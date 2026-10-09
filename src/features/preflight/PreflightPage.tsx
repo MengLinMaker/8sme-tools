@@ -17,13 +17,17 @@ import {
 import { auditEntries } from '@/lib/audit/auditJob'
 import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
 import type { SeverityFilter } from '@/lib/audit/schemas'
-import type { AuditResult, PartRecord, Severity } from '@/lib/audit/types'
+import type { AuditResult, Finding, PartRecord, Severity } from '@/lib/audit/types'
 import { downloadText } from '@/lib/download'
+import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
 import { resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
+import { compareSize, measureStepBounds, type SizeCheck } from '@/lib/step/measure'
 import { cn } from '@/lib/utils'
 
 const PartViewer = lazy(() => import('./PartViewer'))
+
+const SEVERITY_ORDER: Record<Severity, number> = { error: 0, warning: 1, info: 2 }
 
 type Filter = SeverityFilter
 
@@ -45,6 +49,10 @@ export function PreflightPage() {
   const [bundle, setBundle] = useState<InputBundle | null>(null)
   const [viewing, setViewing] = useState<PartRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [modelChecks, setModelChecks] = useState<Map<string, SizeCheck>>(new Map())
+  const [checking, setChecking] = useState(false)
+  const [drawingMaterials, setDrawingMaterials] = useState<Map<string, DrawingMaterial>>(new Map())
+  const [drawingChecking, setDrawingChecking] = useState(false)
   const search = useSearch({ from: '/preflight' })
   const navigate = useNavigate({ from: '/preflight' })
   const filter: Filter = search.severity ?? 'all'
@@ -92,12 +100,103 @@ export function PreflightPage() {
     }
   }, [viewing, bytesByPath])
 
-  const findings = useMemo(() => {
+  // Read each part's ground-truth quantity/length from its drawing (PDF).
+  useEffect(() => {
+    setDrawingMaterials(new Map())
+    if (!result) return
+    let cancelled = false
+    setDrawingChecking(true)
+    const collected = new Map<string, DrawingMaterial>()
+    void (async () => {
+      for (const part of result.parts) {
+        if (cancelled) return
+        const bytes = part.pdf ? bytesByPath.get(part.pdf.path) : undefined
+        if (!bytes) continue
+        try {
+          const material = await resolveDrawingMaterial(bytes, part.mark)
+          if (material) collected.set(part.mark, material)
+        } catch {
+          // ignore an unreadable drawing
+        }
+      }
+      if (!cancelled) {
+        setDrawingMaterials(new Map(collected))
+        setDrawingChecking(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [result, bytesByPath])
+
+  /** True when the NC quantity disagrees with the drawing (ground truth). */
+  const drawingQtyMismatch = useCallback(
+    (part: PartRecord) => {
+      const material = drawingMaterials.get(part.mark)
+      return material != null && part.nc?.quantity != null && material.qty !== part.nc.quantity
+    },
+    [drawingMaterials],
+  )
+
+  const allFindings = useMemo(() => {
     if (!result) return []
+    const extra: Finding[] = []
+    for (const part of result.parts) {
+      const material = drawingMaterials.get(part.mark)
+      if (!material || part.nc?.quantity == null) continue
+      if (material.qty !== part.nc.quantity) {
+        extra.push({
+          severity: 'error',
+          code: 'QTY_MISMATCH_DRAWING',
+          mark: part.mark,
+          message: `NC quantity ${part.nc.quantity} differs from drawing quantity ${material.qty}`,
+        })
+      }
+    }
+    return [...result.findings, ...extra].sort(
+      (a, b) =>
+        SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
+        (a.mark ?? '').localeCompare(b.mark ?? ''),
+    )
+  }, [result, drawingMaterials])
+
+  const counts = useMemo(() => {
+    const result = { error: 0, warning: 0, info: 0 }
+    for (const finding of allFindings) result[finding.severity]++
+    return result
+  }, [allFindings])
+
+  const findings = useMemo(() => {
     return filter === 'all'
-      ? result.findings
-      : result.findings.filter((finding) => finding.severity === filter)
-  }, [result, filter])
+      ? allFindings
+      : allFindings.filter((finding) => finding.severity === filter)
+  }, [allFindings, filter])
+
+  // Measure each part's STEP and compare to its expected size (catches wrong models).
+  const checkModels = async () => {
+    if (!result) return
+    setChecking(true)
+    try {
+      const checks = new Map<string, SizeCheck>()
+      for (const part of result.parts) {
+        const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
+        const length = part.expected?.length ?? part.nc?.length
+        const cross = part.nc?.dimensions?.slice(0, 2) ?? []
+        if (!bytes || length == null || cross.length < 2) {
+          checks.set(part.mark, { ok: false, note: 'no STEP / dims' })
+          continue
+        }
+        try {
+          checks.set(part.mark, compareSize(await measureStepBounds(bytes), length, cross))
+        } catch {
+          checks.set(part.mark, { ok: false, note: 'measure failed' })
+        }
+      }
+      setModelChecks(checks)
+    } finally {
+      setChecking(false)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -125,9 +224,9 @@ export function PreflightPage() {
         <>
           <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <Stat label="Parts" value={result.summary.parts} />
-            <Stat label="Errors" value={result.summary.errors} tone="error" />
-            <Stat label="Warnings" value={result.summary.warnings} tone="warning" />
-            <Stat label="Info" value={result.summary.infos} tone="info" />
+            <Stat label="Errors" value={counts.error} tone="error" />
+            <Stat label="Warnings" value={counts.warning} tone="warning" />
+            <Stat label="Info" value={counts.info} tone="info" />
             <Stat label="Files" value={result.entriesTotal} />
             <Stat label="Part list" value={result.summary.hasPartList ? 'yes' : 'no'} />
           </section>
@@ -157,7 +256,10 @@ export function PreflightPage() {
                   variant="outline"
                   size="sm"
                   onClick={() =>
-                    downloadText(`preflight-${result.sourceName}.csv`, findingsToCsv(result))
+                    downloadText(
+                      `preflight-${result.sourceName}.csv`,
+                      findingsToCsv({ ...result, findings: allFindings }),
+                    )
                   }
                 >
                   Export findings
@@ -206,8 +308,23 @@ export function PreflightPage() {
           </Card>
 
           <Card>
-            <CardHeader>
-              <CardTitle>Parts</CardTitle>
+            <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between">
+              <CardTitle className="flex items-center gap-2">
+                Parts
+                {drawingChecking && (
+                  <span className="text-xs font-normal text-muted-foreground">
+                    reading drawings…
+                  </span>
+                )}
+              </CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void checkModels()}
+                disabled={checking}
+              >
+                {checking ? 'Checking models…' : 'Check 3D models'}
+              </Button>
             </CardHeader>
             <CardContent>
               <Table>
@@ -215,14 +332,14 @@ export function PreflightPage() {
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Mark</TableHead>
                     <TableHead>NC qty</TableHead>
-                    <TableHead>List qty</TableHead>
+                    <TableHead>PDF qty</TableHead>
                     <TableHead>NC len</TableHead>
-                    <TableHead>List len</TableHead>
+                    <TableHead>PDF len</TableHead>
                     <TableHead>Profile</TableHead>
-                    <TableHead>Grade</TableHead>
                     <TableHead>NC</TableHead>
                     <TableHead>STEP</TableHead>
                     <TableHead>PDF</TableHead>
+                    <TableHead>Model size</TableHead>
                     <TableHead className="text-right">3D</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -230,15 +347,23 @@ export function PreflightPage() {
                   {result.parts.map((part) => (
                     <TableRow key={part.mark}>
                       <TableCell className="font-mono text-xs">{part.mark}</TableCell>
-                      <TableCell>{part.nc?.quantity ?? '—'}</TableCell>
-                      <TableCell>{part.expected?.qty ?? '—'}</TableCell>
+                      <TableCell
+                        className={cn(
+                          drawingQtyMismatch(part) &&
+                            'bg-destructive/15 font-semibold text-destructive-foreground',
+                        )}
+                      >
+                        {part.nc?.quantity ?? '—'}
+                      </TableCell>
+                      <TableCell>
+                        {drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? '—'}
+                      </TableCell>
                       <TableCell>{part.nc?.length ?? '—'}</TableCell>
-                      <TableCell>{part.expected?.length ?? '—'}</TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {part.nc?.profile ?? part.expected?.profile ?? '—'}
+                      <TableCell>
+                        {drawingMaterials.get(part.mark)?.length ?? part.expected?.length ?? '—'}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
-                        {part.nc?.grade ?? part.expected?.grade ?? '—'}
+                        {part.nc?.profile ?? part.expected?.profile ?? '—'}
                       </TableCell>
                       <TableCell>
                         <Status value={part.nc ? part.nc.valid : null} />
@@ -248,6 +373,19 @@ export function PreflightPage() {
                       </TableCell>
                       <TableCell>
                         <Status value={part.pdf ? part.pdf.valid : null} />
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {modelChecks.has(part.mark) ? (
+                          <span
+                            className={
+                              modelChecks.get(part.mark)?.ok ? 'text-emerald-400' : 'text-amber-400'
+                            }
+                          >
+                            {modelChecks.get(part.mark)?.note}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         {part.step ? (
@@ -303,7 +441,7 @@ export function PreflightPage() {
                 Green outline = uncut stock ({stock.label}) overlaid for comparison
               </div>
             )}
-            <PartMeta part={viewing} />
+            <PartMeta part={viewing} material={drawingMaterials.get(viewing.mark)} />
           </>
         )}
       </Dialog>
@@ -311,15 +449,16 @@ export function PreflightPage() {
   )
 }
 
-function PartMeta({ part }: { part: PartRecord }) {
+function PartMeta({ part, material }: { part: PartRecord; material?: DrawingMaterial }) {
+  const pdfLength = material?.length ?? part.expected?.length ?? null
+  const pdfQty = material?.qty ?? part.expected?.qty ?? null
   const rows: [string, string][] = [
     ['File', part.step?.path.split('/').pop() ?? '—'],
     ['Profile', part.nc?.profile ?? part.expected?.profile ?? '—'],
-    ['Grade', part.nc?.grade ?? part.expected?.grade ?? '—'],
     ['NC length', part.nc?.length != null ? `${part.nc.length} mm` : '—'],
-    ['List length', part.expected?.length != null ? `${part.expected.length} mm` : '—'],
+    ['PDF length', pdfLength != null ? `${pdfLength} mm` : '—'],
     ['NC qty', part.nc?.quantity != null ? String(part.nc.quantity) : '—'],
-    ['List qty', part.expected?.qty != null ? String(part.expected.qty) : '—'],
+    ['PDF qty', pdfQty != null ? String(pdfQty) : '—'],
     ['Schema', part.step?.schema ?? '—'],
     ['Entities', part.step ? part.step.entityCount.toLocaleString() : '—'],
   ]

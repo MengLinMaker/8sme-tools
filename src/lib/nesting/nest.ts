@@ -54,8 +54,6 @@ export interface NestOptions {
   kerf: number
   /** leftover / trim / accuracy allowance reserved at one end (mm) */
   leftover?: number
-  /** minimum spacing between cuts on opposite halves (mm); 0 disables the guard */
-  minSeparation?: number
 }
 
 export interface NestResult {
@@ -72,8 +70,6 @@ export interface NestResult {
   totalWaste: number
   utilisation: number
   oversized: TeeUnit[]
-  /** cuts on opposite halves that are too close (would cut the same line twice) */
-  cutConflicts: string[]
 }
 
 /** A part is a T if its cross-section resolves to a halved UB. */
@@ -198,33 +194,6 @@ export function nestGroup(group: TeeGroup, options: NestOptions): NestResult {
   const totalStock = teeBars.reduce((sum, bar) => sum + bar.stockLength, 0)
   const totalWaste = teeBars.reduce((sum, bar) => sum + bar.waste, 0)
 
-  // Cut-collision guard: left and right cuts must not land on (or near) the same line.
-  const minSeparation = Math.max(0, options.minSeparation ?? 0)
-  const cutConflicts: string[] = []
-  if (minSeparation > 0) {
-    const cutsOf = (bar: TeeBar): number[] => {
-      const positions: number[] = []
-      let cursor = 0
-      bar.units.forEach((unit, index) => {
-        cursor += unit.length + (index > 0 ? kerf : 0)
-        positions.push(cursor)
-      })
-      return positions
-    }
-    for (const ub of ubBars) {
-      for (const left of cutsOf(ub.teeBars[0])) {
-        for (const right of cutsOf(ub.teeBars[1])) {
-          const delta = Math.abs(left - right)
-          if (delta < minSeparation) {
-            cutConflicts.push(
-              `left cut ${Math.round(left)}mm vs right cut ${Math.round(right)}mm (${Math.round(delta)}mm apart)`,
-            )
-          }
-        }
-      }
-    }
-  }
-
   return {
     parentUb: group.parentUb,
     mass: group.mass,
@@ -239,7 +208,6 @@ export function nestGroup(group: TeeGroup, options: NestOptions): NestResult {
     totalWaste,
     utilisation: totalStock > 0 ? (totalStock - totalWaste) / totalStock : 0,
     oversized,
-    cutConflicts,
   }
 }
 

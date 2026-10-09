@@ -1,6 +1,6 @@
 import { strToU8, zipSync } from 'fflate'
 import { Eye } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -22,7 +22,7 @@ import {
 } from '@/lib/nesting/nest'
 import type { InputBundle } from '@/lib/readInput'
 import { getUb } from '@/lib/sections/ub'
-import { buildUbBarStep, ubOutline } from '@/lib/step/occ'
+import { buildUbBarStep, inspectStepBodies, type StepBody, ubOutline } from '@/lib/step/occ'
 
 const PartViewer = lazy(() => import('@/features/preflight/PartViewer'))
 
@@ -39,6 +39,8 @@ interface ViewFile {
   name: string
   bytes: Uint8Array
   beam: { profile: [number, number][]; length: number }
+  bodies: number
+  bodyInfo: StepBody[]
 }
 
 let rowSeq = 0
@@ -53,7 +55,6 @@ interface StoredSettings {
   rows: { length: number; count: number | null }[]
   kerf: number
   leftover: number
-  minSeparation: number
 }
 
 function loadSettings(): StoredSettings | null {
@@ -76,8 +77,7 @@ export function NestingPage() {
   })
   const [kerf, setKerf] = useState(() => loadSettings()?.kerf ?? 0)
   const [leftover, setLeftover] = useState(() => loadSettings()?.leftover ?? 0)
-  const [minSep, setMinSep] = useState(() => loadSettings()?.minSeparation ?? 10)
-  const [busy, setBusy] = useState(false)
+  const [exporting, setExporting] = useState<'step' | 'nc' | null>(null)
   const [viewing, setViewing] = useState<ViewFile | null>(null)
   const [viewBusy, setViewBusy] = useState(false)
 
@@ -89,17 +89,36 @@ export function NestingPage() {
       })),
       kerf,
       leftover,
-      minSeparation: minSep,
     }
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(data))
     } catch {
       // ignore storage failures (private mode, quota)
     }
-  }, [rows, kerf, leftover, minSep])
+  }, [rows, kerf, leftover])
 
   const stock = (): StockLength[] =>
     rows.filter((row) => row.length > 0).map((row) => ({ length: row.length, count: row.count }))
+
+  // Real part STEP bytes by mark, so the nested beam is assembled from real geometry.
+  const stepByMark = useMemo(() => {
+    const map = new Map<string, Uint8Array>()
+    for (const entry of bundle?.entries ?? []) {
+      const dot = entry.path.lastIndexOf('.')
+      const ext = dot >= 0 ? entry.path.slice(dot + 1).toLowerCase() : ''
+      if (ext !== 'stp' && ext !== 'step') continue
+      const base = (entry.path.split('/').pop() ?? entry.path).replace(/\.[^.]+$/, '')
+      const mark = (base.match(/^[A-Za-z]+\d+/)?.[0] ?? base).toLowerCase()
+      if (!map.has(mark)) map.set(mark, entry.bytes)
+    }
+    return map
+  }, [bundle])
+
+  const pieceFor = (unit: { mark: string; length: number }) => ({
+    mark: unit.mark,
+    length: unit.length,
+    bytes: stepByMark.get(unit.mark),
+  })
 
   const handleBundle = useCallback((input: InputBundle) => {
     setBundle(input)
@@ -125,11 +144,7 @@ export function NestingPage() {
       setError('Add at least one stock length.')
       return
     }
-    setResults(
-      groups.map((group) =>
-        nestGroup(group, { stock: inventory, kerf, leftover, minSeparation: minSep }),
-      ),
-    )
+    setResults(groups.map((group) => nestGroup(group, { stock: inventory, kerf, leftover })))
   }
 
   const updateRow = (id: string, patch: Partial<StockLength>) => {
@@ -143,14 +158,22 @@ export function NestingPage() {
   ): Promise<ViewFile | null> => {
     const ub = getUb(result.parentUb)
     if (!ub) return null
-    const left = layout.ubBar.teeBars[0].units.map((unit) => unit.length)
-    const right = layout.ubBar.teeBars[1].units.map((unit) => unit.length)
+    const left = layout.ubBar.teeBars[0].units.map(pieceFor)
+    const right = layout.ubBar.teeBars[1].units.map(pieceFor)
     const name = `${result.parentUb}-x${layout.quantity}-${layout.ubBar.stockLength}-L${left.length}R${right.length}-bar${String(index + 1).padStart(2, '0')}.step`
-    const content = await buildUbBarStep({ section: ub, name, left, right, kerf: result.kerf })
+    const content = await buildUbBarStep(
+      { section: ub, name, left, right, kerf: result.kerf },
+      { strict: false },
+    )
+    const bytes = strToU8(content)
+    const bodies = (content.match(/MANIFOLD_SOLID_BREP/g) ?? []).length
+    const bodyInfo = bodies === 1 ? [] : await inspectStepBodies(bytes).catch(() => [])
     return {
       name,
-      bytes: strToU8(content),
+      bytes,
       beam: { profile: ubOutline(ub), length: layout.ubBar.stockLength },
+      bodies,
+      bodyInfo,
     }
   }
 
@@ -171,9 +194,53 @@ export function NestingPage() {
     }
   }
 
-  const downloadFiles = async () => {
+  const finishExport = (files: Record<string, Uint8Array>, name: string) => {
+    if (Object.keys(files).length === 0) {
+      setError('Nothing to export.')
+      return
+    }
+    const zip = zipSync(files)
+    downloadBlob(name, new Blob([zip], { type: 'application/zip' }))
+  }
+
+  /** One single-piece STEP per distinct stock-beam layout (imports into WiseCAM as one piece). */
+  const downloadStepFiles = async () => {
     if (!results) return
-    setBusy(true)
+    setExporting('step')
+    setError(null)
+    try {
+      const files: Record<string, Uint8Array> = {}
+      for (const result of results) {
+        const ub = getUb(result.parentUb)
+        if (!ub) continue
+        const layouts = ubLayouts(result)
+        for (let index = 0; index < layouts.length; index++) {
+          const { ubBar, quantity } = layouts[index]
+          const left = ubBar.teeBars[0].units.map(pieceFor)
+          const right = ubBar.teeBars[1].units.map(pieceFor)
+          const base = `${result.parentUb}-x${quantity}-${ubBar.stockLength}-bar${String(index + 1).padStart(2, '0')}`
+          const step = await buildUbBarStep({
+            section: ub,
+            name: base,
+            left,
+            right,
+            kerf: result.kerf,
+          })
+          files[`${base}.step`] = strToU8(step)
+        }
+      }
+      finishExport(files, `nesting-step-${bundle?.sourceName ?? 'job'}.zip`)
+    } catch (err) {
+      setError(`STEP export failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  /** Experimental Weihong .nc1 per stock beam — opt-in, kept separate from the STEP. */
+  const downloadNcFiles = async () => {
+    if (!results) return
+    setExporting('nc')
     setError(null)
     try {
       const files: Record<string, Uint8Array> = {}
@@ -184,17 +251,9 @@ export function NestingPage() {
         const layouts = ubLayouts(result)
         for (let index = 0; index < layouts.length; index++) {
           const { ubBar, quantity } = layouts[index]
-          const left = ubBar.teeBars[0].units.map((unit) => unit.length)
-          const right = ubBar.teeBars[1].units.map((unit) => unit.length)
+          const left = ubBar.teeBars[0].units.map(pieceFor)
+          const right = ubBar.teeBars[1].units.map(pieceFor)
           const base = `${result.parentUb}-x${quantity}-${ubBar.stockLength}-bar${String(index + 1).padStart(2, '0')}`
-          const step = await buildUbBarStep({
-            section: ub,
-            name: base,
-            left,
-            right,
-            kerf: result.kerf,
-          })
-          files[`${base}.step`] = strToU8(step)
           files[`${base}.nc1`] = strToU8(
             buildBarNc({
               section: ub,
@@ -208,24 +267,15 @@ export function NestingPage() {
           )
         }
       }
-      if (Object.keys(files).length === 0) {
-        setError('Nothing to export.')
-        return
-      }
-      const zip = zipSync(files)
-      downloadBlob(
-        `nesting-${bundle?.sourceName ?? 'job'}.zip`,
-        new Blob([zip], { type: 'application/zip' }),
-      )
+      finishExport(files, `nesting-nc-${bundle?.sourceName ?? 'job'}.zip`)
     } catch (err) {
-      setError(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+      setError(`NC export failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
-      setBusy(false)
+      setExporting(null)
     }
   }
 
   const totalUb = results?.reduce((sum, r) => sum + r.ubCount, 0) ?? 0
-  const cutConflicts = results?.flatMap((r) => r.cutConflicts) ?? []
   const totalTeeBars = results?.reduce((sum, r) => sum + r.teeBarCount, 0) ?? 0
   const totalLayouts = results?.reduce((sum, r) => sum + ubLayouts(r).length, 0) ?? 0
 
@@ -353,16 +403,6 @@ export function NestingPage() {
                     className="h-9 w-28 rounded-md border border-input bg-transparent px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   />
                 </label>
-                <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-muted-foreground">Min cut separation (mm)</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={minSep}
-                    onChange={(event) => setMinSep(Number(event.target.value) || 0)}
-                    className="h-9 w-44 rounded-md border border-input bg-transparent px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                </label>
                 <Button onClick={nest}>Nest</Button>
               </div>
             </div>
@@ -386,22 +426,21 @@ export function NestingPage() {
             />
           </section>
 
-          {cutConflicts.length > 0 && (
-            <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3.5 py-3 text-sm text-destructive-foreground">
-              <div className="font-medium">
-                Cut collision — {cutConflicts.length} cut(s) land on the same or a near line:
-              </div>
-              <ul className="mt-1 list-disc pl-5">
-                {cutConflicts.slice(0, 12).map((message) => (
-                  <li key={message}>{message}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
           <div className="flex flex-wrap justify-end gap-2">
-            <Button size="sm" onClick={() => void downloadFiles()} disabled={busy}>
-              {busy ? 'Generating…' : 'Download STEP + NC (.zip)'}
+            <Button
+              size="sm"
+              onClick={() => void downloadStepFiles()}
+              disabled={exporting !== null}
+            >
+              {exporting === 'step' ? 'Generating…' : 'Download STEP (.zip)'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void downloadNcFiles()}
+              disabled={exporting !== null}
+            >
+              {exporting === 'nc' ? 'Generating…' : 'Download NC (.zip)'}
             </Button>
           </div>
 
@@ -441,8 +480,10 @@ export function NestingPage() {
           ))}
 
           <p className="text-sm text-muted-foreground">
-            STEP: one file per distinct layout (AP214) — the UB split into left/right T bars with
-            every T part visible. CSV: the cut list per beam and side.
+            STEP: one file per distinct layout (AP214) — the UB’s left/right T bars packed tight,
+            each part written as its own solid (joins are disabled for now). The dialog lists the
+            separate bodies for debugging. NC: the experimental Weihong .nc1 per beam, kept in a
+            separate download so it is only run on purpose.
           </p>
         </>
       )}
@@ -454,21 +495,47 @@ export function NestingPage() {
         className="max-w-4xl"
       >
         {viewing && (
-          <div className="relative h-[58vh] min-h-72 w-full bg-[#0b0f14]">
-            <Suspense
-              fallback={
-                <div className="grid h-full place-items-center text-sm text-muted-foreground">
-                  Loading viewer…
+          <div className="flex flex-col">
+            {viewing.bodies !== 1 && (
+              <div className="border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+                <div className="font-medium">
+                  {viewing.bodies} separate bodies — joins are disabled for now, so the parts are
+                  written unconnected.
                 </div>
-              }
-            >
-              <PartViewer
-                name={viewing.name}
-                bytes={viewing.bytes}
-                stock={null}
-                beam={viewing.beam}
-              />
-            </Suspense>
+                {viewing.bodyInfo.length > 0 && (
+                  <ul className="mt-1 list-disc pl-5 font-mono">
+                    {[...viewing.bodyInfo]
+                      .sort(
+                        (a, b) =>
+                          a.size[0] * a.size[1] * a.size[2] - b.size[0] * b.size[1] * b.size[2],
+                      )
+                      .slice(0, 8)
+                      .map((body) => (
+                        <li key={`${body.center.join(',')}`}>
+                          {body.size.map((v) => Math.round(v)).join(' × ')} mm @ z=
+                          {Math.round(body.center[2])}
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            <div className="relative h-[58vh] min-h-72 w-full bg-[#0b0f14]">
+              <Suspense
+                fallback={
+                  <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                    Loading viewer…
+                  </div>
+                }
+              >
+                <PartViewer
+                  name={viewing.name}
+                  bytes={viewing.bytes}
+                  stock={null}
+                  beam={viewing.beam}
+                />
+              </Suspense>
+            </div>
           </div>
         )}
       </Dialog>

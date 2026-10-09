@@ -104,16 +104,6 @@ describe('nestGroup', () => {
     expect(layouts).toHaveLength(1)
     expect(layouts[0]?.quantity).toBe(2)
   })
-
-  it('flags cuts that land on the same line across the two halves', () => {
-    const result = nestGroup(makeGroup([[7000, 2]]), {
-      stock: [{ length: 12000, count: UNLIMITED }],
-      kerf: 0,
-      minSeparation: 10,
-    })
-    // left [7000] and right [7000] -> a cut on the same line
-    expect(result.cutConflicts.length).toBeGreaterThan(0)
-  })
 })
 
 describe('regression: NW31 top frames T lengths', () => {
