@@ -14,6 +14,8 @@ import { getUb } from './ub'
 export interface StockOutline {
   /** closed cross-section outline in mm, centred on its bounding box */
   points: [number, number][]
+  /** inner voids for hollow sections (RHS/SHS/CHS), in mm */
+  holes?: [number, number][][]
   /** human label, e.g. "PFC100*50 stock" */
   label: string
 }
@@ -111,6 +113,56 @@ function circle(od: number): [number, number][] {
   return points
 }
 
+function reverse(points: [number, number][]): [number, number][] {
+  return [...points].reverse()
+}
+
+/** Rounded rectangle outline (counter-clockwise), radius clamped to the half-size. */
+function roundedRect(width: number, height: number, radius: number): [number, number][] {
+  const hw = width / 2
+  const hh = height / 2
+  const r = Math.max(0, Math.min(radius, hw, hh))
+  if (r <= 0) {
+    return [
+      [-hw, -hh],
+      [hw, -hh],
+      [hw, hh],
+      [-hw, hh],
+    ]
+  }
+  const points: [number, number][] = []
+  const steps = 6
+  const corners: [number, number, number][] = [
+    [hw - r, -hh + r, -Math.PI / 2],
+    [hw - r, hh - r, 0],
+    [-hw + r, hh - r, Math.PI / 2],
+    [-hw + r, -hh + r, Math.PI],
+  ]
+  for (const [cx, cy, start] of corners) {
+    for (let i = 0; i <= steps; i++) {
+      const angle = start + (i / steps) * (Math.PI / 2)
+      points.push([cx + Math.cos(angle) * r, cy + Math.sin(angle) * r])
+    }
+  }
+  return points
+}
+
+/** Hollow rectangle: outer grown and void shrunk by `gap` so the part fits inside. */
+function hollowRect(
+  width: number,
+  height: number,
+  wall: number,
+  radius: number,
+  gap: number,
+): { points: [number, number][]; holes?: [number, number][][] } {
+  const outer = roundedRect(width + 2 * gap, height + 2 * gap, radius + gap)
+  const iw = width - 2 * wall - 2 * gap
+  const ih = height - 2 * wall - 2 * gap
+  if (iw <= 0 || ih <= 0) return { points: outer }
+  const hole = reverse(roundedRect(iw, ih, Math.max(0, radius - wall - gap)))
+  return { points: outer, holes: [hole] }
+}
+
 function teeOutline(b: number, depth: number, tf: number, tw: number): [number, number][] {
   const hb = b / 2
   const hd = depth / 2
@@ -186,6 +238,8 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
 
   const n = numbers(clean)
   let points: [number, number][] | null = null
+  let holes: [number, number][][] = []
+  let hollow = false
   let label = `${clean} stock`
 
   switch (family) {
@@ -213,14 +267,32 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
       if (n.length >= 3) points = angleL(n[0], n[1], n[2])
       break
     case 'rhs':
-      if (n.length >= 3) points = rectangle(n[1], n[0])
+    case 'shs': {
+      const height = n[0]
+      const width = n[1] ?? n[0]
+      const wall = n[2] ?? dims[2] ?? 0
+      const radius = dims[4] ?? 0
+      if (height > 0 && width > 0 && wall > 0 && wall < Math.min(height, width) / 2) {
+        const rect = hollowRect(width, height, wall, radius, INFLATE)
+        points = rect.points
+        holes = rect.holes ?? []
+        hollow = true
+      } else if (height > 0 && width > 0) {
+        points = rectangle(width, height)
+      }
       break
-    case 'shs':
-      if (n.length >= 2) points = rectangle(n[0], n[1] ?? n[0])
+    }
+    case 'chs': {
+      const od = n[0]
+      const wall = n[1] ?? dims[2] ?? 0
+      if (od > 0) {
+        points = circle(od + 2 * INFLATE)
+        const id = od - 2 * wall - 2 * INFLATE
+        if (wall > 0 && id > 0) holes = [reverse(circle(id))]
+        hollow = true
+      }
       break
-    case 'chs':
-      if (n.length >= 1) points = circle(n[0])
-      break
+    }
     case 'channel': {
       const depth = n[0] || dims[0]
       const flange = n[1] || dims[1] || depth / 2
@@ -246,7 +318,13 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
   }
 
   if (!points || points.length < 3) return null
-  return { points: inflate(points, INFLATE), label }
+  // Solid sections are inflated uniformly; hollow ones are already sized so the
+  // outer wall clears the part and the void stays inside it.
+  return {
+    points: hollow ? points : inflate(points, INFLATE),
+    holes: holes.length > 0 ? holes : undefined,
+    label,
+  }
 }
 
 /**

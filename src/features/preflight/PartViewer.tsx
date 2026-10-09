@@ -15,6 +15,7 @@ import {
   Matrix4,
   Mesh,
   MeshStandardMaterial,
+  Path,
   PerspectiveCamera,
   Scene,
   Shape,
@@ -97,6 +98,7 @@ function chooseOrientation(
 /** Extrudes a section outline along a basis and returns a translucent overlay. */
 function extrudeOverlay(
   profile: [number, number][],
+  holes: [number, number][][],
   length: number,
   xAxis: Vector3,
   yAxis: Vector3,
@@ -105,6 +107,14 @@ function extrudeOverlay(
   shape.moveTo(profile[0][0], profile[0][1])
   for (let i = 1; i < profile.length; i++) shape.lineTo(profile[i][0], profile[i][1])
   shape.closePath()
+  for (const hole of holes) {
+    if (hole.length < 3) continue
+    const path = new Path()
+    path.moveTo(hole[0][0], hole[0][1])
+    for (let i = 1; i < hole.length; i++) path.lineTo(hole[i][0], hole[i][1])
+    path.closePath()
+    shape.holes.push(path)
+  }
 
   const zAxis = new Vector3().crossVectors(xAxis, yAxis)
   const geometry = new ExtrudeGeometry(shape, { depth: length, bevelEnabled: false })
@@ -206,13 +216,19 @@ function mountScene(
       [eA.clone().negate(), eB.clone().negate()],
       [eB.clone().negate(), eA],
     ][orientation]
-    const overlay = extrudeOverlay(stockPoints, extents[longAxis], xAxis, yAxis)
+    const overlay = extrudeOverlay(
+      stockPoints,
+      Array.isArray(stock?.holes) ? stock.holes : [],
+      extents[longAxis],
+      xAxis,
+      yAxis,
+    )
     scene.add(overlay)
     overlays.push(overlay)
   }
   if (beam && Array.isArray(beam.profile) && beam.profile.length >= 3 && beam.length > 0) {
     // Authored in the same frame as the generated STEP, so no re-orientation.
-    const overlay = extrudeOverlay(beam.profile, beam.length, unit(0, 1), unit(1, 1))
+    const overlay = extrudeOverlay(beam.profile, [], beam.length, unit(0, 1), unit(1, 1))
     scene.add(overlay)
     overlays.push(overlay)
   }

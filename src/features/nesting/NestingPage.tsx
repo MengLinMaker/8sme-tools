@@ -7,13 +7,13 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
 import { auditEntries } from '@/lib/audit/auditJob'
-import { downloadBlob, downloadText } from '@/lib/download'
+import { downloadBlob } from '@/lib/download'
+import { buildBarNc } from '@/lib/nesting/nc'
 import {
   collectTees,
   groupTees,
   type NestResult,
   nestGroup,
-  nestingToCsv,
   type StockLength,
   type TeeBar,
   type TeeGroup,
@@ -171,17 +171,41 @@ export function NestingPage() {
     }
   }
 
-  const downloadStep = async () => {
+  const downloadFiles = async () => {
     if (!results) return
     setBusy(true)
     setError(null)
     try {
       const files: Record<string, Uint8Array> = {}
       for (const result of results) {
+        const ub = getUb(result.parentUb)
+        if (!ub) continue
+        const grade = result.parts[0]?.grade
         const layouts = ubLayouts(result)
         for (let index = 0; index < layouts.length; index++) {
-          const file = await layoutStep(result, layouts[index], index)
-          if (file) files[file.name] = file.bytes
+          const { ubBar, quantity } = layouts[index]
+          const left = ubBar.teeBars[0].units.map((unit) => unit.length)
+          const right = ubBar.teeBars[1].units.map((unit) => unit.length)
+          const base = `${result.parentUb}-x${quantity}-${ubBar.stockLength}-bar${String(index + 1).padStart(2, '0')}`
+          const step = await buildUbBarStep({
+            section: ub,
+            name: base,
+            left,
+            right,
+            kerf: result.kerf,
+          })
+          files[`${base}.step`] = strToU8(step)
+          files[`${base}.nc1`] = strToU8(
+            buildBarNc({
+              section: ub,
+              name: base,
+              stockLength: ubBar.stockLength,
+              left,
+              right,
+              kerf: result.kerf,
+              grade,
+            }),
+          )
         }
       }
       if (Object.keys(files).length === 0) {
@@ -190,11 +214,11 @@ export function NestingPage() {
       }
       const zip = zipSync(files)
       downloadBlob(
-        `step-${bundle?.sourceName ?? 'job'}.zip`,
+        `nesting-${bundle?.sourceName ?? 'job'}.zip`,
         new Blob([zip], { type: 'application/zip' }),
       )
     } catch (err) {
-      setError(`STEP generation failed: ${err instanceof Error ? err.message : String(err)}`)
+      setError(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setBusy(false)
     }
@@ -376,17 +400,8 @@ export function NestingPage() {
           )}
 
           <div className="flex flex-wrap justify-end gap-2">
-            <Button size="sm" onClick={() => void downloadStep()} disabled={busy}>
-              {busy ? 'Generating STEP…' : 'Download STEP (.zip)'}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                downloadText(`nesting-${bundle?.sourceName ?? 'job'}.csv`, nestingToCsv(results))
-              }
-            >
-              Download cut list (CSV)
+            <Button size="sm" onClick={() => void downloadFiles()} disabled={busy}>
+              {busy ? 'Generating…' : 'Download STEP + NC (.zip)'}
             </Button>
           </div>
 

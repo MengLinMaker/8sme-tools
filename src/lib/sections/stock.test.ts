@@ -52,6 +52,25 @@ describe('stockOutlineForCode', () => {
     expect(stockOutlineForCode('BT100*15', [134, 103, 9.6, 6.3, 8.9])?.label).toContain('200UB29.8')
   })
 
+  it('makes RHS/SHS hollow with a single void', () => {
+    const rhs = stockOutlineForCode('RHS150*100*9.0', [150, 100, 9, 9, 22.5])
+    expect(rhs?.holes).toHaveLength(1)
+    const outer = bbox(rhs?.points ?? [])
+    expect(outer.width).toBeGreaterThanOrEqual(100)
+    expect(outer.height).toBeGreaterThanOrEqual(150)
+    const inner = bbox(rhs?.holes?.[0] ?? [])
+    expect(inner.width).toBeLessThan(100 - 2 * 9) // void clear of the 9 mm wall
+    expect(inner.height).toBeLessThan(150 - 2 * 9)
+
+    const shs = stockOutlineForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])
+    expect(shs?.holes).toHaveLength(1)
+    expect(bbox(shs?.holes?.[0] ?? []).width).toBeLessThan(100 - 2 * 6)
+  })
+
+  it('makes CHS hollow', () => {
+    expect(stockOutlineForCode('CHS114.3*5.4', [])?.holes).toHaveLength(1)
+  })
+
   it('builds an unequal-angle L', () => {
     const { width, height } = bbox(stockOutlineForCode('UA100*75*6', [])?.points ?? [])
     expect(width).toBeGreaterThanOrEqual(100)
