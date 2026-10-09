@@ -1,0 +1,47 @@
+{
+  "name": "8sme-tools",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Tools for 8 Star Metal Engineering - CNC tube laser workflow helpers",
+  "scripts": {
+    "preinstall": "only-allow pnpm",
+    "dev": "vite",
+    "generate": "tsr generate",
+    "build": "tsr generate && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "format": "biome check --write",
+    "lint": "tsr generate && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm run format",
+    "pre-push": "pnpm run lint"
+  },
+  "packageManager": "pnpm@12.10.1",
+  "dependencies": {
+    "@tanstack/react-router": "^1.170.41",
+    "fflate": "^0.8.3",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@tanstack/react-router-devtools": "^1.167.2",
+    "@tanstack/router-cli": "^1.167.40",
+    "@tanstack/router-plugin": "^1.168.42",
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "only-allow": "^1.2.2",
+    "sass": "^1.105.1",
+    "simple-git-hooks": "^2.14.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vite-plugin-pwa": "^2.0.0",
+    "vitest": "^5.0.3"
+  }
+}
