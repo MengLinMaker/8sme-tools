@@ -18,6 +18,11 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
+      workbox: {
+        // The OpenCASCADE WASM is ~23 MB and lazy-loaded on demand — never precache it.
+        globIgnores: ['**/*.wasm'],
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+      },
       manifest: {
         name: '8SME Tools',
         short_name: '8SME',

@@ -19,10 +19,10 @@ const TOOLS: Tool[] = [
   },
   {
     to: '/nesting',
-    title: 'Beam Nesting',
+    title: 'T Nesting',
     description:
-      'Pack cut lengths into stock beams (with kerf and waste) to minimise bars ordered and offcuts. Handles T-parts cut from UB.',
-    status: 'planned',
+      'Detect T-sections (halved UB), identify the parent UB, and nest pieces into stock beams with cut lines — short parts at the front.',
+    status: 'ready',
   },
 ]
 

@@ -1,15 +1,11 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
-import {
-  type DragEvent,
-  type InputHTMLAttributes,
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { Eye } from 'lucide-react'
+import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
+import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog } from '@/components/ui/dialog'
 import {
   Table,
   TableBody,
@@ -21,10 +17,28 @@ import {
 import { auditEntries } from '@/lib/audit/auditJob'
 import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
 import type { SeverityFilter } from '@/lib/audit/schemas'
-import type { AuditResult, Severity } from '@/lib/audit/types'
+import type { AuditResult, PartRecord, Severity } from '@/lib/audit/types'
 import { downloadText } from '@/lib/download'
-import { type InputBundle, readDataTransfer, readFiles } from '@/lib/readInput'
+import type { InputBundle } from '@/lib/readInput'
+import { inferTee } from '@/lib/sections/infer'
 import { cn } from '@/lib/utils'
+import type { StockProfile } from './PartViewer'
+
+const PartViewer = lazy(() => import('./PartViewer'))
+
+/**
+ * Clean stock cross-section a part is cut from. Only genuine T-sections (halved
+ * UB) get a ghost — `inferTee` rejects channels, angles, RHS, etc., so we never
+ * overlay a T onto a PFC or RHS part.
+ */
+function stockProfileFor(part: PartRecord): StockProfile | null {
+  const nc = part.nc
+  if (!nc) return null
+  const match = inferTee(nc.profile, nc.dimensions)
+  if (!match) return null
+  const { section } = match
+  return { b: section.b, depth: section.d / 2, tf: section.tf, tw: section.tw }
+}
 
 type Filter = SeverityFilter
 
@@ -41,18 +55,11 @@ const SEVERITY_VARIANT = {
   info: 'info',
 } as const
 
-const DIRECTORY_INPUT_PROPS = {
-  webkitdirectory: '',
-  directory: '',
-} as unknown as InputHTMLAttributes<HTMLInputElement>
-
 export function PreflightPage() {
   const [result, setResult] = useState<AuditResult | null>(null)
+  const [bundle, setBundle] = useState<InputBundle | null>(null)
+  const [viewing, setViewing] = useState<PartRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [dragging, setDragging] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const folderInputRef = useRef<HTMLInputElement>(null)
   const search = useSearch({ from: '/preflight' })
   const navigate = useNavigate({ from: '/preflight' })
   const filter: Filter = search.severity ?? 'all'
@@ -64,33 +71,30 @@ export function PreflightPage() {
     [navigate],
   )
 
-  const ingest = useCallback(
-    async (read: () => Promise<InputBundle>) => {
-      setBusy(true)
+  const handleBundle = useCallback(
+    (input: InputBundle) => {
       setError(null)
-      try {
-        const { sourceName, entries } = await read()
-        if (entries.length === 0) {
-          throw new Error('No readable NC / STEP / PDF / part-list files found.')
-        }
-        setResult(auditEntries(sourceName, entries))
-        setFilter('all')
-      } catch (err) {
-        setResult(null)
-        setError(err instanceof Error ? err.message : String(err))
-      } finally {
-        setBusy(false)
-      }
+      setBundle(input)
+      setViewing(null)
+      setResult(auditEntries(input.sourceName, input.entries))
+      setFilter('all')
     },
     [setFilter],
   )
 
-  const run = useCallback(
-    (files: File[]) => {
-      if (files.length > 0) void ingest(() => readFiles(files))
-    },
-    [ingest],
-  )
+  const stepBytesByPath = useMemo(() => {
+    const map = new Map<string, Uint8Array>()
+    for (const entry of bundle?.entries ?? []) map.set(entry.path, entry.bytes)
+    return map
+  }, [bundle])
+
+  const stock = useMemo(() => (viewing ? stockProfileFor(viewing) : null), [viewing])
+
+  const stockLabel = useMemo(() => {
+    const nc = viewing?.nc
+    if (!stock || !nc) return null
+    return `${inferTee(nc.profile, nc.dimensions)?.section.designation ?? 'UB'} T bar`
+  }, [stock, viewing])
 
   const findings = useMemo(() => {
     if (!result) return []
@@ -98,15 +102,6 @@ export function PreflightPage() {
       ? result.findings
       : result.findings.filter((finding) => finding.severity === filter)
   }, [result, filter])
-
-  const onDrop = useCallback(
-    (event: DragEvent<HTMLButtonElement>) => {
-      event.preventDefault()
-      setDragging(false)
-      void ingest(() => readDataTransfer(event.dataTransfer))
-    },
-    [ingest],
-  )
 
   return (
     <div className="flex flex-col gap-6">
@@ -118,62 +113,11 @@ export function PreflightPage() {
         </p>
       </section>
 
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        hidden
-        onChange={(event) => {
-          void run(Array.from(event.target.files ?? []))
-          event.target.value = ''
-        }}
+      <DropZone
+        onBundle={handleBundle}
+        onError={setError}
+        title="Drop a job .zip, files, or a folder"
       />
-      <input
-        ref={folderInputRef}
-        type="file"
-        multiple
-        hidden
-        {...DIRECTORY_INPUT_PROPS}
-        onChange={(event) => {
-          void run(Array.from(event.target.files ?? []))
-          event.target.value = ''
-        }}
-      />
-      <button
-        type="button"
-        className={cn(
-          'flex w-full flex-col items-center gap-1.5 rounded-xl border border-dashed px-5 py-9 text-center transition-colors',
-          dragging
-            ? 'border-primary bg-primary/5'
-            : 'border-input hover:border-primary/50 hover:bg-accent/40',
-          busy && 'cursor-default opacity-70',
-        )}
-        disabled={busy}
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(event) => {
-          event.preventDefault()
-          setDragging(true)
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-      >
-        <span className="text-lg font-semibold">
-          {busy ? 'Auditing…' : 'Drop a .zip, files, or a folder'}
-        </span>
-        <span className="text-sm text-muted-foreground">or click to browse files</span>
-        <span className="mt-1 text-xs tracking-wide text-muted-foreground">
-          .zip · .nc1 · .stp · .pdf · .xlsx
-        </span>
-      </button>
-      <div className="text-center text-sm text-muted-foreground">
-        <button
-          type="button"
-          className="font-medium text-primary underline-offset-4 hover:underline"
-          onClick={() => folderInputRef.current?.click()}
-        >
-          choose a folder
-        </button>
-      </div>
 
       {error && (
         <div className="rounded-lg border border-destructive bg-destructive/10 px-3.5 py-3 text-sm text-destructive-foreground">
@@ -283,6 +227,7 @@ export function PreflightPage() {
                     <TableHead>NC</TableHead>
                     <TableHead>STEP</TableHead>
                     <TableHead>PDF</TableHead>
+                    <TableHead className="text-right">3D</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -308,6 +253,16 @@ export function PreflightPage() {
                       <TableCell>
                         <Status value={part.pdf ? part.pdf.valid : null} />
                       </TableCell>
+                      <TableCell className="text-right">
+                        {part.step ? (
+                          <Button variant="ghost" size="sm" onClick={() => setViewing(part)}>
+                            <Eye />
+                            View
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -316,7 +271,78 @@ export function PreflightPage() {
           </Card>
         </>
       )}
+
+      <Dialog
+        open={viewing !== null}
+        onClose={() => setViewing(null)}
+        title={viewing ? `${viewing.mark} · 3D view` : undefined}
+        className="max-w-4xl"
+      >
+        {viewing?.step && (
+          <>
+            <div className="relative h-[58vh] min-h-72 w-full bg-[#0b0f14]">
+              <Suspense
+                fallback={
+                  <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                    Loading viewer…
+                  </div>
+                }
+              >
+                <PartViewer
+                  name={viewing.step.path}
+                  bytes={stepBytesByPath.get(viewing.step.path)}
+                  stock={stock}
+                />
+              </Suspense>
+            </div>
+            {stock && (
+              <div className="flex items-center gap-2 border-t border-border px-5 py-2 text-xs text-muted-foreground">
+                <span
+                  className="inline-block size-3 rounded-sm border"
+                  style={{
+                    borderColor: '#3ddc84',
+                    background: 'rgba(61, 220, 132, 0.18)',
+                  }}
+                />
+                Green outline = uncut stock bar ({stockLabel}) overlaid for comparison
+              </div>
+            )}
+            <PartMeta part={viewing} />
+          </>
+        )}
+      </Dialog>
     </div>
+  )
+}
+
+function PartMeta({ part }: { part: PartRecord }) {
+  const rows: [string, string][] = [
+    ['File', part.step?.path.split('/').pop() ?? '—'],
+    ['Profile', part.nc?.profile ?? part.expected?.profile ?? '—'],
+    ['Grade', part.nc?.grade ?? part.expected?.grade ?? '—'],
+    ['NC length', part.nc?.length != null ? `${part.nc.length} mm` : '—'],
+    ['List length', part.expected?.length != null ? `${part.expected.length} mm` : '—'],
+    ['NC qty', part.nc?.quantity != null ? String(part.nc.quantity) : '—'],
+    ['List qty', part.expected?.qty != null ? String(part.expected.qty) : '—'],
+    ['Schema', part.step?.schema ?? '—'],
+    ['Entities', part.step ? part.step.entityCount.toLocaleString() : '—'],
+  ]
+  return (
+    <>
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-2 border-t border-border px-5 py-4 text-sm sm:grid-cols-3">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex flex-col gap-0.5">
+            <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
+            <dd className="font-mono text-xs break-words">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {part.step && !part.step.valid && (
+        <div className="border-t border-destructive/40 bg-destructive/10 px-5 py-2 text-xs text-destructive-foreground">
+          {part.step.problems.join('; ')}
+        </div>
+      )}
+    </>
   )
 }
 

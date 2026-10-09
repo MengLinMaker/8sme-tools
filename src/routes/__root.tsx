@@ -7,7 +7,7 @@ export const Route = createRootRoute({
 const NAV = [
   { to: '/', label: 'Hub' },
   { to: '/preflight', label: 'Preflight' },
-  { to: '/nesting', label: 'Nesting' },
+  { to: '/nesting', label: 'T Nesting' },
 ]
 
 function RootLayout() {
