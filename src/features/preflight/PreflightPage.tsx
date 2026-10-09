@@ -1,12 +1,30 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
-import { type DragEvent, useCallback, useMemo, useRef, useState } from 'react'
+import {
+  type DragEvent,
+  type InputHTMLAttributes,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
 import type { SeverityFilter } from '@/lib/audit/schemas'
 import type { AuditResult, Severity } from '@/lib/audit/types'
 import { downloadText } from '@/lib/download'
-import { readFilesToEntries } from '@/lib/readInput'
-import './PreflightPage.scss'
+import { type InputBundle, readDataTransfer, readFiles } from '@/lib/readInput'
+import { cn } from '@/lib/utils'
 
 type Filter = SeverityFilter
 
@@ -17,14 +35,26 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: 'info', label: 'Info' },
 ]
 
+const SEVERITY_VARIANT = {
+  error: 'destructive',
+  warning: 'warning',
+  info: 'info',
+} as const
+
+const DIRECTORY_INPUT_PROPS = {
+  webkitdirectory: '',
+  directory: '',
+} as unknown as InputHTMLAttributes<HTMLInputElement>
+
 export function PreflightPage() {
   const [result, setResult] = useState<AuditResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
-  const search = useSearch({ from: '/' })
-  const navigate = useNavigate({ from: '/' })
+  const folderInputRef = useRef<HTMLInputElement>(null)
+  const search = useSearch({ from: '/preflight' })
+  const navigate = useNavigate({ from: '/preflight' })
   const filter: Filter = search.severity ?? 'all'
 
   const setFilter = useCallback(
@@ -34,13 +64,15 @@ export function PreflightPage() {
     [navigate],
   )
 
-  const run = useCallback(
-    async (files: File[]) => {
-      if (files.length === 0) return
+  const ingest = useCallback(
+    async (read: () => Promise<InputBundle>) => {
       setBusy(true)
       setError(null)
       try {
-        const { sourceName, entries } = await readFilesToEntries(files)
+        const { sourceName, entries } = await read()
+        if (entries.length === 0) {
+          throw new Error('No readable NC / STEP / PDF / part-list files found.')
+        }
         setResult(auditEntries(sourceName, entries))
         setFilter('all')
       } catch (err) {
@@ -51,6 +83,13 @@ export function PreflightPage() {
       }
     },
     [setFilter],
+  )
+
+  const run = useCallback(
+    (files: File[]) => {
+      if (files.length > 0) void ingest(() => readFiles(files))
+    },
+    [ingest],
   )
 
   const findings = useMemo(() => {
@@ -64,16 +103,16 @@ export function PreflightPage() {
     (event: DragEvent<HTMLButtonElement>) => {
       event.preventDefault()
       setDragging(false)
-      void run(Array.from(event.dataTransfer.files))
+      void ingest(() => readDataTransfer(event.dataTransfer))
     },
-    [run],
+    [ingest],
   )
 
   return (
-    <div className="preflight">
-      <section className="intro">
-        <h1>WiseCAM preflight</h1>
-        <p className="muted">
+    <div className="flex flex-col gap-6">
+      <section className="max-w-2xl">
+        <h1 className="mb-1.5 text-2xl font-bold tracking-tight">WiseCAM Preflight</h1>
+        <p className="text-muted-foreground">
           Drop a job .zip (NC + STEP + PDF, optionally a part list .xlsx). Everything is checked
           locally in your browser — nothing is uploaded.
         </p>
@@ -89,9 +128,26 @@ export function PreflightPage() {
           event.target.value = ''
         }}
       />
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        hidden
+        {...DIRECTORY_INPUT_PROPS}
+        onChange={(event) => {
+          void run(Array.from(event.target.files ?? []))
+          event.target.value = ''
+        }}
+      />
       <button
         type="button"
-        className={`dropzone${dragging ? ' dropzone-active' : ''}${busy ? ' dropzone-busy' : ''}`}
+        className={cn(
+          'flex w-full flex-col items-center gap-1.5 rounded-xl border border-dashed px-5 py-9 text-center transition-colors',
+          dragging
+            ? 'border-primary bg-primary/5'
+            : 'border-input hover:border-primary/50 hover:bg-accent/40',
+          busy && 'cursor-default opacity-70',
+        )}
         disabled={busy}
         onClick={() => inputRef.current?.click()}
         onDragOver={(event) => {
@@ -101,16 +157,33 @@ export function PreflightPage() {
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
       >
-        <span className="dropzone-title">{busy ? 'Auditing…' : 'Drop files here'}</span>
-        <span className="muted">or click to browse</span>
-        <span className="dropzone-hint muted">.zip · .nc1 · .stp · .pdf · .xlsx</span>
+        <span className="text-lg font-semibold">
+          {busy ? 'Auditing…' : 'Drop a .zip, files, or a folder'}
+        </span>
+        <span className="text-sm text-muted-foreground">or click to browse files</span>
+        <span className="mt-1 text-xs tracking-wide text-muted-foreground">
+          .zip · .nc1 · .stp · .pdf · .xlsx
+        </span>
       </button>
+      <div className="text-center text-sm text-muted-foreground">
+        <button
+          type="button"
+          className="font-medium text-primary underline-offset-4 hover:underline"
+          onClick={() => folderInputRef.current?.click()}
+        >
+          choose a folder
+        </button>
+      </div>
 
-      {error && <div className="alert alert-error">{error}</div>}
+      {error && (
+        <div className="rounded-lg border border-destructive bg-destructive/10 px-3.5 py-3 text-sm text-destructive-foreground">
+          {error}
+        </div>
+      )}
 
       {result && (
         <>
-          <section className="summary">
+          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <Stat label="Parts" value={result.summary.parts} />
             <Stat label="Errors" value={result.summary.errors} tone="error" />
             <Stat label="Warnings" value={result.summary.warnings} tone="warning" />
@@ -119,134 +192,152 @@ export function PreflightPage() {
             <Stat label="Part list" value={result.summary.hasPartList ? 'yes' : 'no'} />
           </section>
 
-          <section className="results card">
-            <div className="results-head">
-              <h2>Findings</h2>
-              <div className="results-actions">
-                <div className="filters">
+          <Card>
+            <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between">
+              <CardTitle>Findings</CardTitle>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex gap-1 rounded-full border border-border bg-secondary p-1">
                   {FILTERS.map((filterOption) => (
                     <button
                       key={filterOption.id}
                       type="button"
-                      className={`chip${filter === filterOption.id ? ' chip-active' : ''}`}
+                      className={cn(
+                        'rounded-full px-3 py-1 text-xs font-semibold transition-colors',
+                        filter === filterOption.id
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
                       onClick={() => setFilter(filterOption.id)}
                     >
                       {filterOption.label}
                     </button>
                   ))}
                 </div>
-                <button
-                  type="button"
-                  className="btn"
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() =>
                     downloadText(`preflight-${result.sourceName}.csv`, findingsToCsv(result))
                   }
                 >
                   Export findings
-                </button>
-                <button
-                  type="button"
-                  className="btn"
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() => downloadText(`parts-${result.sourceName}.csv`, partsToCsv(result))}
                 >
                   Export parts
-                </button>
+                </Button>
               </div>
-            </div>
-
-            {findings.length === 0 ? (
-              <p className="muted empty">Nothing to report for this filter.</p>
-            ) : (
-              <div className="table-scroll">
-                <table className="findings">
-                  <thead>
-                    <tr>
-                      <th>Severity</th>
-                      <th>Code</th>
-                      <th>Mark</th>
-                      <th>Message</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+            </CardHeader>
+            <CardContent>
+              {findings.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Nothing to report for this filter.</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>Severity</TableHead>
+                      <TableHead>Code</TableHead>
+                      <TableHead>Mark</TableHead>
+                      <TableHead>Message</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {findings.map((finding) => (
-                      <tr key={`${finding.code}-${finding.mark ?? ''}-${finding.message}`}>
-                        <td>
-                          <span className={`badge badge-${finding.severity}`}>
+                      <TableRow key={`${finding.code}-${finding.mark ?? ''}-${finding.message}`}>
+                        <TableCell>
+                          <Badge variant={SEVERITY_VARIANT[finding.severity]}>
                             {finding.severity}
-                          </span>
-                        </td>
-                        <td className="mono">{finding.code}</td>
-                        <td className="mono">{finding.mark ?? '—'}</td>
-                        <td>{finding.message}</td>
-                      </tr>
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">
+                          {finding.code}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{finding.mark ?? '—'}</TableCell>
+                        <TableCell>{finding.message}</TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
 
-          <section className="card">
-            <h2>Parts</h2>
-            <div className="table-scroll">
-              <table className="parts">
-                <thead>
-                  <tr>
-                    <th>Mark</th>
-                    <th>NC qty</th>
-                    <th>List qty</th>
-                    <th>NC len</th>
-                    <th>List len</th>
-                    <th>Profile</th>
-                    <th>Grade</th>
-                    <th>NC</th>
-                    <th>STEP</th>
-                    <th>PDF</th>
-                  </tr>
-                </thead>
-                <tbody>
+          <Card>
+            <CardHeader>
+              <CardTitle>Parts</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Mark</TableHead>
+                    <TableHead>NC qty</TableHead>
+                    <TableHead>List qty</TableHead>
+                    <TableHead>NC len</TableHead>
+                    <TableHead>List len</TableHead>
+                    <TableHead>Profile</TableHead>
+                    <TableHead>Grade</TableHead>
+                    <TableHead>NC</TableHead>
+                    <TableHead>STEP</TableHead>
+                    <TableHead>PDF</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {result.parts.map((part) => (
-                    <tr key={part.mark}>
-                      <td className="mono">{part.mark}</td>
-                      <td>{part.nc?.quantity ?? '—'}</td>
-                      <td>{part.expected?.qty ?? '—'}</td>
-                      <td>{part.nc?.length ?? '—'}</td>
-                      <td>{part.expected?.length ?? '—'}</td>
-                      <td className="mono">{part.nc?.profile ?? part.expected?.profile ?? '—'}</td>
-                      <td className="mono">{part.nc?.grade ?? part.expected?.grade ?? '—'}</td>
-                      <td>
+                    <TableRow key={part.mark}>
+                      <TableCell className="font-mono text-xs">{part.mark}</TableCell>
+                      <TableCell>{part.nc?.quantity ?? '—'}</TableCell>
+                      <TableCell>{part.expected?.qty ?? '—'}</TableCell>
+                      <TableCell>{part.nc?.length ?? '—'}</TableCell>
+                      <TableCell>{part.expected?.length ?? '—'}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {part.nc?.profile ?? part.expected?.profile ?? '—'}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {part.nc?.grade ?? part.expected?.grade ?? '—'}
+                      </TableCell>
+                      <TableCell>
                         <Status value={part.nc ? part.nc.valid : null} />
-                      </td>
-                      <td>
+                      </TableCell>
+                      <TableCell>
                         <Status value={part.step ? part.step.valid : null} />
-                      </td>
-                      <td>
+                      </TableCell>
+                      <TableCell>
                         <Status value={part.pdf ? part.pdf.valid : null} />
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </>
       )}
     </div>
   )
 }
 
+const STAT_TONE: Record<Severity, string> = {
+  error: 'text-red-400',
+  warning: 'text-amber-400',
+  info: 'text-sky-400',
+}
+
 function Stat({ label, value, tone }: { label: string; value: number | string; tone?: Severity }) {
   return (
-    <div className={`stat${tone ? ` stat-${tone}` : ''}`}>
-      <span className="stat-value">{value}</span>
-      <span className="stat-label">{label}</span>
+    <div className="flex flex-col gap-0.5 rounded-xl border border-border bg-card px-3.5 py-3">
+      <span className={cn('text-2xl font-bold tracking-tight', tone && STAT_TONE[tone])}>
+        {value}
+      </span>
+      <span className="text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
     </div>
   )
 }
 
 function Status({ value }: { value: boolean | null }) {
-  if (value === null) return <span className="badge badge-missing">missing</span>
-  return (
-    <span className={`badge ${value ? 'badge-ok' : 'badge-error'}`}>{value ? 'ok' : 'bad'}</span>
-  )
+  if (value === null) return <Badge variant="muted">missing</Badge>
+  return <Badge variant={value ? 'success' : 'destructive'}>{value ? 'ok' : 'bad'}</Badge>
 }

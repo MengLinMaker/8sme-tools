@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+:root {
+  --radius: 0.625rem;
+
+  --background: hsl(217 34% 6%);
+  --foreground: hsl(214 40% 93%);
+  --card: hsl(215 32% 10%);
+  --card-foreground: hsl(214 40% 93%);
+  --popover: hsl(215 32% 10%);
+  --popover-foreground: hsl(214 40% 93%);
+  --primary: hsl(140 65% 52%);
+  --primary-foreground: hsl(150 80% 8%);
+  --secondary: hsl(216 25% 16%);
+  --secondary-foreground: hsl(214 40% 93%);
+  --muted: hsl(216 25% 14%);
+  --muted-foreground: hsl(215 20% 65%);
+  --accent: hsl(216 25% 18%);
+  --accent-foreground: hsl(214 40% 93%);
+  --destructive: hsl(0 70% 55%);
+  --destructive-foreground: hsl(0 0% 98%);
+  --border: hsl(215 25% 20%);
+  --input: hsl(215 25% 20%);
+  --ring: hsl(140 65% 52%);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: radial-gradient(
+      1200px 600px at 50% -200px,
+      hsl(216 30% 13%) 0%,
+      var(--background) 60%
+    );
+    color: var(--foreground);
+    font-family:
+      "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+}

@@ -10,33 +10,53 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as NestingRouteImport } from './routes/nesting'
+import { Route as PreflightRouteImport } from './routes/preflight'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const NestingRoute = NestingRouteImport.update({
+  id: '/nesting',
+  path: '/nesting',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PreflightRoute = PreflightRouteImport.update({
+  id: '/preflight',
+  path: '/preflight',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/nesting': typeof NestingRoute
+  '/preflight': typeof PreflightRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/nesting': typeof NestingRoute
+  '/preflight': typeof PreflightRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/nesting': typeof NestingRoute
+  '/preflight': typeof PreflightRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/nesting' | '/preflight'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/nesting' | '/preflight'
+  id: '__root__' | '/' | '/nesting' | '/preflight'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  NestingRoute: typeof NestingRoute
+  PreflightRoute: typeof PreflightRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +68,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/nesting': {
+      id: '/nesting'
+      path: '/nesting'
+      fullPath: '/nesting'
+      preLoaderRoute: typeof NestingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/preflight': {
+      id: '/preflight'
+      path: '/preflight'
+      fullPath: '/preflight'
+      preLoaderRoute: typeof PreflightRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  NestingRoute: NestingRoute,
+  PreflightRoute: PreflightRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
