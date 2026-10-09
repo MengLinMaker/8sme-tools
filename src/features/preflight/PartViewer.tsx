@@ -22,39 +22,16 @@ import {
   WebGLRenderer,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import type { StockOutline } from '@/lib/sections/stock'
 import { meshStepFile } from '@/lib/step/mesh'
 
 const GHOST_COLOR = 0x3ddc84
 const FACE_MATERIAL = { color: 0xaebfd0, metalness: 0.55, roughness: 0.45 }
 
-/** Cross-section of the uncut stock bar a part is cut from (mm). */
-export interface StockProfile {
-  /** flange width b */
-  b: number
-  /** total T depth (half the parent UB depth) */
-  depth: number
-  /** flange thickness tf */
-  tf: number
-  /** web thickness tw */
-  tw: number
-}
-
-/** The T-shaped stock cross-section (mm), centred on its bounding box. */
-function stockPolygon(profile: StockProfile): [number, number][] {
-  const { b, depth, tf, tw } = profile
-  const hb = b / 2
-  const hd = depth / 2
-  const hw = tw / 2
-  return [
-    [-hb, -hd],
-    [hb, -hd],
-    [hb, -hd + tf],
-    [hw, -hd + tf],
-    [hw, hd],
-    [-hw, hd],
-    [-hw, -hd + tf],
-    [-hb, -hd + tf],
-  ]
+/** An extruded section outline drawn as a translucent overlay. */
+export interface BeamOutline {
+  profile: [number, number][]
+  length: number
 }
 
 function pointInPolygon(x: number, y: number, polygon: [number, number][]): boolean {
@@ -75,22 +52,27 @@ const ORIENTATIONS: ((u: number, v: number) => [number, number])[] = [
   (u, v) => [-v, u],
 ]
 
+function reach(profile: [number, number][]): number {
+  let max = 0
+  for (const [x, y] of profile) max = Math.max(max, Math.abs(x), Math.abs(y))
+  return max || 1
+}
+
 /**
  * Picks the rotation that best seats the part inside the stock profile by
  * counting how many part cross-section vertices land within a slightly enlarged
- * T polygon. The T is not symmetric end-to-end, so guessing the orientation from
- * bounding-box extents alone seats it wrong roughly half the time.
+ * outline. Sections are not end-symmetric, so guessing from bounding-box extents
+ * alone seats them wrong roughly half the time.
  */
 function chooseOrientation(
-  profile: StockProfile,
+  profile: [number, number][],
   vertices: number[],
   crossA: number,
   crossB: number,
   centre: Vector3,
 ): number {
-  const polygon = stockPolygon(profile)
-  const scale = 1 + 2 / Math.max(profile.b, profile.depth)
-  const enlarged = polygon.map(([x, y]) => [x * scale, y * scale] as [number, number])
+  const scale = 1 + 2 / reach(profile)
+  const enlarged = profile.map(([x, y]) => [x * scale, y * scale] as [number, number])
   const centreA = centre.getComponent(crossA)
   const centreB = centre.getComponent(crossB)
   const stride = Math.max(3, Math.floor(vertices.length / 3 / 4000) * 3)
@@ -112,40 +94,19 @@ function chooseOrientation(
   return best
 }
 
-/**
- * Builds the translucent "ghost" of the uncut stock bar: the clean T-section
- * extruded to the part's length and rotated to the orientation that seats the
- * finished part inside it.
- */
-function buildStockBeam(
-  profile: StockProfile,
+/** Extrudes a section outline along a basis and returns a translucent overlay. */
+function extrudeOverlay(
+  profile: [number, number][],
   length: number,
-  crossA: number,
-  crossB: number,
-  orientation: number,
+  xAxis: Vector3,
+  yAxis: Vector3,
 ): Group {
-  const polygon = stockPolygon(profile)
   const shape = new Shape()
-  shape.moveTo(polygon[0][0], polygon[0][1])
-  for (let i = 1; i < polygon.length; i++) shape.lineTo(polygon[i][0], polygon[i][1])
+  shape.moveTo(profile[0][0], profile[0][1])
+  for (let i = 1; i < profile.length; i++) shape.lineTo(profile[i][0], profile[i][1])
   shape.closePath()
 
-  const unit = (axis: number, sign: number) => {
-    const vector = new Vector3()
-    vector.setComponent(axis, sign)
-    return vector
-  }
-  const eA = unit(crossA, 1)
-  const eB = unit(crossB, 1)
-  const bases: [Vector3, Vector3][] = [
-    [eA, eB],
-    [eB, eA.clone().negate()],
-    [eA.clone().negate(), eB.clone().negate()],
-    [eB.clone().negate(), eA],
-  ]
-  const [xAxis, yAxis] = bases[orientation]
   const zAxis = new Vector3().crossVectors(xAxis, yAxis)
-
   const geometry = new ExtrudeGeometry(shape, { depth: length, bevelEnabled: false })
   geometry.translate(0, 0, -length / 2)
   geometry.applyMatrix4(new Matrix4().makeBasis(xAxis, yAxis, zAxis))
@@ -172,47 +133,23 @@ function buildStockBeam(
   return group
 }
 
-/** Translucent stock beam: the given cross-section extruded along Z from 0 to length. */
-function buildBeamGhost(profile: [number, number][], length: number): Group {
-  const shape = new Shape()
-  shape.moveTo(profile[0][0], profile[0][1])
-  for (let i = 1; i < profile.length; i++) shape.lineTo(profile[i][0], profile[i][1])
-  shape.closePath()
-
-  const geometry = new ExtrudeGeometry(shape, { depth: length, bevelEnabled: false })
-  const group = new Group()
-  group.add(
-    new Mesh(
-      geometry,
-      new MeshStandardMaterial({
-        color: GHOST_COLOR,
-        transparent: true,
-        opacity: 0.12,
-        depthWrite: false,
-        side: DoubleSide,
-      }),
-    ),
-  )
-  group.add(
-    new LineSegments(
-      new EdgesGeometry(geometry, 15),
-      new LineBasicMaterial({ color: GHOST_COLOR, transparent: true, opacity: 0.55 }),
-    ),
-  )
-  return group
+function unit(axis: number, sign: number): Vector3 {
+  const vector = new Vector3()
+  vector.setComponent(axis, sign)
+  return vector
 }
 
 interface SceneHandle {
   dispose: () => void
-  ghost: Group | null
+  overlays: Group[]
 }
 
 /** Builds the three.js scene for a set of meshes and returns a disposer. */
 function mountScene(
   container: HTMLElement,
   replicadMeshes: ReplicadMesh[],
-  stock: StockProfile | null,
-  beam: { profile: [number, number][]; length: number } | null,
+  stock: StockOutline | null,
+  beam: BeamOutline | null,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -243,36 +180,46 @@ function mountScene(
   }
   scene.add(group)
 
+  // Centre the part at the origin.
   const bounds = new Box3().setFromObject(group)
+  const size = bounds.getSize(new Vector3())
   const centre = bounds.getCenter(new Vector3())
+  group.position.sub(centre)
 
-  let ghost: Group | null = null
-  if (beam) {
-    // Keep the part in its own STEP coordinates so it sits inside the stock beam.
-    ghost = buildBeamGhost(beam.profile, beam.length)
-    scene.add(ghost)
-  } else {
-    // Centre the part and (optionally) show its uncut stock profile.
-    group.position.sub(centre)
-    const size = bounds.getSize(new Vector3())
-    const extents = [size.x, size.y, size.z]
-    const longAxis = extents.indexOf(Math.max(...extents))
-    if (stock && extents[longAxis] > 0) {
-      const cross = [0, 1, 2].filter((axis) => axis !== longAxis)
-      const crossA = cross[0]
-      const crossB = cross[1]
-      const vertices = replicadMeshes[0]?.faces.vertices ?? []
-      const orientation = vertices.length
-        ? chooseOrientation(stock, vertices, crossA, crossB, centre)
-        : 0
-      ghost = buildStockBeam(stock, extents[longAxis], crossA, crossB, orientation)
-      scene.add(ghost)
-    }
+  const overlays: Group[] = []
+  const extents = [size.x, size.y, size.z]
+  const longAxis = extents.indexOf(Math.max(...extents))
+  const stockPoints = stock?.points
+  if (Array.isArray(stockPoints) && stockPoints.length >= 3 && extents[longAxis] > 0) {
+    const cross = [0, 1, 2].filter((axis) => axis !== longAxis)
+    const crossA = cross[0]
+    const crossB = cross[1]
+    const vertices = replicadMeshes[0]?.faces.vertices ?? []
+    const orientation = vertices.length
+      ? chooseOrientation(stockPoints, vertices, crossA, crossB, centre)
+      : 0
+    const eA = unit(crossA, 1)
+    const eB = unit(crossB, 1)
+    const [xAxis, yAxis] = [
+      [eA, eB],
+      [eB, eA.clone().negate()],
+      [eA.clone().negate(), eB.clone().negate()],
+      [eB.clone().negate(), eA],
+    ][orientation]
+    const overlay = extrudeOverlay(stockPoints, extents[longAxis], xAxis, yAxis)
+    scene.add(overlay)
+    overlays.push(overlay)
+  }
+  if (beam && Array.isArray(beam.profile) && beam.profile.length >= 3 && beam.length > 0) {
+    // Authored in the same frame as the generated STEP, so no re-orientation.
+    const overlay = extrudeOverlay(beam.profile, beam.length, unit(0, 1), unit(1, 1))
+    scene.add(overlay)
+    overlays.push(overlay)
   }
 
-  // Frame the part and (optional) ghost in view.
+  // Frame the part and overlays in view.
   const fit = new Box3().expandByObject(group)
-  if (ghost) fit.expandByObject(ghost)
+  for (const overlay of overlays) fit.expandByObject(overlay)
   const fitSize = fit.getSize(new Vector3())
   const fitCentre = fit.getCenter(new Vector3())
 
@@ -311,7 +258,7 @@ function mountScene(
   observer.observe(container)
 
   return {
-    ghost,
+    overlays,
     dispose() {
       cancelAnimationFrame(raf)
       observer.disconnect()
@@ -321,14 +268,16 @@ function mountScene(
         geometry.lines.dispose()
       }
       for (const material of materials) material.dispose()
-      ghost?.traverse((object) => {
-        if (object instanceof Mesh || object instanceof LineSegments) {
-          object.geometry.dispose()
-          const material = object.material
-          if (Array.isArray(material)) for (const item of material) item.dispose()
-          else material.dispose()
-        }
-      })
+      for (const overlay of overlays) {
+        overlay.traverse((object) => {
+          if (object instanceof Mesh || object instanceof LineSegments) {
+            object.geometry.dispose()
+            const material = object.material
+            if (Array.isArray(material)) for (const item of material) item.dispose()
+            else material.dispose()
+          }
+        })
+      }
       renderer.dispose()
       renderer.domElement.remove()
     },
@@ -338,9 +287,8 @@ function mountScene(
 export interface PartViewerProps {
   name: string
   bytes: Uint8Array | undefined
-  stock?: StockProfile | null
-  /** Stock beam to overlay the parts inside (profile in XY, extruded along Z). */
-  beam?: { profile: [number, number][]; length: number } | null
+  stock?: StockOutline | null
+  beam?: BeamOutline | null
 }
 
 export default function PartViewer({ name, bytes, stock = null, beam = null }: PartViewerProps) {
@@ -371,7 +319,7 @@ export default function PartViewer({ name, bytes, stock = null, beam = null }: P
           return
         }
         handle = mountScene(containerRef.current, meshes, stock, beam)
-        if (handle.ghost) handle.ghost.visible = showStockRef.current
+        for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handleRef.current = handle
         setStatus('ready')
       })
@@ -390,13 +338,15 @@ export default function PartViewer({ name, bytes, stock = null, beam = null }: P
 
   useEffect(() => {
     showStockRef.current = showStock
-    if (handleRef.current?.ghost) handleRef.current.ghost.visible = showStock
+    for (const overlay of handleRef.current?.overlays ?? []) overlay.visible = showStock
   }, [showStock])
+
+  const hasOverlay = Boolean(stock || beam)
 
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full touch-none" />
-      {(stock || beam) && status === 'ready' && (
+      {hasOverlay && status === 'ready' && (
         <button
           type="button"
           onClick={() => setShowStock((value) => !value)}

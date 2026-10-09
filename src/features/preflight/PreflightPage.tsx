@@ -1,6 +1,6 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { Eye } from 'lucide-react'
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -20,25 +20,10 @@ import type { SeverityFilter } from '@/lib/audit/schemas'
 import type { AuditResult, PartRecord, Severity } from '@/lib/audit/types'
 import { downloadText } from '@/lib/download'
 import type { InputBundle } from '@/lib/readInput'
-import { inferTee } from '@/lib/sections/infer'
+import { resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
 import { cn } from '@/lib/utils'
-import type { StockProfile } from './PartViewer'
 
 const PartViewer = lazy(() => import('./PartViewer'))
-
-/**
- * Clean stock cross-section a part is cut from. Only genuine T-sections (halved
- * UB) get a ghost — `inferTee` rejects channels, angles, RHS, etc., so we never
- * overlay a T onto a PFC or RHS part.
- */
-function stockProfileFor(part: PartRecord): StockProfile | null {
-  const nc = part.nc
-  if (!nc) return null
-  const match = inferTee(nc.profile, nc.dimensions)
-  if (!match) return null
-  const { section } = match
-  return { b: section.b, depth: section.d / 2, tf: section.tf, tw: section.tw }
-}
 
 type Filter = SeverityFilter
 
@@ -82,19 +67,30 @@ export function PreflightPage() {
     [setFilter],
   )
 
-  const stepBytesByPath = useMemo(() => {
+  const bytesByPath = useMemo(() => {
     const map = new Map<string, Uint8Array>()
     for (const entry of bundle?.entries ?? []) map.set(entry.path, entry.bytes)
     return map
   }, [bundle])
 
-  const stock = useMemo(() => (viewing ? stockProfileFor(viewing) : null), [viewing])
-
-  const stockLabel = useMemo(() => {
-    const nc = viewing?.nc
-    if (!stock || !nc) return null
-    return `${inferTee(nc.profile, nc.dimensions)?.section.designation ?? 'UB'} T bar`
-  }, [stock, viewing])
+  const [stock, setStock] = useState<StockOutline | null>(null)
+  useEffect(() => {
+    setStock(null)
+    if (!viewing) return
+    let cancelled = false
+    const pdfBytes = viewing.pdf ? bytesByPath.get(viewing.pdf.path) : undefined
+    void resolveStockOutline(viewing, pdfBytes).then(
+      (outline) => {
+        if (!cancelled) setStock(outline)
+      },
+      () => {
+        if (!cancelled) setStock(null)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [viewing, bytesByPath])
 
   const findings = useMemo(() => {
     if (!result) return []
@@ -290,7 +286,7 @@ export function PreflightPage() {
               >
                 <PartViewer
                   name={viewing.step.path}
-                  bytes={stepBytesByPath.get(viewing.step.path)}
+                  bytes={bytesByPath.get(viewing.step.path)}
                   stock={stock}
                 />
               </Suspense>
@@ -304,7 +300,7 @@ export function PreflightPage() {
                     background: 'rgba(61, 220, 132, 0.18)',
                   }}
                 />
-                Green outline = uncut stock bar ({stockLabel}) overlaid for comparison
+                Green outline = uncut stock ({stock.label}) overlaid for comparison
               </div>
             )}
             <PartMeta part={viewing} />

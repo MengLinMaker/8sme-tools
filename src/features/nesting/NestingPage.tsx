@@ -53,6 +53,7 @@ interface StoredSettings {
   rows: { length: number; count: number | null }[]
   kerf: number
   leftover: number
+  minSeparation: number
 }
 
 function loadSettings(): StoredSettings | null {
@@ -75,6 +76,7 @@ export function NestingPage() {
   })
   const [kerf, setKerf] = useState(() => loadSettings()?.kerf ?? 0)
   const [leftover, setLeftover] = useState(() => loadSettings()?.leftover ?? 0)
+  const [minSep, setMinSep] = useState(() => loadSettings()?.minSeparation ?? 10)
   const [busy, setBusy] = useState(false)
   const [viewing, setViewing] = useState<ViewFile | null>(null)
   const [viewBusy, setViewBusy] = useState(false)
@@ -87,13 +89,14 @@ export function NestingPage() {
       })),
       kerf,
       leftover,
+      minSeparation: minSep,
     }
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(data))
     } catch {
       // ignore storage failures (private mode, quota)
     }
-  }, [rows, kerf, leftover])
+  }, [rows, kerf, leftover, minSep])
 
   const stock = (): StockLength[] =>
     rows.filter((row) => row.length > 0).map((row) => ({ length: row.length, count: row.count }))
@@ -122,7 +125,11 @@ export function NestingPage() {
       setError('Add at least one stock length.')
       return
     }
-    setResults(groups.map((group) => nestGroup(group, { stock: inventory, kerf, leftover })))
+    setResults(
+      groups.map((group) =>
+        nestGroup(group, { stock: inventory, kerf, leftover, minSeparation: minSep }),
+      ),
+    )
   }
 
   const updateRow = (id: string, patch: Partial<StockLength>) => {
@@ -194,6 +201,7 @@ export function NestingPage() {
   }
 
   const totalUb = results?.reduce((sum, r) => sum + r.ubCount, 0) ?? 0
+  const cutConflicts = results?.flatMap((r) => r.cutConflicts) ?? []
   const totalTeeBars = results?.reduce((sum, r) => sum + r.teeBarCount, 0) ?? 0
   const totalLayouts = results?.reduce((sum, r) => sum + ubLayouts(r).length, 0) ?? 0
 
@@ -321,6 +329,16 @@ export function NestingPage() {
                     className="h-9 w-28 rounded-md border border-input bg-transparent px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   />
                 </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-muted-foreground">Min cut separation (mm)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={minSep}
+                    onChange={(event) => setMinSep(Number(event.target.value) || 0)}
+                    className="h-9 w-44 rounded-md border border-input bg-transparent px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                </label>
                 <Button onClick={nest}>Nest</Button>
               </div>
             </div>
@@ -343,6 +361,19 @@ export function NestingPage() {
               )}%`}
             />
           </section>
+
+          {cutConflicts.length > 0 && (
+            <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3.5 py-3 text-sm text-destructive-foreground">
+              <div className="font-medium">
+                Cut collision — {cutConflicts.length} cut(s) land on the same or a near line:
+              </div>
+              <ul className="mt-1 list-disc pl-5">
+                {cutConflicts.slice(0, 12).map((message) => (
+                  <li key={message}>{message}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div className="flex flex-wrap justify-end gap-2">
             <Button size="sm" onClick={() => void downloadStep()} disabled={busy}>
