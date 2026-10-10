@@ -1,6 +1,7 @@
 import type { Finding } from '@/lib/audit/schemas'
 import type { DrawingMaterial } from '@/lib/parsers/pdfText'
 import type { ModelComparison, SizeCheck } from '@/lib/step/measure'
+import type { SabreResult } from '@/lib/step/sabre'
 import type { ZipEntry } from '@/lib/zip'
 
 /**
@@ -8,7 +9,12 @@ import type { ZipEntry } from '@/lib/zip'
  * drawings and re-measure every STEP through the OCC kernel from scratch. Holds the dropped
  * entries (the expensive part) plus the analysis results derived from them. Keyed by a content
  * fingerprint so re-dropping the same job is instant too.
+ *
+ * `analysisVersion` is bumped whenever the analysis logic changes, so a cache written by older
+ * logic is ignored rather than showing stale checks (e.g. a new test that never ran).
  */
+export const ANALYSIS_VERSION = 2
+
 export interface PreflightCacheEntry {
   sourceName: string
   entries: ZipEntry[]
@@ -16,6 +22,9 @@ export interface PreflightCacheEntry {
   modelChecks: Map<string, SizeCheck>
   manufactureChecks: Map<string, ModelComparison>
   cutIssues: Map<string, Finding[]>
+  sabreChecks: Map<string, SabreResult>
+  /** Analysis-logic version — see {@link ANALYSIS_VERSION}. */
+  analysisVersion: number
   /** Content fingerprint of `entries` — see {@link fingerprintEntries}. */
   fingerprint: string
   savedAt: number
@@ -64,6 +73,11 @@ export async function loadPreflightCache(): Promise<PreflightCacheEntry | null> 
       db.transaction(STORE, 'readonly').objectStore(STORE).get(KEY),
     )
     if (!entry) return null
+    // A cache written by older analysis logic can't be trusted for the current checks.
+    if (entry.analysisVersion !== ANALYSIS_VERSION) {
+      await clearPreflightCache()
+      return null
+    }
     if (Date.now() - entry.savedAt > TTL_MS) {
       await clearPreflightCache()
       return null

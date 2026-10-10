@@ -77,7 +77,8 @@ function prismOf(profile: [number, number][], length: number) {
   })
 }
 
-const lengthOf = (mark: string): number => parseDstv(readFileSync(ncPath(mark), 'utf8')).header.length ?? 0
+const lengthOf = (mark: string): number =>
+  parseDstv(readFileSync(ncPath(mark), 'utf8')).header.length ?? 0
 
 describe.skipIf(!HAVE)('NW31 tee validation', () => {
   it('every real tee sits inside the ideal T profile (features carried, not clipped)', async () => {

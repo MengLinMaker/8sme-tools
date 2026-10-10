@@ -1,18 +1,7 @@
 import type { DrawingMaterial } from '@/lib/parsers/pdfText'
 import type { Finding, PartRecord, Severity } from './types'
 
-export type PartSortKey =
-  | 'severity'
-  | 'mark'
-  | 'ncQty'
-  | 'pdfQty'
-  | 'ncLen'
-  | 'pdfLen'
-  | 'profile'
-  | 'nc'
-  | 'step'
-  | 'pdf'
-  | 'model'
+export type PartSortKey = 'severity' | 'mark' | 'qty' | 'profile' | 'model'
 
 export interface PartSortContext {
   findings: Finding[]
@@ -35,11 +24,6 @@ export function severityRank(part: PartRecord, context: PartSortContext): number
   return rank
 }
 
-function fileRank(valid: boolean | undefined, present: boolean): number {
-  if (!present) return 1 // missing
-  return valid ? 2 : 0 // invalid sorts before missing and ok
-}
-
 function partValue(
   part: PartRecord,
   key: PartSortKey,
@@ -53,20 +37,9 @@ function partValue(
       return part.mark
     case 'profile':
       return part.nc?.profile ?? part.expected?.profile ?? ''
-    case 'ncQty':
-      return part.nc?.quantity ?? null
-    case 'pdfQty':
-      return material?.qty ?? part.expected?.qty ?? null
-    case 'ncLen':
-      return part.nc?.length ?? null
-    case 'pdfLen':
-      return material?.length ?? part.expected?.length ?? null
-    case 'nc':
-      return fileRank(part.nc?.valid, part.nc != null)
-    case 'step':
-      return fileRank(part.step?.valid, part.step != null)
-    case 'pdf':
-      return fileRank(part.pdf?.valid, part.pdf != null)
+    case 'qty':
+      // Drawing (ground truth) first, NC only as a fallback.
+      return material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
     case 'model': {
       const check = context.modelChecks.get(part.mark)
       return check ? (check.ok ? 1 : 0) : 2

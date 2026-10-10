@@ -1,0 +1,43 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { ensureOc, setOcWasmUrl } from './occInit'
+import { sabreTest } from './sabre'
+
+const require = createRequire(import.meta.url)
+setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
+
+/**
+ * The "light sabre" test against real job parts when the fixtures are present. `m117` (RHS) is
+ * known-good and `m128` (PFC, huge shaved end surface) is known not-manufacturable, so they pin
+ * the pass/fail behaviour. Skipped otherwise.
+ */
+
+const TOP = join(
+  process.env.USERPROFILE ?? '',
+  'Downloads',
+  'Failed tests',
+  '11602-03-01 (NW31 Top frames) Shaft part drawings',
+  'Shaft part drawings',
+  'STP files',
+)
+const BOT = join(
+  process.env.USERPROFILE ?? '',
+  'Downloads',
+  'Failed tests',
+  '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
+)
+const HAVE = existsSync(join(TOP, 'm117.stp')) && existsSync(join(BOT, 'm128.stp'))
+
+describe.skipIf(!HAVE)('light sabre test', () => {
+  it('passes a clean RHS and fails the shaved PFC end', async () => {
+    await ensureOc()
+    const good = await sabreTest(new Uint8Array(readFileSync(join(TOP, 'm117.stp'))))
+    expect(good.ok).toBe(true)
+
+    const bad = await sabreTest(new Uint8Array(readFileSync(join(BOT, 'm128.stp'))))
+    expect(bad.ok).toBe(false)
+    expect(bad.failures.length).toBeGreaterThan(0)
+  }, 600000)
+})

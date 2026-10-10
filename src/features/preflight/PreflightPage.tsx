@@ -46,9 +46,11 @@ import {
   type StepMeasure,
 } from '@/lib/step/measure'
 import { reconstructStepFromNc } from '@/lib/step/reconstructFromNc'
+import { type SabreResult, sabreTest } from '@/lib/step/sabre'
 import { cn } from '@/lib/utils'
 import { createOrbitBus, requestView, type ViewPreset } from './orbitSync'
 import {
+  ANALYSIS_VERSION,
   fingerprintEntries,
   loadPreflightCache,
   type PreflightCacheEntry,
@@ -66,14 +68,9 @@ const CONCURRENCY = 6
 
 const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [
   { labelKey: 'preflight.columns.mark', key: 'mark' },
-  { labelKey: 'preflight.columns.ncQty', key: 'ncQty' },
-  { labelKey: 'preflight.columns.pdfQty', key: 'pdfQty' },
-  { labelKey: 'preflight.columns.ncLen', key: 'ncLen' },
-  { labelKey: 'preflight.columns.pdfLen', key: 'pdfLen' },
+  { labelKey: 'preflight.columns.status', key: 'severity' },
+  { labelKey: 'preflight.columns.qty', key: 'qty' },
   { labelKey: 'preflight.columns.profile', key: 'profile' },
-  { labelKey: 'preflight.columns.nc', key: 'nc' },
-  { labelKey: 'preflight.columns.step', key: 'step' },
-  { labelKey: 'preflight.columns.pdf', key: 'pdf' },
   { labelKey: 'preflight.columns.model', key: 'model' },
 ]
 
@@ -109,10 +106,11 @@ const SEVERITY_VARIANT = {
 } as const
 
 /**
- * A per-part STEP fix the user applied: cleaned (stray bodies dropped), rebuilt from the NC,
- * or simplified (a face's uncuttable step left flat).
+ * A per-part STEP fix the user applied: cleaned (stray bodies dropped) or rebuilt from the NC.
+ * There is deliberately no auto "simplify" fix — a sudden uncuttable step is a judgement call
+ * (cut at an angle on the radius), so it is flagged as an error and left alone.
  */
-type StepFixKind = 'cleaned' | 'regenerated' | 'simplified'
+type StepFixKind = 'cleaned' | 'regenerated'
 interface StepOverride {
   bytes: Uint8Array
   kind: StepFixKind
@@ -120,10 +118,18 @@ interface StepOverride {
 
 /** A finding an override resolves — greyed out in the list, with an undo. */
 function resolvedFindings(kind: StepFixKind): string[] {
-  if (kind === 'regenerated') return ['STRAY_BODY', 'MANUFACTURE_MISMATCH']
-  if (kind === 'simplified')
-    return ['CUT_STEP', 'CUT_END_PIECE', 'MANUFACTURE_MISMATCH', 'STRAY_BODY']
+  if (kind === 'regenerated')
+    return ['STRAY_BODY', 'MANUFACTURE_MISMATCH', 'MANUFACTURE_BORDERLINE']
   return ['STRAY_BODY']
+}
+
+/** Grades an NC-vs-STEP mismatch: massive = error, borderline = warning, close = ok. */
+function mismatchGrade(comparison: ModelComparison): 'ok' | 'warning' | 'error' {
+  if (!comparison.sizeOk) return 'error'
+  const delta = Math.abs(comparison.volumeDelta)
+  if (delta > 0.1) return 'error'
+  if (delta > 0.01) return 'warning'
+  return 'ok'
 }
 
 /** Formats a measured-vs-expected size check for display (localised). */
@@ -179,6 +185,8 @@ export function PreflightPage() {
   )
   /** Per-part laser-cut manufacturability issues (sudden thickness steps). */
   const [cutIssues, setCutIssues] = useState<Map<string, Finding[]>>(new Map())
+  /** Per-part light-sabre test results (can a ~35 mm beam cut each surface in one clean pass?). */
+  const [sabreChecks, setSabreChecks] = useState<Map<string, SabreResult>>(new Map())
   const [checking, setChecking] = useState(false)
   /** True from when a job is dropped until the whole analysis (drawings + models) finishes. */
   const [analyzing, setAnalyzing] = useState(false)
@@ -224,6 +232,7 @@ export function PreflightPage() {
         setModelChecks(new Map(cached.modelChecks))
         setManufactureChecks(new Map(cached.manufactureChecks))
         setCutIssues(new Map(cached.cutIssues))
+        setSabreChecks(new Map(cached.sabreChecks ?? []))
         setAnalyzing(false)
         return
       }
@@ -251,6 +260,7 @@ export function PreflightPage() {
       setModelChecks(cached.modelChecks)
       setManufactureChecks(cached.manufactureChecks)
       setCutIssues(cached.cutIssues)
+      setSabreChecks(new Map(cached.sabreChecks ?? []))
       setAnalyzing(false)
     })
     return () => {
@@ -366,6 +376,7 @@ export function PreflightPage() {
     setModelChecks(new Map())
     setManufactureChecks(new Map())
     setCutIssues(new Map())
+    setSabreChecks(new Map())
     let cancelled = false
 
     const pdfParts = result.parts.filter((part) => {
@@ -416,7 +427,7 @@ export function PreflightPage() {
         for (const issue of assessManufacturability(new TextDecoder().decode(ncBytes))) {
           const list = issues.get(part.mark) ?? []
           list.push({
-            severity: 'warning',
+            severity: issue.severity,
             code: issue.code,
             mark: part.mark,
             message: issue.message,
@@ -488,9 +499,23 @@ export function PreflightPage() {
           // best-effort: skip parts the rebuild can't handle
         }
       }
+      // Phase 5: the light-sabre test — can a ~35 mm straight beam cut each surface in one clean
+      // pass, or does it end up inside the body? Run on the STEP solid (real geometry).
+      const sabre = new Map<string, SabreResult>()
+      for (const part of result.parts) {
+        if (cancelled) return
+        const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
+        if (!bytes) continue
+        try {
+          sabre.set(part.mark, await sabreTest(new Uint8Array(bytes)))
+        } catch {
+          // best-effort: a model the tester can't mesh is skipped
+        }
+      }
       if (!cancelled) {
         setManufactureChecks(new Map(manufacture))
         setCutIssues(new Map(issues))
+        setSabreChecks(new Map(sabre))
         setChecking(false)
         setAnalyzing(false)
         if (preflightCacheEnabled) {
@@ -502,6 +527,8 @@ export function PreflightPage() {
             modelChecks: checks,
             manufactureChecks: manufacture,
             cutIssues: issues,
+            sabreChecks: sabre,
+            analysisVersion: ANALYSIS_VERSION,
             fingerprint: fingerprintEntries(entries),
             savedAt: Date.now(),
           }
@@ -515,15 +542,6 @@ export function PreflightPage() {
       cancelled = true
     }
   }, [result, bytesByPath])
-
-  /** True when the NC quantity disagrees with the drawing (ground truth). */
-  const drawingQtyMismatch = useCallback(
-    (part: PartRecord) => {
-      const material = drawingMaterials.get(part.mark)
-      return material != null && part.nc?.quantity != null && material.qty !== part.nc.quantity
-    },
-    [drawingMaterials],
-  )
 
   const allFindings = useMemo(() => {
     if (!result) return []
@@ -550,18 +568,40 @@ export function PreflightPage() {
         })
       }
       const manufacture = manufactureChecks.get(part.mark)
-      if (manufacture && !manufacture.ok) {
+      const grade = manufacture ? mismatchGrade(manufacture) : 'ok'
+      if (manufacture && grade !== 'ok') {
         const note = formatModelComparison(t, manufacture)
-        extra.push({
-          severity: 'warning',
-          code: 'MANUFACTURE_MISMATCH',
-          mark: part.mark,
-          message: `${note} — can regenerate STEP from the NC`,
-          params: { note },
-        })
+        if (grade === 'error') {
+          extra.push({
+            severity: 'error',
+            code: 'MANUFACTURE_MISMATCH',
+            mark: part.mark,
+            message: `${note} — the model is badly wrong; regenerate the STEP from the NC`,
+            params: { note },
+          })
+        } else {
+          extra.push({
+            severity: 'warning',
+            code: 'MANUFACTURE_BORDERLINE',
+            mark: part.mark,
+            message: `${note} — borderline (commonly the section's end radii); check before running`,
+            params: { note },
+          })
+        }
       }
       const cut = cutIssues.get(part.mark)
       if (cut) extra.push(...cut)
+      const sabre = sabreChecks.get(part.mark)
+      if (sabre && !sabre.ok) {
+        const area = Math.round(sabre.failures.reduce((sum, f) => sum + f.area, 0))
+        extra.push({
+          severity: 'error',
+          code: 'CUT_SABRE',
+          mark: part.mark,
+          message: `Light-sabre test failed: a straight ~35 mm beam ends inside the body on ${sabre.failures.length} surface(s) (~${area} mm²) — not manufacturable`,
+          params: { count: sabre.failures.length, area },
+        })
+      }
     }
     return [...result.findings, ...extra]
       .filter((finding) => finding.severity !== 'info')
@@ -570,12 +610,25 @@ export function PreflightPage() {
           SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
           (a.mark ?? '').localeCompare(b.mark ?? ''),
       )
-  }, [result, drawingMaterials, modelChecks, manufactureChecks, cutIssues, t])
+  }, [result, drawingMaterials, modelChecks, manufactureChecks, cutIssues, sabreChecks, t])
 
   const counts = useMemo(() => {
     const result = { error: 0, warning: 0, info: 0 }
     for (const finding of allFindings) result[finding.severity]++
     return result
+  }, [allFindings])
+
+  /** Per-part worst severity, so the table shows clean vs warning/error at a glance. */
+  const partSeverity = useMemo(() => {
+    const map = new Map<string, { error: number; warning: number }>()
+    for (const finding of allFindings) {
+      if (!finding.mark) continue
+      const current = map.get(finding.mark) ?? { error: 0, warning: 0 }
+      if (finding.severity === 'error') current.error++
+      else if (finding.severity === 'warning') current.warning++
+      map.set(finding.mark, current)
+    }
+    return map
   }, [allFindings])
 
   const findings = useMemo(() => {
@@ -589,6 +642,19 @@ export function PreflightPage() {
     () => (viewing ? allFindings.filter((finding) => finding.mark === viewing.mark) : []),
     [viewing, allFindings],
   )
+
+  /** Faces of the viewed part flagged not-manufacturable, so the NC view can draw them red. */
+  const viewerBadFaces = useMemo(() => {
+    if (!viewing) return []
+    const faces = new Set<string>()
+    for (const issue of cutIssues.get(viewing.mark) ?? []) {
+      for (const face of String(issue.params?.faces ?? '').split(',')) {
+        const trimmed = face.trim()
+        if (trimmed) faces.add(trimmed)
+      }
+    }
+    return [...faces]
+  }, [viewing, cutIssues])
 
   // Parts table sorting — defaults to worst-problem-first so triage is quick.
   const [sort, setSort] = useState<{ key: PartSortKey; dir: 1 | -1 }>({ key: 'severity', dir: 1 })
@@ -641,17 +707,6 @@ export function PreflightPage() {
     [manufactureChecks, stepOverrides],
   )
 
-  /** A part can be simplified when its NC carries an uncuttable step (and isn't simplified). */
-  const isSimplifiable = useCallback(
-    (part: PartRecord | undefined) =>
-      Boolean(
-        part?.nc &&
-          (cutIssues.get(part.mark)?.length ?? 0) > 0 &&
-          stepOverrides.get(part.mark)?.kind !== 'simplified',
-      ),
-    [cutIssues, stepOverrides],
-  )
-
   const setOverride = useCallback((mark: string, bytes: Uint8Array, kind: StepFixKind) => {
     setStepOverrides((prev) => {
       const next = new Map(prev)
@@ -699,29 +754,6 @@ export function PreflightPage() {
         const reference = part.step ? bytesByPath.get(part.step.path) : undefined
         const step = await reconstructStepFromNc(new TextDecoder().decode(ncBytes), { reference })
         if (step) setOverride(part.mark, new TextEncoder().encode(step), 'regenerated')
-      } catch {
-        // leave the original in place if the rebuild fails
-      } finally {
-        setFixingMark(null)
-      }
-    },
-    [bytesByPath, setOverride],
-  )
-
-  /** Leaves a face's uncuttable step flat, rebuilding the part from its NC without that cut. */
-  const simplifyPart = useCallback(
-    async (part: PartRecord) => {
-      const ncPath = part.nc?.path
-      const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
-      if (!ncBytes) return
-      setFixingMark(part.mark)
-      try {
-        const reference = part.step ? bytesByPath.get(part.step.path) : undefined
-        const step = await reconstructStepFromNc(new TextDecoder().decode(ncBytes), {
-          simplify: true,
-          reference,
-        })
-        if (step) setOverride(part.mark, new TextEncoder().encode(step), 'simplified')
       } catch {
         // leave the original in place if the rebuild fails
       } finally {
@@ -906,18 +938,6 @@ export function PreflightPage() {
                                     : t('common.actions.regenerateStep')}
                                 </Button>
                               )}
-                              {!resolved && isSimplifiable(viewable) && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  disabled={fixingMark === viewable?.mark}
-                                  onClick={() => viewable && void simplifyPart(viewable)}
-                                >
-                                  {fixingMark === viewable?.mark
-                                    ? t('common.actions.working')
-                                    : t('common.actions.simplify')}
-                                </Button>
-                              )}
                               {!resolved && isCleanable(viewable) && (
                                 <Button
                                   variant="outline"
@@ -987,118 +1007,127 @@ export function PreflightPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card">
-                  {sortedParts.map((part) => (
-                    <TableRow key={part.mark}>
-                      <TableCell className="font-mono text-xs">{part.mark}</TableCell>
-                      <TableCell
-                        className={cn(
-                          drawingQtyMismatch(part) &&
-                            'bg-destructive/15 font-semibold text-destructive-foreground',
-                        )}
-                      >
-                        {part.nc?.quantity ?? '—'}
-                      </TableCell>
-                      <TableCell>
-                        {drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? '—'}
-                      </TableCell>
-                      <TableCell>{part.nc?.length ?? '—'}</TableCell>
-                      <TableCell>
-                        {drawingMaterials.get(part.mark)?.length ?? part.expected?.length ?? '—'}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {part.nc?.profile ?? part.expected?.profile ?? '—'}
-                      </TableCell>
-                      <TableCell>
-                        <Status value={part.nc ? part.nc.valid : null} />
-                      </TableCell>
-                      <TableCell>
-                        <Status value={part.step ? part.step.valid : null} />
-                      </TableCell>
-                      <TableCell>
-                        <Status value={part.pdf ? part.pdf.valid : null} />
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        {overrideFor(part) ? (
-                          <Badge variant="success">
-                            {overrideFor(part)?.kind
-                              ? t(`common.fix.${overrideFor(part)?.kind}`)
-                              : ''}
-                          </Badge>
-                        ) : modelChecks.has(part.mark) ? (
-                          <span
-                            className={
-                              modelChecks.get(part.mark)?.ok ? 'text-emerald-400' : 'text-amber-400'
+                  {sortedParts.map((part) => {
+                    const severity = partSeverity.get(part.mark)
+                    const errorCount = severity?.error ?? 0
+                    const warningCount = severity?.warning ?? 0
+                    const material = drawingMaterials.get(part.mark)
+                    const pdfQty = material?.qty ?? part.expected?.qty ?? null
+                    const ncQty = part.nc?.quantity ?? null
+                    const qtyMismatch = pdfQty != null && ncQty != null && pdfQty !== ncQty
+                    const qtyFallback = pdfQty == null && ncQty != null
+                    return (
+                      <TableRow key={part.mark}>
+                        <TableCell className="font-mono text-xs">{part.mark}</TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={
+                              errorCount > 0
+                                ? 'destructive'
+                                : warningCount > 0
+                                  ? 'warning'
+                                  : 'success'
                             }
                           >
-                            {formatSizeCheck(t, modelChecks.get(part.mark))}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {part.step || part.nc ? (
-                          <div className="flex justify-end gap-1">
-                            {overrideFor(part) ? (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => undoOverride(part.mark)}
-                              >
-                                <Undo2 />
-                                {t('common.actions.undo')}
+                            {errorCount > 0
+                              ? `${t('preflight.status.error')}${errorCount > 1 ? ` ×${errorCount}` : ''}`
+                              : warningCount > 0
+                                ? `${t('preflight.status.warning')}${warningCount > 1 ? ` ×${warningCount}` : ''}`
+                                : t('preflight.status.ok')}
+                          </Badge>
+                        </TableCell>
+                        <TableCell
+                          className={cn(qtyMismatch && 'font-semibold text-destructive-foreground')}
+                          title={
+                            qtyMismatch
+                              ? t('preflight.qty.mismatchTitle', { nc: ncQty, pdf: pdfQty })
+                              : qtyFallback
+                                ? t('preflight.qty.fallbackTitle')
+                                : undefined
+                          }
+                        >
+                          {pdfQty ?? ncQty ?? '—'}
+                          {qtyMismatch && <span className="ml-1 text-xs">≠ {ncQty}</span>}
+                          {qtyFallback && (
+                            <span className="ml-1 text-xs text-muted-foreground">(NC)</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {part.nc?.profile ?? part.expected?.profile ?? '—'}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {overrideFor(part) ? (
+                            <Badge variant="success">
+                              {overrideFor(part)?.kind
+                                ? t(`common.fix.${overrideFor(part)?.kind}`)
+                                : ''}
+                            </Badge>
+                          ) : modelChecks.has(part.mark) ? (
+                            <span
+                              className={
+                                modelChecks.get(part.mark)?.ok
+                                  ? 'text-emerald-400'
+                                  : 'text-amber-400'
+                              }
+                            >
+                              {formatSizeCheck(t, modelChecks.get(part.mark))}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {part.step || part.nc ? (
+                            <div className="flex justify-end gap-1">
+                              {overrideFor(part) ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => undoOverride(part.mark)}
+                                >
+                                  <Undo2 />
+                                  {t('common.actions.undo')}
+                                </Button>
+                              ) : (
+                                <>
+                                  {isRegeneratable(part) && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      disabled={fixingMark === part.mark}
+                                      onClick={() => void regeneratePart(part)}
+                                    >
+                                      {fixingMark === part.mark
+                                        ? t('common.actions.working')
+                                        : t('common.actions.regenerateStep')}
+                                    </Button>
+                                  )}
+                                  {isCleanable(part) && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      disabled={fixingMark === part.mark}
+                                      onClick={() => void cleanPart(part)}
+                                    >
+                                      {fixingMark === part.mark
+                                        ? t('common.actions.cleaning')
+                                        : t('common.actions.cleanStep')}
+                                    </Button>
+                                  )}
+                                </>
+                              )}
+                              <Button variant="ghost" size="sm" onClick={() => openPart(part)}>
+                                <Eye />
+                                {t('common.actions.view')}
                               </Button>
-                            ) : (
-                              <>
-                                {isRegeneratable(part) && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={fixingMark === part.mark}
-                                    onClick={() => void regeneratePart(part)}
-                                  >
-                                    {fixingMark === part.mark
-                                      ? t('common.actions.working')
-                                      : t('common.actions.regenerateStep')}
-                                  </Button>
-                                )}
-                                {isSimplifiable(part) && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={fixingMark === part.mark}
-                                    onClick={() => void simplifyPart(part)}
-                                  >
-                                    {fixingMark === part.mark
-                                      ? t('common.actions.working')
-                                      : t('common.actions.simplify')}
-                                  </Button>
-                                )}
-                                {isCleanable(part) && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={fixingMark === part.mark}
-                                    onClick={() => void cleanPart(part)}
-                                  >
-                                    {fixingMark === part.mark
-                                      ? t('common.actions.cleaning')
-                                      : t('common.actions.cleanStep')}
-                                  </Button>
-                                )}
-                              </>
-                            )}
-                            <Button variant="ghost" size="sm" onClick={() => openPart(part)}>
-                              <Eye />
-                              {t('common.actions.view')}
-                            </Button>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </CardContent>
@@ -1256,7 +1285,7 @@ export function PreflightPage() {
                         </div>
                       }
                     >
-                      <Nc3dViewer bytes={ncBytes} bus={orbitBus} />
+                      <Nc3dViewer bytes={ncBytes} bus={orbitBus} badFaces={viewerBadFaces} />
                     </Suspense>
                   ) : pdfUrl ? (
                     <iframe
@@ -1440,16 +1469,6 @@ function Stat({
       </span>
       <span className="text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
     </div>
-  )
-}
-
-function Status({ value }: { value: boolean | null }) {
-  const { t } = useTranslation()
-  if (value === null) return <Badge variant="muted">{t('common.status.missing')}</Badge>
-  return (
-    <Badge variant={value ? 'success' : 'destructive'}>
-      {value ? t('common.status.ok') : t('common.status.bad')}
-    </Badge>
   )
 }
 

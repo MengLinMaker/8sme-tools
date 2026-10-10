@@ -98,7 +98,9 @@ async function orientToReference(solid: SolidOps, reference: Uint8Array): Promis
       }
     }
   }
-  return (best ?? solid) as unknown as SolidOps
+  // No transform fits (e.g. the reference is a corrupt/degenerate STEP): keep the native frame.
+  if (!best || bestScore < 0.1) return solid
+  return best as unknown as SolidOps
 }
 
 export interface ReconstructOptions {

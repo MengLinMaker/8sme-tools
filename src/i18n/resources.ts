@@ -115,15 +115,19 @@ export const en = {
     },
     columns: {
       mark: 'Mark',
-      ncQty: 'NC qty',
-      pdfQty: 'PDF qty',
-      ncLen: 'NC len',
-      pdfLen: 'PDF len',
+      status: 'Status',
+      qty: 'QTY',
       profile: 'Profile',
-      nc: 'NC',
-      step: 'STEP',
-      pdf: 'PDF',
       model: 'Model size',
+    },
+    qty: {
+      fallbackTitle: 'No drawing qty — showing NC qty',
+      mismatchTitle: 'NC qty {{nc}} differs from drawing qty {{pdf}}',
+    },
+    status: {
+      ok: 'OK',
+      error: 'Error',
+      warning: 'Warning',
     },
     viewer: {
       dialogTitle: '{{mark}} · drawing + 3D',
@@ -257,7 +261,11 @@ export const en = {
     PART_LIST_NO_FILES: 'Part list lists {{part}} but no NC/STEP/PDF files were found',
     NO_PART_LIST: 'No part list (.xlsx) found — quantity cross-checks were skipped',
     STRAY_BODY: 'STEP has {{bodies}} solid bodies — extra floating piece(s); can be cleaned',
-    MANUFACTURE_MISMATCH: '{{note}} — can regenerate STEP from the NC',
+    CUT_SABRE:
+      'Light-sabre test failed: a straight ~35 mm beam ends inside the body on {{count}} surface(s) (~{{area}} mm²) — not manufacturable',
+    MANUFACTURE_MISMATCH: '{{note}} — the model is badly wrong; regenerate the STEP from the NC',
+    MANUFACTURE_BORDERLINE:
+      "{{note}} — borderline (commonly the section's end radii); check before running",
   },
 } as const
 
@@ -377,15 +385,19 @@ export const zh = {
     },
     columns: {
       mark: '标记',
-      ncQty: 'NC 数量',
-      pdfQty: 'PDF 数量',
-      ncLen: 'NC 长度',
-      pdfLen: 'PDF 长度',
+      status: '状态',
+      qty: '数量',
       profile: '型材',
-      nc: 'NC',
-      step: 'STEP',
-      pdf: 'PDF',
       model: '模型尺寸',
+    },
+    qty: {
+      fallbackTitle: '无图纸数量——显示 NC 数量',
+      mismatchTitle: 'NC 数量 {{nc}} 与图纸数量 {{pdf}} 不一致',
+    },
+    status: {
+      ok: '正常',
+      error: '错误',
+      warning: '警告',
     },
     viewer: {
       dialogTitle: '{{mark}} · 图纸 + 3D',
@@ -516,7 +528,10 @@ export const zh = {
     PART_LIST_NO_FILES: '零件清单列出了 {{part}}，但未找到对应的 NC/STEP/PDF 文件',
     NO_PART_LIST: '未找到零件清单（.xlsx）——已跳过数量交叉核对',
     STRAY_BODY: 'STEP 含 {{bodies}} 个实体——存在多余悬浮件；可清理',
-    MANUFACTURE_MISMATCH: '{{note}}——可根据 NC 重建 STEP',
+    CUT_SABRE:
+      '光剑测试未通过：约 35 mm 的直光束在 {{count}} 个表面处终止于零件内部（约 {{area}} mm²）——无法制造',
+    MANUFACTURE_MISMATCH: '{{note}}——模型严重错误；请根据 NC 重建 STEP',
+    MANUFACTURE_BORDERLINE: '{{note}}——临界（通常为型材端部圆弧）；运行前请核对',
   },
 } as const
 

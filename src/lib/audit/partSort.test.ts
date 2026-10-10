@@ -44,13 +44,13 @@ describe('sortParts', () => {
     ])
   })
 
-  it('sorts by a numeric column and reverses', () => {
+  it('sorts by the quantity column and reverses', () => {
     const parts = [
       { mark: 'a', nc: { quantity: 3 } } as PartRecord,
       { mark: 'b', nc: { quantity: 1 } } as PartRecord,
     ]
     const ctx = context([])
-    expect(sortParts(parts, 'ncQty', 1, ctx).map((p) => p.mark)).toEqual(['b', 'a'])
-    expect(sortParts(parts, 'ncQty', -1, ctx).map((p) => p.mark)).toEqual(['a', 'b'])
+    expect(sortParts(parts, 'qty', 1, ctx).map((p) => p.mark)).toEqual(['b', 'a'])
+    expect(sortParts(parts, 'qty', -1, ctx).map((p) => p.mark)).toEqual(['a', 'b'])
   })
 })

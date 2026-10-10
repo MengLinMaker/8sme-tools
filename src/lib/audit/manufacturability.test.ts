@@ -19,6 +19,14 @@ const RECT = `  o       0.00       0.00       0.00       0.00       0.00       0
        100.00     100.00       0.00       0.00       0.00       0.00       0.00
          0.00     100.00       0.00       0.00       0.00       0.00       0.00`
 
+/** A shallow step (20 mm) — within the head's ~30 mm reach, so not flagged. */
+const SHALLOW = `  o       0.00       0.00       0.00       0.00       0.00       0.00       0.00
+       100.00       0.00       0.00       0.00       0.00       0.00       0.00
+       100.00      30.00       0.00       0.00       0.00       0.00       0.00
+        60.00      30.00       0.00       0.00       0.00       0.00       0.00
+        60.00      50.00       0.00       0.00       0.00       0.00       0.00
+         0.00      50.00       0.00       0.00       0.00       0.00       0.00`
+
 const BEVEL = `  o       0.00       0.00       0.00       0.00       0.00       0.00       0.00
        100.00       0.00       0.00     -20.00       9.00       0.00       0.00
        100.00     100.00       0.00       0.00       0.00       0.00       0.00
@@ -32,6 +40,13 @@ describe('manufacturability', () => {
     const issues = assessManufacturability(nc(STEP))
     expect(issues.map((i) => i.code)).toEqual(['CUT_STEP'])
     expect(issues[0]?.params?.depth).toBe('70')
+    // Deeper than the head can reach → an unmanufacturable error, not a fixable warning.
+    expect(issues[0]?.severity).toBe('error')
+  })
+
+  it('ignores a shallow step within the head reach', () => {
+    expect(contourStepDepth(first(nc(SHALLOW)))).toBeCloseTo(20, 0)
+    expect(assessManufacturability(nc(SHALLOW))).toEqual([])
   })
 
   it('ignores an end cut (material on one side only)', () => {

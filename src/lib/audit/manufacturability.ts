@@ -8,8 +8,8 @@ import { type NcContour, parseNcGeometry } from '@/lib/parsers/ncGeometry'
  * - A **sudden change in thickness** cannot be cut, because the beam has to reach the
  *   material to remove it — only a joint where two faces meet produces an abrupt edge.
  *
- * These are heuristics on the face outlines, surfaced to the operator as findings with a
- * suggested simplification. They are advisory, not exact.
+ * These are heuristics on the face outlines, surfaced to the operator as findings. They are
+ * advisory, not exact — the operator makes the final call on how (or whether) to cut.
  */
 
 /** Non-zero bevel/weld-prep value threshold (mm or degrees). */
@@ -18,9 +18,16 @@ const BEVEL_EPS = 1e-6
 const STEP_DX = 1.0
 /** ...and |ΔY| at least this (mm) — a sudden, not gradual, change. */
 const STEP_DY = 10.0
+/**
+ * The cutting head can only reach ~3 cm (30–40 mm) into a cut. A step deeper than this cannot be
+ * reached by sweeping one face: it is not manufacturable as drawn and would crash the head.
+ */
+export const UNMANUFACTURABLE_DEPTH = 30.0
 
 export interface ManufacturabilityIssue {
   code: 'CUT_STEP'
+  /** All current issues are unmanufacturable, so they surface as errors. */
+  severity: 'error'
   message: string
   params?: Record<string, string | number>
 }
@@ -98,9 +105,11 @@ export function contourHasStep(contour: NcContour): boolean {
 }
 
 /**
- * Runs the manufacturability checks over every outer face contour in an NC file. Currently
- * flags a sudden thickness change (a deep, near-vertical step with material both sides) —
- * which a single-face laser sweep cannot reach. Bevels are captured separately (see
+ * Runs the manufacturability checks over every outer face contour in an NC file. Flags a sudden
+ * thickness change deeper than the head can reach (`UNMANUFACTURABLE_DEPTH`) — material on both
+ * sides of a deep near-vertical step, which a single-face laser sweep cannot cut. This is a
+ * judgement call (e.g. the fix is to cut at an angle on the radius so the side doesn't exist),
+ * so it is surfaced as an **error** and never auto-fixed. Bevels are captured separately (see
  * `contourHasBevel`) and are surfaced by viewing rather than as a finding.
  */
 export function assessManufacturability(ncText: string): ManufacturabilityIssue[] {
@@ -112,7 +121,7 @@ export function assessManufacturability(ncText: string): ManufacturabilityIssue[
   const faces: string[] = []
   for (const contour of outer) {
     const contourDepth = contourStepDepth(contour)
-    if (contourDepth > 0) {
+    if (contourDepth >= UNMANUFACTURABLE_DEPTH) {
       depth = Math.max(depth, contourDepth)
       faces.push(contour.face)
     }
@@ -121,7 +130,8 @@ export function assessManufacturability(ncText: string): ManufacturabilityIssue[
     const faceList = [...new Set(faces)].join(', ')
     issues.push({
       code: 'CUT_STEP',
-      message: `Sudden ${depth.toFixed(0)} mm thickness change on face(s) ${faceList} — cannot be laser cut as drawn; simplify to a flat surface or split the joint`,
+      severity: 'error',
+      message: `Not manufacturable: a sudden ${depth.toFixed(0)} mm thickness change on face(s) ${faceList} is past the ~${UNMANUFACTURABLE_DEPTH.toFixed(0)} mm the head can reach — it would damage the machine. Cut at an angle on the radius (a manual judgement), it can't be swept in one pass`,
       params: { depth: depth.toFixed(0), faces: faceList },
     })
   }

@@ -1,13 +1,6 @@
 import type { AnyShape } from 'replicad'
 import type { RolledSection } from '@/lib/sections/types'
-import {
-  engrave,
-  ensureFont,
-  placeRealPart,
-  teeProfiles,
-  ubOutline,
-  writeStep,
-} from './occ'
+import { engrave, ensureFont, placeRealPart, teeProfiles, ubOutline, writeStep } from './occ'
 import { ensureOc } from './occInit'
 
 /**
@@ -138,7 +131,8 @@ export async function buildCutBeamStep(input: CutBeamInput): Promise<string> {
   }
 
   // 2. Lengthwise split: a kerf-wide slot on the web neutral axis (only the web is at y≈0).
-  const splitEnd = splitMode === 'full' ? input.stockLength : Math.min(input.stockLength, lastEnd + k)
+  const splitEnd =
+    splitMode === 'full' ? input.stockLength : Math.min(input.stockLength, lastEnd + k)
   if (splitEnd > 0) cut(slab(-hb - 2, -k / 2, hb + 2, k / 2, -1, splitEnd))
 
   // 3. Transverse kerf cuts at each part boundary, across the half the part sits in.

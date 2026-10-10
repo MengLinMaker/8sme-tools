@@ -49,7 +49,11 @@ function project(face: string, x: number, y: number, length: number, info: FaceI
   return [ox, oy, -half] // h
 }
 
-function segmentsFor(geometry: NcGeometry): { outer: Point[]; inner: Point[]; holes: Point[] } {
+function segmentsFor(geometry: NcGeometry): {
+  outerByFace: Map<string, Point[]>
+  inner: Point[]
+  holes: Point[]
+} {
   let length = 0
   for (const contour of geometry.contours) {
     for (const [x] of contour.points) length = Math.max(length, x)
@@ -57,7 +61,7 @@ function segmentsFor(geometry: NcGeometry): { outer: Point[]; inner: Point[]; ho
   for (const hole of geometry.holes) length = Math.max(length, hole.x + hole.diameter / 2)
   const width = Math.max(1, ...['v', 'o', 'u', 'h'].map((face) => faceWidth(geometry, face)))
   const info: FaceInfo = { width }
-  const outer: Point[] = []
+  const outerByFace = new Map<string, Point[]>()
   const inner: Point[] = []
   const holes: Point[] = []
 
@@ -72,7 +76,14 @@ function segmentsFor(geometry: NcGeometry): { outer: Point[]; inner: Point[]; ho
 
   for (const contour of geometry.contours) {
     const points = contour.points.map((p) => [p[0], p[1]])
-    addContour(contour.kind === 'inner' ? inner : outer, points, contour.face)
+    if (contour.kind === 'inner') {
+      addContour(inner, points, contour.face)
+    } else {
+      const face = contour.face
+      const target = outerByFace.get(face) ?? []
+      addContour(target, points, face)
+      outerByFace.set(face, target)
+    }
   }
   for (const hole of geometry.holes) {
     const r = hole.diameter / 2
@@ -89,7 +100,7 @@ function segmentsFor(geometry: NcGeometry): { outer: Point[]; inner: Point[]; ho
       )
     }
   }
-  return { outer, inner, holes }
+  return { outerByFace, inner, holes }
 }
 
 function toGeometry(points: Point[]): BufferGeometry {
@@ -99,7 +110,12 @@ function toGeometry(points: Point[]): BufferGeometry {
   return geometry
 }
 
-function mountScene(container: HTMLElement, geometry: NcGeometry, bus: OrbitBus): () => void {
+function mountScene(
+  container: HTMLElement,
+  geometry: NcGeometry,
+  bus: OrbitBus,
+  badFaces: Set<string>,
+): () => void {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   renderer.setSize(container.clientWidth || 1, container.clientHeight || 1)
@@ -113,14 +129,18 @@ function mountScene(container: HTMLElement, geometry: NcGeometry, bus: OrbitBus)
   scene.add(key)
 
   const group = new Group()
-  const { outer, inner, holes } = segmentsFor(geometry)
+  const { outerByFace, inner, holes } = segmentsFor(geometry)
   const lines: LineSegments[] = []
   const materials: LineBasicMaterial[] = []
-  for (const [points, color] of [
-    [outer, 0x3ddc84],
-    [inner, 0xf59e0b],
-    [holes, 0x38bdf8],
-  ] as [Point[], number][]) {
+  // Outer contours, coloured red on any face flagged not-manufacturable and green otherwise.
+  const outerLines: [Point[], number][] = [...outerByFace.entries()].map(([face, points]) => [
+    points,
+    badFaces.has(face) ? 0xef4444 : 0x3ddc84,
+  ])
+  for (const [points, color] of [...outerLines, [inner, 0xf59e0b], [holes, 0x38bdf8]] as [
+    Point[],
+    number,
+  ][]) {
     if (points.length === 0) continue
     const material = new LineBasicMaterial({ color })
     materials.push(material)
@@ -200,7 +220,18 @@ function mountScene(container: HTMLElement, geometry: NcGeometry, bus: OrbitBus)
   }
 }
 
-export default function Nc3dViewer({ bytes, bus }: { bytes: Uint8Array; bus: OrbitBus }) {
+const NO_BAD_FACES: string[] = []
+
+export default function Nc3dViewer({
+  bytes,
+  bus,
+  badFaces = NO_BAD_FACES,
+}: {
+  bytes: Uint8Array
+  bus: OrbitBus
+  /** Faces flagged not-manufacturable — their outer contours draw red. */
+  badFaces?: string[]
+}) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const [empty, setEmpty] = useState(false)
@@ -213,8 +244,8 @@ export default function Nc3dViewer({ bytes, bus }: { bytes: Uint8Array; bus: Orb
       return
     }
     setEmpty(false)
-    return mountScene(containerRef.current, geometry, bus)
-  }, [bytes, bus])
+    return mountScene(containerRef.current, geometry, bus, new Set(badFaces))
+  }, [bytes, bus, badFaces])
 
   return (
     <div className="relative h-full w-full">
