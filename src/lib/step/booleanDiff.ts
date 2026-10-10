@@ -353,6 +353,49 @@ export function booleanDiffRaw(
   }
 }
 
+export interface DiffPresence {
+  /** STEP triangles standing clear of manufactured (red flags) */
+  overShare: number
+  /** manufactured triangles standing clear of STEP (blue flags) */
+  underShare: number
+  /** true when either share clears the keep bar — worth running the full boolean */
+  found: boolean
+}
+
+/** Largest input the fast presence probe attempts (bigger skips straight to the full path). */
+export const PROBE_TRIANGLE_BUDGET = 60_000
+
+/**
+ * Fast diff-presence check, no CSG: symmetric per-triangle clearance shares
+ * (~0.1–0.5 s on real parts vs seconds for the full boolean). Lets the viewer
+ * report "differences found, building the full overlay" long before the exact
+ * solids land. Returns null when it cannot tell (both sides empty or huge
+ * inputs); an empty-vs-solid pair reports a total diff, not null.
+ * A negative is not a clean bill — flush void fills (chunky but fully
+ * touching) only show up in the full boolean.
+ */
+export function probeDiffPresence(
+  primaryParts: DiffSoup[],
+  compareParts: DiffSoup[],
+  primaryMatrix: Matrix4,
+  compareMatrix: Matrix4,
+): DiffPresence | null {
+  const primary = toWorldSoup(primaryParts, primaryMatrix)
+  const compare = toWorldSoup(compareParts, compareMatrix)
+  const triTotal =
+    Math.floor(primary.triangles.length / 3) + Math.floor(compare.triangles.length / 3)
+  if (triTotal === 0 || triTotal > PROBE_TRIANGLE_BUDGET) return null
+  const queryPrimary = createMeshQuery(primary.vertices, primary.triangles, KEEP_CLEAR_MM)
+  const queryCompare = createMeshQuery(compare.vertices, compare.triangles, KEEP_CLEAR_MM)
+  const overShare = diffFraction(queryPrimary.flagFar(compare.vertices, compare.triangles))
+  const underShare = diffFraction(queryCompare.flagFar(primary.vertices, primary.triangles))
+  return {
+    overShare,
+    underShare,
+    found: Math.max(overShare, underShare) >= KEEP_CLEAR_SHARE,
+  }
+}
+
 /**
  * Runs both boolean directions between the manufactured (`primaryParts`) and STEP
  * (`compareParts`) tessellations, keeping only drawable faces on each side.

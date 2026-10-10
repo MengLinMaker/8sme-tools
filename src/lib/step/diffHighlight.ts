@@ -115,7 +115,14 @@ function cellKey(ix: number, iy: number, iz: number): string {
  * Files every triangle under each grid cell its tolerance-expanded bbox touches.
  * Expanded bboxes guarantee a query point finds any triangle whose surface passes
  * within `tolerance` — including huge triangles whose centroid is far away.
+ * Cell size is a pure performance knob (correctness holds for any size): 8 mm
+ * keeps long flange triangles to hundreds of entries instead of tens of
+ * thousands. Spans are clamped per axis as a backstop against degenerate
+ * (near-infinite-bbox) triangles — beyond the clamp only the centroid cell is
+ * filed, degrading to a conservative maybe-far answer for garbage input.
  */
+const MAX_CELLS_PER_AXIS = 512
+
 function buildTriangleIndex(
   vertices: number[],
   triangles: number[],
@@ -136,9 +143,33 @@ function buildTriangleIndex(
     const maxX = Math.max(vertices[i0], vertices[i1], vertices[i2]) + tolerance
     const maxY = Math.max(vertices[i0 + 1], vertices[i1 + 1], vertices[i2 + 1]) + tolerance
     const maxZ = Math.max(vertices[i0 + 2], vertices[i1 + 2], vertices[i2 + 2]) + tolerance
-    for (let ix = Math.floor(minX / cell); ix <= Math.floor(maxX / cell); ix++) {
-      for (let iy = Math.floor(minY / cell); iy <= Math.floor(maxY / cell); iy++) {
-        for (let iz = Math.floor(minZ / cell); iz <= Math.floor(maxZ / cell); iz++) {
+    const x0 = Math.floor(minX / cell)
+    const x1 = Math.floor(maxX / cell)
+    const y0 = Math.floor(minY / cell)
+    const y1 = Math.floor(maxY / cell)
+    const z0 = Math.floor(minZ / cell)
+    const z1 = Math.floor(maxZ / cell)
+    if (
+      x1 - x0 > MAX_CELLS_PER_AXIS ||
+      y1 - y0 > MAX_CELLS_PER_AXIS ||
+      z1 - z0 > MAX_CELLS_PER_AXIS
+    ) {
+      const key = cellKey(
+        Math.floor((minX + maxX) / 2 / cell),
+        Math.floor((minY + maxY) / 2 / cell),
+        Math.floor((minZ + maxZ) / 2 / cell),
+      )
+      let list = index.get(key)
+      if (!list) {
+        list = []
+        index.set(key, list)
+      }
+      list.push(t)
+      continue
+    }
+    for (let ix = x0; ix <= x1; ix++) {
+      for (let iy = y0; iy <= y1; iy++) {
+        for (let iz = z0; iz <= z1; iz++) {
           const key = cellKey(ix, iy, iz)
           let list = index.get(key)
           if (!list) {
@@ -164,8 +195,9 @@ function minDistanceSquaredToMesh(
   if (!candidates || candidates.length === 0) return Number.POSITIVE_INFINITY
   let best = Number.POSITIVE_INFINITY
   // Dense tessellation can stack many small triangles in one cell — cap the work
-  // per query; the closest of the first few dozen is near enough for a yes/no test.
-  const limit = Math.min(candidates.length, 48)
+  // per query; the closest of the first couple hundred is near enough for a
+  // yes/no test (cells are 8 mm, so the cap only binds in genuinely dense spots).
+  const limit = Math.min(candidates.length, 192)
   for (let k = 0; k < limit; k++) {
     const t = candidates[k]
     const i0 = triangles[t * 3] * 3
@@ -223,7 +255,7 @@ export function createMeshQuery(
   targetTriangles: number[],
   tolerance: number,
 ): MeshQuery {
-  const cell = Math.max(2, tolerance * 2)
+  const cell = Math.max(8, tolerance * 2)
   const index = buildTriangleIndex(targetVertices, targetTriangles, tolerance, cell)
   const tolSquared = tolerance * tolerance
   return {
