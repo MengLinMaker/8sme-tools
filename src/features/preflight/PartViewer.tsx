@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { syncGeometries } from 'replicad-threejs-helper'
 import {
   AmbientLight,
@@ -412,6 +413,7 @@ export default function PartViewer({
   bus = null,
   highlightStray = false,
 }: PartViewerProps) {
+  const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<SceneHandle | null>(null)
   const showStockRef = useRef(true)
@@ -424,7 +426,7 @@ export default function PartViewer({
   useEffect(() => {
     if (!bytes) {
       setStatus('error')
-      setMessage('No model to render.')
+      setMessage(t('viewer.noModel'))
       return
     }
     let disposed = false
@@ -443,7 +445,7 @@ export default function PartViewer({
         if (disposed || !containerRef.current) return
         if (step.bodies[0]?.mesh.faces.triangles.length === 0) {
           setStatus('error')
-          setMessage('The model contains no renderable geometry.')
+          setMessage(t('viewer.noGeometry'))
           return
         }
         handle = mountScene(containerRef.current, step, compare, stock, beam, bus, highlightStray)
@@ -464,7 +466,7 @@ export default function PartViewer({
       handle?.dispose()
       handleRef.current = null
     }
-  }, [name, bytes, compareBytes, stock, beam, bus, highlightStray])
+  }, [name, bytes, compareBytes, stock, beam, bus, highlightStray, t])
 
   useEffect(() => {
     showStockRef.current = showStock
@@ -488,7 +490,7 @@ export default function PartViewer({
             onClick={() => setShowStock((value) => !value)}
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
-            {showStock ? 'Hide stock' : 'Show stock'}
+            {showStock ? t('viewer.hideStock') : t('viewer.showStock')}
           </button>
         )}
         {hasCompare && (
@@ -497,7 +499,7 @@ export default function PartViewer({
             onClick={() => setFlipped((value) => !value)}
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
-            Flip {compareLabel}
+            {t('viewer.flip', { label: compareLabel })}
           </button>
         )}
         {hasStray && (
@@ -506,7 +508,7 @@ export default function PartViewer({
               className="inline-block size-3 rounded-sm border border-orange-400"
               style={{ background: 'rgba(249, 115, 22, 0.5)' }}
             />
-            Stray body
+            {t('viewer.strayBody')}
           </span>
         )}
       </div>
@@ -514,8 +516,8 @@ export default function PartViewer({
         <div className="pointer-events-none absolute inset-0 grid place-items-center px-6 text-center">
           <p className="max-w-sm text-sm text-muted-foreground">
             {status === 'loading'
-              ? 'Loading 3D model… (first view loads the ~23 MB CAD kernel)'
-              : `Could not render this model: ${message ?? 'unknown error'}`}
+              ? t('viewer.loading')
+              : t('viewer.couldNotRender', { error: message ?? t('viewer.unknownError') })}
           </p>
         </div>
       )}

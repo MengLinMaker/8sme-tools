@@ -1,6 +1,8 @@
 import { strToU8, zipSync } from 'fflate'
+import type { TFunction } from 'i18next'
 import { Eye } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -67,6 +69,7 @@ function loadSettings(): StoredSettings | null {
 }
 
 export function NestingPage() {
+  const { t } = useTranslation()
   const [bundle, setBundle] = useState<InputBundle | null>(null)
   const [groups, setGroups] = useState<TeeGroup[] | null>(null)
   const [results, setResults] = useState<NestResult[] | null>(null)
@@ -120,28 +123,31 @@ export function NestingPage() {
     bytes: stepByMark.get(unit.mark),
   })
 
-  const handleBundle = useCallback((input: InputBundle) => {
-    setBundle(input)
-    setResults(null)
-    setError(null)
-    const audit = auditEntries(input.sourceName, input.entries)
-    const tees = collectTees(audit)
-    if (tees.length === 0) {
-      setGroups(null)
-      setError('No T-sections (halved-UB parts) were found in this job.')
-      return
-    }
-    const detected = groupTees(tees)
-    setGroups(detected)
-    setRows((current) => (current.length > 0 ? current : [newRow(12000)]))
-  }, [])
+  const handleBundle = useCallback(
+    (input: InputBundle) => {
+      setBundle(input)
+      setResults(null)
+      setError(null)
+      const audit = auditEntries(input.sourceName, input.entries)
+      const tees = collectTees(audit)
+      if (tees.length === 0) {
+        setGroups(null)
+        setError(t('nesting.noTees'))
+        return
+      }
+      const detected = groupTees(tees)
+      setGroups(detected)
+      setRows((current) => (current.length > 0 ? current : [newRow(12000)]))
+    },
+    [t],
+  )
 
   const nest = () => {
     if (!groups) return
     setError(null)
     const inventory = stock()
     if (inventory.length === 0) {
-      setError('Add at least one stock length.')
+      setError(t('nesting.addStock'))
       return
     }
     setResults(groups.map((group) => nestGroup(group, { stock: inventory, kerf, leftover })))
@@ -188,7 +194,7 @@ export function NestingPage() {
       const file = await layoutStep(result, layout, index)
       if (file) setViewing(file)
     } catch (err) {
-      setError(`STEP generation failed: ${err instanceof Error ? err.message : String(err)}`)
+      setError(t('nesting.stepFailed', { error: err instanceof Error ? err.message : String(err) }))
     } finally {
       setViewBusy(false)
     }
@@ -196,7 +202,7 @@ export function NestingPage() {
 
   const finishExport = (files: Record<string, Uint8Array>, name: string) => {
     if (Object.keys(files).length === 0) {
-      setError('Nothing to export.')
+      setError(t('nesting.nothingToExport'))
       return
     }
     const zip = zipSync(files)
@@ -231,7 +237,9 @@ export function NestingPage() {
       }
       finishExport(files, `nesting-step-${bundle?.sourceName ?? 'job'}.zip`)
     } catch (err) {
-      setError(`STEP export failed: ${err instanceof Error ? err.message : String(err)}`)
+      setError(
+        t('nesting.stepExportFailed', { error: err instanceof Error ? err.message : String(err) }),
+      )
     } finally {
       setExporting(null)
     }
@@ -269,7 +277,9 @@ export function NestingPage() {
       }
       finishExport(files, `nesting-nc-${bundle?.sourceName ?? 'job'}.zip`)
     } catch (err) {
-      setError(`NC export failed: ${err instanceof Error ? err.message : String(err)}`)
+      setError(
+        t('nesting.ncExportFailed', { error: err instanceof Error ? err.message : String(err) }),
+      )
     } finally {
       setExporting(null)
     }
@@ -282,12 +292,8 @@ export function NestingPage() {
   return (
     <div className="flex flex-col gap-6">
       <section className="max-w-2xl">
-        <h1 className="mb-1.5 text-2xl font-bold tracking-tight">T Nesting</h1>
-        <p className="text-muted-foreground">
-          Each stock UB is split lengthwise into two independent T bars (left & right) and each is
-          nested separately — so no material is wasted pairing T’s. Shorter pieces go to the front.
-          Identical beams are grouped with a quantity.
-        </p>
+        <h1 className="mb-1.5 text-2xl font-bold tracking-tight">{t('nesting.title')}</h1>
+        <p className="text-muted-foreground">{t('nesting.subtitle')}</p>
       </section>
 
       <DropZone onBundle={handleBundle} onError={setError} />
@@ -301,7 +307,7 @@ export function NestingPage() {
       {groups && (
         <Card>
           <CardHeader>
-            <CardTitle>Detected T sections</CardTitle>
+            <CardTitle>{t('nesting.detectedTitle')}</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
@@ -315,8 +321,18 @@ export function NestingPage() {
                     <span className="font-semibold">{group.parentUb}</span>
                     {ub && <Badge variant="muted">{ub.mass} kg/m</Badge>}
                     <span className="text-sm text-muted-foreground">
-                      {group.teeCount} T’s · {Math.round(group.totalLength)} mm
-                      {ub ? ` · ${ub.d}×${ub.b} mm · tee ≈ ${(ub.mass / 2).toFixed(1)} kg/m` : ''}
+                      {ub
+                        ? t('nesting.teeDetailSection', {
+                            count: group.teeCount,
+                            length: Math.round(group.totalLength),
+                            d: ub.d,
+                            b: ub.b,
+                            tee: (ub.mass / 2).toFixed(1),
+                          })
+                        : t('nesting.teeDetail', {
+                            count: group.teeCount,
+                            length: Math.round(group.totalLength),
+                          })}
                     </span>
                   </div>
                 )
@@ -324,7 +340,7 @@ export function NestingPage() {
             </div>
 
             <div className="flex flex-col gap-3 border-t border-border pt-4">
-              <span className="text-sm font-medium">Stock inventory</span>
+              <span className="text-sm font-medium">{t('nesting.stockTitle')}</span>
               <div className="flex flex-wrap gap-2">
                 {COMMON_LENGTHS.map((length) => (
                   <Button
@@ -340,7 +356,7 @@ export function NestingPage() {
               {rows.map((row) => (
                 <div key={row.id} className="flex flex-wrap items-end gap-3">
                   <label className="flex flex-col gap-1 text-sm">
-                    <span className="text-muted-foreground">Length (mm)</span>
+                    <span className="text-muted-foreground">{t('nesting.lengthLabel')}</span>
                     <input
                       type="number"
                       min={1}
@@ -352,7 +368,7 @@ export function NestingPage() {
                     />
                   </label>
                   <label className="flex flex-col gap-1 text-sm">
-                    <span className="text-muted-foreground">Qty (blank = unlimited)</span>
+                    <span className="text-muted-foreground">{t('nesting.qtyLabel')}</span>
                     <input
                       type="number"
                       min={0}
@@ -374,13 +390,13 @@ export function NestingPage() {
                     size="sm"
                     onClick={() => setRows((current) => current.filter((r) => r.id !== row.id))}
                   >
-                    Remove
+                    {t('common.actions.remove')}
                   </Button>
                 </div>
               ))}
               <div className="flex flex-wrap items-end gap-3">
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-muted-foreground">Leftover / trim (mm)</span>
+                  <span className="text-muted-foreground">{t('nesting.leftoverLabel')}</span>
                   <input
                     type="number"
                     min={0}
@@ -390,7 +406,7 @@ export function NestingPage() {
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-muted-foreground">Kerf (mm)</span>
+                  <span className="text-muted-foreground">{t('nesting.kerfLabel')}</span>
                   <input
                     type="number"
                     min={0}
@@ -399,7 +415,7 @@ export function NestingPage() {
                     className="h-9 w-28 rounded-md border border-input bg-transparent px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   />
                 </label>
-                <Button onClick={nest}>Nest</Button>
+                <Button onClick={nest}>{t('nesting.nest')}</Button>
               </div>
             </div>
           </CardContent>
@@ -409,12 +425,12 @@ export function NestingPage() {
       {results && (
         <>
           <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <Stat label="UB groups" value={results.length} />
-            <Stat label="Beam layouts" value={totalLayouts} />
-            <Stat label="Stock UBs" value={totalUb} />
-            <Stat label="T bars" value={totalTeeBars} />
+            <Stat label={t('nesting.stats.ubGroups')} value={results.length} />
+            <Stat label={t('nesting.stats.beamLayouts')} value={totalLayouts} />
+            <Stat label={t('nesting.stats.stockUbs')} value={totalUb} />
+            <Stat label={t('nesting.stats.tBars')} value={totalTeeBars} />
             <Stat
-              label="Utilisation"
+              label={t('nesting.stats.utilisation')}
               value={`${Math.round(
                 (results.reduce((sum, r) => sum + r.utilisation, 0) / Math.max(1, results.length)) *
                   100,
@@ -428,7 +444,7 @@ export function NestingPage() {
               onClick={() => void downloadStepFiles()}
               disabled={exporting !== null}
             >
-              {exporting === 'step' ? 'Generating…' : 'Download STEP (.zip)'}
+              {exporting === 'step' ? t('nesting.generating') : t('nesting.downloadStep')}
             </Button>
             <Button
               variant="outline"
@@ -436,7 +452,7 @@ export function NestingPage() {
               onClick={() => void downloadNcFiles()}
               disabled={exporting !== null}
             >
-              {exporting === 'nc' ? 'Generating…' : 'Download NC (.zip)'}
+              {exporting === 'nc' ? t('nesting.generating') : t('nesting.downloadNc')}
             </Button>
           </div>
 
@@ -445,18 +461,23 @@ export function NestingPage() {
               <CardHeader className="gap-1.5">
                 <div className="flex flex-wrap items-center gap-3">
                   <CardTitle>{result.parentUb}</CardTitle>
-                  <Badge variant="muted">{result.mass} kg/m UB</Badge>
+                  <Badge variant="muted">{t('nesting.kgPerMUb', { mass: result.mass })}</Badge>
                   <Badge variant="secondary">
-                    {result.ubCount} UBs · {result.teeBarCount} T-bars
+                    {t('nesting.ubsCount', {
+                      ubCount: result.ubCount,
+                      teeBarCount: result.teeBarCount,
+                    })}
                   </Badge>
                 </div>
-                <p className="text-sm text-muted-foreground">{sectionDetail(result.parentUb)}</p>
+                <p className="text-sm text-muted-foreground">{sectionDetail(t, result.parentUb)}</p>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">
                 {result.oversized.length > 0 && (
                   <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
-                    {result.oversized.length} T(s) could not be placed (too long or stock
-                    exhausted): {result.oversized.map((u) => Math.round(u.length)).join(', ')} mm
+                    {t('nesting.oversized', {
+                      count: result.oversized.length,
+                      lengths: result.oversized.map((u) => Math.round(u.length)).join(', '),
+                    })}
                   </div>
                 )}
                 {ubLayouts(result).map((layout, index) => (
@@ -475,19 +496,14 @@ export function NestingPage() {
             </Card>
           ))}
 
-          <p className="text-sm text-muted-foreground">
-            STEP: one file per distinct layout (AP214) — the UB’s left/right T bars packed tight,
-            each part written as its own solid (joins are disabled for now). The dialog lists the
-            separate bodies for debugging. NC: the experimental Weihong .nc1 per beam, kept in a
-            separate download so it is only run on purpose.
-          </p>
+          <p className="text-sm text-muted-foreground">{t('nesting.stepNote')}</p>
         </>
       )}
 
       <Dialog
         open={viewing !== null}
         onClose={() => setViewing(null)}
-        title={viewing ? `${viewing.name} · 3D view` : undefined}
+        title={viewing ? t('nesting.dialogTitle', { name: viewing.name }) : undefined}
         className="max-w-4xl"
       >
         {viewing && (
@@ -495,8 +511,7 @@ export function NestingPage() {
             {viewing.bodies !== 1 && (
               <div className="border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
                 <div className="font-medium">
-                  {viewing.bodies} separate bodies — joins are disabled for now, so the parts are
-                  written unconnected.
+                  {t('nesting.bodiesNote', { count: viewing.bodies })}
                 </div>
                 {viewing.bodyInfo.length > 0 && (
                   <ul className="mt-1 list-disc pl-5 font-mono">
@@ -520,7 +535,7 @@ export function NestingPage() {
               <Suspense
                 fallback={
                   <div className="grid h-full place-items-center text-sm text-muted-foreground">
-                    Loading viewer…
+                    {t('nesting.loadingViewer')}
                   </div>
                 }
               >
@@ -552,6 +567,7 @@ function UbDiagram({
   onView: () => void
   viewBusy: boolean
 }) {
+  const { t } = useTranslation()
   const counts = new Map<string, number>()
   for (const bar of ub.teeBars) {
     for (const unit of bar.units) counts.set(unit.mark, (counts.get(unit.mark) ?? 0) + 1)
@@ -562,17 +578,15 @@ function UbDiagram({
   return (
     <div className="flex flex-col gap-1.5 rounded-lg border border-border p-2">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span>
-          UB {index + 1} · {ub.stockLength} mm
-        </span>
+        <span>{t('nesting.ubLabel', { index: index + 1, length: ub.stockLength })}</span>
         <Badge variant="default">×{quantity}</Badge>
         <Button variant="ghost" size="sm" className="ml-auto" onClick={onView} disabled={viewBusy}>
           <Eye />
-          View
+          {t('common.actions.view')}
         </Button>
       </div>
-      <TeeBarRow label="Left" bar={ub.teeBars[0]} />
-      <TeeBarRow label="Right" bar={ub.teeBars[1]} />
+      <TeeBarRow label={t('nesting.left')} bar={ub.teeBars[0]} />
+      <TeeBarRow label={t('nesting.right')} bar={ub.teeBars[1]} />
       <div className="flex flex-wrap gap-x-3 gap-y-0.5 pl-12 text-[10px] text-muted-foreground">
         {summary.map(([mark, count]) => (
           <span key={mark}>
@@ -585,6 +599,7 @@ function UbDiagram({
 }
 
 function TeeBarRow({ label, bar }: { label: string; bar: TeeBar }) {
+  const { t } = useTranslation()
   const wastePct = (bar.waste / bar.stockLength) * 100
   const reservedPct = (bar.reserved / bar.stockLength) * 100
   const freePct = Math.max(0, wastePct - reservedPct)
@@ -612,7 +627,7 @@ function TeeBarRow({ label, bar }: { label: string; bar: TeeBar }) {
         ))}
         {bar.reserved > 0 && (
           <div
-            title={`leftover / trim ${bar.reserved} mm`}
+            title={t('nesting.trimTitle', { value: bar.reserved })}
             style={{ width: `${reservedPct}%` }}
             className="border-r border-border bg-amber-500/30"
           />
@@ -625,16 +640,22 @@ function TeeBarRow({ label, bar }: { label: string; bar: TeeBar }) {
         </div>
       </div>
       <span className="w-20 shrink-0 text-right text-[10px] text-muted-foreground">
-        waste {Math.round(bar.waste)}
+        {t('nesting.waste', { value: Math.round(bar.waste) })}
       </span>
     </div>
   )
 }
 
-function sectionDetail(designation: string): string {
+function sectionDetail(t: TFunction, designation: string): string {
   const ub = getUb(designation)
   if (!ub) return ''
-  return `Parent UB ${ub.d}×${ub.b} mm · tf ${ub.tf} · tw ${ub.tw} · tee ≈ ${(ub.mass / 2).toFixed(1)} kg/m`
+  return t('nesting.parentUb', {
+    d: ub.d,
+    b: ub.b,
+    tf: ub.tf,
+    tw: ub.tw,
+    tee: (ub.mass / 2).toFixed(1),
+  })
 }
 
 function Stat({ label, value }: { label: string; value: number | string }) {

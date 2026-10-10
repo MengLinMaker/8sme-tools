@@ -1,7 +1,9 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { zipSync } from 'fflate'
+import type { TFunction } from 'i18next'
 import { Eye, Undo2 } from 'lucide-react'
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -45,42 +47,42 @@ const SEVERITY_ORDER: Record<Severity, number> = { error: 0, warning: 1, info: 2
 /** How many drawings to parse at once (pdf.js runs each in its own worker). */
 const CONCURRENCY = 6
 
-const PART_COLUMNS: { label: string; key: PartSortKey }[] = [
-  { label: 'Mark', key: 'mark' },
-  { label: 'NC qty', key: 'ncQty' },
-  { label: 'PDF qty', key: 'pdfQty' },
-  { label: 'NC len', key: 'ncLen' },
-  { label: 'PDF len', key: 'pdfLen' },
-  { label: 'Profile', key: 'profile' },
-  { label: 'NC', key: 'nc' },
-  { label: 'STEP', key: 'step' },
-  { label: 'PDF', key: 'pdf' },
-  { label: 'Model size', key: 'model' },
+const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [
+  { labelKey: 'preflight.columns.mark', key: 'mark' },
+  { labelKey: 'preflight.columns.ncQty', key: 'ncQty' },
+  { labelKey: 'preflight.columns.pdfQty', key: 'pdfQty' },
+  { labelKey: 'preflight.columns.ncLen', key: 'ncLen' },
+  { labelKey: 'preflight.columns.pdfLen', key: 'pdfLen' },
+  { labelKey: 'preflight.columns.profile', key: 'profile' },
+  { labelKey: 'preflight.columns.nc', key: 'nc' },
+  { labelKey: 'preflight.columns.step', key: 'step' },
+  { labelKey: 'preflight.columns.pdf', key: 'pdf' },
+  { labelKey: 'preflight.columns.model', key: 'model' },
 ]
 
 type Filter = SeverityFilter
 
-const VIEW_PRESETS: { id: ViewPreset; label: string }[] = [
-  { id: 'iso', label: 'Iso' },
-  { id: 'front', label: 'Front' },
-  { id: 'top', label: 'Top' },
-  { id: 'side', label: 'Side' },
+const VIEW_PRESETS: { id: ViewPreset; labelKey: string }[] = [
+  { id: 'iso', labelKey: 'preflight.viewer.iso' },
+  { id: 'front', labelKey: 'preflight.viewer.front' },
+  { id: 'top', labelKey: 'preflight.viewer.top' },
+  { id: 'side', labelKey: 'preflight.viewer.side' },
 ]
 
 /** How the 3D area shows the manufactured (NC) model against the STEP model. */
 type ViewMode = 'step' | 'manufactured' | 'split' | 'overlay'
 
-const VIEW_MODES: { id: ViewMode; label: string }[] = [
-  { id: 'manufactured', label: 'Manufactured' },
-  { id: 'step', label: 'STEP' },
-  { id: 'split', label: 'Side by side' },
-  { id: 'overlay', label: 'Overlay' },
+const VIEW_MODES: { id: ViewMode; labelKey: string }[] = [
+  { id: 'manufactured', labelKey: 'preflight.viewer.manufactured' },
+  { id: 'step', labelKey: 'preflight.viewer.step' },
+  { id: 'split', labelKey: 'preflight.viewer.sideBySide' },
+  { id: 'overlay', labelKey: 'preflight.viewer.overlay' },
 ]
 
-const FILTERS: { id: Filter; label: string }[] = [
-  { id: 'all', label: 'All' },
-  { id: 'error', label: 'Errors' },
-  { id: 'warning', label: 'Warnings' },
+const FILTERS: { id: Filter; labelKey: string }[] = [
+  { id: 'all', labelKey: 'preflight.filters.all' },
+  { id: 'error', labelKey: 'preflight.filters.error' },
+  { id: 'warning', labelKey: 'preflight.filters.warning' },
 ]
 
 const SEVERITY_VARIANT = {
@@ -101,7 +103,49 @@ function resolvedFindings(kind: StepFixKind): string[] {
   return kind === 'regenerated' ? ['STRAY_BODY', 'MANUFACTURE_MISMATCH'] : ['STRAY_BODY']
 }
 
+/** Formats a measured-vs-expected size check for display (localised). */
+function formatSizeCheck(t: TFunction, check?: SizeCheck): string {
+  if (!check) return '—'
+  if (check.error === 'noDims') return t('preflight.model.noDims')
+  if (check.error === 'measureFailed') return t('preflight.model.measureFailed')
+  if (!check.measured || !check.expected) return '—'
+  const [l, a, b] = check.measured.map((value) => value.toFixed(0))
+  const measured = `L${l} × ${a} × ${b}`
+  const [el, ea, eb] = check.expected.map((value) => value.toFixed(0))
+  const size = check.ok
+    ? t('preflight.model.sizeOk', { measured })
+    : t('preflight.model.sizeMismatch', { measured, expected: `L${el} × ${ea} × ${eb}` })
+  const annotated = check.bodies != null && !(check.bodies === 1 && !check.stray)
+  if (!annotated) return size
+  return (
+    size +
+    t('preflight.model.bodyCount', { count: check.bodies }) +
+    (check.stray ? t('preflight.model.straySuffix') : '')
+  )
+}
+
+/** Formats an NC-vs-STEP model comparison for display (localised). */
+function formatModelComparison(t: TFunction, comparison: ModelComparison): string {
+  const sizeText = (size?: [number, number, number]) =>
+    size ? `${size.map((value) => value.toFixed(0)).join(' × ')} mm` : ''
+  const size = sizeText(comparison.size)
+  if (comparison.ok) return t('preflight.model.ncMatches', { size })
+  const note = t('preflight.model.ncMismatch', {
+    size,
+    expected: sizeText(comparison.referenceSize),
+  })
+  if (comparison.volumeOk) return note
+  const delta = `${comparison.volumeDelta >= 0 ? '+' : ''}${(comparison.volumeDelta * 100).toFixed(1)}%`
+  return note + t('preflight.model.volume', { delta })
+}
+
 export function PreflightPage() {
+  const { t } = useTranslation()
+  const findingText = useCallback(
+    (finding: Finding) =>
+      t(`findings.${finding.code}`, { ...finding.params, defaultValue: finding.message }),
+    [t],
+  )
   const [result, setResult] = useState<AuditResult | null>(null)
   const [bundle, setBundle] = useState<InputBundle | null>(null)
   const [viewing, setViewing] = useState<PartRecord | null>(null)
@@ -284,7 +328,7 @@ export function PreflightPage() {
         const length = materials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
         const cross = part.nc?.dimensions?.slice(0, 2) ?? []
         if (!bytes || length == null || cross.length < 2) {
-          checks.set(part.mark, { ok: false, note: 'no STEP / dims' })
+          checks.set(part.mark, { ok: false, error: 'noDims' })
           continue
         }
         try {
@@ -295,7 +339,7 @@ export function PreflightPage() {
             compareSize(measured.size, length, cross, measured.bodies, measured.extra),
           )
         } catch {
-          checks.set(part.mark, { ok: false, note: 'measure failed' })
+          checks.set(part.mark, { ok: false, error: 'measureFailed' })
         }
       }
       if (cancelled) return
@@ -350,6 +394,7 @@ export function PreflightPage() {
           code: 'QTY_MISMATCH_DRAWING',
           mark: part.mark,
           message: `NC quantity ${part.nc.quantity} differs from drawing quantity ${material.qty}`,
+          params: { nc: part.nc.quantity, drawing: material.qty },
         })
       }
       const check = modelChecks.get(part.mark)
@@ -359,15 +404,18 @@ export function PreflightPage() {
           code: 'STRAY_BODY',
           mark: part.mark,
           message: `STEP has ${check.bodies ?? '2+'} solid bodies — extra floating piece(s); can be cleaned`,
+          params: { bodies: check.bodies ?? '2+' },
         })
       }
       const manufacture = manufactureChecks.get(part.mark)
       if (manufacture && !manufacture.ok) {
+        const note = formatModelComparison(t, manufacture)
         extra.push({
           severity: 'warning',
           code: 'MANUFACTURE_MISMATCH',
           mark: part.mark,
-          message: `${manufacture.note} — can regenerate STEP from the NC`,
+          message: `${note} — can regenerate STEP from the NC`,
+          params: { note },
         })
       }
     }
@@ -378,7 +426,7 @@ export function PreflightPage() {
           SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
           (a.mark ?? '').localeCompare(b.mark ?? ''),
       )
-  }, [result, drawingMaterials, modelChecks, manufactureChecks])
+  }, [result, drawingMaterials, modelChecks, manufactureChecks, t])
 
   const counts = useMemo(() => {
     const result = { error: 0, warning: 0, info: 0 }
@@ -523,11 +571,8 @@ export function PreflightPage() {
   return (
     <div className="flex flex-col gap-6">
       <section className="max-w-2xl">
-        <h1 className="mb-1.5 text-2xl font-bold tracking-tight">WiseCAM Preflight</h1>
-        <p className="text-muted-foreground">
-          Drop a job .zip (NC + STEP + PDF, optionally a part list .xlsx). Everything is checked
-          locally in your browser — nothing is uploaded.
-        </p>
+        <h1 className="mb-1.5 text-2xl font-bold tracking-tight">{t('preflight.title')}</h1>
+        <p className="text-muted-foreground">{t('preflight.subtitle')}</p>
       </section>
 
       <DropZone onBundle={handleBundle} onError={setError} />
@@ -541,16 +586,21 @@ export function PreflightPage() {
       {result && (
         <>
           <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            <Stat label="Parts" value={result.summary.parts} />
-            <Stat label="Errors" value={counts.error} tone="error" />
-            <Stat label="Warnings" value={counts.warning} tone="warning" />
-            <Stat label="Files" value={result.entriesTotal} />
-            <Stat label="Part list" value={result.summary.hasPartList ? 'yes' : 'no'} />
+            <Stat label={t('preflight.stats.parts')} value={result.summary.parts} />
+            <Stat label={t('preflight.stats.errors')} value={counts.error} tone="error" />
+            <Stat label={t('preflight.stats.warnings')} value={counts.warning} tone="warning" />
+            <Stat label={t('preflight.stats.files')} value={result.entriesTotal} />
+            <Stat
+              label={t('preflight.stats.partList')}
+              value={
+                result.summary.hasPartList ? t('preflight.stats.yes') : t('preflight.stats.no')
+              }
+            />
           </section>
 
           <Card>
             <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between">
-              <CardTitle>Findings</CardTitle>
+              <CardTitle>{t('preflight.findings.title')}</CardTitle>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="inline-flex gap-1 rounded-full border border-border bg-secondary p-1">
                   {FILTERS.map((filterOption) => (
@@ -565,7 +615,7 @@ export function PreflightPage() {
                       )}
                       onClick={() => setFilter(filterOption.id)}
                     >
-                      {filterOption.label}
+                      {t(filterOption.labelKey)}
                     </button>
                   ))}
                 </div>
@@ -579,34 +629,34 @@ export function PreflightPage() {
                     )
                   }
                 >
-                  Export findings
+                  {t('preflight.findings.exportFindings')}
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => downloadText(`parts-${result.sourceName}.csv`, partsToCsv(result))}
                 >
-                  Export parts
+                  {t('preflight.findings.exportParts')}
                 </Button>
                 {stepOverrides.size > 0 && (
                   <Button variant="outline" size="sm" onClick={exportFixed}>
-                    {`Export fixed (${stepOverrides.size})`}
+                    {t('preflight.findings.exportFixed', { count: stepOverrides.size })}
                   </Button>
                 )}
               </div>
             </CardHeader>
             <CardContent>
               {findings.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Nothing to report for this filter.</p>
+                <p className="text-sm text-muted-foreground">{t('preflight.findings.empty')}</p>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead>Severity</TableHead>
-                      <TableHead>Code</TableHead>
-                      <TableHead>Mark</TableHead>
-                      <TableHead>Message</TableHead>
-                      <TableHead className="text-right">Debug</TableHead>
+                      <TableHead>{t('preflight.table.severity')}</TableHead>
+                      <TableHead>{t('preflight.table.code')}</TableHead>
+                      <TableHead>{t('preflight.table.mark')}</TableHead>
+                      <TableHead>{t('preflight.table.message')}</TableHead>
+                      <TableHead className="text-right">{t('preflight.table.debug')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -624,7 +674,7 @@ export function PreflightPage() {
                         >
                           <TableCell>
                             <Badge variant={SEVERITY_VARIANT[finding.severity]}>
-                              {finding.severity}
+                              {t(`common.severity.${finding.severity}`)}
                             </Badge>
                           </TableCell>
                           <TableCell className="font-mono text-xs text-muted-foreground">
@@ -633,11 +683,11 @@ export function PreflightPage() {
                           <TableCell className="font-mono text-xs">{finding.mark ?? '—'}</TableCell>
                           <TableCell>
                             <span className={cn(resolved && 'line-through')}>
-                              {finding.message}
+                              {findingText(finding)}
                             </span>
                             {resolved && (
                               <Badge variant="success" className="ml-2 align-middle">
-                                {override?.kind}
+                                {override?.kind ? t(`common.fix.${override.kind}`) : ''}
                               </Badge>
                             )}
                           </TableCell>
@@ -650,7 +700,7 @@ export function PreflightPage() {
                                   onClick={() => undoOverride(viewable.mark)}
                                 >
                                   <Undo2 />
-                                  Undo
+                                  {t('common.actions.undo')}
                                 </Button>
                               )}
                               {!resolved && isRegeneratable(viewable) && (
@@ -660,7 +710,9 @@ export function PreflightPage() {
                                   disabled={fixingMark === viewable?.mark}
                                   onClick={() => viewable && void regeneratePart(viewable)}
                                 >
-                                  {fixingMark === viewable?.mark ? 'Working…' : 'Regenerate STEP'}
+                                  {fixingMark === viewable?.mark
+                                    ? t('common.actions.working')
+                                    : t('common.actions.regenerateStep')}
                                 </Button>
                               )}
                               {!resolved && isCleanable(viewable) && (
@@ -670,7 +722,9 @@ export function PreflightPage() {
                                   disabled={fixingMark === viewable?.mark}
                                   onClick={() => viewable && void cleanPart(viewable)}
                                 >
-                                  {fixingMark === viewable?.mark ? 'Cleaning…' : 'Clean'}
+                                  {fixingMark === viewable?.mark
+                                    ? t('common.actions.cleaning')
+                                    : t('common.actions.clean')}
                                 </Button>
                               )}
                               {viewable && (
@@ -680,7 +734,7 @@ export function PreflightPage() {
                                   onClick={() => openPart(viewable)}
                                 >
                                   <Eye />
-                                  View
+                                  {t('common.actions.view')}
                                 </Button>
                               )}
                             </div>
@@ -697,15 +751,18 @@ export function PreflightPage() {
           <Card>
             <CardHeader>
               <CardTitle className="flex flex-wrap items-center gap-2">
-                Parts
+                {t('preflight.parts.title')}
                 {drawingChecking && (
                   <span className="text-xs font-normal text-muted-foreground">
-                    reading drawings… {drawingDone}/{drawingTotal}
+                    {t('preflight.parts.readingDrawings', {
+                      done: drawingDone,
+                      total: drawingTotal,
+                    })}
                   </span>
                 )}
                 {checking && (
                   <span className="text-xs font-normal text-muted-foreground">
-                    measuring models…
+                    {t('preflight.parts.measuringModels')}
                   </span>
                 )}
               </CardTitle>
@@ -717,13 +774,13 @@ export function PreflightPage() {
                     {PART_COLUMNS.map((column) => (
                       <SortHead
                         key={column.key}
-                        label={column.label}
+                        label={t(column.labelKey)}
                         sortKey={column.key}
                         sort={sort}
                         onSort={toggleSort}
                       />
                     ))}
-                    <TableHead className="text-right">3D</TableHead>
+                    <TableHead className="text-right">{t('preflight.table.threeD')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card">
@@ -759,14 +816,18 @@ export function PreflightPage() {
                       </TableCell>
                       <TableCell className="text-xs">
                         {overrideFor(part) ? (
-                          <Badge variant="success">{overrideFor(part)?.kind}</Badge>
+                          <Badge variant="success">
+                            {overrideFor(part)?.kind
+                              ? t(`common.fix.${overrideFor(part)?.kind}`)
+                              : ''}
+                          </Badge>
                         ) : modelChecks.has(part.mark) ? (
                           <span
                             className={
                               modelChecks.get(part.mark)?.ok ? 'text-emerald-400' : 'text-amber-400'
                             }
                           >
-                            {modelChecks.get(part.mark)?.note}
+                            {formatSizeCheck(t, modelChecks.get(part.mark))}
                           </span>
                         ) : (
                           <span className="text-muted-foreground">—</span>
@@ -782,7 +843,7 @@ export function PreflightPage() {
                                 onClick={() => undoOverride(part.mark)}
                               >
                                 <Undo2 />
-                                Undo
+                                {t('common.actions.undo')}
                               </Button>
                             ) : (
                               <>
@@ -793,7 +854,9 @@ export function PreflightPage() {
                                     disabled={fixingMark === part.mark}
                                     onClick={() => void regeneratePart(part)}
                                   >
-                                    {fixingMark === part.mark ? 'Working…' : 'Regenerate'}
+                                    {fixingMark === part.mark
+                                      ? t('common.actions.working')
+                                      : t('common.actions.regenerate')}
                                   </Button>
                                 )}
                                 {isCleanable(part) && (
@@ -803,14 +866,16 @@ export function PreflightPage() {
                                     disabled={fixingMark === part.mark}
                                     onClick={() => void cleanPart(part)}
                                   >
-                                    {fixingMark === part.mark ? 'Cleaning…' : 'Clean'}
+                                    {fixingMark === part.mark
+                                      ? t('common.actions.cleaning')
+                                      : t('common.actions.clean')}
                                   </Button>
                                 )}
                               </>
                             )}
                             <Button variant="ghost" size="sm" onClick={() => openPart(part)}>
                               <Eye />
-                              View
+                              {t('common.actions.view')}
                             </Button>
                           </div>
                         ) : (
@@ -829,7 +894,7 @@ export function PreflightPage() {
       <Dialog
         open={viewing !== null}
         onClose={() => setViewing(null)}
-        title={viewing ? `${viewing.mark} · drawing + 3D` : undefined}
+        title={viewing ? t('preflight.viewer.dialogTitle', { mark: viewing.mark }) : undefined}
         className="max-w-6xl"
       >
         {viewing && (viewing.step || viewing.nc) && (
@@ -852,7 +917,7 @@ export function PreflightPage() {
                 <Suspense
                   fallback={
                     <div className="grid h-full place-items-center text-sm text-muted-foreground">
-                      Loading viewer…
+                      {t('preflight.viewer.loading')}
                     </div>
                   }
                 >
@@ -861,7 +926,7 @@ export function PreflightPage() {
                       name={`${viewing.mark} · manufactured`}
                       bytes={manufactured}
                       compareBytes={stepBytes}
-                      compareLabel="STEP"
+                      compareLabel={t('preflight.viewer.step')}
                       stock={stock}
                       bus={orbitBus}
                     />
@@ -874,17 +939,19 @@ export function PreflightPage() {
                           stock={stock}
                           bus={orbitBus}
                         />
-                        <PaneTag tone="manufactured">Manufactured (NC)</PaneTag>
+                        <PaneTag tone="manufactured">
+                          {t('preflight.viewer.manufacturedNc')}
+                        </PaneTag>
                       </div>
                       <div className="relative h-full border-l border-border">
                         <PartViewer
-                          name={viewing.step?.path ?? 'STEP'}
+                          name={viewing.step?.path ?? t('preflight.viewer.stepPath')}
                           bytes={stepBytes}
                           stock={stock}
                           bus={orbitBus}
                           highlightStray
                         />
-                        <PaneTag tone="step">STEP</PaneTag>
+                        <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>
                       </div>
                     </div>
                   ) : effectiveMode === 'manufactured' && manufactured ? (
@@ -896,7 +963,7 @@ export function PreflightPage() {
                     />
                   ) : (
                     <PartViewer
-                      name={viewing.step?.path ?? 'STEP'}
+                      name={viewing.step?.path ?? t('preflight.viewer.stepPath')}
                       bytes={stepBytes}
                       stock={stock}
                       bus={orbitBus}
@@ -912,7 +979,7 @@ export function PreflightPage() {
                       onClick={() => requestView(orbitBus, preset.id)}
                       className="rounded px-2 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                     >
-                      {preset.label}
+                      {t(preset.labelKey)}
                     </button>
                   ))}
                 </div>
@@ -936,7 +1003,7 @@ export function PreflightPage() {
                               : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
                           )}
                         >
-                          {mode.label}
+                          {t(mode.labelKey)}
                         </button>
                       )
                     })}
@@ -946,8 +1013,8 @@ export function PreflightPage() {
               <div className="flex h-[45vh] w-full flex-col border-t border-border lg:h-[70vh] lg:flex-1 lg:border-l lg:border-t-0">
                 <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
                   {[
-                    { id: 'drawing' as const, label: 'Drawing' },
-                    { id: 'nc1' as const, label: 'NC1' },
+                    { id: 'drawing' as const, labelKey: 'preflight.viewer.drawing' },
+                    { id: 'nc1' as const, labelKey: 'preflight.viewer.nc1' },
                   ].map((tab) => (
                     <button
                       key={tab.id}
@@ -961,7 +1028,7 @@ export function PreflightPage() {
                           : 'text-muted-foreground hover:text-foreground',
                       )}
                     >
-                      {tab.label}
+                      {t(tab.labelKey)}
                     </button>
                   ))}
                 </div>
@@ -970,7 +1037,7 @@ export function PreflightPage() {
                     <Suspense
                       fallback={
                         <div className="grid h-full place-items-center text-sm text-muted-foreground">
-                          Loading…
+                          {t('preflight.viewer.loadingShort')}
                         </div>
                       }
                     >
@@ -984,7 +1051,7 @@ export function PreflightPage() {
                     />
                   ) : (
                     <div className="grid h-full place-items-center text-sm text-muted-foreground">
-                      No drawing.
+                      {t('preflight.viewer.noDrawing')}
                     </div>
                   )}
                 </div>
@@ -999,8 +1066,12 @@ export function PreflightPage() {
                     background: 'rgba(61, 220, 132, 0.18)',
                   }}
                 />
-                Green outline = uncut stock ({stock.label}
-                {stock.mass ? ` · ${stock.mass.toFixed(1)} kg/m` : ''}) overlaid for comparison
+                {stock.mass
+                  ? t('preflight.viewer.greenOutlineMass', {
+                      label: stock.label,
+                      mass: stock.mass.toFixed(1),
+                    })
+                  : t('preflight.viewer.greenOutline', { label: stock.label })}
               </div>
             )}
             <PartMeta part={viewing} material={drawingMaterials.get(viewing.mark)} />
@@ -1012,17 +1083,18 @@ export function PreflightPage() {
 }
 
 function PartMeta({ part, material }: { part: PartRecord; material?: DrawingMaterial }) {
+  const { t } = useTranslation()
   const pdfLength = material?.length ?? part.expected?.length ?? null
   const pdfQty = material?.qty ?? part.expected?.qty ?? null
   const rows: [string, string][] = [
-    ['File', part.step?.path.split('/').pop() ?? '—'],
-    ['Profile', part.nc?.profile ?? part.expected?.profile ?? '—'],
-    ['NC length', part.nc?.length != null ? `${part.nc.length} mm` : '—'],
-    ['PDF length', pdfLength != null ? `${pdfLength} mm` : '—'],
-    ['NC qty', part.nc?.quantity != null ? String(part.nc.quantity) : '—'],
-    ['PDF qty', pdfQty != null ? String(pdfQty) : '—'],
-    ['Schema', part.step?.schema ?? '—'],
-    ['Entities', part.step ? part.step.entityCount.toLocaleString() : '—'],
+    [t('preflight.meta.file'), part.step?.path.split('/').pop() ?? '—'],
+    [t('preflight.meta.profile'), part.nc?.profile ?? part.expected?.profile ?? '—'],
+    [t('preflight.meta.ncLength'), part.nc?.length != null ? `${part.nc.length} mm` : '—'],
+    [t('preflight.meta.pdfLength'), pdfLength != null ? `${pdfLength} mm` : '—'],
+    [t('preflight.meta.ncQty'), part.nc?.quantity != null ? String(part.nc.quantity) : '—'],
+    [t('preflight.meta.pdfQty'), pdfQty != null ? String(pdfQty) : '—'],
+    [t('preflight.meta.schema'), part.step?.schema ?? '—'],
+    [t('preflight.meta.entities'), part.step ? part.step.entityCount.toLocaleString() : '—'],
   ]
   return (
     <dl className="grid grid-cols-2 gap-x-6 gap-y-2 border-t border-border px-5 py-4 text-sm sm:grid-cols-3">
@@ -1056,6 +1128,9 @@ function ViewerWarnings({
   step?: StepFile
   fix?: ViewerFix
 }) {
+  const { t } = useTranslation()
+  const findingText = (finding: Finding) =>
+    t(`findings.${finding.code}`, { ...finding.params, defaultValue: finding.message })
   const invalid = step && !step.valid ? step.problems.join('; ') : null
   const hasFixRow = Boolean(fix?.override || fix?.canClean || fix?.canRegenerate)
   if (findings.length === 0 && !invalid && !hasFixRow) return null
@@ -1070,14 +1145,16 @@ function ViewerWarnings({
             key={`${finding.code}-${finding.message}`}
             className={cn('flex items-start gap-2 text-sm', resolved && 'opacity-50')}
           >
-            <Badge variant={SEVERITY_VARIANT[finding.severity]}>{finding.severity}</Badge>
+            <Badge variant={SEVERITY_VARIANT[finding.severity]}>
+              {t(`common.severity.${finding.severity}`)}
+            </Badge>
             <div className="flex flex-col">
               <span className="font-mono text-xs text-muted-foreground">{finding.code}</span>
-              <span className={cn(resolved && 'line-through')}>{finding.message}</span>
+              <span className={cn(resolved && 'line-through')}>{findingText(finding)}</span>
             </div>
             {resolved && (
               <Badge variant="success" className="ml-auto align-middle">
-                {fix?.override}
+                {fix?.override ? t(`common.fix.${fix.override}`) : ''}
               </Badge>
             )}
           </div>
@@ -1090,31 +1167,31 @@ function ViewerWarnings({
       )}
       {fix?.override ? (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-          <span>STEP {fix.override} — this is what the export ships.</span>
+          <span>
+            {fix.override === 'cleaned'
+              ? t('preflight.warnings.stepCleaned')
+              : t('preflight.warnings.stepRegenerated')}
+          </span>
           <Button variant="ghost" size="sm" onClick={fix.onUndo}>
             <Undo2 />
-            Undo
+            {t('common.actions.undo')}
           </Button>
         </div>
       ) : (
         <>
           {fix?.canClean && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-              <span>
-                Stray floating body/bodies shown in orange — cleaning keeps the real geometry.
-              </span>
+              <span>{t('preflight.warnings.strayBodies')}</span>
               <Button variant="outline" size="sm" disabled={fix.pending} onClick={fix.onClean}>
-                {fix.pending ? 'Cleaning…' : 'Clean STEP'}
+                {fix.pending ? t('common.actions.cleaning') : t('common.actions.cleanStep')}
               </Button>
             </div>
           )}
           {fix?.canRegenerate && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-              <span>
-                NC build doesn't match the STEP — regenerating rebuilds the STEP from the NC.
-              </span>
+              <span>{t('preflight.warnings.ncMismatch')}</span>
               <Button variant="outline" size="sm" disabled={fix.pending} onClick={fix.onRegenerate}>
-                {fix.pending ? 'Working…' : 'Regenerate STEP'}
+                {fix.pending ? t('common.actions.working') : t('common.actions.regenerateStep')}
               </Button>
             </div>
           )}
@@ -1142,8 +1219,13 @@ function Stat({ label, value, tone }: { label: string; value: number | string; t
 }
 
 function Status({ value }: { value: boolean | null }) {
-  if (value === null) return <Badge variant="muted">missing</Badge>
-  return <Badge variant={value ? 'success' : 'destructive'}>{value ? 'ok' : 'bad'}</Badge>
+  const { t } = useTranslation()
+  if (value === null) return <Badge variant="muted">{t('common.status.missing')}</Badge>
+  return (
+    <Badge variant={value ? 'success' : 'destructive'}>
+      {value ? t('common.status.ok') : t('common.status.bad')}
+    </Badge>
+  )
 }
 
 function PaneTag({ children, tone }: { children: ReactNode; tone?: 'manufactured' | 'step' }) {

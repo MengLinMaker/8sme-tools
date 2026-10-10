@@ -65,17 +65,23 @@ export async function measureStep(bytes: Uint8Array): Promise<StepMeasure> {
 
 export interface SizeCheck {
   ok: boolean
-  note: string
   /** number of solid bodies (1 = clean single part) */
   bodies?: number
   /** the model carries extra floating body/bodies */
   stray?: boolean
+  /** measured `[length, crossA, crossB]` (length first); absent when not measurable */
+  measured?: [number, number, number]
+  /** expected `[length, crossA, crossB]` (length first) */
+  expected?: [number, number, number]
+  /** why the check could not run — the UI localises this */
+  error?: 'noDims' | 'measureFailed'
 }
 
 /**
  * Compares measured bounding-box extents to an expected part length and cross-section.
  * Orientation-agnostic: the longest extent is taken as the length, the other two matched
  * to the cross-section dims in either order. `bodies`/`extra` annotate multi-body models.
+ * Returns raw extents so the UI can format and localise the note.
  */
 export function compareSize(
   measured: [number, number, number],
@@ -99,34 +105,32 @@ export function compareSize(
     Math.abs(cross[0] - expected[1]) <= crossTol && Math.abs(cross[1] - expected[0]) <= crossTol
   const crossOk = crossForward || crossReverse
 
-  const measuredText = `L${length.toFixed(0)} × ${cross[0].toFixed(0)} × ${cross[1].toFixed(0)}`
-  const expectedText = `L${expectedLength.toFixed(0)} × ${expected[0].toFixed(0)} × ${expected[1].toFixed(0)}`
-  const bodyText =
-    bodies === 1 && !extra
-      ? ''
-      : ` · ${bodies} ${bodies === 1 ? 'body' : 'bodies'}${extra ? ' + stray' : ''}`
-  const note =
-    (lengthOk && crossOk ? `${measuredText} ✓` : `${measuredText} vs expected ${expectedText}`) +
-    bodyText
-
-  return { ok: lengthOk && crossOk, note, bodies, stray: extra }
+  return {
+    ok: lengthOk && crossOk,
+    bodies,
+    stray: extra,
+    measured: [length, cross[0], cross[1]],
+    expected: [expectedLength, expected[0], expected[1]],
+  }
 }
 
 export interface ModelComparison {
   ok: boolean
-  note: string
-}
-
-/** Human-readable sorted extents, e.g. `2590 × 134 × 103 mm`. */
-function sizeText(measure: StepMeasure): string {
-  const [a, b, c] = [...measure.size].sort((x, y) => y - x)
-  return `${a.toFixed(0)} × ${b.toFixed(0)} × ${c.toFixed(0)} mm`
+  sizeOk: boolean
+  volumeOk: boolean
+  /** measured `[a, b, c]` extents, largest first */
+  size?: [number, number, number]
+  /** reference (STEP) `[a, b, c]` extents, largest first */
+  referenceSize?: [number, number, number]
+  /** relative volume difference of `other` vs `reference` */
+  volumeDelta: number
 }
 
 /**
  * Checks whether a model (e.g. the NC-built "manufactured" geometry) matches a reference
  * (the STEP export), by bounding-box size and volume. Orientation-agnostic: the extents are
  * sorted largest-first before matching, so a part seated differently still lines up.
+ * Returns raw numbers so the UI can format and localise the note.
  */
 export function compareModels(reference: StepMeasure, other: StepMeasure): ModelComparison {
   const ref = [...reference.size].sort((a, b) => b - a)
@@ -138,11 +142,13 @@ export function compareModels(reference: StepMeasure, other: StepMeasure): Model
   const volRef = reference.volume
   const volumeDelta = volRef > 0 ? (other.volume - volRef) / volRef : 0
   // The NC rebuild omits end-arc radii, so allow a few percent slack before calling it a mismatch.
-  const volOk = Math.abs(volumeDelta) <= 0.05
-  const ok = sizeOk && volOk
-  const note = ok
-    ? `NC build matches STEP (${sizeText(other)})`
-    : `NC build ${sizeText(other)} vs STEP ${sizeText(reference)}` +
-      (volOk ? '' : ` · volume ${volumeDelta >= 0 ? '+' : ''}${(volumeDelta * 100).toFixed(1)}%`)
-  return { ok, note }
+  const volumeOk = Math.abs(volumeDelta) <= 0.05
+  return {
+    ok: sizeOk && volumeOk,
+    sizeOk,
+    volumeOk,
+    size: got as [number, number, number],
+    referenceSize: ref as [number, number, number],
+    volumeDelta,
+  }
 }

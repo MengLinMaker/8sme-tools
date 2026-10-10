@@ -8,6 +8,8 @@ export const findingSchema = z.object({
   code: z.string().min(1),
   mark: z.string().optional(),
   message: z.string().min(1),
+  /** Interpolation values for the translated message (keyed by `findings.<code>`). */
+  params: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
 })
 export type Finding = z.infer<typeof findingSchema>
 

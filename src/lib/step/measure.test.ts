@@ -23,7 +23,8 @@ describe('compareModels', () => {
     const made = measure([2591, 134, 103], 3_000_000)
     const result = compareModels(step, made)
     expect(result.ok).toBe(false)
-    expect(result.note).toContain('volume')
+    expect(result.volumeOk).toBe(false)
+    expect(result.volumeDelta).toBeLessThan(0)
   })
 })
 
@@ -45,7 +46,7 @@ describe('compareSize', () => {
     // m118-style: main body matches, but a stray surface body is present.
     const check = compareSize([2590.66, 103, 134], 2591, [134, 103], 2, true)
     expect(check.ok).toBe(true)
-    expect(check.note).toContain('2 bodies')
-    expect(check.note).toContain('stray')
+    expect(check.bodies).toBe(2)
+    expect(check.stray).toBe(true)
   })
 })

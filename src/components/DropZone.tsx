@@ -1,4 +1,5 @@
 import { type DragEvent, type InputHTMLAttributes, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { type InputBundle, readDataTransfer, readFiles } from '@/lib/readInput'
 import { cn } from '@/lib/utils'
@@ -15,6 +16,7 @@ export interface DropZoneProps {
 }
 
 export function DropZone({ onBundle, onError, title }: DropZoneProps) {
+  const { t } = useTranslation()
   const [dragging, setDragging] = useState(false)
   const [reading, setReading] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -26,7 +28,7 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
     try {
       const bundle = await read()
       if (bundle.entries.length === 0) {
-        onError?.('No readable NC / STEP / PDF / part-list files found.')
+        onError?.(t('dropzone.noFiles'))
         return
       }
       onBundle(bundle)
@@ -46,7 +48,7 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
 
   return (
     <fieldset
-      aria-label="Project input drop zone"
+      aria-label={t('dropzone.aria')}
       className={cn(
         'flex flex-col items-center gap-3 rounded-xl border border-dashed px-5 py-9 text-center transition-colors',
         dragging
@@ -88,7 +90,7 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
         }}
       />
       <span className="text-lg font-semibold">
-        {reading ? 'Reading…' : (title ?? 'Drop a project .zip or folder')}
+        {reading ? t('dropzone.reading') : (title ?? t('dropzone.title'))}
       </span>
       <div className="flex flex-wrap items-center justify-center gap-2">
         <Button
@@ -98,7 +100,7 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
           disabled={reading}
           onClick={() => inputRef.current?.click()}
         >
-          Choose .zip
+          {t('dropzone.chooseZip')}
         </Button>
         <Button
           type="button"
@@ -107,7 +109,7 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
           disabled={reading}
           onClick={() => folderRef.current?.click()}
         >
-          Choose folder
+          {t('dropzone.chooseFolder')}
         </Button>
       </div>
     </fieldset>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   AmbientLight,
   Box3,
@@ -200,6 +201,7 @@ function mountScene(container: HTMLElement, geometry: NcGeometry, bus: OrbitBus)
 }
 
 export default function Nc3dViewer({ bytes, bus }: { bytes: Uint8Array; bus: OrbitBus }) {
+  const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const [empty, setEmpty] = useState(false)
 
@@ -219,7 +221,7 @@ export default function Nc3dViewer({ bytes, bus }: { bytes: Uint8Array; bus: Orb
       <div ref={containerRef} className="h-full w-full touch-none" />
       {empty && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center text-sm text-muted-foreground">
-          No NC1 geometry.
+          {t('viewer.noNc1')}
         </div>
       )}
     </div>

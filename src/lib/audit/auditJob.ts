@@ -71,12 +71,14 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
             severity: 'warning',
             code: 'PART_LIST_UNREADABLE',
             message: `${baseName(entry.path)} has no recognisable part list rows`,
+            params: { file: baseName(entry.path) },
           })
       } catch {
         findings.push({
           severity: 'warning',
           code: 'PART_LIST_UNREADABLE',
           message: `${baseName(entry.path)} could not be opened as a spreadsheet`,
+          params: { file: baseName(entry.path) },
         })
       }
       continue
@@ -93,6 +95,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           code: 'DUPLICATE_NC',
           mark,
           message: `Duplicate NC for ${mark}: ${baseName(part.nc.path)} and ${baseName(entry.path)}`,
+          params: { mark, a: baseName(part.nc.path), b: baseName(entry.path) },
         })
       }
       part.nc = parseNcFile(entry.path, decodeText(entry.bytes))
@@ -104,6 +107,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           code: 'DUPLICATE_STEP',
           mark,
           message: `Duplicate STEP for ${mark}: ${baseName(part.step.path)} and ${baseName(entry.path)}`,
+          params: { mark, a: baseName(part.step.path), b: baseName(entry.path) },
         })
       }
       part.step = parseStepFile(entry.path, decodeText(entry.bytes))
@@ -115,6 +119,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           code: 'DUPLICATE_PDF',
           mark,
           message: `Duplicate PDF for ${mark}: ${baseName(part.pdf.path)} and ${baseName(entry.path)}`,
+          params: { mark, a: baseName(part.pdf.path), b: baseName(entry.path) },
         })
       }
       part.pdf = parsePdfFile(entry.path, entry.bytes)
@@ -136,6 +141,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           code: 'NC_INVALID',
           mark: part.mark,
           message: `${baseName(part.nc.path)} may not open: ${part.nc.problems.join('; ')}`,
+          params: { file: baseName(part.nc.path), problems: part.nc.problems.join('; ') },
         })
       } else if (part.nc.quantity === null) {
         findings.push({
@@ -151,6 +157,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           code: 'NC_MARK_MISMATCH',
           mark: part.mark,
           message: `NC internal mark "${part.nc.mark}" does not match filename mark "${part.mark}"`,
+          params: { internal: part.nc.mark, mark: part.mark },
         })
       }
     } else {
@@ -159,6 +166,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
         code: 'MISSING_NC',
         mark: part.mark,
         message: `No NC file found for ${part.mark}`,
+        params: { mark: part.mark },
       })
     }
 
@@ -169,6 +177,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           code: 'STEP_INVALID',
           mark: part.mark,
           message: `${baseName(part.step.path)} may not open: ${part.step.problems.join('; ')}`,
+          params: { file: baseName(part.step.path), problems: part.step.problems.join('; ') },
         })
       }
     } else {
@@ -177,6 +186,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
         code: 'MISSING_STEP',
         mark: part.mark,
         message: `No STEP file found for ${part.mark}`,
+        params: { mark: part.mark },
       })
     }
 
@@ -187,6 +197,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           code: 'PDF_INVALID',
           mark: part.mark,
           message: `${baseName(part.pdf.path)} may not open: ${part.pdf.problems.join('; ')}`,
+          params: { file: baseName(part.pdf.path), problems: part.pdf.problems.join('; ') },
         })
       }
     } else {
@@ -195,6 +206,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
         code: 'MISSING_PDF',
         mark: part.mark,
         message: `No drawing PDF found for ${part.mark}`,
+        params: { mark: part.mark },
       })
     }
 
@@ -205,6 +217,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           code: 'QTY_MISMATCH',
           mark: part.mark,
           message: `NC quantity ${part.nc.quantity} differs from part list quantity ${exp.qty}`,
+          params: { nc: part.nc.quantity, list: exp.qty },
         })
       }
     }
@@ -219,6 +232,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           code: 'PROFILE_MISMATCH',
           mark: part.mark,
           message: `NC profile ${part.nc.profile} differs from part list ${exp.profile}`,
+          params: { nc: part.nc.profile, list: exp.profile },
         })
       }
       if (part.nc.grade && exp.grade && part.nc.grade.toLowerCase() !== exp.grade.toLowerCase()) {
@@ -227,6 +241,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           code: 'GRADE_MISMATCH',
           mark: part.mark,
           message: `NC grade ${part.nc.grade} differs from part list ${exp.grade}`,
+          params: { nc: part.nc.grade, list: exp.grade },
         })
       }
       if (part.nc.length !== null && exp.length !== null) {
@@ -238,6 +253,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
             code: 'LENGTH_DIFFERENCE',
             mark: part.mark,
             message: `NC length ${part.nc.length}mm vs part-list ${exp.length}mm (Δ${diff.toFixed(1)}mm) — verify against drawing`,
+            params: { nc: part.nc.length, list: exp.length, diff: diff.toFixed(1) },
           })
         }
       }
@@ -251,6 +267,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
         code: 'PART_LIST_NO_FILES',
         mark: row.part.toLowerCase(),
         message: `Part list lists ${row.part} but no NC/STEP/PDF files were found`,
+        params: { part: row.part },
       })
     }
   }
