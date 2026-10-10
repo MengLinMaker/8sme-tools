@@ -27,6 +27,19 @@ export async function extractPdfText(bytes: Uint8Array): Promise<string> {
   return parts.join('\n')
 }
 
+// The same drawing bytes are parsed by both the preflight qty pass and the 3D
+// viewer (for the section callout) — cache by identity so each is parsed once.
+const textCache = new WeakMap<Uint8Array, Promise<string>>()
+
+/** Cached {@link extractPdfText}; keyed on the input buffer identity. */
+export function extractDrawingText(bytes: Uint8Array): Promise<string> {
+  const cached = textCache.get(bytes)
+  if (cached) return cached
+  const promise = extractPdfText(bytes)
+  textCache.set(bytes, promise)
+  return promise
+}
+
 /**
  * Australian section short-forms as they appear on Tekla drawings, e.g.
  * `EA75*75*6`, `UA100*75*6`, `RHS150*100*9.0`, `SHS100*100*6.0`, `PFC100*50`,
@@ -49,4 +62,53 @@ export function findSectionCode(text: string): string | null {
     if (match) return match[0].replace(/\s+/g, '').toUpperCase()
   }
   return null
+}
+
+export interface MaterialEntry {
+  mark: string
+  section: string
+  grade: string
+  length: number
+  qty: number
+}
+
+/** MARK SECTION GRADE LENGTH Qty AREA WEIGHT row from a Tekla "MATERIAL LIST". */
+const MATERIAL_ROW =
+  /(\b[A-Za-z]\w*\b)\s+(RHS\S*|SHS\S*|PFC\S*|TFC\S*|EA\S*|UA\S*|BT\S*|\d+UB\S*)\s+(C\d+)\s+([\d.]+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)/gi
+
+/** Extracts every material-list row from a drawing's text. */
+export function findMaterialEntries(text: string): MaterialEntry[] {
+  const compact = text.replace(/\s+/g, ' ')
+  const entries: MaterialEntry[] = []
+  for (const match of compact.matchAll(MATERIAL_ROW)) {
+    entries.push({
+      mark: match[1],
+      section: match[2].toUpperCase(),
+      grade: match[3].toUpperCase(),
+      length: Number(match[4]),
+      qty: Number(match[5]),
+    })
+  }
+  return entries
+}
+
+export interface DrawingMaterial {
+  qty: number
+  length: number
+  section: string
+}
+
+/**
+ * Reads a part's ground-truth quantity/length from its drawing. The drawing is
+ * authoritative (per the shop's rule), so this is the reference the NC is held to.
+ */
+export async function resolveDrawingMaterial(
+  bytes: Uint8Array,
+  mark: string,
+): Promise<DrawingMaterial | null> {
+  const entries = findMaterialEntries(await extractDrawingText(bytes))
+  if (entries.length === 0) return null
+  const needle = mark.trim().toLowerCase()
+  const match = entries.find((entry) => entry.mark.toLowerCase() === needle) ?? entries[0]
+  return { qty: match.qty, length: match.length, section: match.section }
 }

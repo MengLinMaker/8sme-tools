@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findSectionCode } from './pdfText'
+import { findMaterialEntries, findSectionCode } from './pdfText'
 
 describe('findSectionCode', () => {
   it('finds section callouts in Tekla drawing text', () => {
@@ -17,5 +17,32 @@ describe('findSectionCode', () => {
 
   it('does not mistake grades or marks for sections', () => {
     expect(findSectionCode('CO-7255 C300 M80 31A-TF1')).toBeNull()
+  })
+})
+
+describe('findMaterialEntries', () => {
+  it('reads MARK SECTION GRADE LENGTH Qty from the material list', () => {
+    const [entry] = findMaterialEntries('m105 SHS100*100*6.0 C350 3966 4 1.48 66.32')
+    expect(entry).toEqual({
+      mark: 'm105',
+      section: 'SHS100*100*6.0',
+      grade: 'C350',
+      length: 3966,
+      qty: 4,
+    })
+  })
+
+  it('reads tee and angle rows', () => {
+    expect(findMaterialEntries('1 a1 EA75*75*6 C300 4131 1 1.20 28.11')[0]).toMatchObject({
+      mark: 'a1',
+      section: 'EA75*75*6',
+      length: 4131,
+      qty: 1,
+    })
+    expect(findMaterialEntries('m118 BT100*15 C300 2591 1 1.19 38.84')[0]).toMatchObject({
+      mark: 'm118',
+      section: 'BT100*15',
+      qty: 1,
+    })
   })
 })

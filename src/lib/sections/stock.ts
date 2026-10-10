@@ -1,5 +1,5 @@
 import type { PartRecord } from '@/lib/audit/types'
-import { extractPdfText, findSectionCode } from '@/lib/parsers/pdfText'
+import { extractDrawingText, findSectionCode } from '@/lib/parsers/pdfText'
 import { inferTee } from './infer'
 import type { UbSection } from './types'
 import { getUb } from './ub'
@@ -338,7 +338,7 @@ export async function resolveStockOutline(
   let code: string | null = null
   if (pdfBytes) {
     try {
-      code = findSectionCode(await extractPdfText(pdfBytes))
+      code = findSectionCode(await extractDrawingText(pdfBytes))
     } catch {
       code = null
     }

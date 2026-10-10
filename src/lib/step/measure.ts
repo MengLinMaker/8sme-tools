@@ -8,10 +8,14 @@ export async function measureStepBounds(bytes: Uint8Array): Promise<[number, num
   await ensureOc()
   const { importSTEP } = await import('replicad')
   const shape = await importSTEP(new Blob([new Uint8Array(bytes)], { type: 'model/step' }))
-  const bounds = (shape as unknown as { boundingBox: { bounds: [number[], number[]] } }).boundingBox
-    .bounds
-  const [min, max] = bounds
-  return [max[0] - min[0], max[1] - min[1], max[2] - min[2]]
+  try {
+    const bounds = (shape as unknown as { boundingBox: { bounds: [number[], number[]] } })
+      .boundingBox.bounds
+    const [min, max] = bounds
+    return [max[0] - min[0], max[1] - min[1], max[2] - min[2]]
+  } finally {
+    shape.delete()
+  }
 }
 
 export interface SizeCheck {

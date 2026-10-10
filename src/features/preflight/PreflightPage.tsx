@@ -29,6 +29,9 @@ const PartViewer = lazy(() => import('./PartViewer'))
 
 const SEVERITY_ORDER: Record<Severity, number> = { error: 0, warning: 1, info: 2 }
 
+/** How many drawings to parse at once (pdf.js runs each in its own worker). */
+const CONCURRENCY = 6
+
 type Filter = SeverityFilter
 
 const FILTERS: { id: Filter; label: string }[] = [
@@ -53,6 +56,8 @@ export function PreflightPage() {
   const [checking, setChecking] = useState(false)
   const [drawingMaterials, setDrawingMaterials] = useState<Map<string, DrawingMaterial>>(new Map())
   const [drawingChecking, setDrawingChecking] = useState(false)
+  const [drawingDone, setDrawingDone] = useState(0)
+  const [drawingTotal, setDrawingTotal] = useState(0)
   const search = useSearch({ from: '/preflight' })
   const navigate = useNavigate({ from: '/preflight' })
   const filter: Filter = search.severity ?? 'all'
@@ -100,30 +105,79 @@ export function PreflightPage() {
     }
   }, [viewing, bytesByPath])
 
-  // Read each part's ground-truth quantity/length from its drawing (PDF).
+  // Read the drawings (ground-truth qty/length) first — parsed concurrently, since
+  // pdf.js does the work off-thread — then measure the STEP models (CPU-bound, so
+  // sequential). Running them in order avoids the OCC kernel and pdf.js competing.
   useEffect(() => {
     setDrawingMaterials(new Map())
+    setDrawingDone(0)
+    setDrawingTotal(0)
+    setModelChecks(new Map())
     if (!result) return
     let cancelled = false
-    setDrawingChecking(true)
-    const collected = new Map<string, DrawingMaterial>()
+
+    const pdfParts = result.parts.filter((part) => {
+      const path = part.pdf?.path
+      return path != null && bytesByPath.has(path)
+    })
+    setDrawingTotal(pdfParts.length)
+    setDrawingChecking(pdfParts.length > 0)
+
     void (async () => {
+      // Phase 1: drawings, up to CONCURRENCY at a time.
+      const materials = new Map<string, DrawingMaterial>()
+      let done = 0
+      let cursor = 0
+      const run = async () => {
+        while (!cancelled && cursor < pdfParts.length) {
+          const part = pdfParts[cursor++]
+          const path = part.pdf?.path
+          const bytes = path ? bytesByPath.get(path) : undefined
+          if (bytes) {
+            try {
+              const material = await resolveDrawingMaterial(bytes, part.mark)
+              if (material) materials.set(part.mark, material)
+            } catch {
+              // ignore an unreadable drawing
+            }
+          }
+          done++
+          if (done % 4 === 0 || done === pdfParts.length) {
+            setDrawingMaterials(new Map(materials))
+            setDrawingDone(done)
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pdfParts.length) }, () => run()))
+      if (cancelled) return
+      setDrawingMaterials(new Map(materials))
+      setDrawingDone(pdfParts.length)
+      setDrawingChecking(false)
+
+      // Phase 2: STEP model sizes (empty/degenerate measurement is fine).
+      setChecking(true)
+      const checks = new Map<string, SizeCheck>()
       for (const part of result.parts) {
         if (cancelled) return
-        const bytes = part.pdf ? bytesByPath.get(part.pdf.path) : undefined
-        if (!bytes) continue
+        const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
+        const length = part.expected?.length ?? part.nc?.length
+        const cross = part.nc?.dimensions?.slice(0, 2) ?? []
+        if (!bytes || length == null || cross.length < 2) {
+          checks.set(part.mark, { ok: false, note: 'no STEP / dims' })
+          continue
+        }
         try {
-          const material = await resolveDrawingMaterial(bytes, part.mark)
-          if (material) collected.set(part.mark, material)
+          checks.set(part.mark, compareSize(await measureStepBounds(bytes), length, cross))
         } catch {
-          // ignore an unreadable drawing
+          checks.set(part.mark, { ok: false, note: 'measure failed' })
         }
       }
       if (!cancelled) {
-        setDrawingMaterials(new Map(collected))
-        setDrawingChecking(false)
+        setModelChecks(new Map(checks))
+        setChecking(false)
       }
     })()
+
     return () => {
       cancelled = true
     }
@@ -171,32 +225,6 @@ export function PreflightPage() {
       ? allFindings
       : allFindings.filter((finding) => finding.severity === filter)
   }, [allFindings, filter])
-
-  // Measure each part's STEP and compare to its expected size (catches wrong models).
-  const checkModels = async () => {
-    if (!result) return
-    setChecking(true)
-    try {
-      const checks = new Map<string, SizeCheck>()
-      for (const part of result.parts) {
-        const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
-        const length = part.expected?.length ?? part.nc?.length
-        const cross = part.nc?.dimensions?.slice(0, 2) ?? []
-        if (!bytes || length == null || cross.length < 2) {
-          checks.set(part.mark, { ok: false, note: 'no STEP / dims' })
-          continue
-        }
-        try {
-          checks.set(part.mark, compareSize(await measureStepBounds(bytes), length, cross))
-        } catch {
-          checks.set(part.mark, { ok: false, note: 'measure failed' })
-        }
-      }
-      setModelChecks(checks)
-    } finally {
-      setChecking(false)
-    }
-  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -308,27 +336,24 @@ export function PreflightPage() {
           </Card>
 
           <Card>
-            <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between">
-              <CardTitle className="flex items-center gap-2">
+            <CardHeader>
+              <CardTitle className="flex flex-wrap items-center gap-2">
                 Parts
                 {drawingChecking && (
                   <span className="text-xs font-normal text-muted-foreground">
-                    reading drawings…
+                    reading drawings… {drawingDone}/{drawingTotal}
+                  </span>
+                )}
+                {checking && (
+                  <span className="text-xs font-normal text-muted-foreground">
+                    measuring models…
                   </span>
                 )}
               </CardTitle>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void checkModels()}
-                disabled={checking}
-              >
-                {checking ? 'Checking models…' : 'Check 3D models'}
-              </Button>
             </CardHeader>
             <CardContent>
-              <Table>
-                <TableHeader>
+              <Table containerClassName="max-h-[70vh] overflow-auto">
+                <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:border-b [&_th]:border-border [&_th]:bg-card [&_th:first-child]:left-0 [&_th:first-child]:z-30">
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Mark</TableHead>
                     <TableHead>NC qty</TableHead>
@@ -343,7 +368,7 @@ export function PreflightPage() {
                     <TableHead className="text-right">3D</TableHead>
                   </TableRow>
                 </TableHeader>
-                <TableBody>
+                <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card">
                   {result.parts.map((part) => (
                     <TableRow key={part.mark}>
                       <TableCell className="font-mono text-xs">{part.mark}</TableCell>
