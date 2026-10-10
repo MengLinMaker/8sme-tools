@@ -1,6 +1,7 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
+import { zipSync } from 'fflate'
 import { Eye } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,11 +20,13 @@ import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { SeverityFilter } from '@/lib/audit/schemas'
 import type { AuditResult, Finding, PartRecord, Severity } from '@/lib/audit/types'
-import { downloadText } from '@/lib/download'
+import { downloadBlob, downloadText } from '@/lib/download'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
 import { resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
+import { cleanStep } from '@/lib/step/clean'
 import { compareSize, measureStep, type SizeCheck } from '@/lib/step/measure'
+import { reconstructStepFromNc } from '@/lib/step/reconstructFromNc'
 import { cn } from '@/lib/utils'
 import { createOrbitBus, requestView, type ViewPreset } from './orbitSync'
 
@@ -55,6 +58,16 @@ const VIEW_PRESETS: { id: ViewPreset; label: string }[] = [
   { id: 'front', label: 'Front' },
   { id: 'top', label: 'Top' },
   { id: 'side', label: 'Side' },
+]
+
+/** How the 3D area shows the manufactured (NC) model against the STEP model. */
+type ViewMode = 'step' | 'manufactured' | 'split' | 'overlay'
+
+const VIEW_MODES: { id: ViewMode; label: string }[] = [
+  { id: 'manufactured', label: 'Manufactured' },
+  { id: 'step', label: 'STEP' },
+  { id: 'split', label: 'Side by side' },
+  { id: 'overlay', label: 'Overlay' },
 ]
 
 const FILTERS: { id: Filter; label: string }[] = [
@@ -141,10 +154,41 @@ export function PreflightPage() {
 
   const [rightTab, setRightTab] = useState<'drawing' | 'nc1'>('drawing')
   const ncBytes = viewing?.nc ? bytesByPath.get(viewing.nc.path) : undefined
+  const stepBytes = viewing?.step ? bytesByPath.get(viewing.step.path) : undefined
+
+  // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
+  const [viewMode, setViewMode] = useState<ViewMode>('split')
+  const [manufactured, setManufactured] = useState<Uint8Array | null>(null)
+  useEffect(() => {
+    setManufactured(null)
+    if (!ncBytes) return
+    let cancelled = false
+    void reconstructStepFromNc(new TextDecoder().decode(ncBytes)).then(
+      (step) => {
+        if (!cancelled && step) setManufactured(new TextEncoder().encode(step))
+      },
+      () => {
+        // reconstruction is best-effort; fall back to the STEP view
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [ncBytes])
+
+  const hasManufactured = Boolean(manufactured)
+  const hasStep = Boolean(stepBytes)
+  const effectiveMode: ViewMode = !hasManufactured
+    ? 'step'
+    : viewMode === 'split' && !hasStep
+      ? 'manufactured'
+      : viewMode
+
   // One orbit bus per part, shared by the STEP and NC viewports so they rotate together.
   const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
   const openPart = useCallback((part: PartRecord) => {
     setRightTab('drawing')
+    setViewMode('split')
     setOrbitBus(createOrbitBus())
     setViewing(part)
   }, [])
@@ -246,13 +290,21 @@ export function PreflightPage() {
     const extra: Finding[] = []
     for (const part of result.parts) {
       const material = drawingMaterials.get(part.mark)
-      if (!material || part.nc?.quantity == null) continue
-      if (material.qty !== part.nc.quantity) {
+      if (material && part.nc?.quantity != null && material.qty !== part.nc.quantity) {
         extra.push({
           severity: 'error',
           code: 'QTY_MISMATCH_DRAWING',
           mark: part.mark,
           message: `NC quantity ${part.nc.quantity} differs from drawing quantity ${material.qty}`,
+        })
+      }
+      const check = modelChecks.get(part.mark)
+      if (check?.stray) {
+        extra.push({
+          severity: 'warning',
+          code: 'STRAY_BODY',
+          mark: part.mark,
+          message: `STEP has ${check.bodies ?? '2+'} solid bodies — extra floating piece(s); can be cleaned`,
         })
       }
     }
@@ -263,7 +315,7 @@ export function PreflightPage() {
           SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
           (a.mark ?? '').localeCompare(b.mark ?? ''),
       )
-  }, [result, drawingMaterials])
+  }, [result, drawingMaterials, modelChecks])
 
   const counts = useMemo(() => {
     const result = { error: 0, warning: 0, info: 0 }
@@ -293,6 +345,41 @@ export function PreflightPage() {
         : [],
     [result, sort, allFindings, drawingMaterials, modelChecks],
   )
+
+  // Parts whose STEP carries stray bodies that we can clean up.
+  const cleanable = useMemo(
+    () => (result ? result.parts.filter((p) => modelChecks.get(p.mark)?.stray && p.step) : []),
+    [result, modelChecks],
+  )
+  const [cleaning, setCleaning] = useState(false)
+
+  /** Cleans every stray STEP in the job and re-exports the whole folder as a zip. */
+  const cleanAndExport = useCallback(async () => {
+    if (!result || !bundle) return
+    setCleaning(true)
+    try {
+      const out: Record<string, Uint8Array> = {}
+      for (const entry of bundle.entries) out[entry.path] = entry.bytes
+      for (const part of cleanable) {
+        const path = part.step?.path
+        const bytes = path ? bytesByPath.get(path) : undefined
+        if (!path || !bytes) continue
+        try {
+          const cleanedStep = await cleanStep(bytes)
+          if (cleanedStep && cleanedStep.removed > 0) out[path] = cleanedStep.bytes
+        } catch {
+          // leave the original in place if cleaning fails
+        }
+      }
+      const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
+      downloadBlob(
+        `cleaned-${safeName || 'job'}.zip`,
+        new Blob([zipSync(out)], { type: 'application/zip' }),
+      )
+    } finally {
+      setCleaning(false)
+    }
+  }, [result, bundle, cleanable, bytesByPath])
 
   return (
     <div className="flex flex-col gap-6">
@@ -362,6 +449,16 @@ export function PreflightPage() {
                 >
                   Export parts
                 </Button>
+                {cleanable.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void cleanAndExport()}
+                    disabled={cleaning}
+                  >
+                    {cleaning ? 'Cleaning…' : `Clean & export (${cleanable.length})`}
+                  </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -475,7 +572,7 @@ export function PreflightPage() {
                         )}
                       </TableCell>
                       <TableCell className="text-right">
-                        {part.step ? (
+                        {part.step || part.nc ? (
                           <Button variant="ghost" size="sm" onClick={() => openPart(part)}>
                             <Eye />
                             View
@@ -499,7 +596,7 @@ export function PreflightPage() {
         title={viewing ? `${viewing.mark} · drawing + 3D` : undefined}
         className="max-w-6xl"
       >
-        {viewing?.step && (
+        {viewing && (viewing.step || viewing.nc) && (
           <>
             <div className="flex flex-col lg:flex-row">
               <div className="relative h-[45vh] min-h-72 w-full bg-[#0b0f14] lg:h-[70vh] lg:flex-1">
@@ -510,12 +607,51 @@ export function PreflightPage() {
                     </div>
                   }
                 >
-                  <PartViewer
-                    name={viewing.step.path}
-                    bytes={bytesByPath.get(viewing.step.path)}
-                    stock={stock}
-                    bus={orbitBus}
-                  />
+                  {effectiveMode === 'overlay' && manufactured ? (
+                    <PartViewer
+                      name={`${viewing.mark} · manufactured`}
+                      bytes={manufactured}
+                      compareBytes={stepBytes}
+                      compareLabel="STEP"
+                      stock={stock}
+                      bus={orbitBus}
+                    />
+                  ) : effectiveMode === 'split' && manufactured ? (
+                    <div className="grid h-full grid-cols-2">
+                      <div className="relative h-full">
+                        <PartViewer
+                          name={`${viewing.mark} · manufactured`}
+                          bytes={manufactured}
+                          stock={stock}
+                          bus={orbitBus}
+                        />
+                        <PaneTag tone="manufactured">Manufactured (NC)</PaneTag>
+                      </div>
+                      <div className="relative h-full border-l border-border">
+                        <PartViewer
+                          name={viewing.step?.path ?? 'STEP'}
+                          bytes={stepBytes}
+                          stock={stock}
+                          bus={orbitBus}
+                        />
+                        <PaneTag tone="step">STEP</PaneTag>
+                      </div>
+                    </div>
+                  ) : effectiveMode === 'manufactured' && manufactured ? (
+                    <PartViewer
+                      name={`${viewing.mark} · manufactured`}
+                      bytes={manufactured}
+                      stock={stock}
+                      bus={orbitBus}
+                    />
+                  ) : (
+                    <PartViewer
+                      name={viewing.step?.path ?? 'STEP'}
+                      bytes={stepBytes}
+                      stock={stock}
+                      bus={orbitBus}
+                    />
+                  )}
                 </Suspense>
                 <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur">
                   {VIEW_PRESETS.map((preset) => (
@@ -529,6 +665,32 @@ export function PreflightPage() {
                     </button>
                   ))}
                 </div>
+                {hasManufactured && (
+                  <div className="absolute bottom-3 left-3 z-10 flex gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur">
+                    {VIEW_MODES.map((mode) => {
+                      const disabled =
+                        (mode.id === 'step' && !hasStep) ||
+                        (mode.id === 'split' && !hasStep) ||
+                        (mode.id === 'overlay' && !hasStep)
+                      return (
+                        <button
+                          key={mode.id}
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => setViewMode(mode.id)}
+                          className={cn(
+                            'rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-30',
+                            effectiveMode === mode.id
+                              ? 'bg-accent text-accent-foreground'
+                              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                          )}
+                        >
+                          {mode.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
               <div className="flex h-[45vh] w-full flex-col border-t border-border lg:h-[70vh] lg:flex-1 lg:border-l lg:border-t-0">
                 <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
@@ -649,6 +811,23 @@ function Stat({ label, value, tone }: { label: string; value: number | string; t
 function Status({ value }: { value: boolean | null }) {
   if (value === null) return <Badge variant="muted">missing</Badge>
   return <Badge variant={value ? 'success' : 'destructive'}>{value ? 'ok' : 'bad'}</Badge>
+}
+
+function PaneTag({ children, tone }: { children: ReactNode; tone?: 'manufactured' | 'step' }) {
+  return (
+    <span
+      className={cn(
+        'pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 whitespace-nowrap rounded-full border px-3 py-0.5 text-xs font-semibold backdrop-blur',
+        tone === 'manufactured'
+          ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+          : tone === 'step'
+            ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
+            : 'border-border bg-card/85 text-foreground',
+      )}
+    >
+      {children}
+    </span>
+  )
 }
 
 function SortHead({

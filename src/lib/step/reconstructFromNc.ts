@@ -1,30 +1,44 @@
 import { parseDstv } from '@/lib/parsers/dstv'
 import { type NcContour, parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { partSectionForCode } from '@/lib/sections/stock'
 import { ensureOc } from './occInit'
 
 /**
- * EXPERIMENTAL / standalone: rebuild a T-profile solid from its DSTV `.nc1`.
+ * EXPERIMENTAL / standalone: rebuild a prismatic part's solid from its DSTV `.nc1`.
  *
- * Kept separate from the nesting/preflight pipeline on purpose — nothing imports this yet.
- * The NC is treated as ground truth (as the docs recommend): the cross-section comes from the
- * `ST` header dims, the outline from the `AK` contours (X along the member, Y within each face),
- * and holes from `BO`. Validated against healthy sibling parts whose real STEP exists: the
- * rebuilt bounding box matches to <0.1 mm and volume to within ~2% (the deficit is the end-arc
- * radii, which are currently drawn as straight edges).
+ * Kept separate from the nesting/preflight pipeline (the preflight viewer is the only caller).
+ * The NC is treated as ground truth: the cross-section comes from the profile code + `ST` header
+ * dims (via `partSectionForCode`), the outline from the `AK` contours, and holes from `BO`.
  *
- * Currently only handles profile type `T` (`BT…` sections); returns `null` otherwise.
+ * Faces are paired as DSTV defines them — `v`/`h` share one cross-section axis, `o`/`u` the other
+ * — and which is which is matched by comparing the contour's Y-extent to the section's two
+ * dimensions. Validated against healthy sibling parts: bounding box within a few mm and volume
+ * within ~2% (the deficit is end-arc radii, drawn straight for now).
+ *
+ * Handles `T`, `RHS`/`SHS`, `PFC`/`TFC`, `EA`/`UA`, `UB` and `CHS`. Returns `null` otherwise.
  */
 
 type Pt = [number, number]
+type Axis = 0 | 1
 
-function polygon(pts: Pt[]) {
-  let pen = drawPen(pts[0])
-  for (let i = 1; i < pts.length; i++) pen = pen.lineTo(pts[i])
-  return pen.close()
+interface SolidOps {
+  intersect: (other: SolidOps) => SolidOps
+  cut: (other: SolidOps) => SolidOps
 }
 
-// `draw` is imported lazily (OpenCASCADE WASM); keep a module-local handle set by `ensureOc` caller.
-let drawPen: (p: Pt) => ReturnType<typeof import('replicad')['draw']>
+function extent(points: Pt[], axis: Axis): number {
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (const p of points) {
+    min = Math.min(min, p[axis])
+    max = Math.max(max, p[axis])
+  }
+  return max - min
+}
+
+function maxCoord(contour: NcContour, axis: Axis): number {
+  return Math.max(...contour.points.map((p) => p[axis]))
+}
 
 function dedupe(pts: Pt[]): Pt[] {
   const out = pts.filter((p, i) => i === 0 || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1])
@@ -37,86 +51,127 @@ function dedupe(pts: Pt[]): Pt[] {
   return out
 }
 
-/** T cross-section outline in the (width, depth) plane. */
-function teeSection(b: number, halfD: number, tf: number, tw: number): Pt[] {
-  const hb = b / 2
-  const htw = tw / 2
-  return [
-    [-hb, 0],
-    [hb, 0],
-    [hb, tf],
-    [htw, tf],
-    [htw, halfD],
-    [-htw, halfD],
-    [-htw, tf],
-    [-hb, tf],
-  ]
-}
-
 export async function reconstructStepFromNc(ncText: string): Promise<string | null> {
   const header = parseDstv(ncText).header
-  if (header.profileType !== 'T') return null
+  const geo = parseNcGeometry(ncText)
+  const section = partSectionForCode(header.profile, header.dimensions)
+  if (!section || section.points.length < 3) return null
 
   await ensureOc()
   const { draw, drawCircle } = await import('replicad')
-  drawPen = draw as unknown as typeof drawPen
+  const poly = (pts: Pt[]) => {
+    let pen = draw(pts[0])
+    for (let i = 1; i < pts.length; i++) pen = pen.lineTo(pts[i])
+    return pen.close()
+  }
 
-  const geo = parseNcGeometry(ncText)
-  const [b, halfD, tf, tw] = header.dimensions
-  const hb = b / 2
-  const maxX = Math.max(...geo.contours.flatMap((c) => c.points.map((p) => p[0])))
+  const ex = extent(section.points, 0)
+  const ey = extent(section.points, 1)
+  const outer = geo.contours.filter((c) => c.kind === 'outer')
+  const maxX = Math.max(
+    ...geo.contours.flatMap((c) => c.points.map((p) => p[0])),
+    ...geo.holes.map((h) => h.x + h.diameter),
+  )
+  const matchAxis = (yMax: number): Axis => (Math.abs(yMax - ex) <= Math.abs(yMax - ey) ? 0 : 1)
 
-  let solid = polygon(teeSection(b, halfD, tf, tw))
+  // `v`/`h` faces share one cross-section axis, `o`/`u` the other. Decide which by matching
+  // the contour's Y-extent to the section's two dimensions.
+  const vh = outer.find((c) => c.face === 'v' || c.face === 'h')
+  const ou = outer.find((c) => c.face === 'o' || c.face === 'u')
+  const axisVH: Axis = vh
+    ? matchAxis(maxCoord(vh, 1))
+    : ou
+      ? ((1 - matchAxis(maxCoord(ou, 1))) as Axis)
+      : 0
+  const axisOU: Axis = (1 - axisVH) as Axis
+  const faceAxis = (face: string): Axis => (face === 'v' || face === 'h' ? axisVH : axisOU)
+  const halfOf = (axis: Axis): number => (axis === 0 ? ex / 2 : ey / 2)
+  const pointsByAxis: Record<Axis, Pt[]> = { 0: [], 1: [] }
+  const drawingsByAxis: Record<Axis, ReturnType<typeof poly>[]> = { 0: [], 1: [] }
+
+  // Base prism: cross-section in the (width=Y, depth=Z) plane, extruded along the member (X).
+  let solid = poly(section.points)
     .sketchOnPlane('YZ')
     .extrude(maxX + 20) as unknown as SolidOps
 
-  // v-face contour lives in (X, width): intersect away everything outside it (trims length + ends).
-  for (const c of geo.contours.filter((c) => c.face === 'v') as NcContour[]) {
-    const pts = dedupe(c.points).map(([x, y]) => [x, y - hb] as Pt)
-    const prism = polygon(pts)
-      .sketchOnPlane('XY')
-      .extrude(400)
-      .translate(0, 0, -150) as unknown as SolidOps
-    solid = solid.intersect(prism)
+  // Holes in the section (hollow RHS/SHS/CHS) are through-cuts too.
+  for (const hole of section.holes ?? []) {
+    const cut = poly(hole)
+      .sketchOnPlane('YZ')
+      .extrude(maxX + 20) as unknown as SolidOps
+    solid = solid.cut(cut)
   }
 
-  // o-face contour lives in (X, depth): the coping / web side. `intersect` trips an OCC
-  // boolean error here, so remove the *complement* (bounding rect minus contour) with a cut.
-  for (const c of geo.contours.filter((c) => c.face === 'o') as NcContour[]) {
-    const pts = dedupe(c.points)
-    const minX = Math.min(...pts.map((p) => p[0]))
-    const maxXo = Math.max(...pts.map((p) => p[0]))
-    const rect = polygon([
-      [minX, -1],
-      [maxXo, -1],
-      [maxXo, halfD + 1],
-      [minX, halfD + 1],
-    ])
-    const notch = (rect as unknown as { cut: (other: unknown) => unknown }).cut(
-      polygon(pts),
-    ) as ReturnType<typeof polygon>
-    const notchSolid = notch
-      .sketchOnPlane('XZ')
-      .extrude(400)
-      .translate(0, -150, 0) as unknown as SolidOps
-    solid = solid.cut(notchSolid)
+  for (const c of outer) {
+    const axis = faceAxis(c.face)
+    const half = halfOf(axis)
+    const pts = dedupe(c.points).map(([x, y]) => [x, y - half] as Pt)
+    pointsByAxis[axis].push(...pts)
+    drawingsByAxis[axis].push(poly(pts))
   }
 
-  // Holes on the v (flange) face are drilled through the depth.
-  for (const h of geo.holes.filter((h) => h.face === 'v' && h.diameter > 0)) {
-    const cyl = drawCircle(h.diameter / 2)
-      .translate(h.x, h.y - hb)
-      .sketchOnPlane('XY')
-      .extrude(600)
-      .translate(0, 0, -250) as unknown as SolidOps
-    solid = solid.cut(cyl)
+  // Constrain each cross-section axis by the union of that axis's face outlines. A mitre makes
+  // the top face shorter than the bottom, so the union (not either face alone) is the true
+  // silhouette and stops the intersection from over-trimming the ends.
+  for (const axis of [0, 1] as Axis[]) {
+    const drawings = drawingsByAxis[axis]
+    if (drawings.length === 0) continue
+    let shape = drawings[0]
+    for (let i = 1; i < drawings.length; i++) {
+      const fused = (shape as unknown as { fuse: (other: unknown) => unknown }).fuse(drawings[i])
+      if (fused) shape = fused as typeof shape
+    }
+    const half = halfOf(axis)
+    if (axis === 0) {
+      // Face plane is (X, width=Y); extrude across the depth and keep the inside.
+      const prism = (shape as ReturnType<typeof poly>)
+        .sketchOnPlane('XY')
+        .extrude(400)
+        .translate(0, 0, -150) as unknown as SolidOps
+      solid = solid.intersect(prism)
+    } else {
+      // Face plane is (X, depth=Z). `intersect` trips an OCC boolean error with the section
+      // prism, so remove the complement (bounding rectangle minus the outline) with a cut.
+      const xs = pointsByAxis[axis].map((p) => p[0])
+      const minX = Math.min(...xs)
+      const maxXc = Math.max(...xs)
+      const rect = poly([
+        [minX, -half - 2],
+        [maxXc, -half - 2],
+        [maxXc, half + 2],
+        [minX, half + 2],
+      ])
+      const notch = (rect as unknown as { cut: (other: unknown) => unknown }).cut(shape)
+      if (!notch) continue
+      const notchSolid = (notch as ReturnType<typeof poly>)
+        .sketchOnPlane('XZ')
+        .extrude(400)
+        .translate(0, -150, 0) as unknown as SolidOps
+      solid = solid.cut(notchSolid)
+    }
+  }
+
+  // Holes, drilled perpendicular to the face they sit on.
+  for (const h of geo.holes.filter((h) => h.diameter > 0)) {
+    const axis = faceAxis(h.face)
+    const half = halfOf(axis)
+    if (axis === 0) {
+      const cyl = drawCircle(h.diameter / 2)
+        .translate(h.x, h.y - half)
+        .sketchOnPlane('XY')
+        .extrude(600)
+        .translate(0, 0, -250) as unknown as SolidOps
+      solid = solid.cut(cyl)
+    } else {
+      const cyl = drawCircle(h.diameter / 2)
+        .translate(h.x, h.y - half)
+        .sketchOnPlane('XZ')
+        .extrude(600)
+        .translate(0, -250, 0) as unknown as SolidOps
+      solid = solid.cut(cyl)
+    }
   }
 
   const blob = (solid as unknown as { blobSTEP: () => Blob }).blobSTEP()
   return await blob.text()
-}
-
-interface SolidOps {
-  intersect: (other: SolidOps) => SolidOps
-  cut: (other: SolidOps) => SolidOps
 }

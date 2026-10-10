@@ -1,8 +1,11 @@
 import type { PartRecord } from '@/lib/audit/types'
 import { extractDrawingText, findSectionCode } from '@/lib/parsers/pdfText'
 import { inferTee } from './infer'
-import type { UbSection } from './types'
+import { getPfcByDepth } from './pfc'
+import { getTfbByDepth } from './tfb'
+import type { RolledSection } from './types'
 import { getUb } from './ub'
+import { getUc, getUcByDepth } from './uc'
 
 /**
  * Builds the uncut stock cross-section ("ghost") for a part from its section
@@ -20,7 +23,17 @@ export interface StockOutline {
   label: string
 }
 
-type Family = 'tee' | 'angle-equal' | 'angle-unequal' | 'rhs' | 'shs' | 'chs' | 'channel' | 'ub'
+type Family =
+  | 'tee'
+  | 'angle-equal'
+  | 'angle-unequal'
+  | 'rhs'
+  | 'shs'
+  | 'chs'
+  | 'channel'
+  | 'ub'
+  | 'uc'
+  | 'tfb'
 
 const PREFIXES: [RegExp, Family][] = [
   [/^BT/, 'tee'],
@@ -31,6 +44,8 @@ const PREFIXES: [RegExp, Family][] = [
   [/^CHS/, 'chs'],
   [/^TFC/, 'channel'],
   [/^PFC/, 'channel'],
+  [/^UC/, 'uc'],
+  [/^TFB/, 'tfb'],
   [/^(?:UB|WB|WC)/, 'ub'],
 ]
 
@@ -179,7 +194,8 @@ function teeOutline(b: number, depth: number, tf: number, tw: number): [number, 
   ])
 }
 
-function ubOutline(section: UbSection): [number, number][] {
+/** Full I-section outline (x = width, y = depth) for UB / UC / TFB, root radii omitted. */
+function iSectionOutline(section: RolledSection): [number, number][] {
   const hb = section.b / 2
   const hd = section.d / 2
   const hw = section.tw / 2
@@ -223,6 +239,8 @@ function ubOutlineFromDims(b: number, d: number, tf: number, tw: number): [numbe
 
 function detectFamily(clean: string): Family | null {
   if (/^\d/.test(clean)) {
+    if (/UC/.test(clean)) return 'uc'
+    if (/TFB/.test(clean)) return 'tfb'
     if (/(?:UB|WB|WC)/.test(clean)) return 'ub'
     if (/(?:PFC|TFC)/.test(clean)) return 'channel'
     return null
@@ -324,6 +342,83 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
     points: hollow ? points : inflate(points, INFLATE),
     holes: holes.length > 0 ? holes : undefined,
     label,
+  }
+}
+
+/**
+ * The exact (un-inflated) cross-section for a profile code, for rebuilding a part's solid
+ * from its NC. Uses the same builders as the stock ghost, but with no clearance allowance.
+ */
+export function partSectionForCode(
+  code: string,
+  dims: number[],
+): { points: [number, number][]; holes?: [number, number][][] } | null {
+  const clean = code.trim().replace(/\s+/g, '').toUpperCase()
+  const family = detectFamily(clean)
+  if (!family) return null
+
+  const n = numbers(clean)
+  switch (family) {
+    case 'tee': {
+      if (dims.length >= 4) return { points: teeOutline(dims[0], dims[1], dims[2], dims[3]) }
+      const match = inferTee(clean, dims)
+      if (match)
+        return {
+          points: teeOutline(
+            match.section.b,
+            match.section.d / 2,
+            match.section.tf,
+            match.section.tw,
+          ),
+        }
+      return null
+    }
+    case 'angle-equal':
+      if (n.length >= 3) return { points: angleL(n[0], n[0], n[2]) }
+      if (dims.length >= 3) return { points: angleL(dims[0], dims[1] || dims[0], dims[2]) }
+      return null
+    case 'angle-unequal':
+      if (n.length >= 3) return { points: angleL(n[0], n[1], n[2]) }
+      if (dims.length >= 3) return { points: angleL(dims[0], dims[1], dims[2]) }
+      return null
+    case 'rhs':
+    case 'shs': {
+      const height = n[0]
+      const width = n[1] ?? n[0]
+      const wall = n[2] ?? dims[2] ?? 0
+      const radius = dims[4] ?? 0
+      if (height > 0 && width > 0 && wall > 0 && wall < Math.min(height, width) / 2) {
+        const iw = width - 2 * wall
+        const ih = height - 2 * wall
+        const holes =
+          iw > 0 && ih > 0 ? [reverse(roundedRect(iw, ih, Math.max(0, radius - wall)))] : undefined
+        return { points: roundedRect(width, height, radius), holes }
+      }
+      if (height > 0 && width > 0) return { points: rectangle(width, height) }
+      return null
+    }
+    case 'chs': {
+      const od = n[0]
+      const wall = n[1] ?? dims[2] ?? 0
+      if (!(od > 0)) return null
+      const id = od - 2 * wall
+      return { points: circle(od), holes: wall > 0 && id > 0 ? [reverse(circle(id))] : undefined }
+    }
+    case 'channel': {
+      const depth = n[0] || dims[0]
+      const flange = n[1] || dims[1] || depth / 2
+      if (!(depth > 0 && flange > 0)) return null
+      const tf = dims[2] ?? depth * 0.05
+      const web = dims[3] ?? depth * 0.08
+      return { points: channel(depth, flange, web, tf) }
+    }
+    case 'ub': {
+      const section = getUb(clean)
+      if (section) return { points: ubOutline(section) }
+      if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
+        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3]) }
+      return null
+    }
   }
 }
 

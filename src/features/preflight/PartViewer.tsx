@@ -17,6 +17,7 @@ import {
   MeshStandardMaterial,
   OrthographicCamera,
   Path,
+  Quaternion,
   Scene,
   Shape,
   Vector3,
@@ -29,12 +30,72 @@ import { meshStepFile } from '@/lib/step/mesh'
 import { attachOrbit, type OrbitBus } from './orbitSync'
 
 const GHOST_COLOR = 0x3ddc84
+const COMPARE_COLOR = 0xf59e0b
 const FACE_MATERIAL = { color: 0xaebfd0, metalness: 0.55, roughness: 0.45 }
+/** Roll about the length axis for each `detectOrientation` result (world YZ → profile-local). */
+const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]
 
 /** An extruded section outline drawn as a translucent overlay. */
 export interface BeamOutline {
   profile: [number, number][]
   length: number
+}
+
+function unit(axis: number, sign: number): Vector3 {
+  const vector = new Vector3()
+  vector.setComponent(axis, sign)
+  return vector
+}
+
+function bboxOfVertices(vertices: number[]): Box3 {
+  const box = new Box3()
+  const point = new Vector3()
+  for (let i = 0; i + 2 < vertices.length; i += 3) {
+    box.expandByPoint(point.set(vertices[i], vertices[i + 1], vertices[i + 2]))
+  }
+  return box
+}
+
+function transformVertices(vertices: number[], matrix: Matrix4): number[] {
+  const out = new Array<number>(vertices.length)
+  const point = new Vector3()
+  for (let i = 0; i + 2 < vertices.length; i += 3) {
+    point.set(vertices[i], vertices[i + 1], vertices[i + 2]).applyMatrix4(matrix)
+    out[i] = point.x
+    out[i + 1] = point.y
+    out[i + 2] = point.z
+  }
+  return out
+}
+
+/**
+ * Seats a model in `profile`'s canonical frame: rotate its length axis to X, then roll about X
+ * so the cross-section matches the profile. Manufactured (NC-built) and STEP models therefore
+ * land in the *same* orientation, and the two never disagree in split/overlay views.
+ */
+function seatQuaternion(vertices: number[], profile: [number, number][] | undefined): Quaternion {
+  if (!profile || profile.length < 3 || vertices.length < 9) return new Quaternion()
+  const box = bboxOfVertices(vertices)
+  const size = box.getSize(new Vector3())
+  const centre = box.getCenter(new Vector3())
+  const extents = [size.x, size.y, size.z]
+  const longAxis = extents.indexOf(Math.max(...extents))
+
+  const toX = new Quaternion()
+  if (longAxis !== 0) toX.setFromUnitVectors(unit(longAxis, 1), unit(0, 1))
+
+  const seated = transformVertices(
+    vertices.map((value, index) =>
+      // centre first (every 3rd component set is a point)
+      index % 3 === 0 ? value - centre.x : index % 3 === 1 ? value - centre.y : value - centre.z,
+    ),
+    new Matrix4().makeRotationFromQuaternion(toX),
+  )
+  const roll = new Quaternion().setFromAxisAngle(
+    unit(0, 1),
+    SEAT_ANGLES[detectOrientation(profile, seated, 1, 2, [0, 0, 0])],
+  )
+  return new Quaternion().multiplyQuaternions(roll, toX)
 }
 
 /** Extrudes a section outline along a basis and returns a translucent overlay. */
@@ -85,21 +146,17 @@ function extrudeOverlay(
   return group
 }
 
-function unit(axis: number, sign: number): Vector3 {
-  const vector = new Vector3()
-  vector.setComponent(axis, sign)
-  return vector
-}
-
 interface SceneHandle {
   dispose: () => void
   overlays: Group[]
+  setFlip: (flip: boolean) => void
 }
 
 /** Builds the three.js scene for a set of meshes and returns a disposer. */
 function mountScene(
   container: HTMLElement,
   replicadMeshes: ReplicadMesh[],
+  compareMeshes: ReplicadMesh[] | null,
   stock: StockOutline | null,
   beam: BeamOutline | null,
   bus: OrbitBus | null,
@@ -119,38 +176,73 @@ function mountScene(
   fill.position.set(-1, -0.6, -0.8)
   scene.add(fill)
 
-  const geometries = syncGeometries(replicadMeshes, [])
-  const group = new Group()
-  const materials: Material[] = []
-  for (const geometry of geometries) {
-    const face = new MeshStandardMaterial(FACE_MATERIAL)
-    const line = new LineBasicMaterial({ color: 0x0b0f14 })
-    materials.push(face, line)
-    group.add(new Mesh(geometry.faces, face))
-    group.add(new LineSegments(geometry.lines, line))
+  const profile =
+    Array.isArray(stock?.points) && stock.points.length >= 3 ? stock.points : undefined
+
+  const buildGroup = (
+    meshes: ReplicadMesh[],
+    material: MeshStandardMaterial,
+    withLines: boolean,
+  ) => {
+    const geometries = syncGeometries(meshes, [])
+    const group = new Group()
+    for (const geometry of geometries) {
+      group.add(new Mesh(geometry.faces, material))
+      if (withLines) group.add(new LineSegments(geometry.lines, lineMaterial))
+    }
+    const raw = meshes[0]?.faces.vertices ?? []
+    const seat = profile ? seatQuaternion(raw, profile) : new Quaternion()
+    const box = bboxOfVertices(raw)
+    const centre = box.getCenter(new Vector3())
+    group.quaternion.copy(seat)
+    group.position.copy(centre.applyQuaternion(seat)).negate()
+    group.updateMatrixWorld(true)
+    return { group, geometries, raw }
   }
-  scene.add(group)
 
-  // Centre the part at the origin.
-  const bounds = new Box3().setFromObject(group)
-  const size = bounds.getSize(new Vector3())
-  const centre = bounds.getCenter(new Vector3())
-  group.position.sub(centre)
+  const faceMaterial = new MeshStandardMaterial(FACE_MATERIAL)
+  const lineMaterial = new LineBasicMaterial({ color: 0x0b0f14 })
+  const compareMaterial = new MeshStandardMaterial({
+    color: COMPARE_COLOR,
+    transparent: true,
+    opacity: 0.4,
+    depthWrite: false,
+    side: DoubleSide,
+    metalness: 0.2,
+    roughness: 0.6,
+  })
+  const materials: Material[] = [faceMaterial, lineMaterial]
 
+  const primary = buildGroup(replicadMeshes, faceMaterial, true)
+  const size = bboxOfVertices(primary.raw).getSize(new Vector3())
+  scene.add(primary.group)
+
+  const compareGeometries: ReturnType<typeof syncGeometries>[] = []
+  let compareGroup: Group | null = null
+  let compareBaseQuaternion: Quaternion | null = null
+  if (compareMeshes && compareMeshes.length > 0) {
+    materials.push(compareMaterial)
+    const compare = buildGroup(compareMeshes, compareMaterial, false)
+    compareGeometries.push(compare.geometries)
+    compareGroup = compare.group
+    compareBaseQuaternion = compare.group.quaternion.clone()
+    scene.add(compareGroup)
+  }
+
+  // Stock ghost, seated in the same canonical frame as the model.
   const overlays: Group[] = []
   const extents = [size.x, size.y, size.z]
-  const longAxis = extents.indexOf(Math.max(...extents))
-  const stockPoints = stock?.points
-  if (Array.isArray(stockPoints) && stockPoints.length >= 3 && extents[longAxis] > 0) {
+  const nativeLongAxis = extents.indexOf(Math.max(...extents))
+  const length = extents[nativeLongAxis]
+  // When a profile is present the model is seated with its length along X, so the ghost's
+  // length axis is X too; otherwise fall back to the model's own longest axis.
+  const longAxis = profile ? 0 : nativeLongAxis
+  if (profile) {
+    const worldVertices = transformVertices(primary.raw, primary.group.matrixWorld)
     const cross = [0, 1, 2].filter((axis) => axis !== longAxis)
-    const crossA = cross[0]
-    const crossB = cross[1]
-    const vertices = replicadMeshes[0]?.faces.vertices ?? []
-    const orientation = vertices.length
-      ? detectOrientation(stockPoints, vertices, crossA, crossB, [centre.x, centre.y, centre.z])
-      : 0
-    const eA = unit(crossA, 1)
-    const eB = unit(crossB, 1)
+    const orientation = detectOrientation(profile, worldVertices, cross[0], cross[1], [0, 0, 0])
+    const eA = unit(cross[0], 1)
+    const eB = unit(cross[1], 1)
     const [xAxis, yAxis] = [
       [eA, eB],
       [eB, eA.clone().negate()],
@@ -158,9 +250,9 @@ function mountScene(
       [eB.clone().negate(), eA],
     ][orientation]
     const overlay = extrudeOverlay(
-      stockPoints,
+      profile,
       Array.isArray(stock?.holes) ? stock.holes : [],
-      extents[longAxis],
+      length,
       xAxis,
       yAxis,
     )
@@ -168,38 +260,50 @@ function mountScene(
     overlays.push(overlay)
   }
   if (beam && Array.isArray(beam.profile) && beam.profile.length >= 3 && beam.length > 0) {
-    // Authored in the same frame as the generated STEP, so no re-orientation.
     const overlay = extrudeOverlay(beam.profile, [], beam.length, unit(0, 1), unit(1, 1))
     scene.add(overlay)
     overlays.push(overlay)
   }
 
-  // Frame the part and overlays in view.
-  const fit = new Box3().expandByObject(group)
+  // Frame the model and overlays in view.
+  const fit = new Box3().expandByObject(primary.group)
+  if (compareGroup) fit.expandByObject(compareGroup)
   for (const overlay of overlays) fit.expandByObject(overlay)
   const fitSize = fit.getSize(new Vector3())
   const fitCentre = fit.getCenter(new Vector3())
 
   const maxDim = Math.max(fitSize.x, fitSize.y, fitSize.z) || 1
-  const aspect = (container.clientWidth || 1) / (container.clientHeight || 1)
-  const frustumHeight = maxDim * 1.4
-  const halfHeight = frustumHeight / 2
-  const halfWidth = halfHeight * aspect
+  // Cover the model's bounding-box diagonal, so it is never cropped at any preset view or
+  // free-orbit angle (a fixed `maxDim` frame cuts long or wide parts).
+  const diameter = Math.hypot(fitSize.x, fitSize.y, fitSize.z) || maxDim
+  const MARGIN = 1.06
+  const baseHalf = (diameter / 2) * MARGIN
+
   const camera = new OrthographicCamera(
-    -halfWidth,
-    halfWidth,
-    halfHeight,
-    -halfHeight,
+    -baseHalf,
+    baseHalf,
+    baseHalf,
+    -baseHalf,
     Math.max(maxDim / 1000, 0.01),
     maxDim * 100,
   )
 
   // Default to a true isometric angle: equal X/Y/Z so no axis is foreshortened.
   const distance = maxDim * 2
-  camera.position
-    .copy(fitCentre)
-    .add(new Vector3(distance, distance, distance).multiplyScalar(1 / Math.sqrt(3)))
+  camera.position.copy(fitCentre).add(new Vector3(1, 1, 1).normalize().multiplyScalar(distance))
   camera.lookAt(fitCentre)
+
+  const applyFrustum = (width: number, height: number) => {
+    const aspect = width / height || 1
+    const halfHeight = Math.max(baseHalf, baseHalf / aspect)
+    const halfWidth = halfHeight * aspect
+    camera.left = -halfWidth
+    camera.right = halfWidth
+    camera.top = halfHeight
+    camera.bottom = -halfHeight
+    camera.updateProjectionMatrix()
+  }
+  applyFrustum(container.clientWidth || 1, container.clientHeight || 1)
 
   const controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
@@ -225,27 +329,32 @@ function mountScene(
     const height = container.clientHeight
     if (!width || !height) return
     renderer.setSize(width, height)
-    const halfH = frustumHeight / 2
-    const halfW = halfH * (width / height)
-    camera.left = -halfW
-    camera.right = halfW
-    camera.top = halfH
-    camera.bottom = -halfH
-    camera.updateProjectionMatrix()
+    applyFrustum(width, height)
   }
   const observer = new ResizeObserver(resize)
   observer.observe(container)
 
   return {
     overlays,
+    setFlip(flip: boolean) {
+      if (!compareGroup || !compareBaseQuaternion) return
+      compareGroup.quaternion.copy(compareBaseQuaternion)
+      compareGroup.rotateOnAxis(unit(0, 1), flip ? Math.PI : 0)
+    },
     dispose() {
       cancelAnimationFrame(raf)
       observer.disconnect()
       detachOrbit?.()
       controls.dispose()
-      for (const geometry of geometries) {
+      for (const geometry of primary.geometries) {
         geometry.faces.dispose()
         geometry.lines.dispose()
+      }
+      for (const geometries of compareGeometries) {
+        for (const geometry of geometries) {
+          geometry.faces.dispose()
+          geometry.lines.dispose()
+        }
       }
       for (const material of materials) material.dispose()
       for (const overlay of overlays) {
@@ -267,6 +376,9 @@ function mountScene(
 export interface PartViewerProps {
   name: string
   bytes: Uint8Array | undefined
+  /** optional second model rendered translucent on top of `bytes` (e.g. STEP over the NC build) */
+  compareBytes?: Uint8Array | null
+  compareLabel?: string
   stock?: StockOutline | null
   beam?: BeamOutline | null
   bus?: OrbitBus | null
@@ -275,6 +387,8 @@ export interface PartViewerProps {
 export default function PartViewer({
   name,
   bytes,
+  compareBytes = null,
+  compareLabel = 'overlay',
   stock = null,
   beam = null,
   bus = null,
@@ -285,28 +399,35 @@ export default function PartViewer({
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
   const [showStock, setShowStock] = useState(true)
+  const [flipped, setFlipped] = useState(false)
 
   useEffect(() => {
     if (!bytes) {
       setStatus('error')
-      setMessage('The STEP file for this part could not be found in the dropped job.')
+      setMessage('No model to render.')
       return
     }
     let disposed = false
     let handle: SceneHandle | null = null
     setStatus('loading')
     setMessage(null)
+    setFlipped(false)
 
     meshStepFile(name, bytes)
-      .then((meshes) => {
+      .then(async (meshes) => {
+        const compare = compareBytes ? await meshStepFile(`${name}·compare`, compareBytes) : null
+        return { meshes, compare }
+      })
+      .then(({ meshes, compare }) => {
         if (disposed || !containerRef.current) return
         if (meshes[0]?.faces.triangles.length === 0) {
           setStatus('error')
-          setMessage('The STEP file contains no renderable geometry.')
+          setMessage('The model contains no renderable geometry.')
           return
         }
-        handle = mountScene(containerRef.current, meshes, stock, beam, bus)
+        handle = mountScene(containerRef.current, meshes, compare, stock, beam, bus)
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
+        handle.setFlip(false)
         handleRef.current = handle
         setStatus('ready')
       })
@@ -321,33 +442,49 @@ export default function PartViewer({
       handle?.dispose()
       handleRef.current = null
     }
-  }, [name, bytes, stock, beam, bus])
+  }, [name, bytes, compareBytes, stock, beam, bus])
 
   useEffect(() => {
     showStockRef.current = showStock
     for (const overlay of handleRef.current?.overlays ?? []) overlay.visible = showStock
   }, [showStock])
 
-  const hasOverlay = Boolean(stock || beam)
+  useEffect(() => {
+    handleRef.current?.setFlip(flipped)
+  }, [flipped])
+
+  const hasOverlay = Boolean((stock || beam) && status === 'ready')
+  const hasCompare = Boolean(compareBytes && status === 'ready')
 
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full touch-none" />
-      {hasOverlay && status === 'ready' && (
-        <button
-          type="button"
-          onClick={() => setShowStock((value) => !value)}
-          className="absolute left-3 top-3 rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
-        >
-          {showStock ? 'Hide stock' : 'Show stock'}
-        </button>
-      )}
+      <div className="absolute left-3 top-3 flex gap-1">
+        {hasOverlay && (
+          <button
+            type="button"
+            onClick={() => setShowStock((value) => !value)}
+            className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
+          >
+            {showStock ? 'Hide stock' : 'Show stock'}
+          </button>
+        )}
+        {hasCompare && (
+          <button
+            type="button"
+            onClick={() => setFlipped((value) => !value)}
+            className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
+          >
+            Flip {compareLabel}
+          </button>
+        )}
+      </div>
       {status !== 'ready' && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center px-6 text-center">
           <p className="max-w-sm text-sm text-muted-foreground">
             {status === 'loading'
               ? 'Loading 3D model… (first view loads the ~23 MB CAD kernel)'
-              : `Could not render this STEP file: ${message ?? 'unknown error'}`}
+              : `Could not render this model: ${message ?? 'unknown error'}`}
           </p>
         </div>
       )}

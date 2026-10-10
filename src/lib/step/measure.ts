@@ -59,6 +59,10 @@ export async function measureStep(bytes: Uint8Array): Promise<StepMeasure> {
 export interface SizeCheck {
   ok: boolean
   note: string
+  /** number of solid bodies (1 = clean single part) */
+  bodies?: number
+  /** the model carries extra floating body/bodies */
+  stray?: boolean
 }
 
 /**
@@ -98,5 +102,5 @@ export function compareSize(
     (lengthOk && crossOk ? `${measuredText} ✓` : `${measuredText} vs expected ${expectedText}`) +
     bodyText
 
-  return { ok: lengthOk && crossOk, note }
+  return { ok: lengthOk && crossOk, note, bodies, stray: extra }
 }

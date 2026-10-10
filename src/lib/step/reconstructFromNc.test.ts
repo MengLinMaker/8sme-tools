@@ -36,9 +36,9 @@ async function measure(bytes: string | Buffer): Promise<{ size: number[]; vol: n
 
 const HAVE = existsSync(ncPath('m199')) && existsSync(stpPath('m199'))
 
-describe.skipIf(!HAVE)('reconstruct T solid from NC (experimental)', () => {
-  it('matches healthy sibling parts within tolerance', async () => {
-    for (const mark of ['m199', 'm143']) {
+describe.skipIf(!HAVE)('reconstruct parts from NC (experimental)', () => {
+  it('matches healthy sibling parts within tolerance (T, RHS, PFC, angle)', async () => {
+    for (const mark of ['m199', 'm143', 'm117', 'm124', 'a1', 'm150', 'm153', 'm164']) {
       const step = await reconstructStepFromNc(readFileSync(ncPath(mark), 'utf8'))
       expect(step).toBeTruthy()
       if (!step) continue
@@ -46,9 +46,14 @@ describe.skipIf(!HAVE)('reconstruct T solid from NC (experimental)', () => {
       const real = await measure(readFileSync(stpPath(mark)))
       const builtSorted = [...built.size].sort((a, b) => b - a)
       const realSorted = [...real.size].sort((a, b) => b - a)
+      const dvol = Math.abs((built.vol - real.vol) / real.vol)
+      console.log(
+        `${mark}: built ${builtSorted.map((v) => v.toFixed(1)).join('x')} vol ${(built.vol / 1e6).toFixed(3)} | ` +
+          `real ${realSorted.map((v) => v.toFixed(1)).join('x')} vol ${(real.vol / 1e6).toFixed(3)} | Δvol ${(dvol * 100).toFixed(1)}%`,
+      )
       for (let i = 0; i < 3; i++) expect(Math.abs(builtSorted[i] - realSorted[i])).toBeLessThan(6)
-      // volume within 5% (end-arc radii are drawn straight)
-      expect(Math.abs(built.vol - real.vol) / real.vol).toBeLessThan(0.05)
+      // volume within 4% (end-arc radii are drawn straight)
+      expect(dvol).toBeLessThan(0.04)
     }
   }, 300000)
 
