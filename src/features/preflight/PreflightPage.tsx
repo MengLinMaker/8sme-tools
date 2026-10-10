@@ -155,6 +155,8 @@ export function PreflightPage() {
     new Map(),
   )
   const [checking, setChecking] = useState(false)
+  /** True from when a job is dropped until the whole analysis (drawings + models) finishes. */
+  const [analyzing, setAnalyzing] = useState(false)
   const [drawingMaterials, setDrawingMaterials] = useState<Map<string, DrawingMaterial>>(new Map())
   const [drawingChecking, setDrawingChecking] = useState(false)
   const [drawingDone, setDrawingDone] = useState(0)
@@ -173,6 +175,7 @@ export function PreflightPage() {
   const handleBundle = useCallback(
     (input: InputBundle) => {
       setError(null)
+      setAnalyzing(true)
       setBundle(input)
       setViewing(null)
       setStepOverrides(new Map())
@@ -276,7 +279,10 @@ export function PreflightPage() {
     setDrawingTotal(0)
     setModelChecks(new Map())
     setManufactureChecks(new Map())
-    if (!result) return
+    if (!result) {
+      setAnalyzing(false)
+      return
+    }
     let cancelled = false
 
     const pdfParts = result.parts.filter((part) => {
@@ -366,6 +372,7 @@ export function PreflightPage() {
       if (!cancelled) {
         setManufactureChecks(new Map(manufacture))
         setChecking(false)
+        setAnalyzing(false)
       }
     })()
 
@@ -587,8 +594,18 @@ export function PreflightPage() {
         <>
           <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             <Stat label={t('preflight.stats.parts')} value={result.summary.parts} />
-            <Stat label={t('preflight.stats.errors')} value={counts.error} tone="error" />
-            <Stat label={t('preflight.stats.warnings')} value={counts.warning} tone="warning" />
+            <Stat
+              label={t('preflight.stats.errors')}
+              value={counts.error}
+              tone="error"
+              pending={analyzing}
+            />
+            <Stat
+              label={t('preflight.stats.warnings')}
+              value={counts.warning}
+              tone="warning"
+              pending={analyzing}
+            />
             <Stat label={t('preflight.stats.files')} value={result.entriesTotal} />
             <Stat
               label={t('preflight.stats.partList')}
@@ -646,7 +663,9 @@ export function PreflightPage() {
               </div>
             </CardHeader>
             <CardContent>
-              {findings.length === 0 ? (
+              {analyzing ? (
+                <p className="text-sm text-muted-foreground">{t('preflight.findings.analyzing')}</p>
+              ) : findings.length === 0 ? (
                 <p className="text-sm text-muted-foreground">{t('preflight.findings.empty')}</p>
               ) : (
                 <Table>
@@ -1207,11 +1226,21 @@ const STAT_TONE: Record<Severity, string> = {
   info: 'text-sky-400',
 }
 
-function Stat({ label, value, tone }: { label: string; value: number | string; tone?: Severity }) {
+function Stat({
+  label,
+  value,
+  tone,
+  pending,
+}: {
+  label: string
+  value: number | string
+  tone?: Severity
+  pending?: boolean
+}) {
   return (
     <div className="flex flex-col gap-0.5 rounded-xl border border-border bg-card px-3.5 py-3">
       <span className={cn('text-2xl font-bold tracking-tight', tone && STAT_TONE[tone])}>
-        {value}
+        {pending ? '…' : value}
       </span>
       <span className="text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
     </div>

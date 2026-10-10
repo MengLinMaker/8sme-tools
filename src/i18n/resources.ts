@@ -75,6 +75,7 @@ export const en = {
     title: 'WiseCAM Preflight',
     subtitle:
       'Drop a job .zip (NC + STEP + PDF, optionally a part list .xlsx). Everything is checked locally in your browser — nothing is uploaded.',
+    analyzing: 'Analyzing…',
     stats: {
       parts: 'Parts',
       errors: 'Errors',
@@ -86,6 +87,7 @@ export const en = {
     },
     findings: {
       title: 'Findings',
+      analyzing: 'Analyzing… findings will appear when the check finishes.',
       empty: 'Nothing to report for this filter.',
       exportFindings: 'Export findings',
       exportParts: 'Export parts',
@@ -331,6 +333,7 @@ export const zh = {
     title: 'WiseCAM 预检',
     subtitle:
       '拖入作业 .zip（NC + STEP + PDF，可选零件清单 .xlsx）。全部在浏览器本地检查——不会上传任何数据。',
+    analyzing: '正在分析…',
     stats: {
       parts: '零件',
       errors: '错误',
@@ -342,6 +345,7 @@ export const zh = {
     },
     findings: {
       title: '检查结果',
+      analyzing: '正在分析… 检查完成后将显示结果。',
       empty: '该筛选条件下没有需要报告的问题。',
       exportFindings: '导出结果',
       exportParts: '导出零件',
