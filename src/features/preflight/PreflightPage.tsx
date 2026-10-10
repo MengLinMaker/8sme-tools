@@ -46,7 +46,7 @@ const Nc3dViewer = lazy(() => import('./Nc3dViewer'))
 
 const SEVERITY_ORDER: Record<Severity, number> = { error: 0, warning: 1, info: 2 }
 
-/** How many drawings to parse at once (pdf.js runs each in its own worker). */
+/** How many drawings to parse at once. Matches the pdf.js worker pool size. */
 const CONCURRENCY = 6
 
 const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [

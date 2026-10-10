@@ -3,28 +3,108 @@
  * (via dynamic import) so it never lands in the initial bundle.
  */
 
-let workerConfigured = false
+import type { PDFWorker } from 'pdfjs-dist'
 
-async function configureWorker(): Promise<void> {
+type PdfjsModule = typeof import('pdfjs-dist')
+
+let enginePromise: Promise<{ pdfjs: PdfjsModule; pool: PdfWorkerPool }> | null = null
+
+async function loadPdfjs(): Promise<PdfjsModule> {
   const pdfjs = await import('pdfjs-dist')
-  if (!workerConfigured && !pdfjs.GlobalWorkerOptions.workerSrc) {
+  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
     const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
     pdfjs.GlobalWorkerOptions.workerSrc = worker.default
-    workerConfigured = true
   }
+  return pdfjs
+}
+
+/** How many pdf.js workers to keep warm. Matches the preflight parse concurrency. */
+const MAX_PDF_WORKERS = 6
+
+interface WorkerLease {
+  worker: PDFWorker
+  release: () => void
+}
+
+/**
+ * Keeps a small set of pdf.js workers alive and hands them out one document at a
+ * time. Spinning up a `Worker` (and compiling the ~800 KB worker script) per PDF
+ * is the dominant cost of reading a drawing, so workers are reused instead of
+ * being recreated for every document.
+ */
+class PdfWorkerPool {
+  private readonly workers: PDFWorker[] = []
+  private readonly idle: PDFWorker[] = []
+  private readonly waiters: ((worker: PDFWorker) => void)[] = []
+
+  constructor(private readonly pdfjs: PdfjsModule) {}
+
+  async acquire(): Promise<WorkerLease> {
+    const worker = await this.take()
+    let released = false
+    return {
+      worker,
+      release: () => {
+        if (released) return
+        released = true
+        const waiter = this.waiters.shift()
+        if (waiter) waiter(worker)
+        else this.idle.push(worker)
+      },
+    }
+  }
+
+  private async take(): Promise<PDFWorker> {
+    let worker = this.idle.pop()
+    if (!worker && this.workers.length < MAX_PDF_WORKERS) {
+      worker = new this.pdfjs.PDFWorker()
+      this.workers.push(worker)
+    }
+    if (!worker) {
+      worker = await new Promise<PDFWorker>((resolve) => this.waiters.push(resolve))
+    }
+    await worker.promise
+    return worker
+  }
+
+  destroy(): void {
+    for (const worker of this.workers) worker.destroy()
+    this.workers.length = 0
+    this.idle.length = 0
+    this.waiters.length = 0
+  }
+}
+
+function getEngine(): Promise<{ pdfjs: PdfjsModule; pool: PdfWorkerPool }> {
+  enginePromise ??= (async () => {
+    const pdfjs = await loadPdfjs()
+    return { pdfjs, pool: new PdfWorkerPool(pdfjs) }
+  })()
+  return enginePromise
 }
 
 /** Concatenates the text layer of every page in a drawing PDF. */
 export async function extractPdfText(bytes: Uint8Array): Promise<string> {
-  await configureWorker()
-  const pdfjs = await import('pdfjs-dist')
-  const document = await pdfjs.getDocument({ data: new Uint8Array(bytes) }).promise
-  const parts: string[] = []
-  for (let page = 1; page <= document.numPages; page++) {
-    const content = await (await document.getPage(page)).getTextContent()
-    parts.push(content.items.map((item) => ('str' in item ? item.str : '')).join(' '))
+  const { pdfjs, pool } = await getEngine()
+  const { worker, release } = await pool.acquire()
+  try {
+    // The copy is ours to hand off; pdf.js transfers its buffer to the worker.
+    const task = pdfjs.getDocument({ data: new Uint8Array(bytes), worker })
+    const document = await task.promise
+    try {
+      const parts: string[] = []
+      for (let page = 1; page <= document.numPages; page++) {
+        const content = await (await document.getPage(page)).getTextContent()
+        parts.push(content.items.map((item) => ('str' in item ? item.str : '')).join(' '))
+      }
+      return parts.join('\n')
+    } finally {
+      // Tears down this document only; the pooled worker is left alive for reuse.
+      await task.destroy()
+    }
+  } finally {
+    release()
   }
-  return parts.join('\n')
 }
 
 // The same drawing bytes are parsed by both the preflight qty pass and the 3D
