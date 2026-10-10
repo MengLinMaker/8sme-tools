@@ -22,7 +22,7 @@ import { downloadText } from '@/lib/download'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
 import { resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
-import { compareSize, measureStepBounds, type SizeCheck } from '@/lib/step/measure'
+import { compareSize, measureStep, type SizeCheck } from '@/lib/step/measure'
 import { cn } from '@/lib/utils'
 
 const PartViewer = lazy(() => import('./PartViewer'))
@@ -105,6 +105,18 @@ export function PreflightPage() {
     }
   }, [viewing, bytesByPath])
 
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null)
+  useEffect(() => {
+    const bytes = viewing?.pdf ? bytesByPath.get(viewing.pdf.path) : undefined
+    if (!bytes) {
+      setPdfUrl(null)
+      return
+    }
+    const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/pdf' }))
+    setPdfUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [viewing, bytesByPath])
+
   // Read the drawings (ground-truth qty/length) first — parsed concurrently, since
   // pdf.js does the work off-thread — then measure the STEP models (CPU-bound, so
   // sequential). Running them in order avoids the OCC kernel and pdf.js competing.
@@ -160,14 +172,19 @@ export function PreflightPage() {
       for (const part of result.parts) {
         if (cancelled) return
         const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
-        const length = part.expected?.length ?? part.nc?.length
+        // Length is compared against the drawing (ground truth) when available.
+        const length = materials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
         const cross = part.nc?.dimensions?.slice(0, 2) ?? []
         if (!bytes || length == null || cross.length < 2) {
           checks.set(part.mark, { ok: false, note: 'no STEP / dims' })
           continue
         }
         try {
-          checks.set(part.mark, compareSize(await measureStepBounds(bytes), length, cross))
+          const measured = await measureStep(bytes)
+          checks.set(
+            part.mark,
+            compareSize(measured.size, length, cross, measured.bodies, measured.extra),
+          )
         } catch {
           checks.set(part.mark, { ok: false, note: 'measure failed' })
         }
@@ -434,25 +451,34 @@ export function PreflightPage() {
       <Dialog
         open={viewing !== null}
         onClose={() => setViewing(null)}
-        title={viewing ? `${viewing.mark} · 3D view` : undefined}
-        className="max-w-4xl"
+        title={viewing ? `${viewing.mark} · drawing + 3D` : undefined}
+        className="max-w-6xl"
       >
         {viewing?.step && (
           <>
-            <div className="relative h-[58vh] min-h-72 w-full bg-[#0b0f14]">
-              <Suspense
-                fallback={
-                  <div className="grid h-full place-items-center text-sm text-muted-foreground">
-                    Loading viewer…
-                  </div>
-                }
-              >
-                <PartViewer
-                  name={viewing.step.path}
-                  bytes={bytesByPath.get(viewing.step.path)}
-                  stock={stock}
+            <div className="flex flex-col lg:flex-row">
+              <div className="relative h-[45vh] min-h-72 w-full bg-[#0b0f14] lg:h-[70vh] lg:flex-1">
+                <Suspense
+                  fallback={
+                    <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                      Loading viewer…
+                    </div>
+                  }
+                >
+                  <PartViewer
+                    name={viewing.step.path}
+                    bytes={bytesByPath.get(viewing.step.path)}
+                    stock={stock}
+                  />
+                </Suspense>
+              </div>
+              {pdfUrl && (
+                <iframe
+                  title={`${viewing.mark} drawing`}
+                  src={pdfUrl}
+                  className="h-[45vh] w-full border-0 border-t border-border lg:h-[70vh] lg:flex-1 lg:border-l lg:border-t-0"
                 />
-              </Suspense>
+              )}
             </div>
             {stock && (
               <div className="flex items-center gap-2 border-t border-border px-5 py-2 text-xs text-muted-foreground">
