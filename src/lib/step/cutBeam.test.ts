@@ -3,7 +3,7 @@ import { measureVolume } from 'replicad'
 import { describe, expect, it } from 'vitest'
 import { getUb } from '@/lib/sections/ub'
 import { buildCutBeamStep, type CutBeamPiece } from './cutBeam'
-import { teeProfiles } from './occ'
+import { mirrorY, penFromProfile, teeProfiles } from './occ'
 import { setOcWasmUrl } from './occInit'
 
 const require = createRequire(import.meta.url)
@@ -25,10 +25,11 @@ async function makeTee(sign: number, length: number, notch = false): Promise<Uin
   const section = getUb('200UB29.8')
   if (!section) throw new Error('missing section')
   const { top } = teeProfiles(section, 3)
-  const profile = top.map(([x, y]) => [x, sign * y] as [number, number])
-  let pen = draw(profile[0])
-  for (let i = 1; i < profile.length; i++) pen = pen.lineTo(profile[i])
-  let solid = pen.close().sketchOnPlane('XY').extrude(length)
+  const profile = sign > 0 ? top : mirrorY(top)
+  let solid = penFromProfile(draw(profile.start), profile)
+    .close()
+    .sketchOnPlane('XY')
+    .extrude(length)
   if (notch) {
     const hd = section.d / 2
     const tf = section.tf

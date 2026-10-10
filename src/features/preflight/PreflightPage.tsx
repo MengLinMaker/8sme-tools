@@ -2,16 +2,7 @@ import { useNavigate, useSearch } from '@tanstack/react-router'
 import { zipSync } from 'fflate'
 import type { TFunction } from 'i18next'
 import { Eye, Undo2 } from 'lucide-react'
-import {
-  lazy,
-  type ReactNode,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
@@ -44,9 +35,9 @@ import {
   type SizeCheck,
   type StepMeasure,
 } from '@/lib/step/measure'
-import { reconstructStepFromNc } from '@/lib/step/reconstructFromNc'
 import type { SabreResult } from '@/lib/step/sabre'
-import { getStepWorkerPool } from '@/lib/step/stepPool'
+import { getStepWorkerPool, prebootStepWorkers } from '@/lib/step/stepPool'
+import { clearViewerModels, reconstructForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { createOrbitBus, requestView, type ViewPreset } from './orbitSync'
 
@@ -189,6 +180,8 @@ export function PreflightPage() {
   /** Progress of the model (OCC) phases: measure + light-sabre, then NC rebuild. */
   const [modelDone, setModelDone] = useState(0)
   const [modelTotal, setModelTotal] = useState(0)
+  /** Which model phase the progress counters belong to, so each shows its own label. */
+  const [modelPhase, setModelPhase] = useState<'measure' | 'rebuild'>('measure')
   const search = useSearch({ from: '/preflight' })
   const navigate = useNavigate({ from: '/preflight' })
   const filter: Filter = search.severity ?? 'all'
@@ -200,6 +193,12 @@ export function PreflightPage() {
     [navigate],
   )
 
+  // Boot the OCC worker kernels the moment the page mounts, so the first model (measure / rebuild /
+  // viewer mesh) does not wait on the ~23 MB WASM load.
+  useEffect(() => {
+    prebootStepWorkers()
+  }, [])
+
   const handleBundle = useCallback(
     (input: InputBundle) => {
       setError(null)
@@ -208,6 +207,7 @@ export function PreflightPage() {
       setStepOverrides(new Map())
       setFilter('all')
       setAnalyzing(true)
+      clearViewerModels()
       setResult(auditEntries(input.sourceName, input.entries))
     },
     [setFilter],
@@ -270,11 +270,11 @@ export function PreflightPage() {
     setManufactured(null)
     if (!ncBytes) return
     let cancelled = false
-    void reconstructStepFromNc(new TextDecoder().decode(ncBytes), {
+    void reconstructForViewer(new TextDecoder().decode(ncBytes), {
       reference: referenceStepBytes,
     }).then(
       (step) => {
-        if (!cancelled && step) setManufactured(new TextEncoder().encode(step))
+        if (!cancelled && step) setManufactured(step)
       },
       () => {
         // reconstruction is best-effort; fall back to the STEP view
@@ -386,6 +386,7 @@ export function PreflightPage() {
       // measures the result. All of it runs off the main thread across a small worker pool, so the
       // UI stays responsive and independent parts are processed in parallel (~pool-size faster).
       setChecking(true)
+      setModelPhase('measure')
       const pool = getStepWorkerPool()
       const checks = new Map<string, SizeCheck>()
       const measures = new Map<string, StepMeasure>()
@@ -447,6 +448,7 @@ export function PreflightPage() {
         const ncBytes = part.nc ? bytesByPath.get(part.nc.path) : undefined
         return ncBytes != null && measures.get(part.mark) != null
       })
+      setModelPhase('rebuild')
       setModelDone(0)
       setModelTotal(rebuildParts.length)
       let rebuiltCount = 0
@@ -710,8 +712,8 @@ export function PreflightPage() {
       setFixingMark(part.mark)
       try {
         const reference = part.step ? bytesByPath.get(part.step.path) : undefined
-        const step = await reconstructStepFromNc(new TextDecoder().decode(ncBytes), { reference })
-        if (step) setOverride(part.mark, new TextEncoder().encode(step), 'regenerated')
+        const step = await reconstructForViewer(new TextDecoder().decode(ncBytes), { reference })
+        if (step) setOverride(part.mark, step, 'regenerated')
       } catch {
         // leave the original in place if the rebuild fails
       } finally {
@@ -742,6 +744,12 @@ export function PreflightPage() {
       <section className="max-w-2xl">
         <h1 className="mb-1.5 text-2xl font-bold tracking-tight">{t('preflight.title')}</h1>
         <p className="text-muted-foreground">{t('preflight.subtitle')}</p>
+        {result && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            {t('preflight.source')}:{' '}
+            <span className="font-mono text-foreground">{result.sourceName}</span>
+          </p>
+        )}
       </section>
 
       <DropZone onBundle={handleBundle} onError={setError} />
@@ -943,10 +951,15 @@ export function PreflightPage() {
                 )}
                 {checking && (
                   <span className="text-xs font-normal text-muted-foreground">
-                    {t('preflight.parts.measuringModels', {
-                      done: modelDone,
-                      total: modelTotal,
-                    })}
+                    {t(
+                      modelPhase === 'rebuild'
+                        ? 'preflight.parts.rebuildingModels'
+                        : 'preflight.parts.measuringModels',
+                      {
+                        done: modelDone,
+                        total: modelTotal,
+                      },
+                    )}
                   </span>
                 )}
               </CardTitle>

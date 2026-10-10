@@ -1,3 +1,4 @@
+import type { MeshedStep } from './mesh'
 import type {
   InspectResult,
   ReconstructResult,
@@ -63,6 +64,24 @@ class StepWorkerPool {
       },
       reference ? [reference.buffer] : [],
     )
+  }
+
+  /** Tessellate a STEP into three.js-ready meshes, off the main thread and in the warm OCC worker. */
+  mesh(name: string, bytes: Uint8Array): Promise<MeshedStep> {
+    const copy = new Uint8Array(bytes)
+    return this.run<MeshedStep>({ id: this.nextId++, kind: 'mesh', step: copy, name }, [
+      copy.buffer,
+    ])
+  }
+
+  /**
+   * Boot the ~23 MB OCC kernel in every worker ahead of time, so the first real task (e.g. opening
+   * the viewer) does not pay for the WASM fetch/compile. Best-effort: a rejected warm is ignored.
+   */
+  warm(): void {
+    for (let i = 0; i < this.max; i++) {
+      void this.run<null>({ id: this.nextId++, kind: 'warm' }, []).catch(() => {})
+    }
   }
 
   /**
@@ -146,4 +165,13 @@ let pool: StepWorkerPool | null = null
 export function getStepWorkerPool(): StepWorkerPool {
   if (!pool) pool = new StepWorkerPool()
   return pool
+}
+
+let prebooted = false
+
+/** Boot the shared worker pool's OCC kernels once, early, in the background. */
+export function prebootStepWorkers(): void {
+  if (prebooted) return
+  prebooted = true
+  getStepWorkerPool().warm()
 }

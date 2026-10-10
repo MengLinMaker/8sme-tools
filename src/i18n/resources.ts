@@ -78,6 +78,7 @@ export const en = {
     subtitle:
       'Drop a job .zip (NC + STEP + PDF, optionally a part list .xlsx). Everything is checked locally in your browser — nothing is uploaded.',
     analyzing: 'Analyzing…',
+    source: 'Job',
     stats: {
       parts: 'Parts',
       errors: 'Errors',
@@ -111,7 +112,8 @@ export const en = {
     parts: {
       title: 'Parts',
       readingDrawings: 'reading drawings… {{done}}/{{total}}',
-      measuringModels: 'measuring models… {{done}}/{{total}}',
+      measuringModels: 'measuring STEP models… {{done}}/{{total}}',
+      rebuildingModels: 'rebuilding from NC… {{done}}/{{total}}',
     },
     columns: {
       mark: 'Mark',
@@ -348,6 +350,7 @@ export const zh = {
     subtitle:
       '拖入作业 .zip（NC + STEP + PDF，可选零件清单 .xlsx）。全部在浏览器本地检查——不会上传任何数据。',
     analyzing: '正在分析…',
+    source: '作业',
     stats: {
       parts: '零件',
       errors: '错误',
@@ -381,7 +384,8 @@ export const zh = {
     parts: {
       title: '零件',
       readingDrawings: '正在读取图纸… {{done}}/{{total}}',
-      measuringModels: '正在测量模型… {{done}}/{{total}}',
+      measuringModels: '正在测量 STEP 模型… {{done}}/{{total}}',
+      rebuildingModels: '正在从 NC 重建模型… {{done}}/{{total}}',
     },
     columns: {
       mark: '标记',

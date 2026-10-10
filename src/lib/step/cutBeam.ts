@@ -1,6 +1,16 @@
 import type { AnyShape } from 'replicad'
 import type { RolledSection } from '@/lib/sections/types'
-import { engrave, ensureFont, placeRealPart, teeProfiles, ubOutline, writeStep } from './occ'
+import {
+  engrave,
+  ensureFont,
+  inflateProfile,
+  type Profile,
+  penFromProfile,
+  placeRealPart,
+  teeProfiles,
+  ubOutline,
+  writeStep,
+} from './occ'
 import { ensureOc } from './occInit'
 
 /**
@@ -109,14 +119,13 @@ export async function buildCutBeamStep(input: CutBeamInput): Promise<string> {
     return (prism as unknown as Ops).translate(0, 0, z0)
   }
 
-  const profilePrism = (profile: [number, number][], length: number, z0: number): AnyShape => {
-    let pen = draw(profile[0])
-    for (let i = 1; i < profile.length; i++) pen = pen.lineTo(profile[i])
-    const sketch = pen.close() as unknown as {
-      sketchOnPlane: (plane: string) => { extrude: (h: number) => AnyShape }
-    }
-    return (sketch.sketchOnPlane('XY').extrude(length) as unknown as Ops).translate(0, 0, z0)
-  }
+  const profilePrism = (profile: Profile, length: number, z0: number): AnyShape =>
+    (
+      penFromProfile(draw(profile.start), profile)
+        .close()
+        .sketchOnPlane('XY')
+        .extrude(length) as unknown as Ops
+    ).translate(0, 0, z0)
 
   const left = layout(input.left, k)
   const right = layout(input.right, k)
@@ -164,7 +173,9 @@ export async function buildCutBeamStep(input: CutBeamInput): Promise<string> {
           !topHalf,
         )
         const length = real.length || slot.length
-        const ideal = profilePrism(profile, length, slot.start)
+        // Blow the ideal envelope up a hair so it never shares a face with the real part (an exact
+        // coincidence makes OCC's intersect return empty, which would silently skip the carve).
+        const ideal = profilePrism(inflateProfile(profile), length, slot.start)
         const placedReal = (real.shape as unknown as Ops).translate(0, 0, slot.start)
         // Only carve when the real part genuinely sits in the ideal envelope. A corrupted export
         // (a flat sheet, or a mis-oriented body) would fail this and must not delete the slot.

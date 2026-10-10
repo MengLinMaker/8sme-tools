@@ -27,7 +27,8 @@ import {
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
-import { type MeshedStep, meshStepFile } from '@/lib/step/mesh'
+import type { MeshedStep } from '@/lib/step/mesh'
+import { meshForViewer } from '@/lib/step/viewerModel'
 import { attachOrbit, type OrbitBus } from './orbitSync'
 
 const GHOST_COLOR = 0x3ddc84
@@ -436,9 +437,9 @@ export default function PartViewer({
     setFlipped(false)
     setHasStray(false)
 
-    meshStepFile(name, bytes)
+    meshForViewer(name, bytes)
       .then(async (step) => {
-        const compare = compareBytes ? await meshStepFile(`${name}·compare`, compareBytes) : null
+        const compare = compareBytes ? await meshForViewer(`${name}·compare`, compareBytes) : null
         return { step, compare }
       })
       .then(({ step, compare }) => {

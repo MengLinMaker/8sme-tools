@@ -1,4 +1,5 @@
 import type { StepMeasure } from './measure'
+import type { MeshedStep } from './mesh'
 import type { SabreResult } from './sabre'
 
 /**
@@ -31,8 +32,12 @@ export type StepRequest =
       measure?: boolean
       simplify?: boolean
     }
+  | { id: number; kind: 'mesh'; step: Uint8Array; name: string }
+  | { id: number; kind: 'warm' }
 
 export type StepResponse =
   | { id: number; kind: 'inspect'; ok: true; value: InspectResult }
   | { id: number; kind: 'reconstruct'; ok: true; value: ReconstructResult }
+  | { id: number; kind: 'mesh'; ok: true; value: MeshedStep }
+  | { id: number; kind: 'warm'; ok: true; value: null }
   | { id: number; kind: 'error'; ok: false; error: string }

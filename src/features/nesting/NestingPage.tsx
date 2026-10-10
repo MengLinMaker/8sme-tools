@@ -25,7 +25,13 @@ import {
 import type { InputBundle } from '@/lib/readInput'
 import { getUb } from '@/lib/sections/ub'
 import { buildCutBeamStep } from '@/lib/step/cutBeam'
-import { buildUbBarStep, inspectStepBodies, type StepBody, ubOutline } from '@/lib/step/occ'
+import {
+  buildUbBarStep,
+  inspectStepBodies,
+  profileToPoints,
+  type StepBody,
+  ubOutline,
+} from '@/lib/step/occ'
 
 const PartViewer = lazy(() => import('@/features/preflight/PartViewer'))
 
@@ -178,7 +184,7 @@ export function NestingPage() {
     return {
       name,
       bytes,
-      beam: { profile: ubOutline(ub), length: layout.ubBar.stockLength },
+      beam: { profile: profileToPoints(ubOutline(ub)), length: layout.ubBar.stockLength },
       bodies,
       bodyInfo,
     }

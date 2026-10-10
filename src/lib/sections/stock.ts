@@ -161,12 +161,13 @@ function angleL(legA: number, legB: number, thickness: number, radius = 0): [num
       [0, legB],
     ])
   }
-  // Root fillet at the inner corner (t, t): arc from (t + r, t) to (t, t + r).
+  // Root fillet at the inner corner (t, t): arc from (t + r, t) to (t, t + r). The arc's own
+  // first point *is* (t + r, t), so it must not be repeated as an explicit vertex (a zero-length
+  // edge makes replicad throw when the outline is drawn).
   return centre([
     [0, 0],
     [legA, 0],
     [legA, t],
-    [t + r, t],
     ...arcPoints(t + r, t + r, r, -Math.PI / 2, -Math.PI),
     [t, legB],
     [0, legB],
@@ -302,45 +303,56 @@ function teeOutline(
   return centre(points)
 }
 
-/** Full I-section outline (x = width, y = depth) for UB / UC / TFB, root radii omitted. */
+/** Full I-section outline (x = width, y = depth) for UB / UC / TFB, with the root fillets. */
 function iSectionOutline(section: RolledSection): [number, number][] {
-  const hb = section.b / 2
-  const hd = section.d / 2
-  const hw = section.tw / 2
-  const tf = section.tf
-  return centre([
-    [-hb, -hd],
-    [hb, -hd],
-    [hb, -hd + tf],
-    [hw, -hd + tf],
-    [hw, hd - tf],
-    [hb, hd - tf],
-    [hb, hd],
-    [-hb, hd],
-    [-hb, hd - tf],
-    [-hw, hd - tf],
-    [-hw, -hd + tf],
-    [-hb, -hd + tf],
-  ])
+  return ubOutlineFromDims(section.b, section.d, section.tf, section.tw, section.r ?? 0)
 }
 
-/** Full I-section from raw dimensions (b, full depth d, tf, tw), e.g. an NC header. */
-function ubOutlineFromDims(b: number, d: number, tf: number, tw: number): [number, number][] {
+/**
+ * Full I-section from raw dimensions (b, full depth d, tf, tw, root radius). The four web-to-
+ * flange junctions carry the concave root fillet `radius`; `radius <= 0` keeps them sharp (as
+ * for a TFB, which has no tabulated root radius).
+ */
+function ubOutlineFromDims(
+  b: number,
+  d: number,
+  tf: number,
+  tw: number,
+  radius = 0,
+): [number, number][] {
   const hb = b / 2
   const hd = d / 2
   const hw = tw / 2
+  const r = Math.max(0, Math.min(radius, hb - hw, hd - tf))
+  if (r <= 0) {
+    return centre([
+      [-hb, -hd],
+      [hb, -hd],
+      [hb, -hd + tf],
+      [hw, -hd + tf],
+      [hw, hd - tf],
+      [hb, hd - tf],
+      [hb, hd],
+      [-hb, hd],
+      [-hb, hd - tf],
+      [-hw, hd - tf],
+      [-hw, -hd + tf],
+      [-hb, -hd + tf],
+    ])
+  }
+  // Root fillets are concave: each arc's centre sits in the void beside/between the flanges.
   return centre([
     [-hb, -hd],
     [hb, -hd],
     [hb, -hd + tf],
-    [hw, -hd + tf],
-    [hw, hd - tf],
+    ...arcPoints(hw + r, -hd + tf + r, r, -Math.PI / 2, -Math.PI),
+    ...arcPoints(hw + r, hd - tf - r, r, Math.PI, Math.PI / 2),
     [hb, hd - tf],
     [hb, hd],
     [-hb, hd],
     [-hb, hd - tf],
-    [-hw, hd - tf],
-    [-hw, -hd + tf],
+    ...arcPoints(-hw - r, hd - tf - r, r, Math.PI / 2, 0),
+    ...arcPoints(-hw - r, -hd + tf + r, r, 0, -Math.PI / 2),
     [-hb, -hd + tf],
   ])
 }
@@ -443,7 +455,7 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
         label = `${section.designation} stock`
       } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
         // Full UB from an NC header (dims = b, full depth, tf, tw).
-        points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3])
+        points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0)
       }
       break
     }
@@ -454,7 +466,7 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
         label = `${section.designation} stock`
       } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
         // Full UC from an NC header (dims = b, full depth, tf, tw).
-        points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3])
+        points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0)
       }
       break
     }
@@ -464,7 +476,7 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
         points = iSectionOutline(section)
         label = `${section.designation} stock`
       } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
-        points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3])
+        points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0)
       }
       break
     }
@@ -557,21 +569,21 @@ export function partSectionForCode(
       const section = getUb(clean)
       if (section) return { points: iSectionOutline(section) }
       if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
-        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3]) }
+        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0) }
       return null
     }
     case 'uc': {
       const section = getUc(clean) ?? getUcByDepth(dims[1] ?? n[0] ?? 0)
       if (section) return { points: iSectionOutline(section) }
       if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
-        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3]) }
+        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0) }
       return null
     }
     case 'tfb': {
       const section = getTfbByDepth(n[0] || dims[0] || dims[1] || 0)
       if (section) return { points: iSectionOutline(section) }
       if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
-        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3]) }
+        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0) }
       return null
     }
   }

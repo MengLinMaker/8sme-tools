@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { getUb } from '@/lib/sections/ub'
 import { buildCutBeamStep } from './cutBeam'
-import { placeRealPart, teeProfiles } from './occ'
+import { inflateProfile, type Profile, penFromProfile, placeRealPart, teeProfiles } from './occ'
 import { ensureOc, setOcWasmUrl } from './occInit'
 
 const require = createRequire(import.meta.url)
@@ -69,12 +69,10 @@ interface ShapeOps {
   intersect: (other: unknown) => unknown
 }
 
-function prismOf(profile: [number, number][], length: number) {
-  return import('replicad').then(({ draw }) => {
-    let pen = draw(profile[0])
-    for (let i = 1; i < profile.length; i++) pen = pen.lineTo(profile[i])
-    return pen.close().sketchOnPlane('XY').extrude(length)
-  })
+function prismOf(profile: Profile, length: number) {
+  return import('replicad').then(({ draw }) =>
+    penFromProfile(draw(profile.start), profile).close().sketchOnPlane('XY').extrude(length),
+  )
 }
 
 const lengthOf = (mark: string): number =>
@@ -99,7 +97,9 @@ describe.skipIf(!HAVE)('NW31 tee validation', () => {
         false,
       )
       const realVol = measureVolume(real.shape as never)
-      const ideal = await prismOf(top, real.length)
+      // Same hair-line blow-up the production carve uses, so an exact face coincidence doesn't
+      // make OCC's intersect return empty (which would falsely read as a misfit).
+      const ideal = await prismOf(inflateProfile(top), real.length)
       const clipped = (real.shape as unknown as ShapeOps).intersect(ideal)
       const clippedVol = measureVolume(clipped as never)
       const ratio = realVol > 0 ? clippedVol / realVol : 0

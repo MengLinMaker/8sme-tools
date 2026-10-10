@@ -47,8 +47,15 @@ export interface MeshableShape {
 }
 
 const SABRE_LENGTH = 35
+/** Cap on the number of triangle samples probed (largest first). */
 const MAX_SAMPLES = 400
-const MIN_AREA_FRACTION = 0.002
+/**
+ * Ignore tessellation slivers below this area (mm²). An *absolute* floor — not a fraction of the
+ * largest triangle — because on a long beam a single side face can be ~10⁵ mm², which pushes a
+ * proportional threshold far past the small end/cut faces we actually need to test (a mitred end
+ * meshes into many tens-of-mm² triangles).
+ */
+const MIN_TRIANGLE_AREA = 20
 
 interface Tri {
   a: Vector3
@@ -143,15 +150,13 @@ export function sabreShape(shape: MeshableShape, length = SABRE_LENGTH): SabreRe
 
   const tris = triangles(mesh.vertices, mesh.triangles)
   const axis = longAxis(mesh.vertices)
-  const maxArea = tris.reduce((max, t) => Math.max(max, t.area), 0)
-  const minArea = maxArea * MIN_AREA_FRACTION
   // Only *tilted* faces (mitres, shaves) are cut with a non-radial beam — the surfaces where an
   // axial beam could end inside the body. Square ends (|n·axis|≈1) are traced by the perimeter
   // and side walls (|n·axis|≈0) are cut radially through their thin wall; neither is a risk.
   const sampled = tris
     .filter((t) => {
       const axial = Math.abs(t.normal.dot(axis))
-      return t.area >= minArea && axial > 0.05 && axial < 0.98
+      return t.area >= MIN_TRIANGLE_AREA && axial > 0.05 && axial < 0.98
     })
     .sort((a, b) => b.area - a.area)
     .slice(0, MAX_SAMPLES)

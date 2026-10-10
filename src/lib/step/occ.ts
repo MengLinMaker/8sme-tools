@@ -1,4 +1,4 @@
-import type { AnyShape } from 'replicad'
+import type { AnyShape, DrawingPen } from 'replicad'
 import type { RolledSection } from '@/lib/sections/types'
 import { ensureOc } from './occInit'
 
@@ -13,50 +13,202 @@ import { ensureOc } from './occInit'
  * The ~23 MB OpenCASCADE WASM is lazy-loaded only when this runs.
  */
 
-/** Fallback upper/lower T profile if a part STEP is unavailable. */
+/**
+ * A profile vertex: a straight `lineTo`, or (when `via` is present) a **true circular arc**
+ * to `to`, passing through `via`. Real arcs — not a polyline — keep OpenCASCADE booleans
+ * stable when the prism is intersected with the imported part STEPs.
+ */
+export interface ProfileVertex {
+  to: [number, number]
+  via?: [number, number]
+}
+
+/** A closed cross-section profile: a start point followed by its vertices. */
+export interface Profile {
+  start: [number, number]
+  vertices: ProfileVertex[]
+}
+
+/** The arc vertex from `start`→`end` (radians) about `(cx, cy)`; `via` is the mid-angle point. */
+function arcVertex(cx: number, cy: number, r: number, start: number, end: number): ProfileVertex {
+  const mid = (start + end) / 2
+  return {
+    to: [cx + Math.cos(end) * r, cy + Math.sin(end) * r],
+    via: [cx + Math.cos(mid) * r, cy + Math.sin(mid) * r],
+  }
+}
+
+/** Draws a profile (true arcs where present) into `pen`, which must be positioned at `start`. */
+export function penFromProfile(pen: DrawingPen, profile: Profile): DrawingPen {
+  let p = pen
+  for (const v of profile.vertices) p = v.via ? p.threePointsArcTo(v.to, v.via) : p.lineTo(v.to)
+  return p
+}
+
+/** Mirrors a profile about the x-axis (y → −y), e.g. the top half → the bottom half. */
+export function mirrorY(profile: Profile): Profile {
+  const m = ([x, y]: [number, number]): [number, number] => [x, -y]
+  return {
+    start: m(profile.start),
+    vertices: profile.vertices.map((v) => ({ to: m(v.to), via: v.via ? m(v.via) : undefined })),
+  }
+}
+
+/**
+ * A small outward blow-up (mm) applied to an ideal envelope before booleaning it against a real
+ * part STEP. OpenCASCADE can return an empty intersection when the two share a face exactly (the
+ * real part's outer faces sit on the nominal profile), which would silently drop a part's holes.
+ * Far below any rolling tolerance, so it does not change the manufactured shape.
+ */
+export const ENVELOPE_EPS = 0.05
+
+/** Grows a profile uniformly about its bounding-box centre by ~`eps` mm outward. */
+export function inflateProfile(profile: Profile, eps = ENVELOPE_EPS): Profile {
+  const pts = [profile.start, ...profile.vertices.flatMap((v) => (v.via ? [v.to, v.via] : [v.to]))]
+  const xs = pts.map((p) => p[0])
+  const ys = pts.map((p) => p[1])
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2
+  const maxR = Math.max(...pts.map(([x, y]) => Math.hypot(x - cx, y - cy))) || 1
+  const k = 1 + eps / maxR
+  const t = ([x, y]: [number, number]): [number, number] => [cx + (x - cx) * k, cy + (y - cy) * k]
+  return {
+    start: t(profile.start),
+    vertices: profile.vertices.map((v) => ({ to: t(v.to), via: v.via ? t(v.via) : undefined })),
+  }
+}
+
+/**
+ * Tessellates a profile into a closed point list for the 3-D viewer (which draws polylines).
+ * Arcs are sampled as quadratic Béziers through their `via` point — smooth enough to render and
+ * to feed orientation detection; the STEP path keeps the exact arcs via {@link penFromProfile}.
+ */
+export function profileToPoints(profile: Profile, arcSteps = 8): [number, number][] {
+  const quad = (
+    p0: [number, number],
+    p1: [number, number],
+    p2: [number, number],
+    t: number,
+  ): [number, number] => {
+    const u = 1 - t
+    return [
+      u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0],
+      u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1],
+    ]
+  }
+  const points: [number, number][] = [profile.start]
+  let cur = profile.start
+  for (const v of profile.vertices) {
+    if (v.via) {
+      const ctrl: [number, number] = [
+        2 * v.via[0] - (cur[0] + v.to[0]) / 2,
+        2 * v.via[1] - (cur[1] + v.to[1]) / 2,
+      ]
+      for (let i = 1; i <= arcSteps; i++) points.push(quad(cur, ctrl, v.to, i / arcSteps))
+    } else {
+      points.push(v.to)
+    }
+    cur = v.to
+  }
+  return points
+}
+
+/**
+ * Fallback upper/lower T profile if a part STEP is unavailable. The root fillet `section.r`
+ * (from the parent UB) is modelled where the web meets the flange, so the prism matches the
+ * real tee; unknown radii stay sharp.
+ */
 export function teeProfiles(
   section: RolledSection,
   gap: number,
-): { top: [number, number][]; bottom: [number, number][] } {
+): { top: Profile; bottom: Profile } {
   const hb = section.b / 2
   const hd = section.d / 2
   const hw = section.tw / 2
   const tf = section.tf
   const hk = gap / 2
-  const top: [number, number][] = [
-    [-hw, hk],
-    [hw, hk],
-    [hw, hd - tf],
-    [hb, hd - tf],
-    [hb, hd],
-    [-hb, hd],
-    [-hb, hd - tf],
-    [-hw, hd - tf],
-  ]
-  const bottom = top.map(([x, y]) => [x, -y] as [number, number])
-  return { top, bottom }
+  const r = Math.max(0, Math.min(section.r ?? 0, hb - hw, hd - tf - hk))
+
+  let top: Profile
+  if (r <= 0) {
+    top = {
+      start: [-hw, hk],
+      vertices: [
+        { to: [hw, hk] },
+        { to: [hw, hd - tf] },
+        { to: [hb, hd - tf] },
+        { to: [hb, hd] },
+        { to: [-hb, hd] },
+        { to: [-hb, hd - tf] },
+        { to: [-hw, hd - tf] },
+      ],
+    }
+  } else {
+    top = {
+      start: [-hw, hk],
+      vertices: [
+        { to: [hw, hk] },
+        { to: [hw, hd - tf - r] },
+        // Right root fillet (web → flange underside), concave with its centre in the void.
+        arcVertex(hw + r, hd - tf - r, r, Math.PI, Math.PI / 2),
+        { to: [hb, hd - tf] },
+        { to: [hb, hd] },
+        { to: [-hb, hd] },
+        { to: [-hb, hd - tf] },
+        { to: [-hw - r, hd - tf] },
+        // Left root fillet (flange underside → web).
+        arcVertex(-hw - r, hd - tf - r, r, Math.PI / 2, 0),
+      ],
+    }
+  }
+  return { top, bottom: mirrorY(top) }
 }
 
-/** Full UB I-section outline (x = width, y = depth), root radii omitted. */
-export function ubOutline(section: RolledSection): [number, number][] {
+/** Full UB I-section outline (x = width, y = depth), with the four root fillets. */
+export function ubOutline(section: RolledSection): Profile {
   const hb = section.b / 2
   const hd = section.d / 2
   const hw = section.tw / 2
   const tf = section.tf
-  return [
-    [-hb, -hd],
-    [hb, -hd],
-    [hb, -hd + tf],
-    [hw, -hd + tf],
-    [hw, hd - tf],
-    [hb, hd - tf],
-    [hb, hd],
-    [-hb, hd],
-    [-hb, hd - tf],
-    [-hw, hd - tf],
-    [-hw, -hd + tf],
-    [-hb, -hd + tf],
-  ]
+  const r = Math.max(0, Math.min(section.r ?? 0, hb - hw, hd - tf))
+  if (r <= 0) {
+    return {
+      start: [-hb, -hd],
+      vertices: [
+        { to: [hb, -hd] },
+        { to: [hb, -hd + tf] },
+        { to: [hw, -hd + tf] },
+        { to: [hw, hd - tf] },
+        { to: [hb, hd - tf] },
+        { to: [hb, hd] },
+        { to: [-hb, hd] },
+        { to: [-hb, hd - tf] },
+        { to: [-hw, hd - tf] },
+        { to: [-hw, -hd + tf] },
+        { to: [-hb, -hd + tf] },
+      ],
+    }
+  }
+  return {
+    start: [-hb, -hd],
+    vertices: [
+      { to: [hb, -hd] },
+      { to: [hb, -hd + tf] },
+      { to: [hw + r, -hd + tf] },
+      arcVertex(hw + r, -hd + tf + r, r, -Math.PI / 2, -Math.PI),
+      { to: [hw, hd - tf - r] },
+      arcVertex(hw + r, hd - tf - r, r, Math.PI, Math.PI / 2),
+      { to: [hb, hd - tf] },
+      { to: [hb, hd] },
+      { to: [-hb, hd] },
+      { to: [-hb, hd - tf] },
+      { to: [-hw - r, hd - tf] },
+      arcVertex(-hw - r, hd - tf - r, r, Math.PI / 2, 0),
+      { to: [-hw, -hd + tf + r] },
+      arcVertex(-hw - r, -hd + tf + r, r, 0, -Math.PI / 2),
+      { to: [-hb, -hd + tf] },
+    ],
+  }
 }
 
 export interface BarPiece {
@@ -208,11 +360,11 @@ export async function buildUbBarStep(
   const { top, bottom } = teeProfiles(section, gap)
   const hd = section.d / 2
 
-  const solidAt = (profile: [number, number][], length: number): AnyShape => {
-    let pen = draw(profile[0])
-    for (let i = 1; i < profile.length; i++) pen = pen.lineTo(profile[i])
-    return pen.close().sketchOnPlane('XY').extrude(length)
-  }
+  const solidAt = (profile: Profile, length: number): AnyShape =>
+    penFromProfile(draw(profile.start), profile)
+      .close()
+      .sketchOnPlane('XY')
+      .extrude(length) as AnyShape
 
   // Pack each side independently and tightly: every piece is butted against the previous one
   // using its REAL measured length (plus the kerf), so there is no wasted space between parts.
@@ -224,7 +376,7 @@ export async function buildUbBarStep(
   const solids: AnyShape[] = []
   const placed: Placed[] = []
   const buildSide = async (
-    profile: [number, number][],
+    profile: Profile,
     pieces: BarPiece[],
     sideSign: number,
   ): Promise<void> => {

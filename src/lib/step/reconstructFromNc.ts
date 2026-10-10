@@ -63,11 +63,17 @@ interface ShapeOps {
 
 /**
  * Align the NC-built solid to a reference STEP (the part's own file), so the manufactured view
- * matches the file's orientation. Tries the eight 90°-step transforms about the member axis and
- * keeps the one with the most overlap, then centres it on the reference.
+ * matches the file's orientation.
+ *
+ * The eight 90°-step transforms about the member axis are ranked cheaply by centre-of-mass distance
+ * (a volume moment, no booleans), which already separates the correct orientation — including the
+ * mirror that a rotation-only seating cannot undo for asymmetric sections (PFC/angle). Only the
+ * top candidate is confirmed with an overlap test; the full overlap search is a fallback for the
+ * rare case the moment does not settle it. This replaces eight boolean intersections (the old
+ * bottleneck) with eight volume moments plus at most one intersection.
  */
 async function orientToReference(solid: SolidOps, reference: Uint8Array): Promise<SolidOps> {
-  const { importSTEP, measureVolume } = await import('replicad')
+  const { importSTEP, measureShapeVolumeProperties, measureVolume } = await import('replicad')
   const ref = (await importSTEP(
     new Blob([new Uint8Array(reference)], { type: 'model/step' }),
   )) as unknown as ShapeOps
@@ -75,28 +81,54 @@ async function orientToReference(solid: SolidOps, reference: Uint8Array): Promis
   const refCentre = rmin.map((v, k) => (v + rmax[k]) / 2)
   const refVolume = measureVolume(ref as never)
   if (!(refVolume > 0)) return solid
+  const refCentroid = (measureShapeVolumeProperties(ref as never) as { centerOfMass: number[] })
+    .centerOfMass
 
   const base = solid as unknown as ShapeOps
-  let best: ShapeOps | null = null
-  let bestScore = -1
+  const candidates: { shape: ShapeOps; score: number }[] = []
   for (const mirrored of [false, true]) {
     for (const angle of [0, 90, 180, 270]) {
       const candidate = mirrored ? base.clone().mirror('XZ') : base.clone()
       const oriented = angle ? candidate.rotate(angle, [0, 0, 0], [1, 0, 0]) : candidate
       const [cmin, cmax] = oriented.boundingBox.bounds
       const shift = rmin.map((_v, k) => refCentre[k] - (cmin[k] + cmax[k]) / 2)
-      let score = 0
+      const moved = oriented.translate(shift[0], shift[1], shift[2])
+      let score = Number.POSITIVE_INFINITY
       try {
-        const probe = oriented.clone().translate(shift[0], shift[1], shift[2])
-        score = measureVolume(probe.intersect(ref.clone()) as never) / refVolume
+        const centroid = (
+          measureShapeVolumeProperties(moved as never) as { centerOfMass: number[] }
+        ).centerOfMass
+        score = Math.hypot(
+          centroid[0] - refCentroid[0],
+          centroid[1] - refCentroid[1],
+          centroid[2] - refCentroid[2],
+        )
       } catch {
-        score = 0
+        score = Number.POSITIVE_INFINITY
       }
-      if (score > bestScore) {
-        bestScore = score
-        best = oriented.translate(shift[0], shift[1], shift[2])
-      }
+      candidates.push({ shape: moved, score })
     }
+  }
+  candidates.sort((a, b) => a.score - b.score)
+
+  const overlap = (shape: ShapeOps): number => {
+    try {
+      return measureVolume(shape.clone().intersect(ref.clone()) as never) / refVolume
+    } catch {
+      return 0
+    }
+  }
+
+  // Confirm the best-ranked candidate; only fall back to testing the rest if it does not fit.
+  let best: ShapeOps | null = null
+  let bestScore = -1
+  for (const candidate of candidates) {
+    const score = overlap(candidate.shape)
+    if (score > bestScore) {
+      bestScore = score
+      best = candidate.shape
+    }
+    if (score >= 0.9) break
   }
   // No transform fits (e.g. the reference is a corrupt/degenerate STEP): keep the native frame.
   if (!best || bestScore < 0.1) return solid

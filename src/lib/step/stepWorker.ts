@@ -1,4 +1,5 @@
 import { type MeasurableShape, measureShape, measureStep, type StepMeasure } from './measure'
+import { meshStepFile } from './mesh'
 import { ensureOc } from './occInit'
 import { reconstructStepFromNc } from './reconstructFromNc'
 import { type MeshableShape, type SabreResult, sabreShape } from './sabre'
@@ -31,6 +32,12 @@ async function handle(request: StepRequest): Promise<void> {
     if (request.kind === 'inspect') {
       const value = await inspect(request.step, request.sabreLength)
       scope.postMessage({ id: request.id, kind: 'inspect', ok: true, value })
+    } else if (request.kind === 'mesh') {
+      const value = await meshStepFile(request.name, request.step)
+      scope.postMessage({ id: request.id, kind: 'mesh', ok: true, value })
+    } else if (request.kind === 'warm') {
+      await ensureOc()
+      scope.postMessage({ id: request.id, kind: 'warm', ok: true, value: null })
     } else {
       const value = await reconstruct(request)
       scope.postMessage({ id: request.id, kind: 'reconstruct', ok: true, value })
