@@ -1,6 +1,12 @@
-import { BoxGeometry, Matrix4 } from 'three'
+import { BoxGeometry, BufferGeometry, Float32BufferAttribute, Matrix4 } from 'three'
 import { describe, expect, it } from 'vitest'
-import { booleanDiff, cachedBooleanDiff, type DiffSoup, toWorldSoup } from './booleanDiff'
+import {
+  booleanDiff,
+  cachedBooleanDiff,
+  type DiffSoup,
+  extractComponents,
+  toWorldSoup,
+} from './booleanDiff'
 
 const IDENTITY = new Matrix4()
 
@@ -166,5 +172,43 @@ describe('boolean diff (STEP is ideal)', () => {
     expect(second?.under?.getAttribute('position')?.count).toBe(
       first?.under?.getAttribute('position')?.count,
     )
+  })
+})
+
+function soupGeometry(soup: DiffSoup): BufferGeometry {
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new Float32BufferAttribute(soup.vertices, 3))
+  geometry.setIndex(soup.triangles)
+  return geometry
+}
+
+describe('extractComponents', () => {
+  it('splits disjoint boxes into closed components with volumes', () => {
+    const merged = toWorldSoup([boxSoup(10, 10, 10), boxSoup(5, 5, 5, 30, 0, 0)], IDENTITY)
+    const components = extractComponents(soupGeometry(merged)).sort((a, b) => b.volume - a.volume)
+    expect(components.length).toBe(2)
+    expect(components[0]?.closed).toBe(true)
+    expect(components[0]?.volume ?? 0).toBeCloseTo(1000, 0)
+    expect(components[1]?.closed).toBe(true)
+    expect(components[1]?.volume ?? 0).toBeCloseTo(125, 0)
+  })
+
+  it('marks an open sheet as not closed', () => {
+    const grid = new BoxGeometry(20, 20, 0.2, 4, 4, 1)
+    const position = grid.getAttribute('position')
+    const index = grid.getIndex()
+    // Drop the bottom face group (+x, -x, +y, -y, +z, -z order in BoxGeometry).
+    const bottom = grid.groups[5]
+    const full = Array.from(index?.array as Uint16Array | Uint32Array)
+    const open: DiffSoup = {
+      vertices: Array.from(position.array as Float32Array),
+      triangles: [
+        ...full.slice(0, bottom?.start ?? 0),
+        ...full.slice((bottom?.start ?? 0) + (bottom?.count ?? 0)),
+      ],
+    }
+    const components = extractComponents(soupGeometry(open))
+    expect(components.length).toBe(1)
+    expect(components[0]?.closed).toBe(false)
   })
 })

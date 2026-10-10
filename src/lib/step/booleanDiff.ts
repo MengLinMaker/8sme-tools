@@ -71,7 +71,9 @@ export function extractComponents(geometry: BufferGeometry): DiffComponent[] {
   const index = geometry.getIndex()
   const corner = (t: number, k: number) => (index ? index.getX(t * 3 + k) : t * 3 + k)
 
-  // Union-find over triangles sharing a (1 µm-welded) vertex.
+  // Union-find over triangles sharing a (1 µm-welded) vertex. Corner keys are
+  // computed once up front and reused for grouping, edge-closedness and
+  // volume/area below — previously re-derived per pass.
   const parent = Array.from({ length: count }, (_, i) => i)
   const find = (i: number): number => {
     let root = i
@@ -85,12 +87,15 @@ export function extractComponents(geometry: BufferGeometry): DiffComponent[] {
   }
   const seen = new Map<string, number>()
   const edgeUses = new Map<string, number>()
+  const keys: string[] = new Array(count * 3)
   const weld = (v: number) =>
     `${Math.round(array[v * 3] * 1000)},${Math.round(array[v * 3 + 1] * 1000)},${Math.round(array[v * 3 + 2] * 1000)}`
   for (let t = 0; t < count; t++) {
-    const keys = [weld(corner(t, 0)), weld(corner(t, 1)), weld(corner(t, 2))]
+    for (let k = 0; k < 3; k++) keys[t * 3 + k] = weld(corner(t, k))
+  }
+  for (let t = 0; t < count; t++) {
     for (let k = 0; k < 3; k++) {
-      const key = keys[k] ?? ''
+      const key = keys[t * 3 + k] ?? ''
       const first = seen.get(key)
       if (first === undefined) seen.set(key, t)
       else {
@@ -98,7 +103,7 @@ export function extractComponents(geometry: BufferGeometry): DiffComponent[] {
         const b = find(first)
         if (a !== b) parent[a] = b
       }
-      const edge = [keys[k] ?? '', keys[(k + 1) % 3] ?? ''].sort().join('|')
+      const edge = [keys[t * 3 + k] ?? '', keys[t * 3 + ((k + 1) % 3)] ?? ''].sort().join('|')
       edgeUses.set(edge, (edgeUses.get(edge) ?? 0) + 1)
     }
   }
@@ -135,9 +140,8 @@ export function extractComponents(geometry: BufferGeometry): DiffComponent[] {
       const nz = abx * acy - aby * acx
       volume += (ax * nx + ay * ny + az * nz) / 6
       area += Math.hypot(nx, ny, nz) / 2
-      const keys = [weld(corner(t, 0)), weld(corner(t, 1)), weld(corner(t, 2))]
       for (let k = 0; k < 3; k++) {
-        const edge = [keys[k] ?? '', keys[(k + 1) % 3] ?? ''].sort().join('|')
+        const edge = [keys[t * 3 + k] ?? '', keys[t * 3 + ((k + 1) % 3)] ?? ''].sort().join('|')
         if (seenEdges.has(edge)) continue
         seenEdges.add(edge)
         if (edgeUses.get(edge) !== 2) closed = false
@@ -205,10 +209,17 @@ export function filterDrawableFaces(
     for (const t of component.triangles) {
       corners.push(triangles[t * 3] ?? 0, triangles[t * 3 + 1] ?? 0, triangles[t * 3 + 2] ?? 0)
     }
+    const thickness = component.area > 0 ? (2 * component.volume) / component.area : 0
+    // Chunky open fills (notch copes) keep without any distance query — volume
+    // and thickness are already known, so this skips the queries entirely.
+    if (!component.closed && thickness >= KEEP_OPEN_SKIN_MM) {
+      kept.push(...corners)
+      volume += component.volume
+      continue
+    }
     // One query object per side — its spatial index is built once and reused
     // across every component, instead of rebuilt per component.
     const aDiff = query.flagFar(sharedVertices, corners)
-    const thickness = component.area > 0 ? (2 * component.volume) / component.area : 0
     // Whole chunky component, or just the far faces of a thin sheet. Volume is
     // always the component's own — signed sums over open patch shells are
     // meaningless, so the number follows the kept components, not the picture.
@@ -228,11 +239,6 @@ export function filterDrawableFaces(
           )
         }
       }
-      volume += component.volume
-      continue
-    }
-    if (!component.closed && thickness >= KEEP_OPEN_SKIN_MM) {
-      kept.push(...corners)
       volume += component.volume
     }
   }

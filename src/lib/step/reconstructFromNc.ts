@@ -59,6 +59,31 @@ function dedupe(pts: Pt[]): Pt[] {
   return out
 }
 
+/**
+ * Cross-section interior span along one axis at a position on the other
+ * (even-odd scanline over the outline). Picks the drill side for one-sided
+ * sections: a T flange lives on one side only, so face-pair symmetry (+v/−h)
+ * cannot tell where the material is — but the outline can. Symmetric sections
+ * reach both sides, so the pairing table stands for them.
+ */
+function sectionSpanAt(points: Pt[], crossAxis: Axis, c: number): [number, number] {
+  const drillAxis = (1 - crossAxis) as Axis
+  let lo = Number.POSITIVE_INFINITY
+  let hi = Number.NEGATIVE_INFINITY
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i] ?? [0, 0]
+    const q = points[(i + 1) % points.length] ?? [0, 0]
+    const pc = p[crossAxis] ?? 0
+    const qc = q[crossAxis] ?? 0
+    if (pc <= c === qc <= c) continue
+    const t = (c - pc) / (qc - pc)
+    const xd = (p[drillAxis] ?? 0) + t * ((q[drillAxis] ?? 0) - (p[drillAxis] ?? 0))
+    if (xd < lo) lo = xd
+    if (xd > hi) hi = xd
+  }
+  return [lo, hi]
+}
+
 interface ShapeOps {
   boundingBox: { bounds: [number[], number[]] }
   clone: () => ShapeOps
@@ -161,6 +186,12 @@ export interface ReconstructOptions {
    * manufactured view uses the file's orientation rather than the reconstruction's own frame.
    */
   reference?: Uint8Array
+  /**
+   * Measure-only: skip reference orientation and the STEP export. Measuring is
+   * orientation-agnostic, and the analysis phase discards the text — both are
+   * pure waste there (orientation alone doubles rebuild cost on real parts).
+   */
+  measureOnly?: boolean
 }
 
 export async function reconstructStepFromNc(
@@ -304,10 +335,20 @@ export async function reconstructSolidFromNc(
     const half = halfOf(axis)
     // The drill runs along the *other* cross-section axis; the face sits at ±(that axis's half).
     const faceOut = halfOf((1 - axis) as Axis)
-    const sign = positiveFace(h.face) ? 1 : -1
+    let sign: 1 | -1 = positiveFace(h.face) ? 1 : -1
+    // One-sided sections (T flange) carry the face on one side only: start the
+    // drill where section material actually reaches at this hole's position,
+    // not where symmetry assumes it. Symmetric sections reach both sides, so
+    // the pairing table stands for them.
+    const [lo, hi] = sectionSpanAt(section.points, axis, h.y - half)
+    const reached = sign > 0 ? hi >= faceOut - 2 : lo <= -faceOut + 2
+    if (!reached) {
+      const otherReached = sign > 0 ? lo <= -faceOut + 2 : hi >= faceOut - 2
+      if (otherReached) sign = sign > 0 ? -1 : 1
+    }
     const outside = faceOut + 2
     if (axis === 0) {
-      // Drill along the 3D Z axis (perpendicular to the `o`/`u` faces).
+      // Drill along the 3D Z axis (perpendicular to the `v`/`h` faces).
       const cyl = drawCircle(h.diameter / 2)
         .translate(h.x, h.y - half)
         .sketchOnPlane('XY')
@@ -315,7 +356,7 @@ export async function reconstructSolidFromNc(
       const shift = sign > 0 ? outside - BEAM_REACH : -outside
       solid = solid.cut(cyl.translate(0, 0, shift) as unknown as SolidOps)
     } else {
-      // Drill along the 3D Y axis (`v`/`h`); `sketchOnPlane('XZ')` extrudes towards −Y.
+      // Drill along the 3D Y axis (`o`/`u`); `sketchOnPlane('XZ')` extrudes towards −Y.
       const cyl = drawCircle(h.diameter / 2)
         .translate(h.x, h.y - half)
         .sketchOnPlane('XZ')
@@ -325,8 +366,12 @@ export async function reconstructSolidFromNc(
     }
   }
 
-  if (options.reference) solid = await orientToReference(solid, options.reference)
+  if (options.reference && !options.measureOnly)
+    solid = await orientToReference(solid, options.reference)
 
+  // Measure-only callers (analysis phase 4) compare the live solid and discard
+  // the text — skip the STEP export entirely.
+  if (options.measureOnly) return { solid: solid as SolidOps & MeasurableShape, step: '' }
   const blob = (solid as unknown as { blobSTEP: () => Blob }).blobSTEP()
   return { solid: solid as SolidOps & MeasurableShape, step: await blob.text() }
 }

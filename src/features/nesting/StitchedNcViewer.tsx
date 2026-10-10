@@ -23,6 +23,10 @@ export interface StitchedNcItem {
   side: 'L' | 'R'
   /** Distance from the beam start to this piece's NC origin. */
   start: number
+  /** Nominal nest slot length for this piece (drives the length reconciliation). */
+  slotLength: number
+  /** The NC's own ST-header declared length, if it parsed (the middle of three lengths). */
+  headerLength: number | null
   geometry: NcGeometry
 }
 
@@ -32,7 +36,7 @@ const INNER_COLOR = 0xf59e0b
 const HOLES_COLOR = 0x38bdf8
 
 /** Member length of one part's NC (X extent), mirroring Nc3dViewer's internal measure. */
-function memberLength(geometry: NcGeometry): number {
+export function memberLength(geometry: NcGeometry): number {
   let length = 0
   for (const contour of geometry.contours) {
     for (const [x] of contour.points) length = Math.max(length, x)
@@ -83,10 +87,17 @@ function mountScene(
   for (const item of items) {
     const built = segmentsFor(item.geometry)
     // segmentsFor centres each part on its own origin: re-anchor to the beam, centred overall.
+    // The bottom (R) row gets the same 180° roll about the length axis the STEP nest applies
+    // (placeRealPart's flip), so stitch and STEP place pieces identically — the projection is
+    // roughly section-centred, so negating both cross axes is that roll. Any mismatch left is
+    // in the NC itself, not the layout.
     const dx = item.start + memberLength(item.geometry) / 2 - stockLength / 2
     const dy = item.side === 'L' ? lane : -lane
+    const flip = item.side === 'R'
     const shift = (points: NcPoint[], target: NcPoint[]): void => {
-      for (const [x, y, z] of points) target.push([x + dx, y + dy, z])
+      for (const [x, y, z] of points) {
+        target.push(flip ? [x + dx, -y + dy, -z] : [x + dx, y + dy, z])
+      }
     }
     for (const points of built.outerByFace.values()) shift(points, outer)
     shift(built.inner, inner)

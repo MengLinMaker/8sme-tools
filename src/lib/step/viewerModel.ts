@@ -26,6 +26,13 @@ export function meshForViewer(name: string, bytes: Uint8Array): Promise<MeshedSt
 }
 
 const reconstructCache = new Map<string, Promise<Uint8Array | null>>()
+/**
+ * Cap on cached reconstructions: each holds a full STEP text (~0.2–2 MB), so
+ * an unbounded map OOMs the tab on 350-part jobs. Evicted parts rebuild on
+ * reopen (~seconds, cached meshes stay). Map preserves insertion order, so the
+ * first key is the stalest — refresh it on hit to approximate LRU.
+ */
+const RECONSTRUCT_CACHE_LIMIT = 32
 const referenceIds = new WeakMap<Uint8Array, number>()
 let nextReferenceId = 0
 
@@ -50,7 +57,11 @@ export function reconstructForViewer(
 ): Promise<Uint8Array | null> {
   const key = `${options.simplify ? 1 : 0}:${referenceKey(options.reference)}:${ncText}`
   const hit = reconstructCache.get(key)
-  if (hit) return hit
+  if (hit) {
+    reconstructCache.delete(key)
+    reconstructCache.set(key, hit)
+    return hit
+  }
   const promise = getStepWorkerPool()
     .reconstruct(ncText, { reference: options.reference, simplify: options.simplify })
     .then((result) => (result.step ? new TextEncoder().encode(result.step) : null))
@@ -59,6 +70,10 @@ export function reconstructForViewer(
       throw error
     })
   reconstructCache.set(key, promise)
+  const oldest = reconstructCache.keys().next()
+  if (!oldest.done && reconstructCache.size > RECONSTRUCT_CACHE_LIMIT) {
+    reconstructCache.delete(oldest.value)
+  }
   return promise
 }
 

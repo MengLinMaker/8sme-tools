@@ -1,8 +1,18 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import {
+  BufferGeometry,
+  Float32BufferAttribute,
+  Mesh,
+  MeshBasicMaterial,
+  Raycaster,
+  Vector3,
+} from 'three'
 import { describe, expect, it } from 'vitest'
+import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { measureStep } from './measure'
+import { meshStepFile } from './mesh'
 import { setOcWasmUrl } from './occInit'
 import { reconstructStepFromNc } from './reconstructFromNc'
 
@@ -100,6 +110,37 @@ describe.skipIf(!HAVE)('reconstruct parts from NC (experimental)', () => {
       expect(Math.min(...built.size)).toBeGreaterThan(50)
       expect(Math.max(...built.size)).toBeGreaterThan(1500)
       writeFileSync(join(process.env.TEMP ?? '.', `nc-${mark}.stp`), step)
+    }
+  }, 300000)
+
+  it('drills v-face holes on the one-sided T flange (m201)', async () => {
+    // The BT tee flange lives on one side only (flange down, −Z). Drilling from
+    // the face-pair side (+Z) cuts air and leaves every hole undrilled — the
+    // drill side must follow section occupancy, not symmetry. m201 carries 8
+    // Ø14 v-face holes through the 9.6 mm flange: a ray from the flange side
+    // (−Z) passes the void untouched (0 hits); undrilled it strikes the face.
+    if (!existsSync(ncPath('m201'))) return
+    const ncText = readFileSync(ncPath('m201'), 'utf8')
+    const step = await reconstructStepFromNc(ncText)
+    expect(step).toBeTruthy()
+    if (!step) return
+    const meshed = await meshStepFile('m201·holes', new TextEncoder().encode(step))
+    const meshes = meshed.bodies.map((body) => {
+      const geometry = new BufferGeometry()
+      geometry.setAttribute('position', new Float32BufferAttribute(body.mesh.faces.vertices, 3))
+      geometry.setIndex(body.mesh.faces.triangles)
+      geometry.computeBoundingSphere()
+      return new Mesh(geometry, new MeshBasicMaterial())
+    })
+    const raycaster = new Raycaster()
+    raycaster.far = Infinity
+    const holes = parseNcGeometry(ncText).holes.filter((hole) => hole.diameter > 0)
+    expect(holes.length).toBeGreaterThan(0)
+    for (const hole of holes) {
+      // v-face spans the 134 mm flange width, centred: cross position in Y.
+      raycaster.set(new Vector3(hole.x, hole.y - 67, -500), new Vector3(0, 0, 1))
+      const hits = raycaster.intersectObjects(meshes, false).length
+      expect(hits, `vØ${hole.diameter} at x=${hole.x} y=${hole.y} drilled`).toBe(0)
     }
   }, 300000)
 })

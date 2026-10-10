@@ -50,7 +50,12 @@ class StepWorkerPool {
   /** Rebuild a solid from its DSTV `.nc1`; optionally measure the result in the same task. */
   reconstruct(
     ncText: string,
-    options: { reference?: Uint8Array; measure?: boolean; simplify?: boolean } = {},
+    options: {
+      reference?: Uint8Array
+      measure?: boolean
+      simplify?: boolean
+      measureOnly?: boolean
+    } = {},
   ): Promise<ReconstructResult> {
     const reference = options.reference ? new Uint8Array(options.reference) : undefined
     return this.run<ReconstructResult>(
@@ -61,6 +66,7 @@ class StepWorkerPool {
         reference,
         measure: options.measure,
         simplify: options.simplify,
+        measureOnly: options.measureOnly,
       },
       reference ? [reference.buffer] : [],
     )

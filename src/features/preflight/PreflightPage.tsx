@@ -493,6 +493,9 @@ export function PreflightPage() {
           try {
             const made = await pool.reconstruct(new TextDecoder().decode(ncBytes), {
               measure: true,
+              // Only the measure is read below — skip reference orientation and
+              // the STEP export (they double rebuild cost for nothing here).
+              measureOnly: true,
             })
             if (cancelled) return
             if (made.measure) {
@@ -1444,6 +1447,13 @@ export function PreflightPage() {
                       key={tab.id}
                       type="button"
                       disabled={tab.id === 'nc1' && !ncBytes}
+                      title={
+                        tab.id === 'nc1' && !ncBytes && viewing?.nc
+                          ? t('preflight.viewer.ncMissingBytes', { mark: viewing.mark })
+                          : tab.id === 'nc1' && !viewing?.nc
+                            ? t('preflight.viewer.ncMissingFile', { mark: viewing?.mark ?? '' })
+                            : undefined
+                      }
                       onClick={() => setRightTab(tab.id)}
                       className={cn(
                         'rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-40',

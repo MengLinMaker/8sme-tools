@@ -23,6 +23,7 @@ import {
   type UbBar,
   ubLayouts,
 } from '@/lib/nesting/nest'
+import { parseDstv } from '@/lib/parsers/dstv'
 import { type NcGeometry, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import type { InputBundle } from '@/lib/readInput'
 import { getUb } from '@/lib/sections/ub'
@@ -36,7 +37,7 @@ import {
 } from '@/lib/step/occ'
 import { cn } from '@/lib/utils'
 import { BeamNcViewer, type BeamSlot } from './BeamNcViewer'
-import { type StitchedNcItem, StitchedNcViewer } from './StitchedNcViewer'
+import { memberLength, type StitchedNcItem, StitchedNcViewer } from './StitchedNcViewer'
 
 const PartViewer = lazy(() => import('@/features/preflight/PartViewer'))
 
@@ -303,7 +304,21 @@ export function NestingPage() {
         noteMissing(slot.mark)
         continue
       }
-      ncItems.push({ mark: slot.mark, side: slot.side, start: slot.start, geometry })
+      let headerLength: number | null = null
+      try {
+        const parsed = parseDstv(text).header.length
+        headerLength = Number.isFinite(parsed) && parsed > 0 ? parsed : null
+      } catch {
+        headerLength = null
+      }
+      ncItems.push({
+        mark: slot.mark,
+        side: slot.side,
+        start: slot.start,
+        slotLength: slot.end - slot.start,
+        headerLength,
+        geometry,
+      })
     }
     return {
       name,
@@ -342,7 +357,11 @@ export function NestingPage() {
           kerf: result.kerf,
         }),
       )
-    } catch {
+    } catch (error) {
+      // Surfaced in the dialog placeholder; logged for diagnosis (orientation skips inside the
+      // carve don't throw, so anything landing here is a genuine OCC/build failure).
+      // eslint-disable-next-line no-console
+      console.warn('[nesting] cut-beam build failed:', error)
       return null
     }
   }
@@ -801,7 +820,10 @@ export function NestingPage() {
                           }
                           compareLabel={t('preflight.viewer.step')}
                           stock={null}
-                          beam={null}
+                          // Same profile as the STEP pane: seating (length → X + roll) must match
+                          // or split/overlay compare misaligned models. The ghost doubles as the
+                          // uncut-stock outline, showing what the split + kerfs removed.
+                          beam={viewing.beam}
                           bus={orbitBus}
                         />
                       ) : (
@@ -957,6 +979,7 @@ export function NestingPage() {
                             bus={orbitBus}
                           />
                         </div>
+                        <NcReconcile items={viewing.ncItems} />
                         {viewing.ncText && (
                           <details className="border-t border-border">
                             <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
@@ -1143,6 +1166,64 @@ function parseBeamNcCuts(ncText: string): BeamCut[] {
     })
   }
   return cuts.filter((cut) => Number.isFinite(cut.end))
+}
+
+/**
+ * Proves whether gaps in the stitch are layout or data: three lengths per piece — the nest slot
+ * (part-list length, else NC header), the NC ST header's own declared length, and the NC
+ * toolpath extent the stitch actually draws. The stitch renders exactly slot vs toolpaths, so:
+ * header ≈ slot >> NC means the NC file is internally short (or the reader is blind to blocks);
+ * header ≈ NC << slot means the part list over-allocates. Block counts ride along to judge the
+ * reader — e.g. AK:0 with holes present means the outline never reached the parser.
+ */
+function NcReconcile({ items }: { items: StitchedNcItem[] }) {
+  const { t } = useTranslation()
+  const rows = items.map((item) => {
+    const nc = memberLength(item.geometry)
+    const ak = item.geometry.contours.filter((c) => c.kind === 'outer').length
+    const ik = item.geometry.contours.length - ak
+    const bo = item.geometry.holes.length
+    const values = [item.slotLength, nc]
+    if (item.headerLength != null) values.push(item.headerLength)
+    return {
+      mark: item.mark,
+      side: item.side,
+      slot: item.slotLength,
+      hdr: item.headerLength,
+      nc,
+      counts: `AK:${ak} IK:${ik} BO:${bo}`,
+      spread: Math.max(...values) - Math.min(...values),
+    }
+  })
+  const offenders = rows.filter((row) => row.spread > 2)
+  if (offenders.length === 0) {
+    const max = rows.reduce((m, row) => Math.max(m, row.spread), 0)
+    return (
+      <div className="border-t border-border px-4 py-2 text-xs text-emerald-300">
+        {t('nesting.viewer.ncReconcileOk', { delta: max.toFixed(1) })}
+      </div>
+    )
+  }
+  const dash = (value: number | null): string => (value == null ? '—' : String(Math.round(value)))
+  return (
+    <div className="border-t border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
+      <div className="font-medium">{t('nesting.viewer.ncReconcileBad')}</div>
+      <ul className="mt-1 font-mono">
+        {offenders.map((row) => (
+          <li key={`${row.side}-${row.mark}`}>
+            {t('nesting.viewer.ncReconcileRow', {
+              mark: row.mark,
+              side: row.side === 'L' ? t('nesting.left') : t('nesting.right'),
+              slot: Math.round(row.slot),
+              hdr: dash(row.hdr),
+              nc: Math.round(row.nc),
+              counts: row.counts,
+            })}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
 }
 
 function PaneTag({ children, tone }: { children: ReactNode; tone?: 'manufactured' | 'step' }) {

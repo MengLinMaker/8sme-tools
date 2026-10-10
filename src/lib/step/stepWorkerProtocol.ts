@@ -31,6 +31,12 @@ export type StepRequest =
       reference?: Uint8Array
       measure?: boolean
       simplify?: boolean
+      /**
+       * Measure-only: skip reference orientation and the STEP export (the
+       * analysis phase compares measures and discards the text, so both are
+       * pure waste there — orientation alone doubles rebuild cost).
+       */
+      measureOnly?: boolean
     }
   | { id: number; kind: 'mesh'; step: Uint8Array; name: string }
   | { id: number; kind: 'warm' }

@@ -83,10 +83,12 @@ async function reconstruct(request: {
   reference?: Uint8Array
   measure?: boolean
   simplify?: boolean
+  measureOnly?: boolean
 }): Promise<ReconstructResult> {
   const built = await reconstructSolidFromNc(request.ncText, {
     reference: request.reference,
     simplify: request.simplify,
+    measureOnly: request.measureOnly,
   })
   let measure: StepMeasure | null = null
   if (built && request.measure) {
@@ -98,5 +100,5 @@ async function reconstruct(request: {
       measure = null
     }
   }
-  return { step: built?.step ?? null, measure }
+  return { step: request.measureOnly ? null : (built?.step ?? null), measure }
 }
