@@ -20,7 +20,11 @@ type Pt = [number, number]
 
 function dedupe(pts: Pt[]): Pt[] {
   const out = pts.filter((p, i) => i === 0 || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1])
-  if (out.length > 1 && out[0][0] === out[out.length - 1][0] && out[0][1] === out[out.length - 1][1])
+  if (
+    out.length > 1 &&
+    out[0][0] === out[out.length - 1][0] &&
+    out[0][1] === out[out.length - 1][1]
+  )
     out.pop()
   return out
 }
@@ -60,7 +64,9 @@ describe('fuse probe', () => {
       [25.52, half + 2],
       [0 - 2, half + 2],
     ])
-    console.log(`o=${vPrism(oP).toFixed(0)} u=${vPrism(uP).toFixed(0)} band=${vPrism(bandP).toFixed(0)}`)
+    console.log(
+      `o=${vPrism(oP).toFixed(0)} u=${vPrism(uP).toFixed(0)} band=${vPrism(bandP).toFixed(0)}`,
+    )
     const fusedOU = (oP as unknown as { fuse: (o: unknown) => unknown }).fuse(uP)
     console.log(`fused(o,u)=${fusedOU ? vPrism(fusedOU).toFixed(0) : 'null'}`)
     if (fusedOU) {
@@ -68,7 +74,9 @@ describe('fuse probe', () => {
       console.log(`fused(o,u,band)=${fusedOUB ? vPrism(fusedOUB).toFixed(0) : 'null'}`)
       // union bound: fused <= o+u+band, and >= max(o+u, band)
       const ou = fusedOU ? vPrism(fusedOU) : 0
-      console.log(`o+u+band=${(vPrism(oP) + vPrism(uP) + vPrism(bandP)).toFixed(0)} ou=${ou.toFixed(0)}`)
+      console.log(
+        `o+u+band=${(vPrism(oP) + vPrism(uP) + vPrism(bandP)).toFixed(0)} ou=${ou.toFixed(0)}`,
+      )
     }
     expect(true).toBe(true)
   }, 300000)

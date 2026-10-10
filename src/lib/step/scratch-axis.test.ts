@@ -32,12 +32,15 @@ describe('axis assignment probe', () => {
       const header = parseDstv(nc).header
       const geo = parseNcGeometry(nc)
       const section = partSectionForCode(header.profile, header.dimensions)
-      const ex = Math.max(...(section?.points.map((p) => p[0]) ?? [0])) - Math.min(...(section?.points.map((p) => p[0]) ?? [0]))
-      const ey = Math.max(...(section?.points.map((p) => p[1]) ?? [0])) - Math.min(...(section?.points.map((p) => p[1]) ?? [0]))
+      const ex =
+        Math.max(...(section?.points.map((p) => p[0]) ?? [0])) -
+        Math.min(...(section?.points.map((p) => p[0]) ?? [0]))
+      const ey =
+        Math.max(...(section?.points.map((p) => p[1]) ?? [0])) -
+        Math.min(...(section?.points.map((p) => p[1]) ?? [0]))
       const outer = geo.contours.filter((c) => c.kind === 'outer')
       const maxCoord = (c: (typeof outer)[number]) => Math.max(...c.points.map((p) => p[1]))
-      const matchAxis = (yMax: number): Axis =>
-        (Math.abs(yMax - ex) <= Math.abs(yMax - ey) ? 0 : 1)
+      const matchAxis = (yMax: number): Axis => (Math.abs(yMax - ex) <= Math.abs(yMax - ey) ? 0 : 1)
       const vh = outer.find((c) => c.face === 'v' || c.face === 'h')
       const ou = outer.find((c) => c.face === 'o' || c.face === 'u')
       const axisVH: Axis = vh

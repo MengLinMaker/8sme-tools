@@ -74,10 +74,70 @@ describe('locateSabreStations', () => {
     // so the STEP long axis must run opposite the NC X.
     const slantedStart: NcGeometry = {
       contours: [
-        { face: 'v', kind: 'outer', points: [[15, 0], [1000, 0], [1000, 100], [15, 100]], bevels: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] },
-        { face: 'h', kind: 'outer', points: [[15, 0], [1000, 0], [1000, 100], [15, 100]], bevels: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] },
-        { face: 'o', kind: 'outer', points: [[0, 0], [1000, 0], [1000, 100], [0, 100]], bevels: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] },
-        { face: 'u', kind: 'outer', points: [[0, 0], [1000, 0], [1000, 100], [0, 100]], bevels: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] },
+        {
+          face: 'v',
+          kind: 'outer',
+          points: [
+            [15, 0],
+            [1000, 0],
+            [1000, 100],
+            [15, 100],
+          ],
+          bevels: [
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+          ],
+        },
+        {
+          face: 'h',
+          kind: 'outer',
+          points: [
+            [15, 0],
+            [1000, 0],
+            [1000, 100],
+            [15, 100],
+          ],
+          bevels: [
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+          ],
+        },
+        {
+          face: 'o',
+          kind: 'outer',
+          points: [
+            [0, 0],
+            [1000, 0],
+            [1000, 100],
+            [0, 100],
+          ],
+          bevels: [
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+          ],
+        },
+        {
+          face: 'u',
+          kind: 'outer',
+          points: [
+            [0, 0],
+            [1000, 0],
+            [1000, 100],
+            [0, 100],
+          ],
+          bevels: [
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+          ],
+        },
       ],
       holes: [],
     }
@@ -96,6 +156,8 @@ describe('locateSabreStations', () => {
   it('returns no stations without failures or geometry', () => {
     expect(locateSabreStations(beamVertices(), [], ncBeam(0))).toEqual([])
     expect(locateSabreStations([], [failureAt(500)], ncBeam(0))).toEqual([])
-    expect(locateSabreStations(beamVertices(), [failureAt(500)], { contours: [], holes: [] })).toEqual([])
+    expect(
+      locateSabreStations(beamVertices(), [failureAt(500)], { contours: [], holes: [] }),
+    ).toEqual([])
   })
 })

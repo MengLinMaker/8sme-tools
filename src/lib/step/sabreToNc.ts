@@ -9,7 +9,7 @@ import type { SabreFailure } from './sabre'
  * axis is transferred (normalised 0–1 on the STEP side, scaled to the NC length). Faces are
  * *not* mapped — the STEP and NC cross-section frames share no guaranteed roll convention,
  * so claiming a face would risk flagging the wrong line. The NC view instead highlights every
- * outer-contour segment near the guilty station; the STEP 3D view shows the exact face.
+ * outer-contour segment near the guilty station; the manufactured 3D view shows the exact face.
  *
  * End flip: the STEP's long-axis sign may run opposite the NC's X. When the STEP failures
  * cluster at one end *and* the NC shows exactly one ragged end (faces ending at different X —
@@ -110,8 +110,10 @@ export function locateSabreStations(
   if (stepEnd) {
     const extents = outerExtents(nc)
     if (extents.length >= 2) {
-      const raggedStart = Math.max(...extents.map((e) => e.min)) - Math.min(...extents.map((e) => e.min))
-      const raggedEnd = Math.max(...extents.map((e) => e.max)) - Math.min(...extents.map((e) => e.max))
+      const raggedStart =
+        Math.max(...extents.map((e) => e.min)) - Math.min(...extents.map((e) => e.min))
+      const raggedEnd =
+        Math.max(...extents.map((e) => e.max)) - Math.min(...extents.map((e) => e.max))
       const ncRagged =
         raggedStart > raggedEnd + RAGGED_THRESHOLD_MM
           ? 'min'

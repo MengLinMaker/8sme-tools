@@ -5,6 +5,7 @@ import {
   AmbientLight,
   Box3,
   BufferGeometry,
+  ConeGeometry,
   DirectionalLight,
   DoubleSide,
   EdgesGeometry,
@@ -17,6 +18,7 @@ import {
   type Material,
   Matrix4,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   OrthographicCamera,
   Path,
@@ -38,9 +40,10 @@ import {
 } from '@/lib/step/booleanDiff'
 import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
-import type { SabreFailure } from '@/lib/step/sabre'
+import { clusterSabre, type SabreFailure, sabreBoundary } from '@/lib/step/sabre'
 import { meshForViewer } from '@/lib/step/viewerModel'
 import { attachOrbit, type OrbitBus } from './orbitSync'
+import { smoothLines } from './smoothLines'
 
 const GHOST_COLOR = 0x3ddc84
 const COMPARE_COLOR = 0xf59e0b
@@ -277,6 +280,7 @@ function mountScene(
   beam: BeamOutline | null,
   bus: OrbitBus | null,
   highlightStray: boolean,
+  smoothModelLines: boolean,
   primaryBytes: Uint8Array | null | undefined,
   compareBytes: Uint8Array | null | undefined,
   deferDiff?: boolean,
@@ -314,7 +318,13 @@ function mountScene(
     geometries.forEach((geometry, index) => {
       const body = meshed.bodies[index]
       group.add(new Mesh(geometry.faces, strayMaterial && body.stray ? strayMaterial : material))
-      if (withLines) group.add(new LineSegments(geometry.lines, lineMaterial))
+      if (withLines) {
+        // Manufactured (NC-rebuilt) models carry boolean shards and dense outline chains in
+        // their OCC edges — straight lines across flats that read as cuts. Re-derive the
+        // lines by dihedral angle so only real cut edges draw.
+        if (smoothModelLines) smoothLines(geometry.lines, geometry.faces)
+        group.add(new LineSegments(geometry.lines, lineMaterial))
+      }
     })
     const raw = meshed.vertices
     const seat = profile ? seatQuaternion(raw, profile) : new Quaternion()
@@ -582,46 +592,32 @@ function mountScene(
   }
   if (!deferDiff) runDiff()
 
-  // Light-sabre overlay: red cut lines (edges of the failing triangles — the surface that
-  // cannot be cut) plus amber bevel ticks (outward normals showing the guilty cut angle).
-  // Local coordinates, parented to the seated primary group so the marks follow the model.
-  // Depth test off + high render order, so the guilty lines read through the solid.
-  const sabreObjects: LineSegments[] = []
+  // Light-sabre overlay: red cut lines tracing the guilty patch perimeter, plus one short
+  // amber arrow per patch showing the bevel direction. Only boundary edges draw — shared
+  // internal diagonals are dropped, so a tiled patch reads as one loop, not a hatch. Arrows
+  // stay short (sized to the cross-section, never the beam) so they read as surface normals
+  // instead of javelins rammed into the stock. Local coordinates, parented to the seated
+  // primary group so the marks follow the model. Depth test off + high render order, so the
+  // guilty lines read through the solid.
+  const sabreObjects: (LineSegments | Mesh)[] = []
   if (sabre && sabre.length > 0) {
-    const byArea = [...sabre].sort((a, b) => b.area - a.area)
-    const fitDiagonal = Math.hypot(fitSize.x, fitSize.y, fitSize.z) || 1
-    const tickLen = Math.min(30, Math.max(8, fitDiagonal * 0.04))
+    const biggest = [...sabre].sort((a, b) => b.area - a.area).slice(0, 200)
     const cutPts: number[] = []
-    for (const failure of byArea.slice(0, 200)) {
-      const [a, b, c] = failure.tri
-      const n = failure.normal
+    for (const edge of sabreBoundary(biggest)) {
+      const n = edge.normal
       // Nudge just off the surface along the outward normal so lines never z-fight.
       const off = (p: [number, number, number]): [number, number, number] => [
         p[0] + n[0] * 0.15,
         p[1] + n[1] * 0.15,
         p[2] + n[2] * 0.15,
       ]
-      const [ao, bo, co] = [off(a), off(b), off(c)]
-      cutPts.push(...ao, ...bo, ...bo, ...co, ...co, ...ao)
+      cutPts.push(...off(edge.a), ...off(edge.b))
     }
-    const bevelPts: number[] = []
-    for (const failure of byArea.slice(0, 60)) {
-      const p = failure.point
-      const n = failure.normal
-      bevelPts.push(
-        p[0] + n[0] * 0.3,
-        p[1] + n[1] * 0.3,
-        p[2] + n[2] * 0.3,
-        p[0] + n[0] * tickLen,
-        p[1] + n[1] * tickLen,
-        p[2] + n[2] * tickLen,
-      )
-    }
-    const addLines = (pts: number[], color: number) => {
+    if (cutPts.length > 0) {
       const lineGeometry = new BufferGeometry()
-      lineGeometry.setAttribute('position', new Float32BufferAttribute(pts, 3))
+      lineGeometry.setAttribute('position', new Float32BufferAttribute(cutPts, 3))
       const lineMaterial = new LineBasicMaterial({
-        color,
+        color: SABRE_CUT_COLOR,
         depthTest: false,
         depthWrite: false,
         transparent: true,
@@ -633,8 +629,55 @@ function mountScene(
       sabreObjects.push(lines)
       materials.push(lineMaterial)
     }
-    if (cutPts.length > 0) addLines(cutPts, SABRE_CUT_COLOR)
-    if (bevelPts.length > 0) addLines(bevelPts, SABRE_BEVEL_COLOR)
+    const crossMin = Math.min(fitSize.x, fitSize.y, fitSize.z) || 1
+    const shaftLen = Math.min(10, Math.max(5, crossMin * 0.15))
+    const coneHeight = shaftLen * 0.55
+    const coneRadius = shaftLen * 0.22
+    const up = new Vector3(0, 1, 0)
+    for (const cluster of clusterSabre(biggest)) {
+      const origin = new Vector3(...cluster.point)
+      const normal = new Vector3(...cluster.normal)
+      const shaftPts = [
+        origin.x + normal.x * 0.3,
+        origin.y + normal.y * 0.3,
+        origin.z + normal.z * 0.3,
+        origin.x + normal.x * shaftLen,
+        origin.y + normal.y * shaftLen,
+        origin.z + normal.z * shaftLen,
+      ]
+      const shaftGeometry = new BufferGeometry()
+      shaftGeometry.setAttribute('position', new Float32BufferAttribute(shaftPts, 3))
+      const shaftMaterial = new LineBasicMaterial({
+        color: SABRE_BEVEL_COLOR,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.95,
+      })
+      const shaft = new LineSegments(shaftGeometry, shaftMaterial)
+      shaft.renderOrder = 12
+      primary.group.add(shaft)
+      sabreObjects.push(shaft)
+      materials.push(shaftMaterial)
+      const headMaterial = new MeshBasicMaterial({
+        color: SABRE_BEVEL_COLOR,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.95,
+      })
+      const head = new Mesh(new ConeGeometry(coneRadius, coneHeight, 12), headMaterial)
+      head.quaternion.setFromUnitVectors(up, normal)
+      head.position.set(
+        origin.x + normal.x * (shaftLen + coneHeight / 2),
+        origin.y + normal.y * (shaftLen + coneHeight / 2),
+        origin.z + normal.z * (shaftLen + coneHeight / 2),
+      )
+      head.renderOrder = 12
+      primary.group.add(head)
+      sabreObjects.push(head)
+      materials.push(headMaterial)
+    }
   }
 
   const maxDim = Math.max(fitSize.x, fitSize.y, fitSize.z) || 1
@@ -765,6 +808,12 @@ export interface PartViewerProps {
   bus?: OrbitBus | null
   /** highlight stray floating bodies in orange, to tell them from the real part (STEP debug) */
   highlightStray?: boolean
+  /**
+   * Re-derive the primary model's edge lines by dihedral angle instead of drawing OCC's
+   * tessellated edges. For manufactured (NC-rebuilt) models, whose booleans leave shard
+   * lines across flat faces that read as cuts.
+   */
+  smoothLines?: boolean
   /** light-sabre failures — drawn as red cut lines + amber bevel ticks on the model */
   sabreFailures?: SabreFailure[] | null
 }
@@ -778,6 +827,7 @@ export default function PartViewer({
   beam = null,
   bus = null,
   highlightStray = false,
+  smoothLines: smoothModelLines = false,
   sabreFailures = null,
 }: PartViewerProps) {
   const { t } = useTranslation()
@@ -832,6 +882,7 @@ export default function PartViewer({
           beam,
           bus,
           highlightStray,
+          smoothModelLines,
           bytes,
           compareBytes,
           true,
@@ -864,7 +915,18 @@ export default function PartViewer({
       handle?.dispose()
       handleRef.current = null
     }
-  }, [name, bytes, compareBytes, stock, beam, bus, highlightStray, sabreFailures, t])
+  }, [
+    name,
+    bytes,
+    compareBytes,
+    stock,
+    beam,
+    bus,
+    highlightStray,
+    smoothModelLines,
+    sabreFailures,
+    t,
+  ])
 
   useEffect(() => {
     showStockRef.current = showStock

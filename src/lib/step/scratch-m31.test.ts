@@ -25,7 +25,9 @@ describe('m31 shape check', () => {
       const stepBytes = new Uint8Array(readFileSync(join(NW31, 'STP files', `${mark}.stp`)))
       const real = await measureStep(stepBytes).catch(() => null)
       const straight = await reconstructStepFromNc(nc).catch(() => null)
-      const bs = straight ? await measureStep(new TextEncoder().encode(straight)).catch(() => null) : null
+      const bs = straight
+        ? await measureStep(new TextEncoder().encode(straight)).catch(() => null)
+        : null
       console.log(
         `${mark}: step bodies=${real?.bodies} vol=${((real?.volume ?? 0) / 1e6).toFixed(3)} size=${(real?.size ?? []).map((v) => v.toFixed(1)).join('x')}`,
       )

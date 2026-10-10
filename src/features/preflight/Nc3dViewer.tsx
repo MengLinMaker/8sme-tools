@@ -220,10 +220,7 @@ function mountScene(
       guiltyLines.renderOrder = 5
       lines.push(guiltyLines)
       group.add(guiltyLines)
-      const marker = new Mesh(
-        new SphereGeometry(1, 12, 8),
-        sabreMaterial,
-      )
+      const marker = new Mesh(new SphereGeometry(1, 12, 8), sabreMaterial)
       marker.position.set(centroid[0] / count, centroid[1] / count, centroid[2] / count)
       marker.renderOrder = 6
       sabreMarkers.push(marker)

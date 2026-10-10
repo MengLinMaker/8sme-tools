@@ -720,19 +720,17 @@ export function PreflightPage() {
   const [viewerSabreStations, setViewerSabreStations] = useState<SabreStation[] | null>(null)
   useEffect(() => {
     setViewerSabreStations(null)
-    if (!viewing || !viewerSabreFailures || !ncBytes || !stepBytes) return
+    // Failures come from the analysis run on the original STEP — map with those same bytes,
+    // not a user override, so the station matches the guilty surface.
+    if (!viewing || !viewerSabreFailures || !ncBytes || !referenceStepBytes) return
     let cancelled = false
     const failures = viewerSabreFailures
     const ncText = new TextDecoder().decode(ncBytes)
-    void meshForViewer(viewing.step?.path ?? viewing.mark, stepBytes).then(
+    void meshForViewer(viewing.step?.path ?? viewing.mark, referenceStepBytes).then(
       (meshed) => {
         if (cancelled) return
         try {
-          const stations = locateSabreStations(
-            meshed.vertices,
-            failures,
-            parseNcGeometry(ncText),
-          )
+          const stations = locateSabreStations(meshed.vertices, failures, parseNcGeometry(ncText))
           if (!cancelled) setViewerSabreStations(stations.length > 0 ? stations : null)
         } catch {
           if (!cancelled) setViewerSabreStations(null)
@@ -745,7 +743,7 @@ export function PreflightPage() {
     return () => {
       cancelled = true
     }
-  }, [viewing, viewerSabreFailures, ncBytes, stepBytes])
+  }, [viewing, viewerSabreFailures, ncBytes, referenceStepBytes])
 
   // Collapsible sections — long jobs push the tables far down, so profiles,
   // findings and parts all collapse like an accordion.
@@ -1471,6 +1469,10 @@ export function PreflightPage() {
                           compareLabel={t('preflight.viewer.step')}
                           stock={stock}
                           bus={orbitBus}
+                          // The rebuild is oriented to the STEP frame, so the guilty-cut
+                          // marks land on what the laser will actually cut — not the ideal.
+                          sabreFailures={viewerSabreFailures}
+                          smoothLines
                         />
                       ) : (
                         <div className="grid h-full place-items-center px-6 text-center">
@@ -1499,7 +1501,9 @@ export function PreflightPage() {
                           stock={stock}
                           bus={orbitBus}
                           highlightStray
-                          sabreFailures={viewerSabreFailures}
+                          // The STEP is the ideal, not what gets cut — the marks live on
+                          // the manufactured pane, except as a fallback when it is absent.
+                          sabreFailures={showMfgPane ? null : viewerSabreFailures}
                         />
                       ) : null}
                       {twoPane && <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>}

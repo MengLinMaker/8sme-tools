@@ -825,6 +825,7 @@ export function NestingPage() {
                           // uncut-stock outline, showing what the split + kerfs removed.
                           beam={viewing.beam}
                           bus={orbitBus}
+                          smoothLines
                         />
                       ) : (
                         <div className="grid h-full place-items-center px-6 text-center">
