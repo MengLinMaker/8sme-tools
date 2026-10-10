@@ -290,11 +290,7 @@ export function NestingPage() {
         </p>
       </section>
 
-      <DropZone
-        onBundle={handleBundle}
-        onError={setError}
-        title="Drop the job .zip, files, or a folder"
-      />
+      <DropZone onBundle={handleBundle} onError={setError} />
 
       {error && (
         <div className="rounded-lg border border-destructive bg-destructive/10 px-3.5 py-3 text-sm text-destructive-foreground">

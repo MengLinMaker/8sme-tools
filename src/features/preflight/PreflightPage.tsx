@@ -61,7 +61,6 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'error', label: 'Errors' },
   { id: 'warning', label: 'Warnings' },
-  { id: 'info', label: 'Info' },
 ]
 
 const SEVERITY_VARIANT = {
@@ -257,11 +256,13 @@ export function PreflightPage() {
         })
       }
     }
-    return [...result.findings, ...extra].sort(
-      (a, b) =>
-        SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
-        (a.mark ?? '').localeCompare(b.mark ?? ''),
-    )
+    return [...result.findings, ...extra]
+      .filter((finding) => finding.severity !== 'info')
+      .sort(
+        (a, b) =>
+          SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
+          (a.mark ?? '').localeCompare(b.mark ?? ''),
+      )
   }, [result, drawingMaterials])
 
   const counts = useMemo(() => {
@@ -303,11 +304,7 @@ export function PreflightPage() {
         </p>
       </section>
 
-      <DropZone
-        onBundle={handleBundle}
-        onError={setError}
-        title="Drop a job .zip, files, or a folder"
-      />
+      <DropZone onBundle={handleBundle} onError={setError} />
 
       {error && (
         <div className="rounded-lg border border-destructive bg-destructive/10 px-3.5 py-3 text-sm text-destructive-foreground">
@@ -317,11 +314,10 @@ export function PreflightPage() {
 
       {result && (
         <>
-          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             <Stat label="Parts" value={result.summary.parts} />
             <Stat label="Errors" value={counts.error} tone="error" />
             <Stat label="Warnings" value={counts.warning} tone="warning" />
-            <Stat label="Info" value={counts.info} tone="info" />
             <Stat label="Files" value={result.entriesTotal} />
             <Stat label="Part list" value={result.summary.hasPartList ? 'yes' : 'no'} />
           </section>
