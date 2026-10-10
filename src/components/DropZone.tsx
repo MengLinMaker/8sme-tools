@@ -1,4 +1,5 @@
 import { type DragEvent, type InputHTMLAttributes, useRef, useState } from 'react'
+import { Button } from '@/components/ui/button'
 import { type InputBundle, readDataTransfer, readFiles } from '@/lib/readInput'
 import { cn } from '@/lib/utils'
 
@@ -11,14 +12,14 @@ export interface DropZoneProps {
   onBundle: (bundle: InputBundle) => void
   onError?: (message: string) => void
   title?: string
-  hint?: string
 }
 
-export function DropZone({ onBundle, onError, title, hint }: DropZoneProps) {
+export function DropZone({ onBundle, onError, title }: DropZoneProps) {
   const [dragging, setDragging] = useState(false)
   const [reading, setReading] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const folderRef = useRef<HTMLInputElement>(null)
+  const dragDepth = useRef(0)
 
   const ingest = async (read: () => Promise<InputBundle>) => {
     setReading(true)
@@ -36,18 +37,39 @@ export function DropZone({ onBundle, onError, title, hint }: DropZoneProps) {
     }
   }
 
-  const onDrop = (event: DragEvent<HTMLButtonElement>) => {
+  const onDrop = (event: DragEvent<HTMLFieldSetElement>) => {
     event.preventDefault()
+    dragDepth.current = 0
     setDragging(false)
     void ingest(() => readDataTransfer(event.dataTransfer))
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <fieldset
+      aria-label="Project input drop zone"
+      className={cn(
+        'flex flex-col items-center gap-3 rounded-xl border border-dashed px-5 py-9 text-center transition-colors',
+        dragging
+          ? 'border-primary bg-primary/5'
+          : 'border-input hover:border-primary/50 hover:bg-accent/40',
+        reading && 'cursor-default opacity-70',
+      )}
+      onDragEnter={(event) => {
+        event.preventDefault()
+        dragDepth.current++
+        setDragging(true)
+      }}
+      onDragOver={(event) => event.preventDefault()}
+      onDragLeave={() => {
+        dragDepth.current--
+        if (dragDepth.current <= 0) setDragging(false)
+      }}
+      onDrop={onDrop}
+    >
       <input
         ref={inputRef}
         type="file"
-        multiple
+        accept=".zip"
         hidden
         onChange={(event) => {
           void ingest(() => readFiles(Array.from(event.target.files ?? [])))
@@ -65,41 +87,29 @@ export function DropZone({ onBundle, onError, title, hint }: DropZoneProps) {
           event.target.value = ''
         }}
       />
-      <button
-        type="button"
-        className={cn(
-          'flex w-full flex-col items-center gap-1.5 rounded-xl border border-dashed px-5 py-9 text-center transition-colors',
-          dragging
-            ? 'border-primary bg-primary/5'
-            : 'border-input hover:border-primary/50 hover:bg-accent/40',
-          reading && 'cursor-default opacity-70',
-        )}
-        disabled={reading}
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(event) => {
-          event.preventDefault()
-          setDragging(true)
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-      >
-        <span className="text-lg font-semibold">
-          {reading ? 'Reading…' : (title ?? 'Drop a .zip, files, or a folder')}
-        </span>
-        <span className="text-sm text-muted-foreground">or click to browse files</span>
-        <span className="mt-1 text-xs tracking-wide text-muted-foreground">
-          {hint ?? '.zip · .nc1 · .stp · .pdf · .xlsx'}
-        </span>
-      </button>
-      <div className="text-center text-sm text-muted-foreground">
-        <button
+      <span className="text-lg font-semibold">
+        {reading ? 'Reading…' : (title ?? 'Drop a project .zip or folder')}
+      </span>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <Button
           type="button"
-          className="font-medium text-primary underline-offset-4 hover:underline"
+          variant="outline"
+          size="sm"
+          disabled={reading}
+          onClick={() => inputRef.current?.click()}
+        >
+          Choose .zip
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={reading}
           onClick={() => folderRef.current?.click()}
         >
-          choose a folder
-        </button>
+          Choose folder
+        </Button>
       </div>
-    </div>
+    </fieldset>
   )
 }
