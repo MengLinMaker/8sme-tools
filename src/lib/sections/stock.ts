@@ -21,6 +21,8 @@ export interface StockOutline {
   holes?: [number, number][][]
   /** human label, e.g. "PFC100*50 stock" */
   label: string
+  /** nominal mass per metre (kg/m), where known */
+  mass?: number
 }
 
 type Family =
@@ -314,9 +316,14 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
     case 'channel': {
       const depth = n[0] || dims[0]
       const flange = n[1] || dims[1] || depth / 2
-      if (depth > 0 && flange > 0) {
-        // Thicknesses aren't in the short code; take the larger of the two NC
-        // thicknesses for both so the ghost can't be thinner than the part.
+      // PFCs are fully tabulated (tf, tw, r) — the short callout only carries depth+flange.
+      const pfc = /PFC/i.test(clean) ? getPfcByDepth(depth) : undefined
+      if (pfc) {
+        points = channel(pfc.d, pfc.b, pfc.tw, pfc.tf)
+        label = `${pfc.designation} stock`
+      } else if (depth > 0 && flange > 0) {
+        // TFC / unknown channel: thicknesses aren't in the short code, so take the larger of
+        // the two NC thicknesses for both so the ghost can't be thinner than the part.
         const thickness = Math.max(dims[2] ?? depth * 0.05, dims[3] ?? depth * 0.08)
         points = channel(depth, flange, thickness, thickness)
       }
@@ -325,10 +332,31 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
     case 'ub': {
       const section = getUb(clean)
       if (section) {
-        points = ubOutline(section)
+        points = iSectionOutline(section)
         label = `${section.designation} stock`
       } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
         // Full UB from an NC header (dims = b, full depth, tf, tw).
+        points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3])
+      }
+      break
+    }
+    case 'uc': {
+      const section = getUc(clean) ?? getUcByDepth(dims[1] ?? n[0] ?? 0)
+      if (section) {
+        points = iSectionOutline(section)
+        label = `${section.designation} stock`
+      } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
+        // Full UC from an NC header (dims = b, full depth, tf, tw).
+        points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3])
+      }
+      break
+    }
+    case 'tfb': {
+      const section = getTfbByDepth(n[0] || dims[0] || dims[1] || 0)
+      if (section) {
+        points = iSectionOutline(section)
+        label = `${section.designation} stock`
+      } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
         points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3])
       }
       break
@@ -342,6 +370,7 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
     points: hollow ? points : inflate(points, INFLATE),
     holes: holes.length > 0 ? holes : undefined,
     label,
+    mass: sectionMassPerMetre(clean, dims) ?? undefined,
   }
 }
 
@@ -407,6 +436,8 @@ export function partSectionForCode(
     case 'channel': {
       const depth = n[0] || dims[0]
       const flange = n[1] || dims[1] || depth / 2
+      const pfc = /PFC/i.test(clean) ? getPfcByDepth(depth) : undefined
+      if (pfc) return { points: channel(pfc.d, pfc.b, pfc.tw, pfc.tf) }
       if (!(depth > 0 && flange > 0)) return null
       const tf = dims[2] ?? depth * 0.05
       const web = dims[3] ?? depth * 0.08
@@ -414,10 +445,72 @@ export function partSectionForCode(
     }
     case 'ub': {
       const section = getUb(clean)
-      if (section) return { points: ubOutline(section) }
+      if (section) return { points: iSectionOutline(section) }
       if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
         return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3]) }
       return null
+    }
+    case 'uc': {
+      const section = getUc(clean) ?? getUcByDepth(dims[1] ?? n[0] ?? 0)
+      if (section) return { points: iSectionOutline(section) }
+      if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
+        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3]) }
+      return null
+    }
+    case 'tfb': {
+      const section = getTfbByDepth(n[0] || dims[0] || dims[1] || 0)
+      if (section) return { points: iSectionOutline(section) }
+      if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
+        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3]) }
+      return null
+    }
+  }
+}
+
+/** Nominal steel density (kg/m³), per AS/NZS 3679.1 / AS 4100. */
+const STEEL_DENSITY = 7850
+
+/** Signed-area magnitude of a closed polygon (shoelace). */
+function polygonArea(points: [number, number][]): number {
+  let twice = 0
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    twice += points[j][0] * points[i][1] - points[i][0] * points[j][1]
+  }
+  return Math.abs(twice) / 2
+}
+
+/**
+ * Nominal mass per metre (kg/m). Tabulated families (UB/UC/PFC/TFB) use the published unit
+ * mass; families whose size + thickness fully define the profile (RHS/SHS/CHS hollows and
+ * EA/UA angles) are integrated from their exact cross-section at 7850 kg/m³ — so the value
+ * is right whenever the NC carries the corner radius.
+ */
+export function sectionMassPerMetre(code: string, dims: number[]): number | null {
+  const clean = code.trim().replace(/\s+/g, '').toUpperCase()
+  const family = detectFamily(clean)
+  if (!family) return null
+  const n = numbers(clean)
+
+  switch (family) {
+    case 'ub':
+      return getUb(clean)?.mass ?? null
+    case 'uc':
+      return (getUc(clean) ?? getUcByDepth(dims[1] ?? n[0] ?? 0))?.mass ?? null
+    case 'channel':
+      return /PFC/i.test(clean) ? (getPfcByDepth(n[0] || dims[0] || 0)?.mass ?? null) : null
+    case 'tfb':
+      return getTfbByDepth(n[0] || dims[0] || dims[1] || 0)?.mass ?? null
+    case 'tee': {
+      const match = inferTee(clean, dims)
+      return match ? match.section.mass / 2 : null
+    }
+    default: {
+      const section = partSectionForCode(clean, dims)
+      if (!section) return null
+      let area = polygonArea(section.points)
+      for (const hole of section.holes ?? []) area -= polygonArea(hole)
+      if (!(area > 0)) return null
+      return area * STEEL_DENSITY * 1e-6
     }
   }
 }

@@ -1,4 +1,4 @@
-import type { UbSection } from '@/lib/sections/types'
+import type { RolledSection } from '@/lib/sections/types'
 import type { BarPiece } from '@/lib/step/occ'
 
 /**
@@ -11,7 +11,7 @@ import type { BarPiece } from '@/lib/step/occ'
  */
 
 export interface BarNcInput {
-  section: UbSection
+  section: RolledSection
   name: string
   stockLength: number
   left: BarPiece[]

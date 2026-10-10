@@ -1,4 +1,4 @@
-import type { UbSection } from './types'
+import type { RolledSection } from './types'
 
 /**
  * Australian Universal Beams (UB), AS/NZS 3679.1 (Grade 300).
@@ -8,7 +8,7 @@ import type { UbSection } from './types'
  *
  * Dimensions verified against supplier tables (Mascot, Steel Solutions, NPS, Midalia).
  */
-export const UB_SECTIONS: UbSection[] = [
+export const UB_SECTIONS: RolledSection[] = [
   { designation: '150UB14.0', mass: 14.0, d: 150, b: 75, tf: 7.0, tw: 5.0 },
   { designation: '150UB18.0', mass: 18.0, d: 155, b: 75, tf: 9.5, tw: 6.0 },
   { designation: '180UB16.1', mass: 16.1, d: 173, b: 90, tf: 7.0, tw: 4.5 },
@@ -39,6 +39,6 @@ export const UB_SECTIONS: UbSection[] = [
   { designation: '610UB125', mass: 125.0, d: 612, b: 229, tf: 19.6, tw: 11.9 },
 ]
 
-export function getUb(designation: string): UbSection | undefined {
+export function getUb(designation: string): RolledSection | undefined {
   return UB_SECTIONS.find((section) => section.designation === designation)
 }

@@ -1,11 +1,11 @@
-import type { UbSection } from './types'
+import type { RolledSection } from './types'
 import { UB_SECTIONS } from './ub'
 
 /** Default per-dimension tolerance in mm when fingerprint-matching a halved UB. */
 export const DEFAULT_TOLERANCE = 0.6
 
 export interface UbMatch {
-  section: UbSection
+  section: RolledSection
   /** 1 = exact, 0 = at the tolerance edge */
   score: number
   deltas: { b: number; depthHalf: number; tf: number; tw: number }

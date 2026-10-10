@@ -43,10 +43,11 @@ export function extractDrawingText(bytes: Uint8Array): Promise<string> {
 /**
  * Australian section short-forms as they appear on Tekla drawings, e.g.
  * `EA75*75*6`, `UA100*75*6`, `RHS150*100*9.0`, `SHS100*100*6.0`, `PFC100*50`,
- * `BT100*15`, `200UB29.8`, `150PFC`.
+ * `BT100*15`, `200UB29.8`, `150PFC`, `310UC158`, `125 TFB`.
  */
 const SECTION_PATTERNS = [
-  /\b\d+(?:\.\d+)?(?:UB|WB|WC)\d+(?:\.\d+)?/i,
+  /\b\d+(?:\.\d+)?(?:UB|UC|WB|WC)\d+(?:\.\d+)?/i,
+  /\b\d+(?:\.\d+)?\s*TFB\b/i,
   /\b(?:RHS|SHS|CHS)\d+(?:[*xX]\d+)*(?:\.\d+)?/i,
   /\b(?:EA|UA)\d+(?:[*xX]\d+)*(?:\.\d+)?/i,
   /\bBT\d+(?:[*xX]\d+)*(?:\.\d+)?/i,
@@ -74,7 +75,7 @@ export interface MaterialEntry {
 
 /** MARK SECTION GRADE LENGTH Qty AREA WEIGHT row from a Tekla "MATERIAL LIST". */
 const MATERIAL_ROW =
-  /(\b[A-Za-z]\w*\b)\s+(RHS\S*|SHS\S*|PFC\S*|TFC\S*|EA\S*|UA\S*|BT\S*|\d+UB\S*)\s+(C\d+)\s+([\d.]+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)/gi
+  /(\b[A-Za-z]\w*\b)\s+(RHS\S*|SHS\S*|PFC\S*|TFC\S*|EA\S*|UA\S*|BT\S*|\d+UB\S*|\d+UC\S*|\d+\s*TFB\S*)\s+(C\d+)\s+([\d.]+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)/gi
 
 /** Extracts every material-list row from a drawing's text. */
 export function findMaterialEntries(text: string): MaterialEntry[] {
@@ -83,7 +84,7 @@ export function findMaterialEntries(text: string): MaterialEntry[] {
   for (const match of compact.matchAll(MATERIAL_ROW)) {
     entries.push({
       mark: match[1],
-      section: match[2].toUpperCase(),
+      section: match[2].replace(/\s+/g, '').toUpperCase(),
       grade: match[3].toUpperCase(),
       length: Number(match[4]),
       qty: Number(match[5]),

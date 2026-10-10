@@ -748,7 +748,8 @@ export function PreflightPage() {
                     background: 'rgba(61, 220, 132, 0.18)',
                   }}
                 />
-                Green outline = uncut stock ({stock.label}) overlaid for comparison
+                Green outline = uncut stock ({stock.label}
+                {stock.mass ? ` · ${stock.mass.toFixed(1)} kg/m` : ''}) overlaid for comparison
               </div>
             )}
             <PartMeta part={viewing} material={drawingMaterials.get(viewing.mark)} />

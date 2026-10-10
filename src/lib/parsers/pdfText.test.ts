@@ -15,6 +15,11 @@ describe('findSectionCode', () => {
     expect(findSectionCode('150PFC C300 3000')).toBe('150PFC')
   })
 
+  it('finds universal columns and taper flange beams', () => {
+    expect(findSectionCode('m1 310UC158 C300 3000')).toBe('310UC158')
+    expect(findSectionCode('m2 125 TFB C300 2500')).toBe('125TFB')
+  })
+
   it('does not mistake grades or marks for sections', () => {
     expect(findSectionCode('CO-7255 C300 M80 31A-TF1')).toBeNull()
   })

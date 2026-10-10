@@ -83,8 +83,45 @@ describe('stockOutlineForCode', () => {
     expect(height).toBeGreaterThanOrEqual(150)
   })
 
+  it('uses the standard PFC table for a short channel callout', () => {
+    const pfc = stockOutlineForCode('150PFC', [150, 75, 9.5, 6.0])
+    expect(pfc?.label).toBe('150 PFC stock')
+    const { width, height } = bbox(pfc?.points ?? [])
+    expect(width).toBeGreaterThanOrEqual(75)
+    expect(height).toBeGreaterThanOrEqual(150)
+  })
+
+  it('builds a UC I-section from its designation', () => {
+    const uc = stockOutlineForCode('310UC158', [311, 327, 25.0, 15.7])
+    expect(uc?.label).toBe('310UC158 stock')
+    const { width, height } = bbox(uc?.points ?? [])
+    expect(width).toBeGreaterThanOrEqual(311)
+    expect(height).toBeGreaterThanOrEqual(327)
+  })
+
+  it('builds a TFB I-section from its short code', () => {
+    const tfb = stockOutlineForCode('125TFB', [65, 125, 8.5, 5.0])
+    expect(tfb?.label).toBe('125 TFB stock')
+    const { height } = bbox(tfb?.points ?? [])
+    expect(height).toBeGreaterThanOrEqual(125)
+  })
+
   it('returns null for a non-section code', () => {
     expect(stockOutlineForCode('C300', [])).toBeNull()
     expect(stockOutlineForCode('', [])).toBeNull()
+  })
+
+  it('reports published mass for tabulated families', () => {
+    expect(stockOutlineForCode('200UB29.8', [134, 207, 9.6, 6.3])?.mass).toBeCloseTo(29.8, 1)
+    expect(stockOutlineForCode('310UC158', [311, 327, 25.0, 15.7])?.mass).toBeCloseTo(158.0, 1)
+    expect(stockOutlineForCode('150PFC', [150, 75, 9.5, 6.0])?.mass).toBeCloseTo(17.7, 1)
+    expect(stockOutlineForCode('125TFB', [65, 125, 8.5, 5.0])?.mass).toBeCloseTo(13.1, 1)
+  })
+
+  it('integrates mass from geometry for hollows and angles', () => {
+    // Exact NC dims carry the corner radius (dims[4]) so the mass lands on the published value.
+    expect(stockOutlineForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])?.mass).toBeCloseTo(16.7, 0)
+    expect(stockOutlineForCode('RHS150*100*9.0', [150, 100, 9, 9, 22.5])?.mass).toBeCloseTo(30.6, 0)
+    expect(stockOutlineForCode('EA75*75*6', [75, 75, 6, 6, 8])?.mass).toBeCloseTo(6.8, 0)
   })
 })

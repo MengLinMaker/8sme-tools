@@ -1,5 +1,5 @@
 import type { AnyShape } from 'replicad'
-import type { UbSection } from '@/lib/sections/types'
+import type { RolledSection } from '@/lib/sections/types'
 import { ensureOc } from './occInit'
 
 /**
@@ -15,7 +15,7 @@ import { ensureOc } from './occInit'
 
 /** Fallback upper/lower T profile if a part STEP is unavailable. */
 function teeProfiles(
-  section: UbSection,
+  section: RolledSection,
   gap: number,
 ): { top: [number, number][]; bottom: [number, number][] } {
   const hb = section.b / 2
@@ -38,7 +38,7 @@ function teeProfiles(
 }
 
 /** Full UB I-section outline (x = width, y = depth), root radii omitted. */
-export function ubOutline(section: UbSection): [number, number][] {
+export function ubOutline(section: RolledSection): [number, number][] {
   const hb = section.b / 2
   const hd = section.d / 2
   const hw = section.tw / 2
@@ -67,7 +67,7 @@ export interface BarPiece {
 }
 
 export interface UbBarStepInput {
-  section: UbSection
+  section: RolledSection
   name: string
   left: BarPiece[]
   right: BarPiece[]
