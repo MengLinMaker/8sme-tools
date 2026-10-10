@@ -21,6 +21,8 @@ import { attachOrbit, type OrbitBus } from './orbitSync'
 
 type Point = [number, number, number]
 
+export type NcPoint = Point
+
 interface FaceInfo {
   width: number
 }
@@ -49,7 +51,8 @@ function project(face: string, x: number, y: number, length: number, info: FaceI
   return [ox, oy, -half] // h
 }
 
-function segmentsFor(geometry: NcGeometry): {
+/** Per-face outer segments + inner contours + holes, shared with the nesting stitch view. */
+export function segmentsFor(geometry: NcGeometry): {
   outerByFace: Map<string, Point[]>
   inner: Point[]
   holes: Point[]

@@ -29,7 +29,12 @@ import {
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
-import { booleanDiff, cachedBooleanDiff } from '@/lib/step/booleanDiff'
+import {
+  booleanDiff,
+  cachedBooleanDiff,
+  type DiffPresence,
+  probeDiffPresence,
+} from '@/lib/step/booleanDiff'
 import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { meshForViewer } from '@/lib/step/viewerModel'
@@ -168,6 +173,8 @@ interface SceneHandle {
   setFlip: (flip: boolean) => void
   setDiffVisible: (visible: boolean) => void
   diffStats: DiffStats | null
+  diffPresence: DiffPresence | null
+  runDiff: () => DiffStats | null
 }
 
 /** Share of each boolean direction vs the STEP ideal, for the overlay legend. */
@@ -233,6 +240,7 @@ function mountScene(
   highlightStray: boolean,
   primaryBytes: Uint8Array | null | undefined,
   compareBytes: Uint8Array | null | undefined,
+  deferDiff?: boolean,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -375,20 +383,21 @@ function mountScene(
   // Coincident surfaces cancel, leaving only the volumetric leftovers. When the
   // CSG kernel can't run (over budget or failing input), fall back to red
   // surface-distance flagging.
+  //
+  // The multi-second boolean is deferred: the component paints the models plus
+  // a fast presence verdict first, then runs the exact solids after paint.
   const diffMeshes: Mesh[] = []
   let diffStats: DiffStats | null = null
-  if (compareStep && compareGroup) {
+  let diffPresence: DiffPresence | null = null
+  const soups = (meshed: MeshedStep) =>
+    meshed.bodies.map((body) => ({
+      vertices: body.mesh.faces.vertices,
+      triangles: body.mesh.faces.triangles,
+    }))
+  const runDiff = (): DiffStats | null => {
+    if (!compareStep || !compareGroup || diffStats) return diffStats
     const diagonal = Math.hypot(fitSize.x, fitSize.y, fitSize.z)
     const tolerance = resolveDiffTolerance(diagonal)
-    primary.group.updateMatrixWorld(true)
-    compareGroup.updateMatrixWorld(true)
-    const soups = (meshed: MeshedStep) =>
-      meshed.bodies.map((body) => ({
-        vertices: body.mesh.faces.vertices,
-        triangles: body.mesh.faces.triangles,
-      }))
-    // Remounts of the same part (reopen, stock arriving late) reuse the cached
-    // CSG result when the bytes and seating match; otherwise compute directly.
     const boolean =
       primaryBytes && compareBytes
         ? cachedBooleanDiff(
@@ -505,7 +514,22 @@ function mountScene(
         approximate: true,
       }
     }
+    return diffStats
   }
+
+  // Fast presence probe (~0.3 s on real parts): enough to report "differences
+  // found, building the full overlay" long before the multi-second boolean.
+  if (compareStep && compareGroup) {
+    primary.group.updateMatrixWorld(true)
+    compareGroup.updateMatrixWorld(true)
+    diffPresence = probeDiffPresence(
+      soups(step),
+      soups(compareStep),
+      primary.group.matrixWorld,
+      compareGroup.matrixWorld,
+    )
+  }
+  if (!deferDiff) runDiff()
 
   const maxDim = Math.max(fitSize.x, fitSize.y, fitSize.z) || 1
   // Cover the model's bounding-box diagonal, so it is never cropped at any preset view or
@@ -574,6 +598,8 @@ function mountScene(
   return {
     overlays,
     diffStats,
+    diffPresence,
+    runDiff,
     setFlip(flip: boolean) {
       if (!compareGroup || !compareBaseQuaternion) return
       compareGroup.quaternion.copy(compareBaseQuaternion)
@@ -650,6 +676,8 @@ export default function PartViewer({
   const [hasStray, setHasStray] = useState(false)
   const [showDiff, setShowDiff] = useState(true)
   const [diffInfo, setDiffInfo] = useState<DiffStats | null>(null)
+  const [diffPresence, setDiffPresence] = useState<DiffPresence | null>(null)
+  const flippedRef = useRef(false)
 
   useEffect(() => {
     if (!bytes) {
@@ -662,15 +690,17 @@ export default function PartViewer({
     setStatus('loading')
     setMessage(null)
     setFlipped(false)
+    flippedRef.current = false
     setHasStray(false)
     setDiffInfo(null)
+    setDiffPresence(null)
 
     meshForViewer(name, bytes)
       .then(async (step) => {
         const compare = compareBytes ? await meshForViewer(`${name}·compare`, compareBytes) : null
         return { step, compare }
       })
-      .then(({ step, compare }) => {
+      .then(async ({ step, compare }) => {
         if (disposed || !containerRef.current) return
         if (step.bodies[0]?.mesh.faces.triangles.length === 0) {
           setStatus('error')
@@ -687,14 +717,23 @@ export default function PartViewer({
           highlightStray,
           bytes,
           compareBytes,
+          true,
         )
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handle.setFlip(false)
-        handle.setDiffVisible(showDiffRef.current)
         handleRef.current = handle
         setHasStray(highlightStray && step.bodies.some((body) => body.stray))
-        setDiffInfo(handle.diffStats)
+        setDiffPresence(handle.diffPresence)
         setStatus('ready')
+        if (!compare) return
+        // Let the models and the presence verdict paint before the multi-second
+        // boolean blocks the main thread.
+        await new Promise((resolve) => requestAnimationFrame(resolve))
+        if (disposed) return
+        const stats = handle.runDiff()
+        if (disposed) return
+        handle.setDiffVisible(showDiffRef.current && !flippedRef.current)
+        setDiffInfo(stats)
       })
       .catch((error: unknown) => {
         if (disposed) return
@@ -716,6 +755,7 @@ export default function PartViewer({
 
   useEffect(() => {
     handleRef.current?.setFlip(flipped)
+    flippedRef.current = flipped
     // The red diff is only meaningful in the seated alignment — flipping spins the
     // overlay 180° about the length axis, so the diff hides until it is unflipped.
     handleRef.current?.setDiffVisible(showDiff && !flipped)
@@ -728,6 +768,8 @@ export default function PartViewer({
   const hasCompare = Boolean(compareBytes && status === 'ready')
   const hasDiff = Boolean(hasCompare && diffInfo)
   const diffClean = diffInfo != null && diffInfo.over < 0.001 && diffInfo.under < 0.001
+  // Fast probe verdict, shown while the exact boolean still runs.
+  const diffFound = Boolean(hasCompare && !diffInfo && diffPresence?.found)
 
   return (
     <div className="relative h-full w-full">
@@ -770,6 +812,15 @@ export default function PartViewer({
           </span>
         )}
       </div>
+      {diffFound && !flipped && (
+        <div className="absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-md border border-amber-500/50 bg-card/80 px-2.5 py-1 text-xs font-medium text-amber-300 backdrop-blur">
+          <span
+            className="inline-block size-3 animate-pulse rounded-sm border border-amber-400"
+            style={{ background: 'rgba(245, 158, 11, 0.5)' }}
+          />
+          {t('viewer.buildingDiff')}
+        </div>
+      )}
       {hasDiff && !flipped && diffInfo && showDiff && (
         <div
           className="absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur"

@@ -1,13 +1,14 @@
 import { strToU8, zipSync } from 'fflate'
 import type { TFunction } from 'i18next'
 import { Eye } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
+import { createOrbitBus, requestView, type ViewPreset } from '@/features/preflight/orbitSync'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { downloadBlob } from '@/lib/download'
 import { buildBarNc } from '@/lib/nesting/nc'
@@ -22,6 +23,7 @@ import {
   type UbBar,
   ubLayouts,
 } from '@/lib/nesting/nest'
+import { type NcGeometry, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import type { InputBundle } from '@/lib/readInput'
 import { getUb } from '@/lib/sections/ub'
 import { buildCutBeamStep } from '@/lib/step/cutBeam'
@@ -32,6 +34,9 @@ import {
   type StepBody,
   ubOutline,
 } from '@/lib/step/occ'
+import { cn } from '@/lib/utils'
+import { BeamNcViewer, type BeamSlot } from './BeamNcViewer'
+import { type StitchedNcItem, StitchedNcViewer } from './StitchedNcViewer'
 
 const PartViewer = lazy(() => import('@/features/preflight/PartViewer'))
 
@@ -46,11 +51,41 @@ interface StockRow {
 
 interface ViewFile {
   name: string
+  /** Nested STEP: the finished T pieces packed as separate solids (the STEP ideal). */
   bytes: Uint8Array
+  /** Manufactured NC: the whole stock beam with the split + kerf cuts + real features carved. */
+  manufactured: Uint8Array | null
+  /** Generated Weihong .nc1 text for this beam. */
+  ncText: string | null
+  /** Piece spans per side along the beam, driving the NC preview + cuts tab. */
+  slots: BeamSlot[]
+  /** Each nested piece's real NC at its slot: the stitched NC 3D view. */
+  ncItems: StitchedNcItem[]
+  /** Marks with no NC file, omitted from the stitch. */
+  ncMissing: string[]
+  kerf: number
+  stockLength: number
   beam: { profile: [number, number][]; length: number }
   bodies: number
   bodyInfo: StepBody[]
 }
+
+const VIEW_PRESETS: { id: ViewPreset; labelKey: string }[] = [
+  { id: 'iso', labelKey: 'preflight.viewer.iso' },
+  { id: 'front', labelKey: 'preflight.viewer.front' },
+  { id: 'top', labelKey: 'preflight.viewer.top' },
+  { id: 'side', labelKey: 'preflight.viewer.side' },
+]
+
+/** How the 3D area shows the manufactured (cut-beam) model against the nested STEP. */
+type NestViewMode = 'step' | 'manufactured' | 'split' | 'overlay'
+
+const NEST_VIEW_MODES: { id: NestViewMode; labelKey: string }[] = [
+  { id: 'manufactured', labelKey: 'preflight.viewer.manufactured' },
+  { id: 'step', labelKey: 'preflight.viewer.step' },
+  { id: 'split', labelKey: 'preflight.viewer.sideBySide' },
+  { id: 'overlay', labelKey: 'preflight.viewer.overlay' },
+]
 
 let rowSeq = 0
 const newRow = (length: number, count = UNLIMITED): StockRow => ({
@@ -90,6 +125,13 @@ export function NestingPage() {
   const [exporting, setExporting] = useState<'step' | 'nc' | 'cut' | null>(null)
   const [viewing, setViewing] = useState<ViewFile | null>(null)
   const [viewBusy, setViewBusy] = useState(false)
+  // Preflight principles in the nesting viewer: one orbit bus shared by both 3D panes so the
+  // nested STEP and the manufactured (cut-beam) model rotate together, plus split/overlay modes
+  // with the boolean red/blue diff. The manufactured pane shows a placeholder until the cut-beam
+  // build lands instead of remounting viewers when it arrives.
+  const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
+  const [nestViewMode, setNestViewMode] = useState<NestViewMode>('split')
+  const [rightTab, setRightTab] = useState<'nc' | 'cuts' | 'preview'>('preview')
 
   useEffect(() => {
     const data: StoredSettings = {
@@ -129,6 +171,27 @@ export function NestingPage() {
     length: unit.length,
     bytes: stepByMark.get(unit.mark),
   })
+
+  // Real part NC text by mark, so the stitched NC view draws each piece's true toolpaths.
+  const ncTextByMark = useMemo(() => {
+    const map = new Map<string, string>()
+    const decoder = new TextDecoder()
+    for (const entry of bundle?.entries ?? []) {
+      const dot = entry.path.lastIndexOf('.')
+      const ext = dot >= 0 ? entry.path.slice(dot + 1).toLowerCase() : ''
+      if (ext !== 'nc1' && ext !== 'nc') continue
+      const base = (entry.path.split('/').pop() ?? entry.path).replace(/\.[^.]+$/, '')
+      const mark = (base.match(/^[A-Za-z]+\d+/)?.[0] ?? base).toLowerCase()
+      if (!map.has(mark)) {
+        try {
+          map.set(mark, decoder.decode(entry.bytes))
+        } catch {
+          // unreadable NC — treated as missing for the stitch
+        }
+      }
+    }
+    return map
+  }, [bundle])
 
   const handleBundle = useCallback(
     (input: InputBundle) => {
@@ -173,7 +236,24 @@ export function NestingPage() {
     if (!ub) return null
     const left = layout.ubBar.teeBars[0].units.map(pieceFor)
     const right = layout.ubBar.teeBars[1].units.map(pieceFor)
-    const name = `${result.parentUb}-x${layout.quantity}-${layout.ubBar.stockLength}-L${left.length}R${right.length}-bar${String(index + 1).padStart(2, '0')}.step`
+    const base = `${result.parentUb}-x${layout.quantity}-${layout.ubBar.stockLength}-L${left.length}R${right.length}-bar${String(index + 1).padStart(2, '0')}`
+    const name = `${base}.step`
+    const grade = result.parts[0]?.grade
+    // The NC text is sync and cheap — generate it up front so the right-hand tab is never empty.
+    let ncText: string | null = null
+    try {
+      ncText = buildBarNc({
+        section: ub,
+        name: base,
+        stockLength: layout.ubBar.stockLength,
+        left,
+        right,
+        kerf: result.kerf,
+        grade,
+      })
+    } catch {
+      ncText = null
+    }
     const content = await buildUbBarStep(
       { section: ub, name, left, right, kerf: result.kerf },
       { strict: false },
@@ -181,12 +261,89 @@ export function NestingPage() {
     const bytes = strToU8(content)
     const bodies = (content.match(/MANIFOLD_SOLID_BREP/g) ?? []).length
     const bodyInfo = bodies === 1 ? [] : await inspectStepBodies(bytes).catch(() => [])
+    // Piece spans per side, mirroring the cut-beam layout (kerf gap between neighbours) — the NC
+    // preview draws these, so it is available instantly without waiting for any OCC boolean.
+    const span = (units: { mark: string; length: number }[], side: 'L' | 'R'): BeamSlot[] => {
+      const out: BeamSlot[] = []
+      let cursor = 0
+      units.forEach((unit, i) => {
+        if (i > 0) cursor += result.kerf
+        out.push({ side, mark: unit.mark, start: cursor, end: cursor + unit.length })
+        cursor += unit.length
+      })
+      return out
+    }
+    const slots: BeamSlot[] = [
+      ...span(layout.ubBar.teeBars[0].units, 'L'),
+      ...span(layout.ubBar.teeBars[1].units, 'R'),
+    ]
+    // Stitch each piece's real NC at its slot (sync text parse — instant, no OCC involved).
+    const ncItems: StitchedNcItem[] = []
+    const ncMissing: string[] = []
+    const seenMissing = new Set<string>()
+    const noteMissing = (mark: string): void => {
+      if (!seenMissing.has(mark)) {
+        seenMissing.add(mark)
+        ncMissing.push(mark)
+      }
+    }
+    for (const slot of slots) {
+      const text = ncTextByMark.get(slot.mark) ?? ncTextByMark.get(slot.mark.toLowerCase())
+      if (!text) {
+        noteMissing(slot.mark)
+        continue
+      }
+      let geometry: NcGeometry | null = null
+      try {
+        geometry = parseNcGeometry(text)
+      } catch {
+        geometry = null
+      }
+      if (!geometry || (geometry.contours.length === 0 && geometry.holes.length === 0)) {
+        noteMissing(slot.mark)
+        continue
+      }
+      ncItems.push({ mark: slot.mark, side: slot.side, start: slot.start, geometry })
+    }
     return {
       name,
       bytes,
+      manufactured: null,
+      ncText,
+      slots,
+      ncItems,
+      ncMissing,
+      kerf: result.kerf,
+      stockLength: layout.ubBar.stockLength,
       beam: { profile: profileToPoints(ubOutline(ub)), length: layout.ubBar.stockLength },
       bodies,
       bodyInfo,
+    }
+  }
+
+  const layoutManufacturedStep = async (
+    result: NestResult,
+    layout: { ubBar: UbBar; quantity: number },
+    index: number,
+  ): Promise<Uint8Array | null> => {
+    const ub = getUb(result.parentUb)
+    if (!ub) return null
+    const left = layout.ubBar.teeBars[0].units.map(pieceFor)
+    const right = layout.ubBar.teeBars[1].units.map(pieceFor)
+    const base = `${result.parentUb}-x${layout.quantity}-${layout.ubBar.stockLength}-bar${String(index + 1).padStart(2, '0')}`
+    try {
+      return strToU8(
+        await buildCutBeamStep({
+          section: ub,
+          name: base,
+          stockLength: layout.ubBar.stockLength,
+          left,
+          right,
+          kerf: result.kerf,
+        }),
+      )
+    } catch {
+      return null
     }
   }
 
@@ -197,11 +354,31 @@ export function NestingPage() {
   ) => {
     setViewBusy(true)
     setError(null)
+    setRightTab('preview')
+    setNestViewMode('split')
+    setOrbitBus(createOrbitBus())
+    let file: ViewFile | null = null
     try {
-      const file = await layoutStep(result, layout, index)
+      file = await layoutStep(result, layout, index)
       if (file) setViewing(file)
     } catch (err) {
       setError(t('nesting.stepFailed', { error: err instanceof Error ? err.message : String(err) }))
+      setViewBusy(false)
+      return
+    } finally {
+      if (!file) setViewBusy(false)
+    }
+    if (!file) return
+    // The cut-beam boolean carve is the slow part — build it after the nested STEP is already
+    // on screen, then patch it into the open dialog so the manufactured pane fills in.
+    const expectedName = file.name
+    try {
+      const manufactured = await layoutManufacturedStep(result, layout, index)
+      if (manufactured) {
+        setViewing((current) =>
+          current && current.name === expectedName ? { ...current, manufactured } : current,
+        )
+      }
     } finally {
       setViewBusy(false)
     }
@@ -337,6 +514,22 @@ export function NestingPage() {
   const totalUb = results?.reduce((sum, r) => sum + r.ubCount, 0) ?? 0
   const totalTeeBars = results?.reduce((sum, r) => sum + r.teeBarCount, 0) ?? 0
   const totalLayouts = results?.reduce((sum, r) => sum + ubLayouts(r).length, 0) ?? 0
+
+  // Preflight-style effective mode: the split layout renders straight away — the manufactured
+  // pane shows a placeholder until the cut-beam build lands — instead of collapsing to a single
+  // STEP view and remounting both viewers when it arrives. If the cut-beam build failed, fall
+  // back to the STEP view (the mode buttons stay visible but manufactured-dependent modes disable).
+  const hasManufactured = Boolean(viewing?.manufactured)
+  const hasStep = Boolean(viewing?.bytes)
+  const mfgFailed = Boolean(viewing && !viewing.manufactured && !viewBusy)
+  const effectiveMode: NestViewMode = mfgFailed ? 'step' : nestViewMode
+  const mfgPaneActive =
+    effectiveMode === 'split' || effectiveMode === 'manufactured' || effectiveMode === 'overlay'
+  const stepPaneActive = effectiveMode === 'step' || effectiveMode === 'split'
+  const showMfgPane = Boolean(viewing) && mfgPaneActive && (hasManufactured || viewBusy)
+  const showStepPane = Boolean(viewing) && stepPaneActive && hasStep
+  const twoPane = showMfgPane && showStepPane
+  const ncCuts = viewing?.ncText ? parseBeamNcCuts(viewing.ncText) : []
 
   return (
     <div className="flex flex-col gap-6">
@@ -561,7 +754,7 @@ export function NestingPage() {
         open={viewing !== null}
         onClose={() => setViewing(null)}
         title={viewing ? t('nesting.dialogTitle', { name: viewing.name }) : undefined}
-        className="max-w-4xl"
+        className="max-w-6xl"
       >
         {viewing && (
           <div className="flex flex-col">
@@ -588,21 +781,240 @@ export function NestingPage() {
                 )}
               </div>
             )}
-            <div className="relative h-[58vh] min-h-72 w-full bg-[#0b0f14]">
-              <Suspense
-                fallback={
-                  <div className="grid h-full place-items-center text-sm text-muted-foreground">
-                    {t('nesting.loadingViewer')}
+            <div className="flex flex-col lg:flex-row">
+              <div className="relative h-[45vh] min-h-72 w-full bg-[#0b0f14] lg:h-[70vh] lg:flex-1">
+                <Suspense
+                  fallback={
+                    <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                      {t('nesting.loadingViewer')}
+                    </div>
+                  }
+                >
+                  <div className={cn('grid h-full', twoPane ? 'grid-cols-2' : 'grid-cols-1')}>
+                    <div className={cn('relative h-full', showMfgPane ? '' : 'hidden')}>
+                      {viewing.manufactured ? (
+                        <PartViewer
+                          name={`${viewing.name} · manufactured`}
+                          bytes={viewing.manufactured}
+                          compareBytes={
+                            effectiveMode === 'overlay' ? (viewing.bytes ?? null) : null
+                          }
+                          compareLabel={t('preflight.viewer.step')}
+                          stock={null}
+                          beam={null}
+                          bus={orbitBus}
+                        />
+                      ) : (
+                        <div className="grid h-full place-items-center px-6 text-center">
+                          <p className="max-w-sm text-sm text-muted-foreground">
+                            {mfgFailed
+                              ? t('nesting.viewer.manufacturedFailed')
+                              : t('nesting.viewer.buildingManufactured')}
+                          </p>
+                        </div>
+                      )}
+                      {twoPane && (
+                        <PaneTag tone="manufactured">
+                          {t('preflight.viewer.manufacturedNc')}
+                        </PaneTag>
+                      )}
+                    </div>
+                    <div
+                      className={cn(
+                        'relative h-full',
+                        showStepPane ? '' : 'hidden',
+                        twoPane ? 'border-l border-border' : '',
+                      )}
+                    >
+                      <PartViewer
+                        name={viewing.name}
+                        bytes={viewing.bytes}
+                        stock={null}
+                        beam={viewing.beam}
+                        bus={orbitBus}
+                      />
+                      {twoPane && <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>}
+                    </div>
+                    {!showMfgPane && !showStepPane && (
+                      <div className="grid h-full place-items-center px-6 text-center">
+                        <p className="max-w-sm text-sm text-muted-foreground">
+                          {t('nesting.loadingViewer')}
+                        </p>
+                      </div>
+                    )}
                   </div>
-                }
-              >
-                <PartViewer
-                  name={viewing.name}
-                  bytes={viewing.bytes}
-                  stock={null}
-                  beam={viewing.beam}
-                />
-              </Suspense>
+                </Suspense>
+                <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur">
+                  {VIEW_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => requestView(orbitBus, preset.id)}
+                      className="rounded px-2 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    >
+                      {t(preset.labelKey)}
+                    </button>
+                  ))}
+                </div>
+                {/* Always visible (unlike the first cut): manufactured / split / overlay disable
+                    until the cut-beam build lands, so the Overlay option is discoverable while it
+                    builds instead of appearing out of nowhere. */}
+                <div className="absolute bottom-3 left-3 z-10 flex gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur">
+                  {NEST_VIEW_MODES.map((mode) => {
+                    const needsMfg =
+                      mode.id === 'manufactured' || mode.id === 'split' || mode.id === 'overlay'
+                    const disabled =
+                      (mode.id === 'step' && !hasStep) ||
+                      (needsMfg && (!hasManufactured || !hasStep))
+                    const title =
+                      needsMfg && !hasManufactured
+                        ? mfgFailed
+                          ? t('nesting.viewer.manufacturedFailed')
+                          : t('nesting.viewer.buildingManufactured')
+                        : undefined
+                    return (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        disabled={disabled}
+                        title={title}
+                        onClick={() => setNestViewMode(mode.id)}
+                        className={cn(
+                          'rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-30',
+                          effectiveMode === mode.id
+                            ? 'bg-accent text-accent-foreground'
+                            : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                        )}
+                      >
+                        {t(mode.labelKey)}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div className="flex h-[45vh] w-full flex-col border-t border-border lg:h-[70vh] lg:flex-1 lg:border-l lg:border-t-0">
+                <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
+                  {[
+                    { id: 'preview' as const, labelKey: 'nesting.viewer.previewTab' },
+                    { id: 'nc' as const, labelKey: 'nesting.viewer.ncTab' },
+                    { id: 'cuts' as const, labelKey: 'nesting.viewer.cutsTab' },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setRightTab(tab.id)}
+                      className={cn(
+                        'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                        rightTab === tab.id
+                          ? 'bg-accent text-accent-foreground'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {t(tab.labelKey)}
+                    </button>
+                  ))}
+                  {viewing.ncText && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="ml-auto"
+                      onClick={() =>
+                        downloadBlob(
+                          viewing.name.replace(/\.step$/, '.nc1'),
+                          new Blob([viewing.ncText ?? ''], { type: 'text/plain' }),
+                        )
+                      }
+                    >
+                      {t('nesting.viewer.downloadNc')}
+                    </Button>
+                  )}
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto">
+                  {rightTab === 'preview' ? (
+                    <div className="h-full min-h-64">
+                      <BeamNcViewer
+                        profile={viewing.beam.profile}
+                        stockLength={viewing.stockLength}
+                        slots={viewing.slots}
+                        kerf={viewing.kerf}
+                        bus={orbitBus}
+                      />
+                    </div>
+                  ) : rightTab === 'nc' ? (
+                    viewing.ncItems.length > 0 ? (
+                      <div className="flex h-full flex-col">
+                        {viewing.ncMissing.length > 0 && (
+                          <div className="border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
+                            {t('nesting.viewer.ncMissing', {
+                              marks: viewing.ncMissing.join(', '),
+                            })}
+                          </div>
+                        )}
+                        <div className="min-h-72 flex-1">
+                          <StitchedNcViewer
+                            items={viewing.ncItems}
+                            stockLength={viewing.stockLength}
+                            bus={orbitBus}
+                          />
+                        </div>
+                        {viewing.ncText && (
+                          <details className="border-t border-border">
+                            <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+                              {t('nesting.viewer.ncSource')}
+                            </summary>
+                            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words border-t border-border px-4 py-3 font-mono text-xs leading-relaxed">
+                              {viewing.ncText}
+                            </pre>
+                          </details>
+                        )}
+                      </div>
+                    ) : viewing.ncText ? (
+                      <pre className="whitespace-pre-wrap break-words px-4 py-3 font-mono text-xs leading-relaxed">
+                        {viewing.ncText}
+                      </pre>
+                    ) : (
+                      <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
+                        {t('nesting.viewer.ncEmpty')}
+                      </div>
+                    )
+                  ) : ncCuts.length === 0 ? (
+                    <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
+                      {t('nesting.viewer.ncEmpty')}
+                    </div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-card">
+                        <tr className="text-left text-muted-foreground">
+                          <th className="px-4 py-2 font-medium">{t('nesting.viewer.side')}</th>
+                          <th className="px-2 py-2 font-medium">{t('nesting.viewer.mark')}</th>
+                          <th className="px-2 py-2 text-right font-medium">
+                            {t('nesting.viewer.cutAt')}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ncCuts.map((cut) => (
+                          <tr
+                            key={`${cut.side}-${cut.end.toFixed(2)}-${cut.mark}`}
+                            className="border-t border-border"
+                          >
+                            <td className="px-4 py-1.5 text-muted-foreground">
+                              {cut.side === 'L' ? t('nesting.left') : t('nesting.right')}
+                            </td>
+                            <td className="px-2 py-1.5 font-mono">{cut.mark}</td>
+                            <td className="px-2 py-1.5 text-right font-mono">
+                              {cut.end.toFixed(0)} mm
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+                <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
+                  {t('nesting.viewer.diffHint')}
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -700,6 +1112,53 @@ function TeeBarRow({ label, bar }: { label: string; bar: TeeBar }) {
         {t('nesting.waste', { value: Math.round(bar.waste) })}
       </span>
     </div>
+  )
+}
+
+/** One transverse cut from the generated beam NC (`L/R end mark` lines under `AK`). */
+interface BeamCut {
+  side: 'L' | 'R'
+  mark: string
+  end: number
+}
+
+/** Parses the cut list out of a generated beam `.nc1` for the cuts tab. */
+function parseBeamNcCuts(ncText: string): BeamCut[] {
+  const cuts: BeamCut[] = []
+  let inAk = false
+  for (const raw of ncText.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line === 'AK') {
+      inAk = true
+      continue
+    }
+    if (line === 'EN') break
+    if (!inAk) continue
+    const match = /^[LR]\s+(-?\d+(?:\.\d+)?)\s+(.+)$/.exec(line)
+    if (!match) continue
+    cuts.push({
+      side: line[0] as 'L' | 'R',
+      end: Number(match[1]),
+      mark: match[2].trim(),
+    })
+  }
+  return cuts.filter((cut) => Number.isFinite(cut.end))
+}
+
+function PaneTag({ children, tone }: { children: ReactNode; tone?: 'manufactured' | 'step' }) {
+  return (
+    <span
+      className={cn(
+        'pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 whitespace-nowrap rounded-full border px-3 py-0.5 text-xs font-semibold backdrop-blur',
+        tone === 'manufactured'
+          ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+          : tone === 'step'
+            ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
+            : 'border-border bg-card/85 text-foreground',
+      )}
+    >
+      {children}
+    </span>
   )
 }
 
