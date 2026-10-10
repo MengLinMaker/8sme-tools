@@ -134,6 +134,7 @@ export const en = {
     viewer: {
       dialogTitle: '{{mark}} · drawing + 3D',
       loading: 'Loading viewer…',
+      buildingManufactured: 'Building the manufactured (NC) model…',
       manufactured: 'Manufactured',
       manufacturedNc: 'Manufactured (NC)',
       step: 'STEP',
@@ -406,6 +407,7 @@ export const zh = {
     viewer: {
       dialogTitle: '{{mark}} · 图纸 + 3D',
       loading: '正在加载查看器…',
+      buildingManufactured: '正在构建制造件（NC）模型…',
       manufactured: '制造件',
       manufacturedNc: '制造件 (NC)',
       step: 'STEP',

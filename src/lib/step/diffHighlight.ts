@@ -1,0 +1,293 @@
+/**
+ * Mesh-to-mesh difference highlighting for the viewer's overlay tab.
+ *
+ * The overlay seats the manufactured (NC-built) model and the STEP model in the same
+ * frame and draws one translucent over the other. That alone doesn't say *where* they
+ * disagree, so this module compares the two tessellated surfaces triangle-by-triangle:
+ * any triangle whose surface sits further than `tolerance` from the other model is
+ * flagged, and the viewer paints those faces red.
+ *
+ * Method: for each source vertex, look up nearby target triangles through a uniform
+ * grid (each triangle is filed under every cell its tolerance-expanded bbox touches,
+ * so large flat triangles are still found) and take the minimum point-to-triangle
+ * distance. A triangle counts as different when any of its three vertices is further
+ * than `tolerance` from the other surface. Symmetric — both sides are tested, so an
+ * extra hole rim on the STEP side and a missing cut on the NC side both light up.
+ */
+
+/** Picks a diff tolerance from the model's bounding-box diagonal (mm). */
+export function resolveDiffTolerance(diagonal: number): number {
+  if (!Number.isFinite(diagonal) || diagonal <= 0) return 1.5
+  return Math.min(2, Math.max(1, diagonal * 0.002))
+}
+
+function pointTriangleDistanceSquared(
+  px: number,
+  py: number,
+  pz: number,
+  ax: number,
+  ay: number,
+  az: number,
+  bx: number,
+  by: number,
+  bz: number,
+  cx: number,
+  cy: number,
+  cz: number,
+): number {
+  const abx = bx - ax
+  const aby = by - ay
+  const abz = bz - az
+  const acx = cx - ax
+  const acy = cy - ay
+  const acz = cz - az
+  const apx = px - ax
+  const apy = py - ay
+  const apz = pz - az
+
+  const d1 = abx * apx + aby * apy + abz * apz
+  const d2 = acx * apx + acy * apy + acz * apz
+  // Vertex A region (or degenerate triangle — fall back to vertex distances).
+  if (d1 <= 0 && d2 <= 0) return apx * apx + apy * apy + apz * apz
+
+  const bpx = px - bx
+  const bpy = py - by
+  const bpz = pz - bz
+  const d3 = abx * bpx + aby * bpy + abz * bpz
+  const d4 = acx * bpx + acy * bpy + acz * bpz
+  if (d3 >= 0 && d4 <= d3) return bpx * bpx + bpy * bpy + bpz * bpz
+
+  const vc = d1 * d4 - d3 * d2
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+    const v = d1 / (d1 - d3)
+    const qx = ax + abx * v - px
+    const qy = ay + aby * v - py
+    const qz = az + abz * v - pz
+    return qx * qx + qy * qy + qz * qz
+  }
+
+  const cpx = px - cx
+  const cpy = py - cy
+  const cpz = pz - cz
+  const d5 = abx * cpx + aby * cpy + abz * cpz
+  const d6 = acx * cpx + acy * cpy + acz * cpz
+  if (d6 >= 0 && d5 <= d6) return cpx * cpx + cpy * cpy + cpz * cpz
+
+  const vb = d5 * d2 - d1 * d6
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+    const w = d2 / (d2 - d6)
+    const qx = ax + acx * w - px
+    const qy = ay + acy * w - py
+    const qz = az + acz * w - pz
+    return qx * qx + qy * qy + qz * qz
+  }
+
+  const va = d3 * d6 - d5 * d4
+  if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) {
+    const w = (d4 - d3) / (d4 - d3 + (d5 - d6))
+    const qx = bx + (cx - bx) * w - px
+    const qy = by + (cy - by) * w - py
+    const qz = bz + (cz - bz) * w - pz
+    return qx * qx + qy * qy + qz * qz
+  }
+
+  // Inside the face — distance along the normal.
+  const nx = aby * acz - abz * acy
+  const ny = abz * acx - abx * acz
+  const nz = abx * acy - aby * acx
+  const denom = nx * nx + ny * ny + nz * nz
+  if (denom === 0) {
+    // Degenerate (collinear) triangle — nearest vertex wins.
+    const db = bpx * bpx + bpy * bpy + bpz * bpz
+    const dc = cpx * cpx + cpy * cpy + cpz * cpz
+    const da = apx * apx + apy * apy + apz * apz
+    return Math.min(da, db, dc)
+  }
+  const dist = (nx * apx + ny * apy + nz * apz) / Math.sqrt(denom)
+  return dist * dist
+}
+
+function cellKey(ix: number, iy: number, iz: number): string {
+  return `${ix},${iy},${iz}`
+}
+
+/**
+ * Files every triangle under each grid cell its tolerance-expanded bbox touches.
+ * Expanded bboxes guarantee a query point finds any triangle whose surface passes
+ * within `tolerance` — including huge triangles whose centroid is far away.
+ */
+function buildTriangleIndex(
+  vertices: number[],
+  triangles: number[],
+  tolerance: number,
+  cell: number,
+): Map<string, number[]> {
+  const index = new Map<string, number[]>()
+  const triCount = Math.floor(triangles.length / 3)
+  for (let t = 0; t < triCount; t++) {
+    const i0 = triangles[t * 3] * 3
+    const i1 = triangles[t * 3 + 1] * 3
+    const i2 = triangles[t * 3 + 2] * 3
+    if (i0 + 2 >= vertices.length || i1 + 2 >= vertices.length || i2 + 2 >= vertices.length)
+      continue
+    const minX = Math.min(vertices[i0], vertices[i1], vertices[i2]) - tolerance
+    const minY = Math.min(vertices[i0 + 1], vertices[i1 + 1], vertices[i2 + 1]) - tolerance
+    const minZ = Math.min(vertices[i0 + 2], vertices[i1 + 2], vertices[i2 + 2]) - tolerance
+    const maxX = Math.max(vertices[i0], vertices[i1], vertices[i2]) + tolerance
+    const maxY = Math.max(vertices[i0 + 1], vertices[i1 + 1], vertices[i2 + 1]) + tolerance
+    const maxZ = Math.max(vertices[i0 + 2], vertices[i1 + 2], vertices[i2 + 2]) + tolerance
+    for (let ix = Math.floor(minX / cell); ix <= Math.floor(maxX / cell); ix++) {
+      for (let iy = Math.floor(minY / cell); iy <= Math.floor(maxY / cell); iy++) {
+        for (let iz = Math.floor(minZ / cell); iz <= Math.floor(maxZ / cell); iz++) {
+          const key = cellKey(ix, iy, iz)
+          let list = index.get(key)
+          if (!list) {
+            list = []
+            index.set(key, list)
+          }
+          list.push(t)
+        }
+      }
+    }
+  }
+  return index
+}
+
+function minDistanceSquaredToMesh(
+  px: number,
+  py: number,
+  pz: number,
+  vertices: number[],
+  triangles: number[],
+  candidates: number[] | undefined,
+): number {
+  if (!candidates || candidates.length === 0) return Number.POSITIVE_INFINITY
+  let best = Number.POSITIVE_INFINITY
+  // Dense tessellation can stack many small triangles in one cell — cap the work
+  // per query; the closest of the first few dozen is near enough for a yes/no test.
+  const limit = Math.min(candidates.length, 48)
+  for (let k = 0; k < limit; k++) {
+    const t = candidates[k]
+    const i0 = triangles[t * 3] * 3
+    const i1 = triangles[t * 3 + 1] * 3
+    const i2 = triangles[t * 3 + 2] * 3
+    if (i0 + 2 >= vertices.length || i1 + 2 >= vertices.length || i2 + 2 >= vertices.length)
+      continue
+    const d = pointTriangleDistanceSquared(
+      px,
+      py,
+      pz,
+      vertices[i0],
+      vertices[i0 + 1],
+      vertices[i0 + 2],
+      vertices[i1],
+      vertices[i1 + 1],
+      vertices[i1 + 2],
+      vertices[i2],
+      vertices[i2 + 1],
+      vertices[i2 + 2],
+    )
+    if (d < best) {
+      best = d
+      if (best === 0) return 0
+    }
+  }
+  return best
+}
+
+/** Per-vertex flags: true when the vertex sits further than `tolerance` off the target mesh. */
+function flagDifferentVertices(
+  source: number[],
+  targetVertices: number[],
+  targetTriangles: number[],
+  targetIndex: Map<string, number[]>,
+  tolerance: number,
+  cell: number,
+): Uint8Array {
+  const tolSquared = tolerance * tolerance
+  const count = Math.floor(source.length / 3)
+  const flags = new Uint8Array(count)
+  for (let v = 0; v < count; v++) {
+    const px = source[v * 3]
+    const py = source[v * 3 + 1]
+    const pz = source[v * 3 + 2]
+    const key = cellKey(
+      Math.floor(px / cell),
+      Math.floor(py / cell),
+      Math.floor(pz / cell),
+    )
+    const distance = minDistanceSquaredToMesh(
+      px,
+      py,
+      pz,
+      targetVertices,
+      targetTriangles,
+      targetIndex.get(key),
+    )
+    if (!(distance <= tolSquared)) flags[v] = 1
+  }
+  return flags
+}
+
+export interface MeshDiff {
+  /** per-triangle flags for `aTriangles` (1 = further than tolerance off mesh B) */
+  aDiff: Uint8Array
+  /** per-triangle flags for `bTriangles` (1 = further than tolerance off mesh A) */
+  bDiff: Uint8Array
+}
+
+/**
+ * Compares two triangle soups (flat xyz vertices + flat triangle indices) and flags
+ * the triangles on each side that sit further than `tolerance` (mm) from the other
+ * surface. A triangle is different when any of its three vertices is.
+ */
+export function computeDiffMasks(
+  aVertices: number[],
+  aTriangles: number[],
+  bVertices: number[],
+  bTriangles: number[],
+  tolerance: number,
+): MeshDiff {
+  const cell = Math.max(2, tolerance * 2)
+  const aTriCount = Math.floor(aTriangles.length / 3)
+  const bTriCount = Math.floor(bTriangles.length / 3)
+  const aDiff = new Uint8Array(aTriCount)
+  const bDiff = new Uint8Array(bTriCount)
+  if (aTriCount === 0 || bTriCount === 0) {
+    // One side has no surface at all — everything on the other side is different.
+    aDiff.fill(aTriCount === 0 ? 0 : 1)
+    bDiff.fill(bTriCount === 0 ? 0 : 1)
+    return { aDiff, bDiff }
+  }
+  const bIndex = buildTriangleIndex(bVertices, bTriangles, tolerance, cell)
+  const aIndex = buildTriangleIndex(aVertices, aTriangles, tolerance, cell)
+  const aBadVerts = flagDifferentVertices(aVertices, bVertices, bTriangles, bIndex, tolerance, cell)
+  const bBadVerts = flagDifferentVertices(bVertices, aVertices, aTriangles, aIndex, tolerance, cell)
+  for (let t = 0; t < aTriCount; t++) {
+    if (
+      aBadVerts[aTriangles[t * 3]] === 1 ||
+      aBadVerts[aTriangles[t * 3 + 1]] === 1 ||
+      aBadVerts[aTriangles[t * 3 + 2]] === 1
+    ) {
+      aDiff[t] = 1
+    }
+  }
+  for (let t = 0; t < bTriCount; t++) {
+    if (
+      bBadVerts[bTriangles[t * 3]] === 1 ||
+      bBadVerts[bTriangles[t * 3 + 1]] === 1 ||
+      bBadVerts[bTriangles[t * 3 + 2]] === 1
+    ) {
+      bDiff[t] = 1
+    }
+  }
+  return { aDiff, bDiff }
+}
+
+/** Fraction of flagged triangles (0–1), for the overlay legend. */
+export function diffFraction(mask: Uint8Array): number {
+  if (mask.length === 0) return 0
+  let flagged = 0
+  for (const value of mask) flagged += value
+  return flagged / mask.length
+}

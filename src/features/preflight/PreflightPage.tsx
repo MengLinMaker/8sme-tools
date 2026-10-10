@@ -266,18 +266,26 @@ export function PreflightPage() {
   // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
   const [viewMode, setViewMode] = useState<ViewMode>('split')
   const [manufactured, setManufactured] = useState<Uint8Array | null>(null)
+  const [mfgStatus, setMfgStatus] = useState<'idle' | 'pending' | 'failed'>('idle')
   useEffect(() => {
     setManufactured(null)
-    if (!ncBytes) return
+    if (!ncBytes) {
+      setMfgStatus('idle')
+      return
+    }
+    setMfgStatus('pending')
     let cancelled = false
     void reconstructForViewer(new TextDecoder().decode(ncBytes), {
       reference: referenceStepBytes,
     }).then(
       (step) => {
-        if (!cancelled && step) setManufactured(step)
+        if (cancelled) return
+        if (step) setManufactured(step)
+        // reconstruction is best-effort; a null/failed build falls back to the STEP view
+        else setMfgStatus('failed')
       },
       () => {
-        // reconstruction is best-effort; fall back to the STEP view
+        if (!cancelled) setMfgStatus('failed')
       },
     )
     return () => {
@@ -287,11 +295,27 @@ export function PreflightPage() {
 
   const hasManufactured = Boolean(manufactured)
   const hasStep = Boolean(stepBytes)
-  const effectiveMode: ViewMode = !hasManufactured
-    ? 'step'
-    : viewMode === 'split' && !hasStep
-      ? 'manufactured'
-      : viewMode
+  // The split layout renders straight away — the manufactured pane shows a placeholder
+  // until the NC rebuild lands — instead of collapsing to a single STEP view and
+  // remounting both viewers when it arrives.
+  const mfgFailed = mfgStatus === 'failed'
+  const effectiveMode: ViewMode =
+    !ncBytes || mfgFailed
+      ? 'step'
+      : viewMode === 'split' && hasManufactured && !hasStep
+        ? 'manufactured'
+        : viewMode
+  // Both panes stay mounted across mode switches (hidden with CSS, never unmounted),
+  // so toggling views reuses the live three.js scenes instead of rebuilding them.
+  const mfgPaneActive =
+    effectiveMode === 'split' ||
+    effectiveMode === 'manufactured' ||
+    effectiveMode === 'overlay'
+  const stepPaneActive = effectiveMode === 'step' || effectiveMode === 'split'
+  const showMfgPane =
+    mfgPaneActive && (hasManufactured || (ncBytes != null && mfgStatus === 'pending'))
+  const showStepPane = stepPaneActive && hasStep
+  const twoPane = showMfgPane && showStepPane
 
   // One orbit bus per part, shared by the STEP and NC viewports so they rotate together.
   const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
@@ -301,6 +325,14 @@ export function PreflightPage() {
     setOrbitBus(createOrbitBus())
     setViewing(part)
   }, [])
+
+  // Warm the viewer code-split chunks while the analysis runs, so the first
+  // "view" click doesn't pay the download on top of the model build.
+  useEffect(() => {
+    if (!result) return
+    void import('./PartViewer')
+    void import('./Nc3dViewer')
+  }, [result])
 
   // Read the drawings (ground-truth qty/length) first — parsed concurrently, since pdf.js does the
   // work off-thread. Then the CPU-bound STEP work (measure, light-sabre, NC rebuild) runs across a
@@ -1139,29 +1171,38 @@ export function PreflightPage() {
                     </div>
                   }
                 >
-                  {effectiveMode === 'overlay' && manufactured ? (
-                    <PartViewer
-                      name={`${viewing.mark} · manufactured`}
-                      bytes={manufactured}
-                      compareBytes={stepBytes}
-                      compareLabel={t('preflight.viewer.step')}
-                      stock={stock}
-                      bus={orbitBus}
-                    />
-                  ) : effectiveMode === 'split' && manufactured ? (
-                    <div className="grid h-full grid-cols-2">
-                      <div className="relative h-full">
+                  <div className={cn('grid h-full', twoPane ? 'grid-cols-2' : 'grid-cols-1')}>
+                    <div className={cn('relative h-full', showMfgPane ? '' : 'hidden')}>
+                      {manufactured ? (
                         <PartViewer
                           name={`${viewing.mark} · manufactured`}
                           bytes={manufactured}
+                          compareBytes={effectiveMode === 'overlay' ? (stepBytes ?? null) : null}
+                          compareLabel={t('preflight.viewer.step')}
                           stock={stock}
                           bus={orbitBus}
                         />
+                      ) : (
+                        <div className="grid h-full place-items-center px-6 text-center">
+                          <p className="max-w-sm text-sm text-muted-foreground">
+                            {t('preflight.viewer.buildingManufactured')}
+                          </p>
+                        </div>
+                      )}
+                      {twoPane && (
                         <PaneTag tone="manufactured">
                           {t('preflight.viewer.manufacturedNc')}
                         </PaneTag>
-                      </div>
-                      <div className="relative h-full border-l border-border">
+                      )}
+                    </div>
+                    <div
+                      className={cn(
+                        'relative h-full',
+                        showStepPane ? '' : 'hidden',
+                        twoPane ? 'border-l border-border' : '',
+                      )}
+                    >
+                      {stepBytes ? (
                         <PartViewer
                           name={viewing.step?.path ?? t('preflight.viewer.stepPath')}
                           bytes={stepBytes}
@@ -1169,25 +1210,17 @@ export function PreflightPage() {
                           bus={orbitBus}
                           highlightStray
                         />
-                        <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>
-                      </div>
+                      ) : null}
+                      {twoPane && <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>}
                     </div>
-                  ) : effectiveMode === 'manufactured' && manufactured ? (
-                    <PartViewer
-                      name={`${viewing.mark} · manufactured`}
-                      bytes={manufactured}
-                      stock={stock}
-                      bus={orbitBus}
-                    />
-                  ) : (
-                    <PartViewer
-                      name={viewing.step?.path ?? t('preflight.viewer.stepPath')}
-                      bytes={stepBytes}
-                      stock={stock}
-                      bus={orbitBus}
-                      highlightStray
-                    />
-                  )}
+                    {!showMfgPane && !showStepPane && (
+                      <div className="grid h-full place-items-center px-6 text-center">
+                        <p className="max-w-sm text-sm text-muted-foreground">
+                          {t('viewer.noModel')}
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </Suspense>
                 <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur">
                   {VIEW_PRESETS.map((preset) => (

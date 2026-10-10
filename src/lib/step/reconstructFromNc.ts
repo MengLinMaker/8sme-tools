@@ -91,7 +91,7 @@ async function orientToReference(solid: SolidOps, reference: Uint8Array): Promis
     .centerOfMass
 
   const base = solid as unknown as ShapeOps
-  const candidates: { shape: ShapeOps; score: number }[] = []
+  const candidates: { shape: ShapeOps; score: number; tag: string }[] = []
   for (const mirrored of [false, true]) {
     for (const angle of [0, 90, 180, 270]) {
       const candidate = mirrored ? base.clone().mirror('XZ') : base.clone()
@@ -112,10 +112,14 @@ async function orientToReference(solid: SolidOps, reference: Uint8Array): Promis
       } catch {
         score = Number.POSITIVE_INFINITY
       }
-      candidates.push({ shape: moved, score })
+      candidates.push({ shape: moved, score, tag: `${mirrored ? 'mir' : '   '}/rot${angle}` })
     }
   }
   candidates.sort((a, b) => a.score - b.score)
+  // eslint-disable-next-line no-console
+  console.log(
+    `[orient] ranked: ${candidates.map((c) => `${c.tag}=${c.score.toFixed(2)}`).join(' ')}`,
+  )
 
   const overlap = (shape: ShapeOps): number => {
     try {
@@ -128,14 +132,18 @@ async function orientToReference(solid: SolidOps, reference: Uint8Array): Promis
   // Confirm the best-ranked candidate; only fall back to testing the rest if it does not fit.
   let best: ShapeOps | null = null
   let bestScore = -1
+  let bestTag = ''
   for (const candidate of candidates) {
     const score = overlap(candidate.shape)
     if (score > bestScore) {
       bestScore = score
       best = candidate.shape
+      bestTag = candidate.tag
     }
     if (score >= 0.9) break
   }
+  // eslint-disable-next-line no-console
+  console.log(`[orient] chosen ${bestTag} overlap=${bestScore.toFixed(3)}`)
   // No transform fits (e.g. the reference is a corrupt/degenerate STEP): keep the native frame.
   if (!best || bestScore < 0.1) return solid
   return best as unknown as SolidOps
