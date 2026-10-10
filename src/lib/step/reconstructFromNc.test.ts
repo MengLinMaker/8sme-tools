@@ -86,14 +86,20 @@ describe.skipIf(!HAVE)('reconstruct parts from NC (experimental)', () => {
     }
   }, 300000)
 
-  it('simplify keeps a mitred end attached (a1)', async () => {
+  it('keeps a mitred end attached with the union silhouette (a1)', async () => {
     const nc = readFileSync(ncPath('a1'), 'utf8')
-    // Straight-through cuts sever the mitred v-leg end (which the STEP keeps attached)...
+    const real = await measureStep(new Uint8Array(readFileSync(stpPath('a1'))))
+    // Faces disagree in X at a sloped/bevel end; the straight rebuild follows the union
+    // silhouette, so the mitred end the STEP keeps attached stays attached...
     const straight = await reconstructStepFromNc(nc)
     expect(straight).toBeTruthy()
     if (!straight) return
-    expect((await measureStep(new TextEncoder().encode(straight))).bodies).toBeGreaterThan(1)
-    // ...and the simplify fix leaves that surface uncut, so it stays one solid.
+    const built = await measureStep(new TextEncoder().encode(straight))
+    expect(built.bodies).toBe(1)
+    // ...at full member length (no severed tip, no dropped end).
+    const longest = (size: number[]) => Math.max(...size)
+    expect(Math.abs(longest(built.size) - longest(real.size))).toBeLessThan(6)
+    // ...and the simplify fix still yields one solid.
     const simple = await reconstructStepFromNc(nc, { simplify: true })
     expect(simple).toBeTruthy()
     if (!simple) return

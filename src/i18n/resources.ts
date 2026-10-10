@@ -296,6 +296,11 @@ export const en = {
     diffTitle: 'Red = overcut vs STEP ideal ({{over}}) · Blue = undercut vs STEP ({{under}})',
     facesHiddenNote: 'Invisible at 1 mm · solid by 2 mm',
     noDifferences: 'Models match — no differences',
+    sabreCut: 'Cut line',
+    sabreBevel: 'Bevel',
+    hideSabre: 'Hide sabre',
+    showSabre: 'Show sabre',
+    sabreNc: 'Sabre fail near {{stations}} mm',
   },
   findings: {
     PART_LIST_UNREADABLE: '{{file}} has no recognisable part list rows',
@@ -623,6 +628,11 @@ export const zh = {
     diffTitle: '红色 = 相对 STEP 理想模型切割过度（{{over}}）· 蓝色 = 切割不足（{{under}}）',
     facesHiddenNote: '1 mm 处不可见 · 2 mm 以上为实色',
     noDifferences: '模型一致——无差异',
+    sabreCut: '切割线',
+    sabreBevel: '坡口方向',
+    hideSabre: '隐藏光剑标记',
+    showSabre: '显示光剑标记',
+    sabreNc: '光剑失效约 {{stations}} mm 处',
   },
   findings: {
     PART_LIST_UNREADABLE: '{{file}} 没有可识别的零件清单行',

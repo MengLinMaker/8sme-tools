@@ -10,16 +10,23 @@ import {
   HemisphereLight,
   LineBasicMaterial,
   LineSegments,
+  Mesh,
+  MeshBasicMaterial,
   OrthographicCamera,
   Scene,
+  SphereGeometry,
   Vector3,
   WebGLRenderer,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { type NcGeometry, parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import type { SabreStation } from '@/lib/step/sabreToNc'
 import { attachOrbit, type OrbitBus } from './orbitSync'
 
 type Point = [number, number, number]
+
+/** Guilty light-sabre cut lines draw in strong red, on top of the solid. */
+const SABRE_COLOR = 0xff2b2b
 
 export type NcPoint = Point
 
@@ -54,6 +61,8 @@ function project(face: string, x: number, y: number, length: number, info: FaceI
 /** Per-face outer segments + inner contours + holes, shared with the nesting stitch view. */
 export function segmentsFor(geometry: NcGeometry): {
   outerByFace: Map<string, Point[]>
+  /** NC-X range of each outer segment, aligned segment-for-segment with `outerByFace`. */
+  outerRanges: Map<string, [number, number][]>
   inner: Point[]
   holes: Point[]
 } {
@@ -65,15 +74,22 @@ export function segmentsFor(geometry: NcGeometry): {
   const width = Math.max(1, ...['v', 'o', 'u', 'h'].map((face) => faceWidth(geometry, face)))
   const info: FaceInfo = { width }
   const outerByFace = new Map<string, Point[]>()
+  const outerRanges = new Map<string, [number, number][]>()
   const inner: Point[] = []
   const holes: Point[] = []
 
-  const addContour = (target: Point[], points: number[][], face: string) => {
+  const addContour = (
+    target: Point[],
+    points: number[][],
+    face: string,
+    ranges?: [number, number][],
+  ) => {
     for (let i = 0; i < points.length - 1; i++) {
       target.push(
         project(face, points[i][0], points[i][1], length, info),
         project(face, points[i + 1][0], points[i + 1][1], length, info),
       )
+      ranges?.push([points[i][0], points[i + 1][0]])
     }
   }
 
@@ -84,8 +100,10 @@ export function segmentsFor(geometry: NcGeometry): {
     } else {
       const face = contour.face
       const target = outerByFace.get(face) ?? []
-      addContour(target, points, face)
+      const ranges = outerRanges.get(face) ?? []
+      addContour(target, points, face, ranges)
       outerByFace.set(face, target)
+      outerRanges.set(face, ranges)
     }
   }
   for (const hole of geometry.holes) {
@@ -103,7 +121,7 @@ export function segmentsFor(geometry: NcGeometry): {
       )
     }
   }
-  return { outerByFace, inner, holes }
+  return { outerByFace, outerRanges, inner, holes }
 }
 
 function toGeometry(points: Point[]): BufferGeometry {
@@ -118,6 +136,7 @@ function mountScene(
   geometry: NcGeometry,
   bus: OrbitBus,
   badFaces: Set<string>,
+  sabreStations?: SabreStation[] | null,
 ): () => void {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -132,9 +151,11 @@ function mountScene(
   scene.add(key)
 
   const group = new Group()
-  const { outerByFace, inner, holes } = segmentsFor(geometry)
+  const { outerByFace, outerRanges, inner, holes } = segmentsFor(geometry)
   const lines: LineSegments[] = []
   const materials: LineBasicMaterial[] = []
+  const sabreMarkers: Mesh[] = []
+  let sabreMaterial: MeshBasicMaterial | null = null
   // Outer contours, coloured red on any face flagged not-manufacturable and green otherwise.
   const outerLines: [Point[], number][] = [...outerByFace.entries()].map(([face, points]) => [
     points,
@@ -151,6 +172,64 @@ function mountScene(
     lines.push(line)
     group.add(line)
   }
+  // Light-sabre guilty cuts: outer segments near a mapped failure station draw strong red on
+  // top, with a dot at each face's guilty cluster — so the responsible cut line is obvious.
+  // Faces are deliberately not mapped (no shared roll convention), so every face's segments
+  // near the station light up and the STEP view carries the exact face.
+  const stations = sabreStations ?? []
+  if (stations.length > 0) {
+    const near = (x0: number, x1: number) =>
+      stations.some(
+        (station) =>
+          (x0 > station.x - station.window && x0 < station.x + station.window) ||
+          (x1 > station.x - station.window && x1 < station.x + station.window),
+      )
+    sabreMaterial = new MeshBasicMaterial({
+      color: SABRE_COLOR,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.95,
+    })
+    for (const [face, points] of outerByFace.entries()) {
+      const ranges = outerRanges.get(face) ?? []
+      const guilty: Point[] = []
+      const centroid: [number, number, number] = [0, 0, 0]
+      let count = 0
+      for (let s = 0; s < ranges.length; s++) {
+        const [x0, x1] = ranges[s]
+        if (!near(x0, x1)) continue
+        const p0 = points[s * 2]
+        const p1 = points[s * 2 + 1]
+        guilty.push(p0, p1)
+        centroid[0] += (p0[0] + p1[0]) / 2
+        centroid[1] += (p0[1] + p1[1]) / 2
+        centroid[2] += (p0[2] + p1[2]) / 2
+        count++
+      }
+      if (guilty.length === 0) continue
+      const guiltyMaterial = new LineBasicMaterial({
+        color: SABRE_COLOR,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.95,
+      })
+      materials.push(guiltyMaterial)
+      const guiltyLines = new LineSegments(toGeometry(guilty), guiltyMaterial)
+      guiltyLines.renderOrder = 5
+      lines.push(guiltyLines)
+      group.add(guiltyLines)
+      const marker = new Mesh(
+        new SphereGeometry(1, 12, 8),
+        sabreMaterial,
+      )
+      marker.position.set(centroid[0] / count, centroid[1] / count, centroid[2] / count)
+      marker.renderOrder = 6
+      sabreMarkers.push(marker)
+      group.add(marker)
+    }
+  }
   scene.add(group)
 
   if (lines.length === 0) {
@@ -164,6 +243,11 @@ function mountScene(
   const centre = bounds.getCenter(new Vector3())
   group.position.sub(centre)
   const maxDim = Math.max(size.x, size.y, size.z) || 1
+  // Guilty-cut dots scale with the part so they read on 100 mm brackets and 12 m beams alike.
+  if (sabreMarkers.length > 0) {
+    const dotRadius = Math.min(8, Math.max(1.5, maxDim * 0.008))
+    for (const marker of sabreMarkers) marker.scale.setScalar(dotRadius)
+  }
 
   const aspect = (container.clientWidth || 1) / (container.clientHeight || 1)
   const frustumHeight = maxDim * 1.4
@@ -217,6 +301,8 @@ function mountScene(
     detachOrbit()
     controls.dispose()
     for (const line of lines) line.geometry.dispose()
+    for (const marker of sabreMarkers) marker.geometry.dispose()
+    sabreMaterial?.dispose()
     for (const material of materials) material.dispose()
     renderer.dispose()
     renderer.domElement.remove()
@@ -225,15 +311,20 @@ function mountScene(
 
 const NO_BAD_FACES: string[] = []
 
+const NO_SABRE_STATIONS: SabreStation[] = []
+
 export default function Nc3dViewer({
   bytes,
   bus,
   badFaces = NO_BAD_FACES,
+  sabreStations = NO_SABRE_STATIONS,
 }: {
   bytes: Uint8Array
   bus: OrbitBus
   /** Faces flagged not-manufacturable — their outer contours draw red. */
   badFaces?: string[]
+  /** Guilty light-sabre cut stations (NC X coords) — nearby outer segments draw red. */
+  sabreStations?: SabreStation[] | null
 }) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -247,12 +338,26 @@ export default function Nc3dViewer({
       return
     }
     setEmpty(false)
-    return mountScene(containerRef.current, geometry, bus, new Set(badFaces))
-  }, [bytes, bus, badFaces])
+    return mountScene(containerRef.current, geometry, bus, new Set(badFaces), sabreStations)
+  }, [bytes, bus, badFaces, sabreStations])
+
+  const stationLabel =
+    sabreStations && sabreStations.length > 0
+      ? sabreStations.map((station) => `~${Math.round(station.x)}`).join(', ')
+      : null
 
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full touch-none" />
+      {stationLabel && !empty && (
+        <div className="absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur">
+          <span
+            className="inline-block size-3 rounded-sm border border-red-400"
+            style={{ background: 'rgba(255, 43, 43, 0.65)' }}
+          />
+          <span className="text-red-300">{t('viewer.sabreNc', { stations: stationLabel })}</span>
+        </div>
+      )}
       {empty && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center text-sm text-muted-foreground">
           {t('viewer.noNc1')}

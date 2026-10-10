@@ -30,6 +30,114 @@ type Axis = 0 | 1
  */
 const BEAM_REACH = 35
 
+/**
+ * Laser kerf (mm) modelled in the NC fabrication: every outline cut removes a kerf-wide slot,
+ * so the removal tool overlaps the finished surface instead of sharing its faces exactly (which
+ * makes OCC booleans drop the cut and leave the scrap as floating bodies). 0.2 mm is a thin but
+ * real fibre-laser kerf; the 0.1 mm skin it takes off the constrained surfaces costs well under
+ * 1% volume (far inside the validation tolerances), while sitting twice clear of the
+ * face-coincidence that breaks the booleans.
+ */
+export const LASER_KERF = 0.2
+
+/**
+ * Erodes a closed outline inward by `d` (mm): each edge shifts along its inward normal and
+ * adjacent shifted edges re-intersect. Returns `null` when the loop is degenerate, too small,
+ * or an intersection blows up (a tight concave spike) — callers fall back to the exact outline,
+ * i.e. today's behaviour for that contour. Pure 2D math, no OCC.
+ */
+export function erodePolygon(pts: Pt[], d: number): Pt[] | null {
+  const cleaned = pts.filter(
+    (p, i) => i === 0 || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 0.01,
+  )
+  if (cleaned.length < 3 || !(d > 0)) return null
+  let area = 0
+  for (let i = 0; i < cleaned.length; i++) {
+    const a = cleaned[i] ?? [0, 0]
+    const b = cleaned[(i + 1) % cleaned.length] ?? [0, 0]
+    area += a[0] * b[1] - b[0] * a[1]
+  }
+  if (!(Math.abs(area) > 0)) return null
+  const inward = area > 0 ? 1 : -1 // CCW: interior is left of each directed edge
+  const n = cleaned.length
+  const shifted: [Pt, Pt][] = []
+  for (let i = 0; i < n; i++) {
+    const a = cleaned[i] ?? [0, 0]
+    const b = cleaned[(i + 1) % n] ?? [0, 0]
+    const dx = b[0] - a[0]
+    const dy = b[1] - a[1]
+    const len = Math.hypot(dx, dy)
+    if (!(len > 0)) return null
+    const nx = (-dy / len) * inward * d
+    const ny = (dx / len) * inward * d
+    shifted.push([
+      [a[0] + nx, a[1] + ny],
+      [b[0] + nx, b[1] + ny],
+    ])
+  }
+  const out: Pt[] = []
+  for (let i = 0; i < n; i++) {
+    const prev = shifted[(i + n - 1) % n] ?? [0, 0]
+    const cur = shifted[i] ?? [0, 0]
+    const p = prev[0]
+    const r: Pt = [prev[1][0] - prev[0][0], prev[1][1] - prev[0][1]]
+    const q = cur[0]
+    const s: Pt = [cur[1][0] - cur[0][0], cur[1][1] - cur[0][1]]
+    const cross = r[0] * s[1] - r[1] * s[0]
+    const orig = cleaned[i] ?? [0, 0]
+    if (Math.abs(cross) < 1e-9) {
+      // Collinear neighbours: the shifted point itself is the eroded vertex.
+      out.push([q[0], q[1]])
+      continue
+    }
+    const t = ((q[0] - p[0]) * s[1] - (q[1] - p[1]) * s[0]) / cross
+    const hit: Pt = [p[0] + t * r[0], p[1] + t * r[1]]
+    // A concave spike inverts the offset (intersection shoots far): refuse it.
+    if (Math.hypot(hit[0] - orig[0], hit[1] - orig[1]) > 10 * d) return null
+    out.push(hit)
+  }
+  // Crossed offset walls (a solid protrusion narrower than 2d) self-intersect the loop:
+  // the offset is meaningless there, so refuse it.
+  const orient = (a: Pt, b: Pt, c: Pt): number =>
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+  const sharesEndpoint = (a: Pt, b: Pt): boolean => Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-9
+  for (let i = 0; i < n; i++) {
+    const a = out[i] ?? [0, 0]
+    const b = out[(i + 1) % n] ?? [0, 0]
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue // adjacent around the loop closure
+      const c = out[j] ?? [0, 0]
+      const d2 = out[(j + 1) % n] ?? [0, 0]
+      if (
+        sharesEndpoint(a, c) ||
+        sharesEndpoint(a, d2) ||
+        sharesEndpoint(b, c) ||
+        sharesEndpoint(b, d2)
+      )
+        return null
+      const o1 = orient(a, b, c)
+      const o2 = orient(a, b, d2)
+      const o3 = orient(c, d2, a)
+      const o4 = orient(c, d2, b)
+      if (
+        Math.abs(o1) < 1e-9 &&
+        Math.abs(o2) < 1e-9 &&
+        Math.abs(o3) < 1e-9 &&
+        Math.abs(o4) < 1e-9
+      ) {
+        // Collinear: refuse only on a genuine overlap (disjoint shared-line edges are fine).
+        const ax = Math.abs(b[0] - a[0]) >= Math.abs(b[1] - a[1]) ? 0 : 1
+        const lo1 = Math.min(a[ax] ?? 0, b[ax] ?? 0)
+        const hi1 = Math.max(a[ax] ?? 0, b[ax] ?? 0)
+        const lo2 = Math.min(c[ax] ?? 0, d2[ax] ?? 0)
+        const hi2 = Math.max(c[ax] ?? 0, d2[ax] ?? 0)
+        if (Math.min(hi1, hi2) - Math.max(lo1, lo2) > 1e-9) return null
+      } else if (o1 * o2 < 0 && o3 * o4 < 0) return null
+    }
+  }
+  return out
+}
+
 interface SolidOps {
   intersect: (other: SolidOps) => SolidOps
   cut: (other: SolidOps) => SolidOps
@@ -249,6 +357,10 @@ export async function reconstructSolidFromNc(
   const halfOf = (axis: Axis): number => (axis === 0 ? ex / 2 : ey / 2)
   const pointsByAxis: Record<Axis, Pt[]> = { 0: [], 1: [] }
   const drawingsByAxis: Record<Axis, ReturnType<typeof poly>[]> = { 0: [], 1: [] }
+  // Exact (uneroded) axis-1 pens, alongside the kerf-eroded ones: eroded loops can still
+  // trip the 2D fuse splitter on real job outlines, and then the trim falls back to these
+  // (the proven path) instead of failing the whole rebuild.
+  const exactDrawings: ReturnType<typeof poly>[] = []
 
   // Base prism: cross-section in the (width=Y, depth=Z) plane, extruded along the member (X).
   let solid = poly(section.points)
@@ -268,8 +380,27 @@ export async function reconstructSolidFromNc(
     const half = halfOf(axis)
     const pts = dedupe(c.points).map(([x, y]) => [x, y - half] as Pt)
     pointsByAxis[axis].push(...pts)
-    drawingsByAxis[axis].push(poly(pts))
+    // The axis-1 trim removes material, so its outlines are eroded by half the laser kerf:
+    // the removal tool then overlaps the finished surface instead of sharing its faces
+    // exactly (which makes OCC drop the cut and leave floating bodies). Falls back to the
+    // exact outline per contour when erosion refuses a degenerate loop.
+    if (axis === 1) {
+      const eroded = erodePolygon(pts, LASER_KERF / 2)
+      drawingsByAxis[axis].push(poly(eroded ?? pts))
+      exactDrawings.push(poly(pts))
+    } else {
+      drawingsByAxis[axis].push(poly(pts))
+    }
   }
+
+  // Global member-end extent over every outer face outline. Faces routinely disagree in X at
+  // an end (a sloped/bevel end runs long on one face, short on another); the union silhouette —
+  // never the shortest face — is the true end. Without this the short face's trim severs the
+  // long face's end wedge into stray bodies (and deletes a slice at the cut), or squares the
+  // member short by dropping the end caps entirely (m106 lost 92 mm silently).
+  const endXs = outer.flatMap((c) => c.points.map((p) => p[0]))
+  const endMinX = Math.min(...endXs)
+  const endMaxX = Math.max(...endXs)
 
   // Constrain each cross-section axis by the union of that axis's face outlines. A mitre makes
   // the top face shorter than the bottom, so the union (not either face alone) is the true
@@ -277,11 +408,63 @@ export async function reconstructSolidFromNc(
   for (const axis of [0, 1] as Axis[]) {
     const drawings = drawingsByAxis[axis]
     if (drawings.length === 0) continue
-    let shape = drawings[0]
-    for (let i = 1; i < drawings.length; i++) {
-      const fused = (shape as unknown as { fuse: (other: unknown) => unknown }).fuse(drawings[i])
-      if (fused) shape = fused as typeof shape
+    const half = halfOf(axis)
+    // 2D fuse throws (rather than returning null) on some real outlines — an eroded loop
+    // or a near-tangent band edge can break the curve splitter. Skipping the thrower keeps
+    // today's behaviour for the rest instead of failing the rebuild.
+    const fusePens = (pens: ReturnType<typeof poly>[]): ReturnType<typeof poly> | null => {
+      let fused = pens[0]
+      if (!fused) return null
+      for (let i = 1; i < pens.length; i++) {
+        try {
+          const next = (fused as unknown as { fuse: (other: unknown) => unknown }).fuse(pens[i])
+          if (next) fused = next as typeof fused
+        } catch {
+          return null
+        }
+      }
+      return fused
     }
+    let shape = fusePens(drawings)
+    if (!shape && axis === 1) shape = fusePens(exactDrawings)
+    if (!shape) continue
+    const fuseIn = (other: ReturnType<typeof poly>): void => {
+      try {
+        const fused = (shape as unknown as { fuse: (other: unknown) => unknown }).fuse(other)
+        if (fused) shape = fused as typeof shape
+      } catch {
+        // Leave the band out rather than fail the rebuild (see above).
+      }
+    }
+    // Square each face outline off to the global end extent: material past a face's own end
+    // belongs to another face's wall (a bevel-cut end wedge), so this axis's trim must neither
+    // cut it away nor let it detach — the other axis's union already shapes the slope itself.
+    // Interior copes and chamfers (fully inside the outline's own X range) still carve normally.
+    // The bands overlap the outline by 1 mm (an edge-touching fuse does not merge reliably) and
+    // stop exactly at the global extent (the trim rect's own ±2 padding stays empty, so no
+    // sliver body is kept past the member end). A band is only added where the other axis's
+    // outlines already span the whole band range — otherwise the band would keep a full-section
+    // slab floating past a sloped face start (m143), instead of joining a wedge (m71/m124).
+    const loopXs = pointsByAxis[axis].map((p) => p[0])
+    const loopMinX = Math.min(...loopXs)
+    const loopMaxX = Math.max(...loopXs)
+    const otherXs = pointsByAxis[(1 - axis) as Axis].map((p) => p[0])
+    const otherSpans = (x0: number, x1: number): boolean => {
+      if (otherXs.length === 0) return true
+      const eps = 1e-6
+      return Math.min(...otherXs) <= x0 + eps && Math.max(...otherXs) >= x1 - eps
+    }
+    const band = (x0: number, x1: number): ReturnType<typeof poly> =>
+      poly([
+        [x0, -half - 2],
+        [x1, -half - 2],
+        [x1, half + 2],
+        [x0, half + 2],
+      ])
+    if (loopMinX + 1 - endMinX > 1e-9 && otherSpans(endMinX, loopMinX + 1))
+      fuseIn(band(endMinX, loopMinX + 1))
+    if (endMaxX - (loopMaxX - 1) > 1e-9 && otherSpans(loopMaxX - 1, endMaxX))
+      fuseIn(band(loopMaxX - 1, endMaxX))
     // Simplifying: leave the face flat rather than reproducing a step, or a bevel whose
     // straight-through cut would sever a piece it is meant to keep.
     if (
@@ -291,7 +474,6 @@ export async function reconstructSolidFromNc(
     ) {
       continue
     }
-    const half = halfOf(axis)
     if (axis === 0) {
       // Face plane is (X, width=Y); extrude across the depth and keep the inside.
       const prism = (shape as ReturnType<typeof poly>)
@@ -302,26 +484,38 @@ export async function reconstructSolidFromNc(
     } else {
       // Face plane is (X, depth=Z). `intersect` trips an OCC boolean error with the section
       // prism, so remove the complement (bounding rectangle minus the outline) with a cut.
-      const xs = pointsByAxis[axis].map((p) => p[0])
-      const minX = Math.min(...xs)
-      const maxXc = Math.max(...xs)
-      // The rectangle must fully enclose the outline in X too, or the boolean drops the sliver
-      // of removed material at the very ends (the outline reaches the rect's left/right edges).
+      // The rectangle spans the global end extent (not just this axis's outlines), so a
+      // longer face's end wedge is never left standing past the cut as a stray body.
       const rect = poly([
-        [minX - 2, -half - 2],
-        [maxXc + 2, -half - 2],
-        [maxXc + 2, half + 2],
-        [minX - 2, half + 2],
+        [endMinX - 2, -half - 2],
+        [endMaxX + 2, -half - 2],
+        [endMaxX + 2, half + 2],
+        [endMinX - 2, half + 2],
       ])
-      const notch = (rect as unknown as { cut: (other: unknown) => unknown }).cut(shape)
+      const notch = (() => {
+        try {
+          return (rect as unknown as { cut: (other: unknown) => unknown }).cut(shape)
+        } catch {
+          return null
+        }
+      })()
       if (!notch) continue
       // `sketchOnPlane('XZ')` extrudes towards −Y, so shift the prism back over the section
       // (which sits at Y = −half..half) rather than away from it.
-      const notchSolid = (notch as ReturnType<typeof poly>)
-        .sketchOnPlane('XZ')
-        .extrude(400)
-        .translate(0, 250, 0) as unknown as SolidOps
-      solid = solid.cut(notchSolid)
+      //
+      // Limited distance: the laser only reaches BEAM_REACH into the material from each
+      // face, so the trim cuts a skin that deep from both sides instead of vaporising the
+      // whole width. A full-width cut deletes extensions (flange tips past a mitred web)
+      // the head physically cannot reach — the manufactured model then runs short and the
+      // detached rest shows up as stray bodies.
+      const faceOut = halfOf(0 as Axis)
+      const skin = (topEdge: number): SolidOps =>
+        (notch as ReturnType<typeof poly>)
+          .sketchOnPlane('XZ')
+          .extrude(BEAM_REACH)
+          .translate(0, topEdge, 0) as unknown as SolidOps
+      solid = solid.cut(skin(faceOut + 2))
+      solid = solid.cut(skin(-faceOut - 2 + BEAM_REACH))
     }
   }
 

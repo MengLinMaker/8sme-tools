@@ -32,6 +32,8 @@ export interface SabreFailure {
   thickness: number
   /** area (mm²) of the offending surface patch */
   area: number
+  /** failing triangle corners in STEP native coordinates — paints the red surface patch */
+  tri: [[number, number, number], [number, number, number], [number, number, number]]
 }
 
 export interface SabreResult {
@@ -202,6 +204,11 @@ export function sabreShape(shape: MeshableShape, length = SABRE_LENGTH): SabreRe
         normal: [tri.normal.x, tri.normal.y, tri.normal.z],
         thickness,
         area: tri.area,
+        tri: [
+          [tri.a.x, tri.a.y, tri.a.z],
+          [tri.b.x, tri.b.y, tri.b.z],
+          [tri.c.x, tri.c.y, tri.c.z],
+        ],
       })
     }
   }

@@ -24,6 +24,7 @@ import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { SeverityFilter } from '@/lib/audit/schemas'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
 import { downloadBlob, downloadText } from '@/lib/download'
+import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
 import { resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
@@ -36,8 +37,9 @@ import {
   type StepMeasure,
 } from '@/lib/step/measure'
 import type { SabreResult } from '@/lib/step/sabre'
+import { locateSabreStations, type SabreStation } from '@/lib/step/sabreToNc'
 import { getStepWorkerPool, prebootStepWorkers } from '@/lib/step/stepPool'
-import { clearViewerModels, reconstructForViewer } from '@/lib/step/viewerModel'
+import { clearViewerModels, meshForViewer, reconstructForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { createOrbitBus, requestView, type ViewPreset } from './orbitSync'
 
@@ -706,6 +708,44 @@ export function PreflightPage() {
     }
     return [...faces]
   }, [viewing, cutIssues])
+
+  /** Light-sabre failures of the viewed part — the STEP view draws cut lines + bevel ticks. */
+  const viewerSabreFailures = useMemo(() => {
+    if (!viewing) return null
+    const failures = sabreChecks.get(viewing.mark)?.failures
+    return failures && failures.length > 0 ? failures : null
+  }, [viewing, sabreChecks])
+
+  /** Guilty cut stations mapped onto the NC length axis — the NC view highlights them red. */
+  const [viewerSabreStations, setViewerSabreStations] = useState<SabreStation[] | null>(null)
+  useEffect(() => {
+    setViewerSabreStations(null)
+    if (!viewing || !viewerSabreFailures || !ncBytes || !stepBytes) return
+    let cancelled = false
+    const failures = viewerSabreFailures
+    const ncText = new TextDecoder().decode(ncBytes)
+    void meshForViewer(viewing.step?.path ?? viewing.mark, stepBytes).then(
+      (meshed) => {
+        if (cancelled) return
+        try {
+          const stations = locateSabreStations(
+            meshed.vertices,
+            failures,
+            parseNcGeometry(ncText),
+          )
+          if (!cancelled) setViewerSabreStations(stations.length > 0 ? stations : null)
+        } catch {
+          if (!cancelled) setViewerSabreStations(null)
+        }
+      },
+      () => {
+        if (!cancelled) setViewerSabreStations(null)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [viewing, viewerSabreFailures, ncBytes, stepBytes])
 
   // Collapsible sections — long jobs push the tables far down, so profiles,
   // findings and parts all collapse like an accordion.
@@ -1459,6 +1499,7 @@ export function PreflightPage() {
                           stock={stock}
                           bus={orbitBus}
                           highlightStray
+                          sabreFailures={viewerSabreFailures}
                         />
                       ) : null}
                       {twoPane && <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>}
@@ -1549,7 +1590,12 @@ export function PreflightPage() {
                         </div>
                       }
                     >
-                      <Nc3dViewer bytes={ncBytes} bus={orbitBus} badFaces={viewerBadFaces} />
+                      <Nc3dViewer
+                        bytes={ncBytes}
+                        bus={orbitBus}
+                        badFaces={viewerBadFaces}
+                        sabreStations={viewerSabreStations}
+                      />
                     </Suspense>
                   ) : pdfUrl ? (
                     <iframe

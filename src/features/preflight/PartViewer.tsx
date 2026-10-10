@@ -38,12 +38,17 @@ import {
 } from '@/lib/step/booleanDiff'
 import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
+import type { SabreFailure } from '@/lib/step/sabre'
 import { meshForViewer } from '@/lib/step/viewerModel'
 import { attachOrbit, type OrbitBus } from './orbitSync'
 
 const GHOST_COLOR = 0x3ddc84
 const COMPARE_COLOR = 0xf59e0b
 const STRAY_COLOR = 0xf97316
+/** Light-sabre cut lines: triangle edges of the surfaces the beam cannot cut. */
+const SABRE_CUT_COLOR = 0xff2b2b
+/** Light-sabre bevel ticks: outward normals showing the guilty cut angle. */
+const SABRE_BEVEL_COLOR = 0xfbbf24
 /** Overcut vs the STEP ideal (NC took too much — scrap, cannot fix). */
 const OVERCUT_COLOR = 0xef4444
 const OVERCUT_RGB: [number, number, number] = [0xef / 255, 0x44 / 255, 0x44 / 255]
@@ -205,6 +210,7 @@ interface SceneHandle {
   overlays: Group[]
   setFlip: (flip: boolean) => void
   setDiffVisible: (visible: boolean) => void
+  setSabreVisible: (visible: boolean) => void
   diffStats: DiffStats | null
   diffPresence: DiffPresence | null
   runDiff: () => DiffStats | null
@@ -274,6 +280,7 @@ function mountScene(
   primaryBytes: Uint8Array | null | undefined,
   compareBytes: Uint8Array | null | undefined,
   deferDiff?: boolean,
+  sabre?: SabreFailure[] | null,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -575,6 +582,61 @@ function mountScene(
   }
   if (!deferDiff) runDiff()
 
+  // Light-sabre overlay: red cut lines (edges of the failing triangles — the surface that
+  // cannot be cut) plus amber bevel ticks (outward normals showing the guilty cut angle).
+  // Local coordinates, parented to the seated primary group so the marks follow the model.
+  // Depth test off + high render order, so the guilty lines read through the solid.
+  const sabreObjects: LineSegments[] = []
+  if (sabre && sabre.length > 0) {
+    const byArea = [...sabre].sort((a, b) => b.area - a.area)
+    const fitDiagonal = Math.hypot(fitSize.x, fitSize.y, fitSize.z) || 1
+    const tickLen = Math.min(30, Math.max(8, fitDiagonal * 0.04))
+    const cutPts: number[] = []
+    for (const failure of byArea.slice(0, 200)) {
+      const [a, b, c] = failure.tri
+      const n = failure.normal
+      // Nudge just off the surface along the outward normal so lines never z-fight.
+      const off = (p: [number, number, number]): [number, number, number] => [
+        p[0] + n[0] * 0.15,
+        p[1] + n[1] * 0.15,
+        p[2] + n[2] * 0.15,
+      ]
+      const [ao, bo, co] = [off(a), off(b), off(c)]
+      cutPts.push(...ao, ...bo, ...bo, ...co, ...co, ...ao)
+    }
+    const bevelPts: number[] = []
+    for (const failure of byArea.slice(0, 60)) {
+      const p = failure.point
+      const n = failure.normal
+      bevelPts.push(
+        p[0] + n[0] * 0.3,
+        p[1] + n[1] * 0.3,
+        p[2] + n[2] * 0.3,
+        p[0] + n[0] * tickLen,
+        p[1] + n[1] * tickLen,
+        p[2] + n[2] * tickLen,
+      )
+    }
+    const addLines = (pts: number[], color: number) => {
+      const lineGeometry = new BufferGeometry()
+      lineGeometry.setAttribute('position', new Float32BufferAttribute(pts, 3))
+      const lineMaterial = new LineBasicMaterial({
+        color,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.95,
+      })
+      const lines = new LineSegments(lineGeometry, lineMaterial)
+      lines.renderOrder = 11
+      primary.group.add(lines)
+      sabreObjects.push(lines)
+      materials.push(lineMaterial)
+    }
+    if (cutPts.length > 0) addLines(cutPts, SABRE_CUT_COLOR)
+    if (bevelPts.length > 0) addLines(bevelPts, SABRE_BEVEL_COLOR)
+  }
+
   const maxDim = Math.max(fitSize.x, fitSize.y, fitSize.z) || 1
   // Cover the model's bounding-box diagonal, so it is never cropped at any preset view or
   // free-orbit angle (a fixed `maxDim` frame cuts long or wide parts).
@@ -652,6 +714,9 @@ function mountScene(
     setDiffVisible(visible: boolean) {
       for (const mesh of diffMeshes) mesh.visible = visible
     },
+    setSabreVisible(visible: boolean) {
+      for (const lines of sabreObjects) lines.visible = visible
+    },
     dispose() {
       cancelAnimationFrame(raf)
       observer.disconnect()
@@ -668,6 +733,10 @@ function mountScene(
         }
       }
       for (const mesh of diffMeshes) mesh.geometry.dispose()
+      for (const lines of sabreObjects) {
+        primary.group.remove(lines)
+        lines.geometry.dispose()
+      }
       for (const material of materials) material.dispose()
       for (const overlay of overlays) {
         overlay.traverse((object) => {
@@ -696,6 +765,8 @@ export interface PartViewerProps {
   bus?: OrbitBus | null
   /** highlight stray floating bodies in orange, to tell them from the real part (STEP debug) */
   highlightStray?: boolean
+  /** light-sabre failures — drawn as red cut lines + amber bevel ticks on the model */
+  sabreFailures?: SabreFailure[] | null
 }
 
 export default function PartViewer({
@@ -707,6 +778,7 @@ export default function PartViewer({
   beam = null,
   bus = null,
   highlightStray = false,
+  sabreFailures = null,
 }: PartViewerProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -721,6 +793,7 @@ export default function PartViewer({
   const [showDiff, setShowDiff] = useState(true)
   const [diffInfo, setDiffInfo] = useState<DiffStats | null>(null)
   const [diffPresence, setDiffPresence] = useState<DiffPresence | null>(null)
+  const [showSabre, setShowSabre] = useState(true)
   const flippedRef = useRef(false)
 
   useEffect(() => {
@@ -762,6 +835,7 @@ export default function PartViewer({
           bytes,
           compareBytes,
           true,
+          sabreFailures,
         )
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handle.setFlip(false)
@@ -790,7 +864,7 @@ export default function PartViewer({
       handle?.dispose()
       handleRef.current = null
     }
-  }, [name, bytes, compareBytes, stock, beam, bus, highlightStray, t])
+  }, [name, bytes, compareBytes, stock, beam, bus, highlightStray, sabreFailures, t])
 
   useEffect(() => {
     showStockRef.current = showStock
@@ -808,8 +882,13 @@ export default function PartViewer({
   useEffect(() => {
     showDiffRef.current = showDiff
   }, [showDiff])
+
+  useEffect(() => {
+    handleRef.current?.setSabreVisible(showSabre)
+  }, [showSabre])
   const hasOverlay = Boolean((stock || beam) && status === 'ready')
   const hasCompare = Boolean(compareBytes && status === 'ready')
+  const hasSabre = Boolean(sabreFailures && sabreFailures.length > 0 && status === 'ready')
   const hasDiff = Boolean(hasCompare && diffInfo)
   const diffClean = diffInfo != null && diffInfo.over < 0.001 && diffInfo.under < 0.001
   // Fast probe verdict, shown while the exact boolean still runs.
@@ -844,6 +923,15 @@ export default function PartViewer({
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
             {showDiff ? t('viewer.hideDiff') : t('viewer.showDiff')}
+          </button>
+        )}
+        {hasSabre && (
+          <button
+            type="button"
+            onClick={() => setShowSabre((value) => !value)}
+            className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
+          >
+            {showSabre ? t('viewer.hideSabre') : t('viewer.showSabre')}
           </button>
         )}
         {hasStray && (
@@ -905,6 +993,20 @@ export default function PartViewer({
               <span className="text-blue-300">{t('viewer.undercut')}</span>
             </>
           )}
+        </div>
+      )}
+      {hasSabre && showSabre && (
+        <div className="absolute bottom-3 right-3 z-10 flex items-center gap-2 rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur">
+          <span
+            className="inline-block size-3 rounded-sm border border-red-400"
+            style={{ background: 'rgba(255, 43, 43, 0.65)' }}
+          />
+          <span className="text-red-300">{t('viewer.sabreCut')}</span>
+          <span
+            className="inline-block size-3 rounded-sm border border-amber-400"
+            style={{ background: 'rgba(251, 191, 36, 0.65)' }}
+          />
+          <span className="text-amber-300">{t('viewer.sabreBevel')}</span>
         </div>
       )}
       {status !== 'ready' && (
