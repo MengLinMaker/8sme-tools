@@ -22,6 +22,12 @@ import { ensureOc } from './occInit'
 type Pt = [number, number]
 type Axis = 0 | 1
 
+/**
+ * How far a single laser cut can reach into the material — 3–4 cm. An enclosed NC surface (a hole)
+ * is only ever cut this deep from its own face, never straight through the section.
+ */
+const BEAM_REACH = 35
+
 interface SolidOps {
   intersect: (other: SolidOps) => SolidOps
   cut: (other: SolidOps) => SolidOps
@@ -264,24 +270,35 @@ export async function reconstructStepFromNc(
     }
   }
 
-  // Holes, drilled perpendicular to the face they sit on.
+  // Holes, drilled perpendicular to the face they sit on — and ONLY as deep as the beam reaches.
+  // An enclosed NC surface (a `BO` hole) is a single 3–4 cm cut: the cutter runs from just outside
+  // the face a `BEAM_REACH` inward, so it passes through that face's wall and stops, never
+  // crossing to the opposite wall (which the beam could not reach anyway). The NC gives each hole
+  // size its own face (e.g. Ø14 on `o`, Ø10 on `u`).
+  const positiveFace = (face: string): boolean => face === 'o' || face === 'v'
   for (const h of geo.holes.filter((h) => h.diameter > 0)) {
     const axis = faceAxis(h.face)
     const half = halfOf(axis)
+    // The drill runs along the *other* cross-section axis; the face sits at ±(that axis's half).
+    const faceOut = halfOf((1 - axis) as Axis)
+    const sign = positiveFace(h.face) ? 1 : -1
+    const outside = faceOut + 2
     if (axis === 0) {
+      // Drill along the 3D Z axis (perpendicular to the `o`/`u` faces).
       const cyl = drawCircle(h.diameter / 2)
         .translate(h.x, h.y - half)
         .sketchOnPlane('XY')
-        .extrude(600)
-        .translate(0, 0, -250) as unknown as SolidOps
-      solid = solid.cut(cyl)
+        .extrude(BEAM_REACH)
+      const shift = sign > 0 ? outside - BEAM_REACH : -outside
+      solid = solid.cut(cyl.translate(0, 0, shift) as unknown as SolidOps)
     } else {
+      // Drill along the 3D Y axis (`v`/`h`); `sketchOnPlane('XZ')` extrudes towards −Y.
       const cyl = drawCircle(h.diameter / 2)
         .translate(h.x, h.y - half)
         .sketchOnPlane('XZ')
-        .extrude(600)
-        .translate(0, -250, 0) as unknown as SolidOps
-      solid = solid.cut(cyl)
+        .extrude(BEAM_REACH)
+      const shift = sign > 0 ? outside : BEAM_REACH - outside
+      solid = solid.cut(cyl.translate(0, shift, 0) as unknown as SolidOps)
     }
   }
 

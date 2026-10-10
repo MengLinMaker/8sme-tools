@@ -174,15 +174,41 @@ function angleL(legA: number, legB: number, thickness: number, radius = 0): [num
   ])
 }
 
-function channel(depth: number, flange: number, web: number, tf: number): [number, number][] {
+/**
+ * Parallel-flange channel: solid web on the left (x = −hb..−hb+web), flanges to the right, C
+ * opening left-to-right. `radius` is the root fillet where the flanges meet the inner web face;
+ * 0 keeps those two corners sharp.
+ */
+function channel(
+  depth: number,
+  flange: number,
+  web: number,
+  tf: number,
+  radius = 0,
+): [number, number][] {
   const hb = flange / 2
   const hd = depth / 2
+  const xWeb = -hb + web
+  const r = Math.max(0, Math.min(radius, flange - web, hd - tf))
+  if (r <= 0) {
+    return centre([
+      [-hb, -hd],
+      [hb, -hd],
+      [hb, -hd + tf],
+      [xWeb, -hd + tf],
+      [xWeb, hd - tf],
+      [hb, hd - tf],
+      [hb, hd],
+      [-hb, hd],
+    ])
+  }
+  // Two concave root fillets on the inner web face (arc centres sit in the channel cavity).
   return centre([
     [-hb, -hd],
     [hb, -hd],
     [hb, -hd + tf],
-    [-hb + web, -hd + tf],
-    [-hb + web, hd - tf],
+    ...arcPoints(xWeb + r, -hd + tf + r, r, -Math.PI / 2, -Math.PI),
+    ...arcPoints(xWeb + r, hd - tf - r, r, Math.PI, Math.PI / 2),
     [hb, hd - tf],
     [hb, hd],
     [-hb, hd],
@@ -438,13 +464,13 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
       // PFCs are fully tabulated (tf, tw, r) — the short callout only carries depth+flange.
       const pfc = /PFC/i.test(clean) ? getPfcByDepth(depth) : undefined
       if (pfc) {
-        points = channel(pfc.d, pfc.b, pfc.tw, pfc.tf)
+        points = channel(pfc.d, pfc.b, pfc.tw, pfc.tf, pfc.r ?? 0)
         label = `${pfc.designation} stock`
       } else if (depth > 0 && flange > 0) {
         // TFC / unknown channel: thicknesses aren't in the short code, so take the larger of
         // the two NC thicknesses for both so the ghost can't be thinner than the part.
         const thickness = Math.max(dims[2] ?? depth * 0.05, dims[3] ?? depth * 0.08)
-        points = channel(depth, flange, thickness, thickness)
+        points = channel(depth, flange, thickness, thickness, dims[4] ?? 0)
       }
       break
     }
@@ -559,11 +585,11 @@ export function partSectionForCode(
       const depth = n[0] || dims[0]
       const flange = n[1] || dims[1] || depth / 2
       const pfc = /PFC/i.test(clean) ? getPfcByDepth(depth) : undefined
-      if (pfc) return { points: channel(pfc.d, pfc.b, pfc.tw, pfc.tf) }
+      if (pfc) return { points: channel(pfc.d, pfc.b, pfc.tw, pfc.tf, pfc.r ?? 0) }
       if (!(depth > 0 && flange > 0)) return null
       const tf = dims[2] ?? depth * 0.05
       const web = dims[3] ?? depth * 0.08
-      return { points: channel(depth, flange, web, tf) }
+      return { points: channel(depth, flange, web, tf, dims[4] ?? 0) }
     }
     case 'ub': {
       const section = getUb(clean)

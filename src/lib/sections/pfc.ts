@@ -3,17 +3,18 @@ import type { RolledSection } from './types'
 /**
  * Australian Parallel Flange Channels (PFC), AS/NZS 3679.1 (Grade 300).
  *
- * `b` is the overall flange width; `r` is the root radius (where the catalogue quotes it).
- * The short callout (`150PFC`, `PFC100*50`) carries only depth and flange, so the web and
- * flange thicknesses come from here — not from a guess.
+ * `b` is the overall flange width; `r` is the root radius (from the AS/NZS 3679.1 / OneSteel
+ * "Hot Rolled and Structural Steel Products" table, 8–14 mm by section). The short callout
+ * (`150PFC`, `PFC100*50`) carries only depth and flange, so the web and flange thicknesses and
+ * the root radius come from here — not from a guess.
  *
  * Dimensions and nominal mass verified against the ASI / InfraBuild "Hot Rolled and
  * Structural Steel Products" catalogue and AS/NZS 3679.1 Appendix D.
  */
 export const PFC_SECTIONS: RolledSection[] = [
-  { designation: '75 PFC', mass: 5.9, d: 75, b: 40, tf: 6.1, tw: 3.8 },
-  { designation: '100 PFC', mass: 8.3, d: 100, b: 50, tf: 6.7, tw: 4.2 },
-  { designation: '125 PFC', mass: 11.9, d: 125, b: 65, tf: 7.5, tw: 4.7 },
+  { designation: '75 PFC', mass: 5.9, d: 75, b: 40, tf: 6.1, tw: 3.8, r: 8.0 },
+  { designation: '100 PFC', mass: 8.3, d: 100, b: 50, tf: 6.7, tw: 4.2, r: 8.0 },
+  { designation: '125 PFC', mass: 11.9, d: 125, b: 65, tf: 7.5, tw: 4.7, r: 8.0 },
   { designation: '150 PFC', mass: 17.7, d: 150, b: 75, tf: 9.5, tw: 6.0, r: 10.0 },
   { designation: '180 PFC', mass: 20.9, d: 180, b: 75, tf: 11.0, tw: 6.0, r: 12.0 },
   { designation: '200 PFC', mass: 22.9, d: 200, b: 75, tf: 12.0, tw: 6.0, r: 12.0 },

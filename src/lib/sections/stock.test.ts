@@ -91,6 +91,13 @@ describe('stockOutlineForCode', () => {
     expect(height).toBeGreaterThanOrEqual(150)
   })
 
+  it('models the PFC root fillets from the catalogue radius', () => {
+    // A tabulated PFC (r = 10) is drawn with its two inner root fillets; a sharp 8-point channel
+    // would mean the radius was dropped.
+    const pfc = stockOutlineForCode('150PFC', [150, 75, 9.5, 6.0])
+    expect(pfc?.points.length ?? 0).toBeGreaterThan(8)
+  })
+
   it('builds a UC I-section from its designation', () => {
     const uc = stockOutlineForCode('310UC158', [311, 327, 25.0, 15.7])
     expect(uc?.label).toBe('310UC158 stock')
