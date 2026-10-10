@@ -15,16 +15,18 @@ import {
   Matrix4,
   Mesh,
   MeshStandardMaterial,
+  OrthographicCamera,
   Path,
-  PerspectiveCamera,
   Scene,
   Shape,
   Vector3,
   WebGLRenderer,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
 import { meshStepFile } from '@/lib/step/mesh'
+import { attachOrbit, type OrbitBus } from './orbitSync'
 
 const GHOST_COLOR = 0x3ddc84
 const FACE_MATERIAL = { color: 0xaebfd0, metalness: 0.55, roughness: 0.45 }
@@ -33,66 +35,6 @@ const FACE_MATERIAL = { color: 0xaebfd0, metalness: 0.55, roughness: 0.45 }
 export interface BeamOutline {
   profile: [number, number][]
   length: number
-}
-
-function pointInPolygon(x: number, y: number, polygon: [number, number][]): boolean {
-  let inside = false
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const [xi, yi] = polygon[i]
-    const [xj, yj] = polygon[j]
-    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside
-  }
-  return inside
-}
-
-/** World→local transform for each 90° rotation about the length axis. */
-const ORIENTATIONS: ((u: number, v: number) => [number, number])[] = [
-  (u, v) => [u, v],
-  (u, v) => [v, -u],
-  (u, v) => [-u, -v],
-  (u, v) => [-v, u],
-]
-
-function reach(profile: [number, number][]): number {
-  let max = 0
-  for (const [x, y] of profile) max = Math.max(max, Math.abs(x), Math.abs(y))
-  return max || 1
-}
-
-/**
- * Picks the rotation that best seats the part inside the stock profile by
- * counting how many part cross-section vertices land within a slightly enlarged
- * outline. Sections are not end-symmetric, so guessing from bounding-box extents
- * alone seats them wrong roughly half the time.
- */
-function chooseOrientation(
-  profile: [number, number][],
-  vertices: number[],
-  crossA: number,
-  crossB: number,
-  centre: Vector3,
-): number {
-  const scale = 1 + 2 / reach(profile)
-  const enlarged = profile.map(([x, y]) => [x * scale, y * scale] as [number, number])
-  const centreA = centre.getComponent(crossA)
-  const centreB = centre.getComponent(crossB)
-  const stride = Math.max(3, Math.floor(vertices.length / 3 / 4000) * 3)
-
-  let best = 0
-  let bestScore = -1
-  for (let orientation = 0; orientation < ORIENTATIONS.length; orientation++) {
-    const map = ORIENTATIONS[orientation]
-    let score = 0
-    for (let i = 0; i + 2 < vertices.length; i += stride) {
-      const [lx, ly] = map(vertices[i + crossA] - centreA, vertices[i + crossB] - centreB)
-      if (pointInPolygon(lx, ly, enlarged)) score++
-    }
-    if (score > bestScore) {
-      bestScore = score
-      best = orientation
-    }
-  }
-  return best
 }
 
 /** Extrudes a section outline along a basis and returns a translucent overlay. */
@@ -160,6 +102,7 @@ function mountScene(
   replicadMeshes: ReplicadMesh[],
   stock: StockOutline | null,
   beam: BeamOutline | null,
+  bus: OrbitBus | null,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -167,8 +110,6 @@ function mountScene(
   container.appendChild(renderer.domElement)
 
   const scene = new Scene()
-  const camera = new PerspectiveCamera(45, 1, 0.1, 100000)
-
   scene.add(new AmbientLight(0xffffff, 0.6))
   scene.add(new HemisphereLight(0xf2f7ff, 0x1a2733, 0.9))
   const key = new DirectionalLight(0xffffff, 2.6)
@@ -206,7 +147,7 @@ function mountScene(
     const crossB = cross[1]
     const vertices = replicadMeshes[0]?.faces.vertices ?? []
     const orientation = vertices.length
-      ? chooseOrientation(stockPoints, vertices, crossA, crossB, centre)
+      ? detectOrientation(stockPoints, vertices, crossA, crossB, [centre.x, centre.y, centre.z])
       : 0
     const eA = unit(crossA, 1)
     const eB = unit(crossB, 1)
@@ -240,19 +181,36 @@ function mountScene(
   const fitCentre = fit.getCenter(new Vector3())
 
   const maxDim = Math.max(fitSize.x, fitSize.y, fitSize.z) || 1
-  const fitDistance = (maxDim / 2 / Math.tan((camera.fov * Math.PI) / 180 / 2)) * 1.9
+  const aspect = (container.clientWidth || 1) / (container.clientHeight || 1)
+  const frustumHeight = maxDim * 1.4
+  const halfHeight = frustumHeight / 2
+  const halfWidth = halfHeight * aspect
+  const camera = new OrthographicCamera(
+    -halfWidth,
+    halfWidth,
+    halfHeight,
+    -halfHeight,
+    Math.max(maxDim / 1000, 0.01),
+    maxDim * 100,
+  )
+
+  // Default to a true isometric angle: equal X/Y/Z so no axis is foreshortened.
+  const distance = maxDim * 2
   camera.position
     .copy(fitCentre)
-    .add(new Vector3(fitDistance * 0.85, fitDistance * 0.65, fitDistance))
-  camera.near = Math.max(maxDim / 1000, 0.01)
-  camera.far = maxDim * 100
-  camera.updateProjectionMatrix()
+    .add(new Vector3(distance, distance, distance).multiplyScalar(1 / Math.sqrt(3)))
   camera.lookAt(fitCentre)
 
   const controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.08
   controls.target.copy(fitCentre)
+  const detachOrbit = bus
+    ? attachOrbit(bus, camera, controls, {
+        centre: [fitCentre.x, fitCentre.y, fitCentre.z],
+        distance,
+      })
+    : null
 
   let raf = 0
   const render = () => {
@@ -267,7 +225,12 @@ function mountScene(
     const height = container.clientHeight
     if (!width || !height) return
     renderer.setSize(width, height)
-    camera.aspect = width / height
+    const halfH = frustumHeight / 2
+    const halfW = halfH * (width / height)
+    camera.left = -halfW
+    camera.right = halfW
+    camera.top = halfH
+    camera.bottom = -halfH
     camera.updateProjectionMatrix()
   }
   const observer = new ResizeObserver(resize)
@@ -278,6 +241,7 @@ function mountScene(
     dispose() {
       cancelAnimationFrame(raf)
       observer.disconnect()
+      detachOrbit?.()
       controls.dispose()
       for (const geometry of geometries) {
         geometry.faces.dispose()
@@ -305,9 +269,16 @@ export interface PartViewerProps {
   bytes: Uint8Array | undefined
   stock?: StockOutline | null
   beam?: BeamOutline | null
+  bus?: OrbitBus | null
 }
 
-export default function PartViewer({ name, bytes, stock = null, beam = null }: PartViewerProps) {
+export default function PartViewer({
+  name,
+  bytes,
+  stock = null,
+  beam = null,
+  bus = null,
+}: PartViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<SceneHandle | null>(null)
   const showStockRef = useRef(true)
@@ -334,7 +305,7 @@ export default function PartViewer({ name, bytes, stock = null, beam = null }: P
           setMessage('The STEP file contains no renderable geometry.')
           return
         }
-        handle = mountScene(containerRef.current, meshes, stock, beam)
+        handle = mountScene(containerRef.current, meshes, stock, beam, bus)
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handleRef.current = handle
         setStatus('ready')
@@ -350,7 +321,7 @@ export default function PartViewer({ name, bytes, stock = null, beam = null }: P
       handle?.dispose()
       handleRef.current = null
     }
-  }, [name, bytes, stock, beam])
+  }, [name, bytes, stock, beam, bus])
 
   useEffect(() => {
     showStockRef.current = showStock

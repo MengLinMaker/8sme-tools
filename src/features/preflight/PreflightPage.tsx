@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/table'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
+import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { SeverityFilter } from '@/lib/audit/schemas'
 import type { AuditResult, Finding, PartRecord, Severity } from '@/lib/audit/types'
 import { downloadText } from '@/lib/download'
@@ -24,15 +25,37 @@ import type { InputBundle } from '@/lib/readInput'
 import { resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
 import { compareSize, measureStep, type SizeCheck } from '@/lib/step/measure'
 import { cn } from '@/lib/utils'
+import { createOrbitBus, requestView, type ViewPreset } from './orbitSync'
 
 const PartViewer = lazy(() => import('./PartViewer'))
+const Nc3dViewer = lazy(() => import('./Nc3dViewer'))
 
 const SEVERITY_ORDER: Record<Severity, number> = { error: 0, warning: 1, info: 2 }
 
 /** How many drawings to parse at once (pdf.js runs each in its own worker). */
 const CONCURRENCY = 6
 
+const PART_COLUMNS: { label: string; key: PartSortKey }[] = [
+  { label: 'Mark', key: 'mark' },
+  { label: 'NC qty', key: 'ncQty' },
+  { label: 'PDF qty', key: 'pdfQty' },
+  { label: 'NC len', key: 'ncLen' },
+  { label: 'PDF len', key: 'pdfLen' },
+  { label: 'Profile', key: 'profile' },
+  { label: 'NC', key: 'nc' },
+  { label: 'STEP', key: 'step' },
+  { label: 'PDF', key: 'pdf' },
+  { label: 'Model size', key: 'model' },
+]
+
 type Filter = SeverityFilter
+
+const VIEW_PRESETS: { id: ViewPreset; label: string }[] = [
+  { id: 'iso', label: 'Iso' },
+  { id: 'front', label: 'Front' },
+  { id: 'top', label: 'Top' },
+  { id: 'side', label: 'Side' },
+]
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -116,6 +139,16 @@ export function PreflightPage() {
     setPdfUrl(url)
     return () => URL.revokeObjectURL(url)
   }, [viewing, bytesByPath])
+
+  const [rightTab, setRightTab] = useState<'drawing' | 'nc1'>('drawing')
+  const ncBytes = viewing?.nc ? bytesByPath.get(viewing.nc.path) : undefined
+  // One orbit bus per part, shared by the STEP and NC viewports so they rotate together.
+  const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
+  const openPart = useCallback((part: PartRecord) => {
+    setRightTab('drawing')
+    setOrbitBus(createOrbitBus())
+    setViewing(part)
+  }, [])
 
   // Read the drawings (ground-truth qty/length) first — parsed concurrently, since
   // pdf.js does the work off-thread — then measure the STEP models (CPU-bound, so
@@ -242,6 +275,23 @@ export function PreflightPage() {
       ? allFindings
       : allFindings.filter((finding) => finding.severity === filter)
   }, [allFindings, filter])
+
+  // Parts table sorting — defaults to worst-problem-first so triage is quick.
+  const [sort, setSort] = useState<{ key: PartSortKey; dir: 1 | -1 }>({ key: 'severity', dir: 1 })
+  const toggleSort = useCallback((key: PartSortKey) => {
+    setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 1 ? -1 : 1 } : { key, dir: 1 }))
+  }, [])
+  const sortedParts = useMemo(
+    () =>
+      result
+        ? sortParts(result.parts, sort.key, sort.dir, {
+            findings: allFindings,
+            materials: drawingMaterials,
+            modelChecks,
+          })
+        : [],
+    [result, sort, allFindings, drawingMaterials, modelChecks],
+  )
 
   return (
     <div className="flex flex-col gap-6">
@@ -372,21 +422,20 @@ export function PreflightPage() {
               <Table containerClassName="max-h-[70vh] overflow-auto">
                 <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:border-b [&_th]:border-border [&_th]:bg-card [&_th:first-child]:left-0 [&_th:first-child]:z-30">
                   <TableRow className="hover:bg-transparent">
-                    <TableHead>Mark</TableHead>
-                    <TableHead>NC qty</TableHead>
-                    <TableHead>PDF qty</TableHead>
-                    <TableHead>NC len</TableHead>
-                    <TableHead>PDF len</TableHead>
-                    <TableHead>Profile</TableHead>
-                    <TableHead>NC</TableHead>
-                    <TableHead>STEP</TableHead>
-                    <TableHead>PDF</TableHead>
-                    <TableHead>Model size</TableHead>
+                    {PART_COLUMNS.map((column) => (
+                      <SortHead
+                        key={column.key}
+                        label={column.label}
+                        sortKey={column.key}
+                        sort={sort}
+                        onSort={toggleSort}
+                      />
+                    ))}
                     <TableHead className="text-right">3D</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card">
-                  {result.parts.map((part) => (
+                  {sortedParts.map((part) => (
                     <TableRow key={part.mark}>
                       <TableCell className="font-mono text-xs">{part.mark}</TableCell>
                       <TableCell
@@ -431,7 +480,7 @@ export function PreflightPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         {part.step ? (
-                          <Button variant="ghost" size="sm" onClick={() => setViewing(part)}>
+                          <Button variant="ghost" size="sm" onClick={() => openPart(part)}>
                             <Eye />
                             View
                           </Button>
@@ -469,16 +518,68 @@ export function PreflightPage() {
                     name={viewing.step.path}
                     bytes={bytesByPath.get(viewing.step.path)}
                     stock={stock}
+                    bus={orbitBus}
                   />
                 </Suspense>
+                <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur">
+                  {VIEW_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => requestView(orbitBus, preset.id)}
+                      className="rounded px-2 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              {pdfUrl && (
-                <iframe
-                  title={`${viewing.mark} drawing`}
-                  src={pdfUrl}
-                  className="h-[45vh] w-full border-0 border-t border-border lg:h-[70vh] lg:flex-1 lg:border-l lg:border-t-0"
-                />
-              )}
+              <div className="flex h-[45vh] w-full flex-col border-t border-border lg:h-[70vh] lg:flex-1 lg:border-l lg:border-t-0">
+                <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
+                  {[
+                    { id: 'drawing' as const, label: 'Drawing' },
+                    { id: 'nc1' as const, label: 'NC1' },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      disabled={tab.id === 'nc1' && !ncBytes}
+                      onClick={() => setRightTab(tab.id)}
+                      className={cn(
+                        'rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-40',
+                        rightTab === tab.id
+                          ? 'bg-accent text-accent-foreground'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  {rightTab === 'nc1' && ncBytes ? (
+                    <Suspense
+                      fallback={
+                        <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                          Loading…
+                        </div>
+                      }
+                    >
+                      <Nc3dViewer bytes={ncBytes} bus={orbitBus} />
+                    </Suspense>
+                  ) : pdfUrl ? (
+                    <iframe
+                      title={`${viewing.mark} drawing`}
+                      src={pdfUrl}
+                      className="h-full w-full border-0"
+                    />
+                  ) : (
+                    <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                      No drawing.
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
             {stock && (
               <div className="flex items-center gap-2 border-t border-border px-5 py-2 text-xs text-muted-foreground">
@@ -552,4 +653,32 @@ function Stat({ label, value, tone }: { label: string; value: number | string; t
 function Status({ value }: { value: boolean | null }) {
   if (value === null) return <Badge variant="muted">missing</Badge>
   return <Badge variant={value ? 'success' : 'destructive'}>{value ? 'ok' : 'bad'}</Badge>
+}
+
+function SortHead({
+  label,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  label: string
+  sortKey: PartSortKey
+  sort: { key: PartSortKey; dir: 1 | -1 }
+  onSort: (key: PartSortKey) => void
+}) {
+  const active = sort.key === sortKey
+  return (
+    <TableHead>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-foreground"
+      >
+        {label}
+        <span className="text-[9px] leading-none">
+          {active ? (sort.dir === 1 ? '▲' : '▼') : ''}
+        </span>
+      </button>
+    </TableHead>
+  )
 }

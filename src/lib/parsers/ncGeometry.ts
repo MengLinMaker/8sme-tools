@@ -1,0 +1,100 @@
+/**
+ * Minimal DSTV NC (`.nc1`) geometry reader.
+ *
+ * Reads the `AK`/`IK` (outer/inner contours) and `BO` (holes) blocks so a part can be
+ * drawn from its NC even when its STEP is wrong. Coordinates are per face: X runs along
+ * the member, Y is within the face (`v` front/web, `o` top, `u` bottom, `h` rear).
+ */
+
+export type NcFace = 'v' | 'o' | 'u' | 'h'
+
+export interface NcContour {
+  face: NcFace
+  kind: 'outer' | 'inner'
+  points: [number, number][]
+}
+
+export interface NcHole {
+  face: NcFace
+  x: number
+  y: number
+  diameter: number
+}
+
+export interface NcGeometry {
+  contours: NcContour[]
+  holes: NcHole[]
+}
+
+const BLOCK_CODES = new Set([
+  'ST',
+  'EN',
+  'BO',
+  'AK',
+  'IK',
+  'SI',
+  'PU',
+  'KO',
+  'KA',
+  'SC',
+  'TO',
+  'UE',
+])
+const FACE = /^[vouh]$/
+
+/** `0.00`, `0.00u`, `124.38s` → the numeric part. */
+function num(token: string | undefined): number {
+  if (token == null) return Number.NaN
+  const match = token.match(/-?\d+(?:\.\d+)?/)
+  return match ? Number(match[0]) : Number.NaN
+}
+
+export function parseNcGeometry(text: string): NcGeometry {
+  const lines = text.split(/\r?\n/).map((line) => line.trim())
+  const contours: NcContour[] = []
+  const holes: NcHole[] = []
+
+  let block = ''
+  let face: NcFace | null = null
+  let current: [number, number][] = []
+
+  const flush = () => {
+    if ((block === 'AK' || block === 'IK') && face && current.length >= 2) {
+      contours.push({ face, kind: block === 'IK' ? 'inner' : 'outer', points: current })
+    }
+    current = []
+  }
+
+  for (const line of lines) {
+    if (line === '') continue
+    if (BLOCK_CODES.has(line)) {
+      flush()
+      block = line
+      face = null
+      continue
+    }
+    if (block !== 'AK' && block !== 'IK' && block !== 'BO') continue
+
+    const tokens = line.split(/\s+/)
+    let index = 0
+    if (FACE.test(tokens[0])) {
+      face = tokens[0] as NcFace
+      index = 1
+    }
+    if (!face) continue
+
+    const x = num(tokens[index])
+    const y = num(tokens[index + 1])
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+
+    if (block === 'BO') {
+      const diameter = num(tokens[index + 2])
+      holes.push({ face, x, y, diameter: Number.isFinite(diameter) ? diameter : 0 })
+    } else {
+      current.push([x, y])
+    }
+  }
+  flush()
+
+  return { contours, holes }
+}
