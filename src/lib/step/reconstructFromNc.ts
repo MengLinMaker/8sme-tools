@@ -1,3 +1,4 @@
+import { contourHasBevel, contourStepDepth } from '@/lib/audit/manufacturability'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { type NcContour, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { partSectionForCode } from '@/lib/sections/stock'
@@ -51,7 +52,72 @@ function dedupe(pts: Pt[]): Pt[] {
   return out
 }
 
-export async function reconstructStepFromNc(ncText: string): Promise<string | null> {
+interface ShapeOps {
+  boundingBox: { bounds: [number[], number[]] }
+  clone: () => ShapeOps
+  translate: (x: number, y: number, z: number) => ShapeOps
+  mirror: (plane: string) => ShapeOps
+  rotate: (angle: number, position: number[], direction: number[]) => ShapeOps
+  intersect: (other: ShapeOps) => ShapeOps
+}
+
+/**
+ * Align the NC-built solid to a reference STEP (the part's own file), so the manufactured view
+ * matches the file's orientation. Tries the eight 90°-step transforms about the member axis and
+ * keeps the one with the most overlap, then centres it on the reference.
+ */
+async function orientToReference(solid: SolidOps, reference: Uint8Array): Promise<SolidOps> {
+  const { importSTEP, measureVolume } = await import('replicad')
+  const ref = (await importSTEP(
+    new Blob([new Uint8Array(reference)], { type: 'model/step' }),
+  )) as unknown as ShapeOps
+  const [rmin, rmax] = ref.boundingBox.bounds
+  const refCentre = rmin.map((v, k) => (v + rmax[k]) / 2)
+  const refVolume = measureVolume(ref as never)
+  if (!(refVolume > 0)) return solid
+
+  const base = solid as unknown as ShapeOps
+  let best: ShapeOps | null = null
+  let bestScore = -1
+  for (const mirrored of [false, true]) {
+    for (const angle of [0, 90, 180, 270]) {
+      const candidate = mirrored ? base.clone().mirror('XZ') : base.clone()
+      const oriented = angle ? candidate.rotate(angle, [0, 0, 0], [1, 0, 0]) : candidate
+      const [cmin, cmax] = oriented.boundingBox.bounds
+      const shift = rmin.map((_v, k) => refCentre[k] - (cmin[k] + cmax[k]) / 2)
+      let score = 0
+      try {
+        const probe = oriented.clone().translate(shift[0], shift[1], shift[2])
+        score = measureVolume(probe.intersect(ref.clone()) as never) / refVolume
+      } catch {
+        score = 0
+      }
+      if (score > bestScore) {
+        bestScore = score
+        best = oriented.translate(shift[0], shift[1], shift[2])
+      }
+    }
+  }
+  return (best ?? solid) as unknown as SolidOps
+}
+
+export interface ReconstructOptions {
+  /**
+   * Leave a flat surface where a face carries a sudden thickness step (a cut the laser can't
+   * sweep), instead of reproducing the step. Used for the "simplify to flat surface" fix.
+   */
+  simplify?: boolean
+  /**
+   * The part's own STEP file, if available: the built solid is oriented to match it, so the
+   * manufactured view uses the file's orientation rather than the reconstruction's own frame.
+   */
+  reference?: Uint8Array
+}
+
+export async function reconstructStepFromNc(
+  ncText: string,
+  options: ReconstructOptions = {},
+): Promise<string | null> {
   const header = parseDstv(ncText).header
   const geo = parseNcGeometry(ncText)
   const section = partSectionForCode(header.profile, header.dimensions)
@@ -121,6 +187,15 @@ export async function reconstructStepFromNc(ncText: string): Promise<string | nu
       const fused = (shape as unknown as { fuse: (other: unknown) => unknown }).fuse(drawings[i])
       if (fused) shape = fused as typeof shape
     }
+    // Simplifying: leave the face flat rather than reproducing a step, or a bevel whose
+    // straight-through cut would sever a piece it is meant to keep.
+    if (
+      options.simplify &&
+      axis === 1 &&
+      outer.some((c) => faceAxis(c.face) === 1 && (contourStepDepth(c) > 0 || contourHasBevel(c)))
+    ) {
+      continue
+    }
     const half = halfOf(axis)
     if (axis === 0) {
       // Face plane is (X, width=Y); extrude across the depth and keep the inside.
@@ -135,18 +210,22 @@ export async function reconstructStepFromNc(ncText: string): Promise<string | nu
       const xs = pointsByAxis[axis].map((p) => p[0])
       const minX = Math.min(...xs)
       const maxXc = Math.max(...xs)
+      // The rectangle must fully enclose the outline in X too, or the boolean drops the sliver
+      // of removed material at the very ends (the outline reaches the rect's left/right edges).
       const rect = poly([
-        [minX, -half - 2],
-        [maxXc, -half - 2],
-        [maxXc, half + 2],
-        [minX, half + 2],
+        [minX - 2, -half - 2],
+        [maxXc + 2, -half - 2],
+        [maxXc + 2, half + 2],
+        [minX - 2, half + 2],
       ])
       const notch = (rect as unknown as { cut: (other: unknown) => unknown }).cut(shape)
       if (!notch) continue
+      // `sketchOnPlane('XZ')` extrudes towards −Y, so shift the prism back over the section
+      // (which sits at Y = −half..half) rather than away from it.
       const notchSolid = (notch as ReturnType<typeof poly>)
         .sketchOnPlane('XZ')
         .extrude(400)
-        .translate(0, -150, 0) as unknown as SolidOps
+        .translate(0, 250, 0) as unknown as SolidOps
       solid = solid.cut(notchSolid)
     }
   }
@@ -171,6 +250,8 @@ export async function reconstructStepFromNc(ncText: string): Promise<string | nu
       solid = solid.cut(cyl)
     }
   }
+
+  if (options.reference) solid = await orientToReference(solid, options.reference)
 
   const blob = (solid as unknown as { blobSTEP: () => Blob }).blobSTEP()
   return await blob.text()

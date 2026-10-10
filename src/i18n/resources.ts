@@ -20,6 +20,7 @@ export const en = {
       cleanStep: 'Clean STEP',
       regenerate: 'Regenerate',
       regenerateStep: 'Regenerate STEP',
+      simplify: 'Simplify STEP (flat)',
       working: 'Working…',
       cleaning: 'Cleaning…',
     },
@@ -36,6 +37,7 @@ export const en = {
     fix: {
       cleaned: 'cleaned',
       regenerated: 'regenerated',
+      simplified: 'simplified',
     },
     dialog: {
       close: 'Close',
@@ -194,6 +196,7 @@ export const en = {
     },
     downloadStep: 'Download STEP (.zip)',
     downloadNc: 'Download NC (.zip)',
+    downloadCutBeam: 'Download cut-beam STEP (.zip)',
     generating: 'Generating…',
     oversized: '{{count}} T(s) could not be placed (too long or stock exhausted): {{lengths}} mm',
     stepNote:
@@ -204,6 +207,7 @@ export const en = {
     stepFailed: 'STEP generation failed: {{error}}',
     stepExportFailed: 'STEP export failed: {{error}}',
     ncExportFailed: 'NC export failed: {{error}}',
+    cutBeamExportFailed: 'Cut-beam STEP export failed: {{error}}',
     ubLabel: 'UB {{index}} · {{length}} mm',
     left: 'Left',
     right: 'Right',
@@ -279,6 +283,7 @@ export const zh = {
       cleanStep: '清理 STEP',
       regenerate: '重建',
       regenerateStep: '重建 STEP',
+      simplify: '简化 STEP（平面）',
       working: '处理中…',
       cleaning: '清理中…',
     },
@@ -295,6 +300,7 @@ export const zh = {
     fix: {
       cleaned: '已清理',
       regenerated: '已重建',
+      simplified: '已简化',
     },
     dialog: {
       close: '关闭',
@@ -450,6 +456,7 @@ export const zh = {
     },
     downloadStep: '下载 STEP (.zip)',
     downloadNc: '下载 NC (.zip)',
+    downloadCutBeam: '下载剖切钢梁 STEP (.zip)',
     generating: '生成中…',
     oversized: '{{count}} 根 T 件无法排入（过长或原材不足）：{{lengths}} mm',
     stepNote:
@@ -460,6 +467,7 @@ export const zh = {
     stepFailed: 'STEP 生成失败：{{error}}',
     stepExportFailed: 'STEP 导出失败：{{error}}',
     ncExportFailed: 'NC 导出失败：{{error}}',
+    cutBeamExportFailed: '剖切钢梁 STEP 导出失败：{{error}}',
     ubLabel: 'UB {{index}} · {{length}} mm',
     left: '左',
     right: '右',

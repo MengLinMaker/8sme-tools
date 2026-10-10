@@ -24,6 +24,7 @@ import {
 } from '@/lib/nesting/nest'
 import type { InputBundle } from '@/lib/readInput'
 import { getUb } from '@/lib/sections/ub'
+import { buildCutBeamStep } from '@/lib/step/cutBeam'
 import { buildUbBarStep, inspectStepBodies, type StepBody, ubOutline } from '@/lib/step/occ'
 
 const PartViewer = lazy(() => import('@/features/preflight/PartViewer'))
@@ -80,7 +81,7 @@ export function NestingPage() {
   })
   const [kerf, setKerf] = useState(() => loadSettings()?.kerf ?? 0)
   const [leftover, setLeftover] = useState(() => loadSettings()?.leftover ?? 0)
-  const [exporting, setExporting] = useState<'step' | 'nc' | null>(null)
+  const [exporting, setExporting] = useState<'step' | 'nc' | 'cut' | null>(null)
   const [viewing, setViewing] = useState<ViewFile | null>(null)
   const [viewBusy, setViewBusy] = useState(false)
 
@@ -239,6 +240,48 @@ export function NestingPage() {
     } catch (err) {
       setError(
         t('nesting.stepExportFailed', { error: err instanceof Error ? err.message : String(err) }),
+      )
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  /**
+   * Whole-beam STEP: the stock UB modelled as the beam the laser cuts (local lengthwise split +
+   * transverse kerf cuts + each part's real features) rather than loose finished parts.
+   */
+  const downloadCutBeamFiles = async () => {
+    if (!results) return
+    setExporting('cut')
+    setError(null)
+    try {
+      const files: Record<string, Uint8Array> = {}
+      for (const result of results) {
+        const ub = getUb(result.parentUb)
+        if (!ub) continue
+        const layouts = ubLayouts(result)
+        for (let index = 0; index < layouts.length; index++) {
+          const { ubBar, quantity } = layouts[index]
+          const left = ubBar.teeBars[0].units.map(pieceFor)
+          const right = ubBar.teeBars[1].units.map(pieceFor)
+          const base = `${result.parentUb}-x${quantity}-${ubBar.stockLength}-bar${String(index + 1).padStart(2, '0')}`
+          const step = await buildCutBeamStep({
+            section: ub,
+            name: base,
+            stockLength: ubBar.stockLength,
+            left,
+            right,
+            kerf: result.kerf,
+          })
+          files[`${base}.step`] = strToU8(step)
+        }
+      }
+      finishExport(files, `nesting-cutbeam-${bundle?.sourceName ?? 'job'}.zip`)
+    } catch (err) {
+      setError(
+        t('nesting.cutBeamExportFailed', {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       )
     } finally {
       setExporting(null)
@@ -445,6 +488,14 @@ export function NestingPage() {
               disabled={exporting !== null}
             >
               {exporting === 'step' ? t('nesting.generating') : t('nesting.downloadStep')}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void downloadCutBeamFiles()}
+              disabled={exporting !== null}
+            >
+              {exporting === 'cut' ? t('nesting.generating') : t('nesting.downloadCutBeam')}
             </Button>
             <Button
               variant="outline"

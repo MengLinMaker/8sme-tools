@@ -12,6 +12,11 @@ export interface NcContour {
   face: NcFace
   kind: 'outer' | 'inner'
   points: [number, number][]
+  /**
+   * Per-vertex extra fields after `X Y R`, aligned with `points`. These are the DSTV
+   * welding-preparation / bevel pairs — up to two `angle, distance` values (`0` = none).
+   */
+  bevels: number[][]
 }
 
 export interface NcHole {
@@ -57,12 +62,19 @@ export function parseNcGeometry(text: string): NcGeometry {
   let block = ''
   let face: NcFace | null = null
   let current: [number, number][] = []
+  let currentBevels: number[][] = []
 
   const flush = () => {
     if ((block === 'AK' || block === 'IK') && face && current.length >= 2) {
-      contours.push({ face, kind: block === 'IK' ? 'inner' : 'outer', points: current })
+      contours.push({
+        face,
+        kind: block === 'IK' ? 'inner' : 'outer',
+        points: current,
+        bevels: currentBevels,
+      })
     }
     current = []
+    currentBevels = []
   }
 
   for (const line of lines) {
@@ -92,6 +104,13 @@ export function parseNcGeometry(text: string): NcGeometry {
       holes.push({ face, x, y, diameter: Number.isFinite(diameter) ? diameter : 0 })
     } else {
       current.push([x, y])
+      // R then up to four welding-preparation values (two angle/distance pairs).
+      const bevel: number[] = []
+      for (let i = index + 2; i <= index + 5; i++) {
+        const value = num(tokens[i])
+        bevel.push(Number.isFinite(value) ? value : 0)
+      }
+      currentBevels.push(bevel)
     }
   }
   flush()

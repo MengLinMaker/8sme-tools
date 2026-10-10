@@ -14,7 +14,7 @@ import { ensureOc } from './occInit'
  */
 
 /** Fallback upper/lower T profile if a part STEP is unavailable. */
-function teeProfiles(
+export function teeProfiles(
   section: RolledSection,
   gap: number,
 ): { top: [number, number][]; bottom: [number, number][] } {
@@ -105,7 +105,7 @@ interface ShapeOps {
 const ETCH_FONT = 'etch'
 let fontReady: Promise<boolean> | null = null
 
-async function ensureFont(): Promise<boolean> {
+export async function ensureFont(): Promise<boolean> {
   if (!fontReady) {
     fontReady = (async () => {
       try {
@@ -122,7 +122,7 @@ async function ensureFont(): Promise<boolean> {
   return fontReady
 }
 
-async function engrave(
+export async function engrave(
   solid: AnyShape,
   mark: string,
   zStart: number,
@@ -145,7 +145,7 @@ async function engrave(
  * returns the shape (starting at Z=0) with its real along-beam length so callers can pack parts
  * without overlapping.
  */
-async function placeRealPart(
+export async function placeRealPart(
   blob: Blob,
   sideOffset: number,
   flip: boolean,
@@ -177,6 +177,22 @@ async function placeRealPart(
   return { shape: so.translate(-cx, sideOffset - cy, -min[2]), length }
 }
 
+/**
+ * Writes a shape to STEP (AP214, no assembly) and returns the file text. The writer constructor
+ * (re)initialises the STEP interface, so its options are set after it exists.
+ */
+export async function writeStep(shape: AnyShape, path: string): Promise<string> {
+  const { getOC } = await import('replicad')
+  const occ = getOC() as unknown as OccStep
+  const writer = new occ.STEPControl_Writer()
+  occ.Interface_Static.SetCVal('write.step.schema', 'AP214IS')
+  occ.Interface_Static.SetIVal('write.step.assembly', 0)
+  writer.Transfer((shape as unknown as { wrapped: unknown }).wrapped, occ.STEPControl_AsIs)
+  writer.Write(path)
+  const content = occ.FS.readFile(path, { encoding: 'utf8' })
+  return typeof content === 'string' ? content : new TextDecoder().decode(content)
+}
+
 export async function buildUbBarStep(
   input: UbBarStepInput,
   options: UbBarStepOptions = {},
@@ -184,7 +200,7 @@ export async function buildUbBarStep(
   const strict = options.strict ?? true
   const { section, kerf } = input
   await ensureOc()
-  const { draw, getOC, compoundShapes } = await import('replicad')
+  const { draw, compoundShapes } = await import('replicad')
   const hasFont = await ensureFont()
 
   // Pieces sit only the kerf apart — as close as possible, no extra allowance.
@@ -267,20 +283,9 @@ export async function buildUbBarStep(
     throw new Error(`parts clash and cannot be cut: ${clashes.join(', ')}`)
   }
 
-  const occ = getOC() as unknown as OccStep
-  // The writer constructor (re)initialises the STEP interface, so set its options after it
-  // exists: schema AP214 and no assembly.
-  const writer = new occ.STEPControl_Writer()
-  occ.Interface_Static.SetCVal('write.step.schema', 'AP214IS')
-  occ.Interface_Static.SetIVal('write.step.assembly', 0)
   // No tabs for now — write the pieces as-is (a compound of separate bodies).
   const beam = compoundShapes(solids)
-  writer.Transfer((beam as unknown as { wrapped: unknown }).wrapped, occ.STEPControl_AsIs)
-
-  const path = `nested-${input.name}.stp`
-  writer.Write(path)
-  const content = occ.FS.readFile(path, { encoding: 'utf8' })
-  return typeof content === 'string' ? content : new TextDecoder().decode(content)
+  return writeStep(beam, `nested-${input.name}.stp`)
 }
 
 export interface StepBody {

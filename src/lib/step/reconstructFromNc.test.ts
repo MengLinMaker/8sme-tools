@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { measureStep } from './measure'
 import { setOcWasmUrl } from './occInit'
 import { reconstructStepFromNc } from './reconstructFromNc'
 
@@ -36,7 +37,25 @@ async function measure(bytes: string | Buffer): Promise<{ size: number[]; vol: n
 
 const HAVE = existsSync(ncPath('m199')) && existsSync(stpPath('m199'))
 
+/** Fraction of the reference STEP's volume the NC-built solid covers when aligned to it. */
+async function overlapWithReference(mark: string): Promise<number> {
+  const { importSTEP, measureVolume } = await import('replicad')
+  const reference = new Uint8Array(readFileSync(stpPath(mark)))
+  const built = await reconstructStepFromNc(readFileSync(ncPath(mark), 'utf8'), { reference })
+  if (!built) return 0
+  const b = (await importSTEP(new Blob([new TextEncoder().encode(built)]))) as never
+  const r = (await importSTEP(new Blob([reference]))) as never
+  const inter = (b as unknown as { intersect: (o: never) => never }).intersect(r)
+  return measureVolume(inter as never) / measureVolume(r)
+}
+
 describe.skipIf(!HAVE)('reconstruct parts from NC (experimental)', () => {
+  it('orients to the part STEP file (m41/m31 are both PFCs needing opposite flips)', async () => {
+    for (const mark of ['m41', 'm31', 'm124', 'm117', 'a1', 'm143']) {
+      expect(await overlapWithReference(mark), `${mark} overlap`).toBeGreaterThan(0.9)
+    }
+  }, 600000)
+
   it('matches healthy sibling parts within tolerance (T, RHS, PFC, angle)', async () => {
     for (const mark of ['m199', 'm143', 'm117', 'm124', 'a1', 'm150', 'm153', 'm164']) {
       const step = await reconstructStepFromNc(readFileSync(ncPath(mark), 'utf8'))
@@ -55,6 +74,20 @@ describe.skipIf(!HAVE)('reconstruct parts from NC (experimental)', () => {
       // volume within 4% (end-arc radii are drawn straight)
       expect(dvol).toBeLessThan(0.04)
     }
+  }, 300000)
+
+  it('simplify keeps a mitred end attached (a1)', async () => {
+    const nc = readFileSync(ncPath('a1'), 'utf8')
+    // Straight-through cuts sever the mitred v-leg end (which the STEP keeps attached)...
+    const straight = await reconstructStepFromNc(nc)
+    expect(straight).toBeTruthy()
+    if (!straight) return
+    expect((await measureStep(new TextEncoder().encode(straight))).bodies).toBeGreaterThan(1)
+    // ...and the simplify fix leaves that surface uncut, so it stays one solid.
+    const simple = await reconstructStepFromNc(nc, { simplify: true })
+    expect(simple).toBeTruthy()
+    if (!simple) return
+    expect((await measureStep(new TextEncoder().encode(simple))).bodies).toBe(1)
   }, 300000)
 
   it('produces usable geometry for the corrupted parts', async () => {

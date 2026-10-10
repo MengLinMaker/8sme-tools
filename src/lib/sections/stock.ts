@@ -189,6 +189,23 @@ function reverse(points: [number, number][]): [number, number][] {
   return [...points].reverse()
 }
 
+/** Polyline approximation of a circular arc (radians), inclusive of both endpoints. */
+function arcPoints(
+  cx: number,
+  cy: number,
+  radius: number,
+  start: number,
+  end: number,
+  steps = 6,
+): [number, number][] {
+  const points: [number, number][] = []
+  for (let i = 0; i <= steps; i++) {
+    const angle = start + ((end - start) * i) / steps
+    points.push([cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius])
+  }
+  return points
+}
+
 /** Rounded rectangle outline (counter-clockwise), radius clamped to the half-size. */
 function roundedRect(width: number, height: number, radius: number): [number, number][] {
   const hw = width / 2
@@ -235,20 +252,41 @@ function hollowRect(
   return { points: outer, holes: [hole] }
 }
 
-function teeOutline(b: number, depth: number, tf: number, tw: number): [number, number][] {
+/**
+ * T-section (a UB split lengthwise), flange down, web up. `radius` is the root fillet
+ * where the web meets the flange (from the parent UB); 0 keeps the junction sharp.
+ */
+function teeOutline(
+  b: number,
+  depth: number,
+  tf: number,
+  tw: number,
+  radius = 0,
+): [number, number][] {
   const hb = b / 2
   const hd = depth / 2
   const hw = tw / 2
-  return centre([
+  const r = Math.max(0, Math.min(radius, hb - hw, hd - tf))
+  const points: [number, number][] = [
     [-hb, -hd],
     [hb, -hd],
     [hb, -hd + tf],
-    [hw, -hd + tf],
-    [hw, hd],
-    [-hw, hd],
-    [-hw, -hd + tf],
-    [-hb, -hd + tf],
-  ])
+  ]
+  if (r > 0) {
+    // Right root fillet: flange top → web side, concave (centre in the void).
+    points.push(...arcPoints(hw + r, -hd + tf + r, r, -Math.PI / 2, -Math.PI))
+  } else {
+    points.push([hw, -hd + tf])
+  }
+  points.push([hw, hd], [-hw, hd])
+  if (r > 0) {
+    // Left root fillet: web side → flange top.
+    points.push(...arcPoints(-hw - r, -hd + tf + r, r, 0, -Math.PI / 2))
+  } else {
+    points.push([-hw, -hd + tf])
+  }
+  points.push([-hb, -hd + tf])
+  return centre(points)
 }
 
 /** Full I-section outline (x = width, y = depth) for UB / UC / TFB, root radii omitted. */
@@ -320,7 +358,7 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
   switch (family) {
     case 'tee': {
       if (dims.length >= 4) {
-        points = teeOutline(dims[0], dims[1], dims[2], dims[3])
+        points = teeOutline(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0)
       } else {
         const match = inferTee(clean, dims)
         if (match)
@@ -329,6 +367,7 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
             match.section.d / 2,
             match.section.tf,
             match.section.tw,
+            match.section.r,
           )
       }
       const match = inferTee(clean, dims)
@@ -444,7 +483,8 @@ export function partSectionForCode(
   const n = numbers(clean)
   switch (family) {
     case 'tee': {
-      if (dims.length >= 4) return { points: teeOutline(dims[0], dims[1], dims[2], dims[3]) }
+      if (dims.length >= 4)
+        return { points: teeOutline(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0) }
       const match = inferTee(clean, dims)
       if (match)
         return {
@@ -453,6 +493,7 @@ export function partSectionForCode(
             match.section.d / 2,
             match.section.tf,
             match.section.tw,
+            match.section.r,
           ),
         }
       return null

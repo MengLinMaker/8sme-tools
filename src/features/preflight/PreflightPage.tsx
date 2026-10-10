@@ -2,7 +2,16 @@ import { useNavigate, useSearch } from '@tanstack/react-router'
 import { zipSync } from 'fflate'
 import type { TFunction } from 'i18next'
 import { Eye, Undo2 } from 'lucide-react'
-import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  lazy,
+  type ReactNode,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
@@ -19,6 +28,7 @@ import {
 } from '@/components/ui/table'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
+import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { SeverityFilter } from '@/lib/audit/schemas'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
@@ -38,6 +48,13 @@ import {
 import { reconstructStepFromNc } from '@/lib/step/reconstructFromNc'
 import { cn } from '@/lib/utils'
 import { createOrbitBus, requestView, type ViewPreset } from './orbitSync'
+import {
+  fingerprintEntries,
+  loadPreflightCache,
+  type PreflightCacheEntry,
+  preflightCacheEnabled,
+  savePreflightCache,
+} from './preflightCache'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 const Nc3dViewer = lazy(() => import('./Nc3dViewer'))
@@ -91,8 +108,11 @@ const SEVERITY_VARIANT = {
   info: 'info',
 } as const
 
-/** A per-part STEP fix the user applied: cleaned (stray bodies dropped) or rebuilt from the NC. */
-type StepFixKind = 'cleaned' | 'regenerated'
+/**
+ * A per-part STEP fix the user applied: cleaned (stray bodies dropped), rebuilt from the NC,
+ * or simplified (a face's uncuttable step left flat).
+ */
+type StepFixKind = 'cleaned' | 'regenerated' | 'simplified'
 interface StepOverride {
   bytes: Uint8Array
   kind: StepFixKind
@@ -100,7 +120,10 @@ interface StepOverride {
 
 /** A finding an override resolves — greyed out in the list, with an undo. */
 function resolvedFindings(kind: StepFixKind): string[] {
-  return kind === 'regenerated' ? ['STRAY_BODY', 'MANUFACTURE_MISMATCH'] : ['STRAY_BODY']
+  if (kind === 'regenerated') return ['STRAY_BODY', 'MANUFACTURE_MISMATCH']
+  if (kind === 'simplified')
+    return ['CUT_STEP', 'CUT_END_PIECE', 'MANUFACTURE_MISMATCH', 'STRAY_BODY']
+  return ['STRAY_BODY']
 }
 
 /** Formats a measured-vs-expected size check for display (localised). */
@@ -154,6 +177,8 @@ export function PreflightPage() {
   const [manufactureChecks, setManufactureChecks] = useState<Map<string, ModelComparison>>(
     new Map(),
   )
+  /** Per-part laser-cut manufacturability issues (sudden thickness steps). */
+  const [cutIssues, setCutIssues] = useState<Map<string, Finding[]>>(new Map())
   const [checking, setChecking] = useState(false)
   /** True from when a job is dropped until the whole analysis (drawings + models) finishes. */
   const [analyzing, setAnalyzing] = useState(false)
@@ -172,18 +197,66 @@ export function PreflightPage() {
     [navigate],
   )
 
+  /** The analysis whose results came from the dev cache, so the effect can skip re-running it. */
+  const restoredResultRef = useRef<AuditResult | null>(null)
+  /** The last cached run, for fingerprinting a re-dropped job without a full re-analysis. */
+  const cacheRef = useRef<PreflightCacheEntry | null>(null)
+
   const handleBundle = useCallback(
     (input: InputBundle) => {
       setError(null)
-      setAnalyzing(true)
       setBundle(input)
       setViewing(null)
       setStepOverrides(new Map())
-      setResult(auditEntries(input.sourceName, input.entries))
       setFilter('all')
+
+      // Dev-only: re-dropping the same job reuses the cached analysis instead of re-measuring.
+      const cached = cacheRef.current
+      if (
+        preflightCacheEnabled &&
+        cached &&
+        fingerprintEntries(input.entries) === cached.fingerprint
+      ) {
+        const restored = auditEntries(input.sourceName, input.entries)
+        restoredResultRef.current = restored
+        setResult(restored)
+        setDrawingMaterials(new Map(cached.drawingMaterials))
+        setModelChecks(new Map(cached.modelChecks))
+        setManufactureChecks(new Map(cached.manufactureChecks))
+        setCutIssues(new Map(cached.cutIssues))
+        setAnalyzing(false)
+        return
+      }
+
+      restoredResultRef.current = null
+      setAnalyzing(true)
+      setResult(auditEntries(input.sourceName, input.entries))
     },
     [setFilter],
   )
+
+  // Dev-only: restore the last run on mount so a hot reload skips re-parsing the drawings and
+  // re-measuring every STEP through the OCC kernel.
+  useEffect(() => {
+    if (!preflightCacheEnabled) return
+    let cancelled = false
+    void loadPreflightCache().then((cached) => {
+      if (cancelled || !cached) return
+      cacheRef.current = cached
+      const restored = auditEntries(cached.sourceName, cached.entries)
+      restoredResultRef.current = restored
+      setBundle({ sourceName: cached.sourceName, entries: cached.entries })
+      setResult(restored)
+      setDrawingMaterials(cached.drawingMaterials)
+      setModelChecks(cached.modelChecks)
+      setManufactureChecks(cached.manufactureChecks)
+      setCutIssues(cached.cutIssues)
+      setAnalyzing(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const bytesByPath = useMemo(() => {
     const map = new Map<string, Uint8Array>()
@@ -232,6 +305,8 @@ export function PreflightPage() {
     ? (stepOverrides.get(viewing.mark)?.bytes ??
       (viewing.step ? bytesByPath.get(viewing.step.path) : undefined))
     : undefined
+  // The part's own STEP file, used to give the manufactured model the file's orientation.
+  const referenceStepBytes = viewing?.step ? bytesByPath.get(viewing.step.path) : undefined
 
   // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
   const [viewMode, setViewMode] = useState<ViewMode>('split')
@@ -240,7 +315,9 @@ export function PreflightPage() {
     setManufactured(null)
     if (!ncBytes) return
     let cancelled = false
-    void reconstructStepFromNc(new TextDecoder().decode(ncBytes)).then(
+    void reconstructStepFromNc(new TextDecoder().decode(ncBytes), {
+      reference: referenceStepBytes,
+    }).then(
       (step) => {
         if (!cancelled && step) setManufactured(new TextEncoder().encode(step))
       },
@@ -251,7 +328,7 @@ export function PreflightPage() {
     return () => {
       cancelled = true
     }
-  }, [ncBytes])
+  }, [ncBytes, referenceStepBytes])
 
   const hasManufactured = Boolean(manufactured)
   const hasStep = Boolean(stepBytes)
@@ -274,15 +351,21 @@ export function PreflightPage() {
   // pdf.js does the work off-thread — then measure the STEP models (CPU-bound, so
   // sequential). Running them in order avoids the OCC kernel and pdf.js competing.
   useEffect(() => {
+    if (!result) {
+      setAnalyzing(false)
+      return
+    }
+    // Results restored from the dev cache (or the same job re-dropped) are already complete.
+    if (result === restoredResultRef.current) {
+      setAnalyzing(false)
+      return
+    }
     setDrawingMaterials(new Map())
     setDrawingDone(0)
     setDrawingTotal(0)
     setModelChecks(new Map())
     setManufactureChecks(new Map())
-    if (!result) {
-      setAnalyzing(false)
-      return
-    }
+    setCutIssues(new Map())
     let cancelled = false
 
     const pdfParts = result.parts.filter((part) => {
@@ -323,7 +406,29 @@ export function PreflightPage() {
       setDrawingDone(pdfParts.length)
       setDrawingChecking(false)
 
-      // Phase 2: STEP model sizes (empty/degenerate measurement is fine).
+      // Phase 2: laser-cut manufacturability — sudden thickness changes a single-face sweep
+      // can't reach. Cheap (text only), so do it before the heavy model work.
+      const issues = new Map<string, Finding[]>()
+      for (const part of result.parts) {
+        const ncPath = part.nc?.path
+        const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
+        if (!ncBytes) continue
+        for (const issue of assessManufacturability(new TextDecoder().decode(ncBytes))) {
+          const list = issues.get(part.mark) ?? []
+          list.push({
+            severity: 'warning',
+            code: issue.code,
+            mark: part.mark,
+            message: issue.message,
+            params: issue.params,
+          })
+          issues.set(part.mark, list)
+        }
+      }
+      if (cancelled) return
+      setCutIssues(issues)
+
+      // Phase 3: STEP model sizes (empty/degenerate measurement is fine).
       setChecking(true)
       const checks = new Map<string, SizeCheck>()
       const measures = new Map<string, StepMeasure>()
@@ -351,7 +456,7 @@ export function PreflightPage() {
       if (cancelled) return
       setModelChecks(new Map(checks))
 
-      // Phase 3: does the NC-built geometry match the STEP? Rebuild each part from its NC and
+      // Phase 4: does the NC-built geometry match the STEP? Rebuild each part from its NC and
       // compare sizes/volume. Mismatches get an offer to regenerate the STEP (viewer / findings).
       const manufacture = new Map<string, ModelComparison>()
       for (const part of result.parts) {
@@ -365,14 +470,44 @@ export function PreflightPage() {
           if (!built) continue
           const madeMeasure = await measureStep(new TextEncoder().encode(built))
           manufacture.set(part.mark, compareModels(stepMeasure, madeMeasure))
+          // Cutting straight through (no bevel) detaches piece(s) the STEP keeps attached —
+          // the "tiny end piece" that a bevel/angled cut exists to avoid.
+          const extra = madeMeasure.bodies - stepMeasure.bodies
+          if (extra > 0) {
+            const list = issues.get(part.mark) ?? []
+            list.push({
+              severity: 'warning',
+              code: 'CUT_END_PIECE',
+              mark: part.mark,
+              message: `Cutting straight through would detach ${extra} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)`,
+              params: { extra },
+            })
+            issues.set(part.mark, list)
+          }
         } catch {
           // best-effort: skip parts the rebuild can't handle
         }
       }
       if (!cancelled) {
         setManufactureChecks(new Map(manufacture))
+        setCutIssues(new Map(issues))
         setChecking(false)
         setAnalyzing(false)
+        if (preflightCacheEnabled) {
+          const entries = Array.from(bytesByPath, ([path, bytes]) => ({ path, bytes }))
+          const cacheEntry: PreflightCacheEntry = {
+            sourceName: result.sourceName,
+            entries,
+            drawingMaterials: materials,
+            modelChecks: checks,
+            manufactureChecks: manufacture,
+            cutIssues: issues,
+            fingerprint: fingerprintEntries(entries),
+            savedAt: Date.now(),
+          }
+          cacheRef.current = cacheEntry
+          void savePreflightCache(cacheEntry)
+        }
       }
     })()
 
@@ -425,6 +560,8 @@ export function PreflightPage() {
           params: { note },
         })
       }
+      const cut = cutIssues.get(part.mark)
+      if (cut) extra.push(...cut)
     }
     return [...result.findings, ...extra]
       .filter((finding) => finding.severity !== 'info')
@@ -433,7 +570,7 @@ export function PreflightPage() {
           SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
           (a.mark ?? '').localeCompare(b.mark ?? ''),
       )
-  }, [result, drawingMaterials, modelChecks, manufactureChecks, t])
+  }, [result, drawingMaterials, modelChecks, manufactureChecks, cutIssues, t])
 
   const counts = useMemo(() => {
     const result = { error: 0, warning: 0, info: 0 }
@@ -504,6 +641,17 @@ export function PreflightPage() {
     [manufactureChecks, stepOverrides],
   )
 
+  /** A part can be simplified when its NC carries an uncuttable step (and isn't simplified). */
+  const isSimplifiable = useCallback(
+    (part: PartRecord | undefined) =>
+      Boolean(
+        part?.nc &&
+          (cutIssues.get(part.mark)?.length ?? 0) > 0 &&
+          stepOverrides.get(part.mark)?.kind !== 'simplified',
+      ),
+    [cutIssues, stepOverrides],
+  )
+
   const setOverride = useCallback((mark: string, bytes: Uint8Array, kind: StepFixKind) => {
     setStepOverrides((prev) => {
       const next = new Map(prev)
@@ -548,8 +696,32 @@ export function PreflightPage() {
       if (!ncBytes) return
       setFixingMark(part.mark)
       try {
-        const step = await reconstructStepFromNc(new TextDecoder().decode(ncBytes))
+        const reference = part.step ? bytesByPath.get(part.step.path) : undefined
+        const step = await reconstructStepFromNc(new TextDecoder().decode(ncBytes), { reference })
         if (step) setOverride(part.mark, new TextEncoder().encode(step), 'regenerated')
+      } catch {
+        // leave the original in place if the rebuild fails
+      } finally {
+        setFixingMark(null)
+      }
+    },
+    [bytesByPath, setOverride],
+  )
+
+  /** Leaves a face's uncuttable step flat, rebuilding the part from its NC without that cut. */
+  const simplifyPart = useCallback(
+    async (part: PartRecord) => {
+      const ncPath = part.nc?.path
+      const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
+      if (!ncBytes) return
+      setFixingMark(part.mark)
+      try {
+        const reference = part.step ? bytesByPath.get(part.step.path) : undefined
+        const step = await reconstructStepFromNc(new TextDecoder().decode(ncBytes), {
+          simplify: true,
+          reference,
+        })
+        if (step) setOverride(part.mark, new TextEncoder().encode(step), 'simplified')
       } catch {
         // leave the original in place if the rebuild fails
       } finally {
@@ -734,6 +906,18 @@ export function PreflightPage() {
                                     : t('common.actions.regenerateStep')}
                                 </Button>
                               )}
+                              {!resolved && isSimplifiable(viewable) && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={fixingMark === viewable?.mark}
+                                  onClick={() => viewable && void simplifyPart(viewable)}
+                                >
+                                  {fixingMark === viewable?.mark
+                                    ? t('common.actions.working')
+                                    : t('common.actions.simplify')}
+                                </Button>
+                              )}
                               {!resolved && isCleanable(viewable) && (
                                 <Button
                                   variant="outline"
@@ -743,7 +927,7 @@ export function PreflightPage() {
                                 >
                                   {fixingMark === viewable?.mark
                                     ? t('common.actions.cleaning')
-                                    : t('common.actions.clean')}
+                                    : t('common.actions.cleanStep')}
                                 </Button>
                               )}
                               {viewable && (
@@ -875,7 +1059,19 @@ export function PreflightPage() {
                                   >
                                     {fixingMark === part.mark
                                       ? t('common.actions.working')
-                                      : t('common.actions.regenerate')}
+                                      : t('common.actions.regenerateStep')}
+                                  </Button>
+                                )}
+                                {isSimplifiable(part) && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={fixingMark === part.mark}
+                                    onClick={() => void simplifyPart(part)}
+                                  >
+                                    {fixingMark === part.mark
+                                      ? t('common.actions.working')
+                                      : t('common.actions.simplify')}
                                   </Button>
                                 )}
                                 {isCleanable(part) && (
@@ -887,7 +1083,7 @@ export function PreflightPage() {
                                   >
                                     {fixingMark === part.mark
                                       ? t('common.actions.cleaning')
-                                      : t('common.actions.clean')}
+                                      : t('common.actions.cleanStep')}
                                   </Button>
                                 )}
                               </>
