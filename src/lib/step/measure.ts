@@ -60,16 +60,27 @@ export async function measureShape(shape: MeasurableShape): Promise<StepMeasure>
   const solids = shape.solids
   if (solids.length === 0) return { size: whole, bodies: 0, extra: false, volume: 0 }
 
-  let main = solids[0]
-  let largest = measureVolume(main as never)
-  for (const solid of solids.slice(1)) {
-    const volume = measureVolume(solid as never)
+  // Rank solids by bounding-box volume (a Bnd_Box pass, no surface integration) and only run the
+  // expensive exact volume on candidates that can still win: a solid's true volume never exceeds
+  // its bounding-box volume, so anything at or below the best exact volume so far is out. This
+  // returns exactly what measuring every solid would — usually with a single GProp call.
+  const ranked = solids
+    .map((solid) => {
+      const size = extents(solid.boundingBox)
+      return { solid, size, boxVolume: size[0] * size[1] * size[2] }
+    })
+    .sort((a, b) => b.boxVolume - a.boxVolume)
+  let main = ranked[0]
+  let largest = measureVolume(main.solid as never)
+  for (const candidate of ranked.slice(1)) {
+    if (!(candidate.boxVolume > largest)) break
+    const volume = measureVolume(candidate.solid as never)
     if (volume > largest) {
       largest = volume
-      main = solid
+      main = candidate
     }
   }
-  const size = extents(main.boundingBox)
+  const size = main.size
   return {
     size,
     bodies: solids.length,

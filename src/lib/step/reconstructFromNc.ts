@@ -2,6 +2,7 @@ import { contourHasBevel, contourStepDepth } from '@/lib/audit/manufacturability
 import { parseDstv } from '@/lib/parsers/dstv'
 import { type NcContour, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { partSectionForCode } from '@/lib/sections/stock'
+import type { MeasurableShape } from './measure'
 import { ensureOc } from './occInit'
 
 /**
@@ -166,6 +167,20 @@ export async function reconstructStepFromNc(
   ncText: string,
   options: ReconstructOptions = {},
 ): Promise<string | null> {
+  const built = await reconstructSolidFromNc(ncText, options)
+  return built?.step ?? null
+}
+
+/**
+ * Rebuilds the part solid from its DSTV `.nc1` and returns both the live OCC shape and its STEP
+ * text. The shape is what was exported, so callers that need to measure it (e.g. the STEP worker)
+ * should run `measureShape` on `solid` directly — re-importing `step` just to measure it pays for
+ * a STEP export + parse round trip of geometry already in memory.
+ */
+export async function reconstructSolidFromNc(
+  ncText: string,
+  options: ReconstructOptions = {},
+): Promise<{ solid: SolidOps & MeasurableShape; step: string } | null> {
   const header = parseDstv(ncText).header
   const geo = parseNcGeometry(ncText)
   const section = partSectionForCode(header.profile, header.dimensions)
@@ -313,5 +328,5 @@ export async function reconstructStepFromNc(
   if (options.reference) solid = await orientToReference(solid, options.reference)
 
   const blob = (solid as unknown as { blobSTEP: () => Blob }).blobSTEP()
-  return await blob.text()
+  return { solid: solid as SolidOps & MeasurableShape, step: await blob.text() }
 }

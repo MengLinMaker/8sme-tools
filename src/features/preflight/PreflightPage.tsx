@@ -1,7 +1,7 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { zipSync } from 'fflate'
 import type { TFunction } from 'i18next'
-import { Eye, Undo2 } from 'lucide-react'
+import { ChevronDown, Eye, Undo2 } from 'lucide-react'
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
@@ -608,6 +608,53 @@ export function PreflightPage() {
     return result
   }, [allFindings])
 
+  /** Total pieces across the job (drawing qty is ground truth, then part list, then NC). */
+  const totalQty = useMemo(() => {
+    if (!result) return 0
+    let total = 0
+    for (const part of result.parts) {
+      const qty =
+        drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? 0
+      total += qty
+    }
+    return total
+  }, [result, drawingMaterials])
+
+  /** Cumulative cut length in mm (qty × length per mark, drawing length is ground truth). */
+  const totalLengthMm = useMemo(() => {
+    if (!result) return 0
+    let total = 0
+    for (const part of result.parts) {
+      const qty =
+        drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? 0
+      const length =
+        drawingMaterials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
+      if (length != null) total += qty * length
+    }
+    return total
+  }, [result, drawingMaterials])
+
+  /** Per-profile rollup: pieces and cumulative length, so stock can be planned at a glance. */
+  const profileGroups = useMemo(() => {
+    if (!result) return []
+    const map = new Map<string, { marks: Set<string>; pieces: number; lengthMm: number }>()
+    for (const part of result.parts) {
+      const profile = part.nc?.profile ?? part.expected?.profile ?? '—'
+      const entry = map.get(profile) ?? { marks: new Set<string>(), pieces: 0, lengthMm: 0 }
+      entry.marks.add(part.mark)
+      const qty =
+        drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? 0
+      const length =
+        drawingMaterials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
+      entry.pieces += qty
+      if (length != null) entry.lengthMm += qty * length
+      map.set(profile, entry)
+    }
+    return [...map.entries()]
+      .map(([profile, entry]) => ({ profile, ...entry, markCount: entry.marks.size }))
+      .sort((a, b) => b.lengthMm - a.lengthMm || b.pieces - a.pieces)
+  }, [result, drawingMaterials])
+
   /** Per-part worst severity, so the table shows clean vs warning/error at a glance. */
   const partSeverity = useMemo(() => {
     const map = new Map<string, { error: number; warning: number }>()
@@ -645,6 +692,12 @@ export function PreflightPage() {
     }
     return [...faces]
   }, [viewing, cutIssues])
+
+  // Collapsible sections — long jobs push the tables far down, so profiles,
+  // findings and parts all collapse like an accordion.
+  const [profilesOpen, setProfilesOpen] = useState(true)
+  const [findingsOpen, setFindingsOpen] = useState(true)
+  const [partsOpen, setPartsOpen] = useState(true)
 
   // Parts table sorting — defaults to worst-problem-first so triage is quick.
   const [sort, setSort] = useState<{ key: PartSortKey; dir: 1 | -1 }>({ key: 'severity', dir: 1 })
@@ -773,16 +826,22 @@ export function PreflightPage() {
     <div className="flex flex-col gap-6">
       <section className="max-w-2xl">
         <h1 className="mb-1.5 text-2xl font-bold tracking-tight">{t('preflight.title')}</h1>
-        <p className="text-muted-foreground">{t('preflight.subtitle')}</p>
-        {result && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            {t('preflight.source')}:{' '}
-            <span className="font-mono text-foreground">{result.sourceName}</span>
-          </p>
-        )}
       </section>
 
       <DropZone onBundle={handleBundle} onError={setError} />
+
+      {result && (
+        <Card>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-3">
+            <span className="text-xs uppercase tracking-wide text-muted-foreground">
+              {t('preflight.source')}
+            </span>
+            <span className="font-mono text-lg font-semibold tracking-tight">
+              {result.sourceName}
+            </span>
+          </div>
+        </Card>
+      )}
 
       {error && (
         <div className="rounded-lg border border-destructive bg-destructive/10 px-3.5 py-3 text-sm text-destructive-foreground">
@@ -792,8 +851,15 @@ export function PreflightPage() {
 
       {result && (
         <>
-          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <Stat label={t('preflight.stats.parts')} value={result.summary.parts} />
+            <Stat label={t('preflight.stats.totalQty')} value={totalQty} />
+            <Stat
+              label={t('preflight.stats.totalLength')}
+              value={totalLengthMm > 0 ? `${(totalLengthMm / 1000).toFixed(1)} m` : '—'}
+              pending={analyzing && drawingChecking}
+            />
+            <Stat label={t('preflight.stats.profiles')} value={profileGroups.length} />
             <Stat
               label={t('preflight.stats.errors')}
               value={counts.error}
@@ -806,18 +872,101 @@ export function PreflightPage() {
               tone="warning"
               pending={analyzing}
             />
-            <Stat label={t('preflight.stats.files')} value={result.entriesTotal} />
-            <Stat
-              label={t('preflight.stats.partList')}
-              value={
-                result.summary.hasPartList ? t('preflight.stats.yes') : t('preflight.stats.no')
-              }
-            />
           </section>
 
           <Card>
+            <CardHeader>
+              <button
+                type="button"
+                onClick={() => setProfilesOpen((open) => !open)}
+                aria-expanded={profilesOpen}
+                className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronDown
+                  className={cn(
+                    'size-4 shrink-0 text-muted-foreground transition-transform',
+                    !profilesOpen && '-rotate-90',
+                  )}
+                />
+                <CardTitle>
+                  {t('preflight.profiles.title')}
+                  <span className="ml-2 text-sm font-normal text-muted-foreground">
+                    ({profileGroups.length})
+                  </span>
+                </CardTitle>
+              </button>
+            </CardHeader>
+            {profilesOpen && (
+              <CardContent>
+                {profileGroups.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">—</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>{t('preflight.profiles.profile')}</TableHead>
+                        <TableHead>{t('preflight.profiles.marks')}</TableHead>
+                        <TableHead>{t('preflight.profiles.pieces')}</TableHead>
+                        <TableHead className="text-right">
+                          {t('preflight.profiles.totalLength')}
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {profileGroups.map((group) => (
+                        <TableRow key={group.profile}>
+                          <TableCell className="font-mono text-xs">{group.profile}</TableCell>
+                          <TableCell>{group.markCount}</TableCell>
+                          <TableCell>{group.pieces}</TableCell>
+                          <TableCell className="text-right font-mono text-xs">
+                            {group.lengthMm > 0 ? (
+                              `${(group.lengthMm / 1000).toFixed(1)} m`
+                            ) : (
+                              <span className="text-muted-foreground">
+                                {t('preflight.profiles.noLengths')}
+                              </span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {t('preflight.source')}:{' '}
+                  <span className="font-mono">
+                    {result.entriesTotal} {t('preflight.stats.files').toLowerCase()} ·{' '}
+                    {t('preflight.stats.partList')}:{' '}
+                    {result.summary.hasPartList
+                      ? t('preflight.stats.yes')
+                      : t('preflight.stats.no')}
+                  </span>
+                </p>
+              </CardContent>
+            )}
+          </Card>
+
+          <Card>
             <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between">
-              <CardTitle>{t('preflight.findings.title')}</CardTitle>
+              <button
+                type="button"
+                onClick={() => setFindingsOpen((open) => !open)}
+                aria-expanded={findingsOpen}
+                className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronDown
+                  className={cn(
+                    'size-4 shrink-0 text-muted-foreground transition-transform',
+                    !findingsOpen && '-rotate-90',
+                  )}
+                />
+                <CardTitle>
+                  {t('preflight.findings.title')}
+                  <span className="ml-2 text-sm font-normal text-muted-foreground">
+                    ({findings.length})
+                  </span>
+                </CardTitle>
+              </button>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="inline-flex gap-1 rounded-full border border-border bg-secondary p-1">
                   {FILTERS.map((filterOption) => (
@@ -862,279 +1011,305 @@ export function PreflightPage() {
                 )}
               </div>
             </CardHeader>
-            <CardContent>
-              {analyzing ? (
-                <p className="text-sm text-muted-foreground">{t('preflight.findings.analyzing')}</p>
-              ) : findings.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t('preflight.findings.empty')}</p>
-              ) : (
-                <Table>
-                  <TableHeader>
+            {findingsOpen && (
+              <CardContent>
+                {analyzing ? (
+                  <p className="text-sm text-muted-foreground">
+                    {t('preflight.findings.analyzing')}
+                  </p>
+                ) : findings.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{t('preflight.findings.empty')}</p>
+                ) : (
+                  <Table containerClassName="max-h-[60vh] overflow-auto">
+                    <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:border-b [&_th]:border-border [&_th]:bg-card">
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>{t('preflight.table.severity')}</TableHead>
+                        <TableHead>{t('preflight.table.code')}</TableHead>
+                        <TableHead>{t('preflight.table.mark')}</TableHead>
+                        <TableHead>{t('preflight.table.message')}</TableHead>
+                        <TableHead className="text-right">{t('preflight.table.debug')}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {findings.map((finding) => {
+                        const part = finding.mark ? partByMark.get(finding.mark) : undefined
+                        const viewable = part && (part.step || part.nc) ? part : undefined
+                        const override = overrideFor(part)
+                        const resolved = Boolean(
+                          override && resolvedFindings(override.kind).includes(finding.code),
+                        )
+                        return (
+                          <TableRow
+                            key={`${finding.code}-${finding.mark ?? ''}-${finding.message}`}
+                            className={cn(resolved && 'opacity-50')}
+                          >
+                            <TableCell>
+                              <Badge variant={SEVERITY_VARIANT[finding.severity]}>
+                                {t(`common.severity.${finding.severity}`)}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="font-mono text-xs text-muted-foreground">
+                              {finding.code}
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">
+                              {finding.mark ?? '—'}
+                            </TableCell>
+                            <TableCell>
+                              <span className={cn(resolved && 'line-through')}>
+                                {findingText(finding)}
+                              </span>
+                              {resolved && (
+                                <Badge variant="success" className="ml-2 align-middle">
+                                  {override?.kind ? t(`common.fix.${override.kind}`) : ''}
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-1">
+                                {resolved && viewable && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => undoOverride(viewable.mark)}
+                                  >
+                                    <Undo2 />
+                                    {t('common.actions.undo')}
+                                  </Button>
+                                )}
+                                {!resolved && isRegeneratable(viewable) && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={fixingMark === viewable?.mark}
+                                    onClick={() => viewable && void regeneratePart(viewable)}
+                                  >
+                                    {fixingMark === viewable?.mark
+                                      ? t('common.actions.working')
+                                      : t('common.actions.regenerateStep')}
+                                  </Button>
+                                )}
+                                {!resolved && isCleanable(viewable) && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={fixingMark === viewable?.mark}
+                                    onClick={() => viewable && void cleanPart(viewable)}
+                                  >
+                                    {fixingMark === viewable?.mark
+                                      ? t('common.actions.cleaning')
+                                      : t('common.actions.cleanStep')}
+                                  </Button>
+                                )}
+                                {viewable && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => openPart(viewable)}
+                                  >
+                                    <Eye />
+                                    {t('common.actions.view')}
+                                  </Button>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            )}
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <button
+                type="button"
+                onClick={() => setPartsOpen((open) => !open)}
+                aria-expanded={partsOpen}
+                className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronDown
+                  className={cn(
+                    'size-4 shrink-0 text-muted-foreground transition-transform',
+                    !partsOpen && '-rotate-90',
+                  )}
+                />
+                <CardTitle className="flex flex-wrap items-center gap-2">
+                  {t('preflight.parts.title')}
+                  <span className="text-sm font-normal text-muted-foreground">
+                    ({sortedParts.length})
+                  </span>
+                  {drawingChecking && (
+                    <span className="text-xs font-normal text-muted-foreground">
+                      {t('preflight.parts.readingDrawings', {
+                        done: drawingDone,
+                        total: drawingTotal,
+                      })}
+                    </span>
+                  )}
+                  {checking && (
+                    <span className="text-xs font-normal text-muted-foreground">
+                      {t(
+                        modelPhase === 'rebuild'
+                          ? 'preflight.parts.rebuildingModels'
+                          : 'preflight.parts.measuringModels',
+                        {
+                          done: modelDone,
+                          total: modelTotal,
+                        },
+                      )}
+                    </span>
+                  )}
+                </CardTitle>
+              </button>
+            </CardHeader>
+            {partsOpen && (
+              <CardContent>
+                <Table containerClassName="max-h-[70vh] overflow-auto">
+                  <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:border-b [&_th]:border-border [&_th]:bg-card [&_th:first-child]:left-0 [&_th:first-child]:z-30">
                     <TableRow className="hover:bg-transparent">
-                      <TableHead>{t('preflight.table.severity')}</TableHead>
-                      <TableHead>{t('preflight.table.code')}</TableHead>
-                      <TableHead>{t('preflight.table.mark')}</TableHead>
-                      <TableHead>{t('preflight.table.message')}</TableHead>
-                      <TableHead className="text-right">{t('preflight.table.debug')}</TableHead>
+                      {PART_COLUMNS.map((column) => (
+                        <SortHead
+                          key={column.key}
+                          label={t(column.labelKey)}
+                          sortKey={column.key}
+                          sort={sort}
+                          onSort={toggleSort}
+                        />
+                      ))}
+                      <TableHead className="text-right">{t('preflight.table.threeD')}</TableHead>
                     </TableRow>
                   </TableHeader>
-                  <TableBody>
-                    {findings.map((finding) => {
-                      const part = finding.mark ? partByMark.get(finding.mark) : undefined
-                      const viewable = part && (part.step || part.nc) ? part : undefined
-                      const override = overrideFor(part)
-                      const resolved = Boolean(
-                        override && resolvedFindings(override.kind).includes(finding.code),
-                      )
+                  <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card">
+                    {sortedParts.map((part) => {
+                      const severity = partSeverity.get(part.mark)
+                      const errorCount = severity?.error ?? 0
+                      const warningCount = severity?.warning ?? 0
+                      const material = drawingMaterials.get(part.mark)
+                      const pdfQty = material?.qty ?? part.expected?.qty ?? null
+                      const ncQty = part.nc?.quantity ?? null
+                      const qtyMismatch = pdfQty != null && ncQty != null && pdfQty !== ncQty
+                      const qtyFallback = pdfQty == null && ncQty != null
                       return (
-                        <TableRow
-                          key={`${finding.code}-${finding.mark ?? ''}-${finding.message}`}
-                          className={cn(resolved && 'opacity-50')}
-                        >
+                        <TableRow key={part.mark}>
+                          <TableCell className="font-mono text-xs">{part.mark}</TableCell>
                           <TableCell>
-                            <Badge variant={SEVERITY_VARIANT[finding.severity]}>
-                              {t(`common.severity.${finding.severity}`)}
+                            <Badge
+                              variant={
+                                errorCount > 0
+                                  ? 'destructive'
+                                  : warningCount > 0
+                                    ? 'warning'
+                                    : 'success'
+                              }
+                            >
+                              {errorCount > 0
+                                ? `${t('preflight.status.error')}${errorCount > 1 ? ` ×${errorCount}` : ''}`
+                                : warningCount > 0
+                                  ? `${t('preflight.status.warning')}${warningCount > 1 ? ` ×${warningCount}` : ''}`
+                                  : t('preflight.status.ok')}
                             </Badge>
                           </TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground">
-                            {finding.code}
+                          <TableCell
+                            className={cn(
+                              qtyMismatch && 'font-semibold text-destructive-foreground',
+                            )}
+                            title={
+                              qtyMismatch
+                                ? t('preflight.qty.mismatchTitle', { nc: ncQty, pdf: pdfQty })
+                                : qtyFallback
+                                  ? t('preflight.qty.fallbackTitle')
+                                  : undefined
+                            }
+                          >
+                            {pdfQty ?? ncQty ?? '—'}
+                            {qtyMismatch && <span className="ml-1 text-xs">≠ {ncQty}</span>}
+                            {qtyFallback && (
+                              <span className="ml-1 text-xs text-muted-foreground">(NC)</span>
+                            )}
                           </TableCell>
-                          <TableCell className="font-mono text-xs">{finding.mark ?? '—'}</TableCell>
-                          <TableCell>
-                            <span className={cn(resolved && 'line-through')}>
-                              {findingText(finding)}
-                            </span>
-                            {resolved && (
-                              <Badge variant="success" className="ml-2 align-middle">
-                                {override?.kind ? t(`common.fix.${override.kind}`) : ''}
+                          <TableCell className="font-mono text-xs">
+                            {part.nc?.profile ?? part.expected?.profile ?? '—'}
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {overrideFor(part) ? (
+                              <Badge variant="success">
+                                {overrideFor(part)?.kind
+                                  ? t(`common.fix.${overrideFor(part)?.kind}`)
+                                  : ''}
                               </Badge>
+                            ) : modelChecks.has(part.mark) ? (
+                              <span
+                                className={
+                                  modelChecks.get(part.mark)?.ok
+                                    ? 'text-emerald-400'
+                                    : 'text-amber-400'
+                                }
+                              >
+                                {formatSizeCheck(t, modelChecks.get(part.mark))}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
                             )}
                           </TableCell>
                           <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              {resolved && viewable && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => undoOverride(viewable.mark)}
-                                >
-                                  <Undo2 />
-                                  {t('common.actions.undo')}
-                                </Button>
-                              )}
-                              {!resolved && isRegeneratable(viewable) && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  disabled={fixingMark === viewable?.mark}
-                                  onClick={() => viewable && void regeneratePart(viewable)}
-                                >
-                                  {fixingMark === viewable?.mark
-                                    ? t('common.actions.working')
-                                    : t('common.actions.regenerateStep')}
-                                </Button>
-                              )}
-                              {!resolved && isCleanable(viewable) && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  disabled={fixingMark === viewable?.mark}
-                                  onClick={() => viewable && void cleanPart(viewable)}
-                                >
-                                  {fixingMark === viewable?.mark
-                                    ? t('common.actions.cleaning')
-                                    : t('common.actions.cleanStep')}
-                                </Button>
-                              )}
-                              {viewable && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => openPart(viewable)}
-                                >
+                            {part.step || part.nc ? (
+                              <div className="flex justify-end gap-1">
+                                {overrideFor(part) ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => undoOverride(part.mark)}
+                                  >
+                                    <Undo2 />
+                                    {t('common.actions.undo')}
+                                  </Button>
+                                ) : (
+                                  <>
+                                    {isRegeneratable(part) && (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={fixingMark === part.mark}
+                                        onClick={() => void regeneratePart(part)}
+                                      >
+                                        {fixingMark === part.mark
+                                          ? t('common.actions.working')
+                                          : t('common.actions.regenerateStep')}
+                                      </Button>
+                                    )}
+                                    {isCleanable(part) && (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={fixingMark === part.mark}
+                                        onClick={() => void cleanPart(part)}
+                                      >
+                                        {fixingMark === part.mark
+                                          ? t('common.actions.cleaning')
+                                          : t('common.actions.cleanStep')}
+                                      </Button>
+                                    )}
+                                  </>
+                                )}
+                                <Button variant="ghost" size="sm" onClick={() => openPart(part)}>
                                   <Eye />
                                   {t('common.actions.view')}
                                 </Button>
-                              )}
-                            </div>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
                           </TableCell>
                         </TableRow>
                       )
                     })}
                   </TableBody>
                 </Table>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex flex-wrap items-center gap-2">
-                {t('preflight.parts.title')}
-                {drawingChecking && (
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {t('preflight.parts.readingDrawings', {
-                      done: drawingDone,
-                      total: drawingTotal,
-                    })}
-                  </span>
-                )}
-                {checking && (
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {t(
-                      modelPhase === 'rebuild'
-                        ? 'preflight.parts.rebuildingModels'
-                        : 'preflight.parts.measuringModels',
-                      {
-                        done: modelDone,
-                        total: modelTotal,
-                      },
-                    )}
-                  </span>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Table containerClassName="max-h-[70vh] overflow-auto">
-                <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:border-b [&_th]:border-border [&_th]:bg-card [&_th:first-child]:left-0 [&_th:first-child]:z-30">
-                  <TableRow className="hover:bg-transparent">
-                    {PART_COLUMNS.map((column) => (
-                      <SortHead
-                        key={column.key}
-                        label={t(column.labelKey)}
-                        sortKey={column.key}
-                        sort={sort}
-                        onSort={toggleSort}
-                      />
-                    ))}
-                    <TableHead className="text-right">{t('preflight.table.threeD')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card">
-                  {sortedParts.map((part) => {
-                    const severity = partSeverity.get(part.mark)
-                    const errorCount = severity?.error ?? 0
-                    const warningCount = severity?.warning ?? 0
-                    const material = drawingMaterials.get(part.mark)
-                    const pdfQty = material?.qty ?? part.expected?.qty ?? null
-                    const ncQty = part.nc?.quantity ?? null
-                    const qtyMismatch = pdfQty != null && ncQty != null && pdfQty !== ncQty
-                    const qtyFallback = pdfQty == null && ncQty != null
-                    return (
-                      <TableRow key={part.mark}>
-                        <TableCell className="font-mono text-xs">{part.mark}</TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              errorCount > 0
-                                ? 'destructive'
-                                : warningCount > 0
-                                  ? 'warning'
-                                  : 'success'
-                            }
-                          >
-                            {errorCount > 0
-                              ? `${t('preflight.status.error')}${errorCount > 1 ? ` ×${errorCount}` : ''}`
-                              : warningCount > 0
-                                ? `${t('preflight.status.warning')}${warningCount > 1 ? ` ×${warningCount}` : ''}`
-                                : t('preflight.status.ok')}
-                          </Badge>
-                        </TableCell>
-                        <TableCell
-                          className={cn(qtyMismatch && 'font-semibold text-destructive-foreground')}
-                          title={
-                            qtyMismatch
-                              ? t('preflight.qty.mismatchTitle', { nc: ncQty, pdf: pdfQty })
-                              : qtyFallback
-                                ? t('preflight.qty.fallbackTitle')
-                                : undefined
-                          }
-                        >
-                          {pdfQty ?? ncQty ?? '—'}
-                          {qtyMismatch && <span className="ml-1 text-xs">≠ {ncQty}</span>}
-                          {qtyFallback && (
-                            <span className="ml-1 text-xs text-muted-foreground">(NC)</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">
-                          {part.nc?.profile ?? part.expected?.profile ?? '—'}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          {overrideFor(part) ? (
-                            <Badge variant="success">
-                              {overrideFor(part)?.kind
-                                ? t(`common.fix.${overrideFor(part)?.kind}`)
-                                : ''}
-                            </Badge>
-                          ) : modelChecks.has(part.mark) ? (
-                            <span
-                              className={
-                                modelChecks.get(part.mark)?.ok
-                                  ? 'text-emerald-400'
-                                  : 'text-amber-400'
-                              }
-                            >
-                              {formatSizeCheck(t, modelChecks.get(part.mark))}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {part.step || part.nc ? (
-                            <div className="flex justify-end gap-1">
-                              {overrideFor(part) ? (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => undoOverride(part.mark)}
-                                >
-                                  <Undo2 />
-                                  {t('common.actions.undo')}
-                                </Button>
-                              ) : (
-                                <>
-                                  {isRegeneratable(part) && (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      disabled={fixingMark === part.mark}
-                                      onClick={() => void regeneratePart(part)}
-                                    >
-                                      {fixingMark === part.mark
-                                        ? t('common.actions.working')
-                                        : t('common.actions.regenerateStep')}
-                                    </Button>
-                                  )}
-                                  {isCleanable(part) && (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      disabled={fixingMark === part.mark}
-                                      onClick={() => void cleanPart(part)}
-                                    >
-                                      {fixingMark === part.mark
-                                        ? t('common.actions.cleaning')
-                                        : t('common.actions.cleanStep')}
-                                    </Button>
-                                  )}
-                                </>
-                              )}
-                              <Button variant="ghost" size="sm" onClick={() => openPart(part)}>
-                                <Eye />
-                                {t('common.actions.view')}
-                              </Button>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </CardContent>
+              </CardContent>
+            )}
           </Card>
         </>
       )}

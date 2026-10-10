@@ -29,7 +29,7 @@ import {
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
-import { booleanDiff } from '@/lib/step/booleanDiff'
+import { booleanDiff, cachedBooleanDiff } from '@/lib/step/booleanDiff'
 import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { meshForViewer } from '@/lib/step/viewerModel'
@@ -38,10 +38,10 @@ import { attachOrbit, type OrbitBus } from './orbitSync'
 const GHOST_COLOR = 0x3ddc84
 const COMPARE_COLOR = 0xf59e0b
 const STRAY_COLOR = 0xf97316
-/** Extra manufactured material vs the STEP ideal (boolean manufactured − STEP). */
-const EXTRA_COLOR = 0xef4444
-/** STEP-ideal material the manufactured build lacks (boolean STEP − manufactured). */
-const MISSING_COLOR = 0x3b82f6
+/** Overcut vs the STEP ideal (NC took too much — scrap, cannot fix). */
+const OVERCUT_COLOR = 0xef4444
+/** Undercut vs the STEP ideal (leftover — can still be cut). */
+const UNDERCUT_COLOR = 0x3b82f6
 const FACE_MATERIAL = { color: 0xaebfd0, metalness: 0.55, roughness: 0.45 }
 /** Roll about the length axis for each `detectOrientation` result (world YZ → profile-local). */
 const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]
@@ -172,10 +172,10 @@ interface SceneHandle {
 
 /** Share of each boolean direction vs the STEP ideal, for the overlay legend. */
 export interface DiffStats {
-  /** manufactured-minus-STEP share of the manufactured volume (red = extra material) */
-  extra: number
-  /** STEP-minus-manufactured share (blue = ideal material the build lacks) */
-  missing: number
+  /** STEP-minus-manufactured share of the manufactured volume (red = overcut, scrap) */
+  over: number
+  /** manufactured-minus-STEP share (blue = undercut, can still be cut) */
+  under: number
   tolerance: number
   /** true when the CSG kernel couldn't run and red surface flagging was used instead */
   approximate: boolean
@@ -231,6 +231,8 @@ function mountScene(
   beam: BeamOutline | null,
   bus: OrbitBus | null,
   highlightStray: boolean,
+  primaryBytes: Uint8Array | null | undefined,
+  compareBytes: Uint8Array | null | undefined,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -296,6 +298,17 @@ function mountScene(
   })
   const materials: Material[] = [faceMaterial, strayMaterial, lineMaterial]
 
+  // Overlay mode (a second model is present): both base shells go translucent so
+  // the solid red/blue diffs read through them from any angle. Opaque renders
+  // first, so the diffs draw before the shells blend over them. Single-model
+  // views keep their solid faces.
+  const isOverlay = Boolean(compareStep && compareStep.bodies.length > 0)
+  if (isOverlay) {
+    faceMaterial.transparent = true
+    faceMaterial.opacity = 0.45
+    faceMaterial.depthWrite = false
+  }
+
   const primary = buildGroup(step, faceMaterial, true, highlightStray ? strayMaterial : null)
   const size = bboxOfVertices(primary.raw).getSize(new Vector3())
   scene.add(primary.group)
@@ -357,10 +370,11 @@ function mountScene(
 
   // Boolean difference overlays, with the STEP treated as ideal. Both groups are
   // already seated in the same frame, so the booleans run in world coordinates:
-  // red = manufactured-minus-STEP (extra material vs the ideal), blue =
-  // STEP-minus-manufactured (ideal material the build lacks). Coincident surfaces
-  // cancel, leaving only the volumetric leftovers. When the CSG kernel can't run
-  // (over budget or failing input), fall back to red surface-distance flagging.
+  // red = STEP-minus-manufactured (overcut — scrap, cannot fix), blue =
+  // manufactured-minus-STEP (undercut — leftover that can still be cut).
+  // Coincident surfaces cancel, leaving only the volumetric leftovers. When the
+  // CSG kernel can't run (over budget or failing input), fall back to red
+  // surface-distance flagging.
   const diffMeshes: Mesh[] = []
   let diffStats: DiffStats | null = null
   if (compareStep && compareGroup) {
@@ -373,48 +387,65 @@ function mountScene(
         vertices: body.mesh.faces.vertices,
         triangles: body.mesh.faces.triangles,
       }))
-    const boolean = booleanDiff(
-      soups(step),
-      soups(compareStep),
-      primary.group.matrixWorld,
-      compareGroup.matrixWorld,
-    )
+    // Remounts of the same part (reopen, stock arriving late) reuse the cached
+    // CSG result when the bytes and seating match; otherwise compute directly.
+    const boolean =
+      primaryBytes && compareBytes
+        ? cachedBooleanDiff(
+            soups(step),
+            soups(compareStep),
+            primary.group.matrixWorld,
+            compareGroup.matrixWorld,
+            primaryBytes,
+            compareBytes,
+          )
+        : booleanDiff(
+            soups(step),
+            soups(compareStep),
+            primary.group.matrixWorld,
+            compareGroup.matrixWorld,
+          )
     if (boolean) {
-      const extraMaterial = new MeshStandardMaterial({
-        color: EXTRA_COLOR,
+      // X-ray style: fully solid colours drawn after the shells with no depth
+      // test, so the diffs composite at full strength over everything instead
+      // of being dimmed by the translucent bases in front of them.
+      const overcutMaterial = new MeshStandardMaterial({
+        color: OVERCUT_COLOR,
         emissive: 0x7f1d1d,
         emissiveIntensity: 0.55,
         metalness: 0.15,
         roughness: 0.5,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
       })
-      const missingMaterial = new MeshStandardMaterial({
-        color: MISSING_COLOR,
+      const undercutMaterial = new MeshStandardMaterial({
+        color: UNDERCUT_COLOR,
         emissive: 0x1e3a8a,
         emissiveIntensity: 0.55,
         metalness: 0.15,
         roughness: 0.5,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
       })
-      materials.push(extraMaterial, missingMaterial)
-      if (boolean.extra) {
-        const mesh = new Mesh(boolean.extra, extraMaterial)
+      materials.push(overcutMaterial, undercutMaterial)
+      if (boolean.over) {
+        const mesh = new Mesh(boolean.over, overcutMaterial)
+        mesh.renderOrder = 10
         scene.add(mesh)
         diffMeshes.push(mesh)
       }
-      if (boolean.missing) {
-        const mesh = new Mesh(boolean.missing, missingMaterial)
+      if (boolean.under) {
+        const mesh = new Mesh(boolean.under, undercutMaterial)
+        mesh.renderOrder = 10
         scene.add(mesh)
         diffMeshes.push(mesh)
       }
       const volume = boolean.primaryVolume > 0 ? boolean.primaryVolume : 1
       diffStats = {
-        extra: boolean.extraVolume / volume,
-        missing: boolean.missingVolume / volume,
+        over: boolean.overVolume / volume,
+        under: boolean.underVolume / volume,
         tolerance,
         approximate: false,
       }
@@ -431,14 +462,14 @@ function mountScene(
         tolerance,
       )
       const diffMaterial = new MeshStandardMaterial({
-        color: EXTRA_COLOR,
+        color: OVERCUT_COLOR,
         emissive: 0x7f1d1d,
         emissiveIntensity: 0.6,
         metalness: 0.15,
         roughness: 0.5,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
       })
       materials.push(diffMaterial)
       step.bodies.forEach((body, index) => {
@@ -450,6 +481,7 @@ function mountScene(
         )
         if (!geometry) return
         const mesh = new Mesh(geometry, diffMaterial)
+        mesh.renderOrder = 10
         primary.group.add(mesh)
         diffMeshes.push(mesh)
       })
@@ -462,12 +494,13 @@ function mountScene(
         )
         if (!geometry) return
         const mesh = new Mesh(geometry, diffMaterial)
+        mesh.renderOrder = 10
         compareGroup.add(mesh)
         diffMeshes.push(mesh)
       })
       diffStats = {
-        extra: diffFraction(aDiff),
-        missing: diffFraction(bDiff),
+        over: diffFraction(aDiff),
+        under: diffFraction(bDiff),
         tolerance,
         approximate: true,
       }
@@ -644,7 +677,17 @@ export default function PartViewer({
           setMessage(t('viewer.noGeometry'))
           return
         }
-        handle = mountScene(containerRef.current, step, compare, stock, beam, bus, highlightStray)
+        handle = mountScene(
+          containerRef.current,
+          step,
+          compare,
+          stock,
+          beam,
+          bus,
+          highlightStray,
+          bytes,
+          compareBytes,
+        )
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handle.setFlip(false)
         handle.setDiffVisible(showDiffRef.current)
@@ -684,7 +727,7 @@ export default function PartViewer({
   const hasOverlay = Boolean((stock || beam) && status === 'ready')
   const hasCompare = Boolean(compareBytes && status === 'ready')
   const hasDiff = Boolean(hasCompare && diffInfo)
-  const diffClean = diffInfo != null && diffInfo.extra < 0.001 && diffInfo.missing < 0.001
+  const diffClean = diffInfo != null && diffInfo.over < 0.001 && diffInfo.under < 0.001
 
   return (
     <div className="relative h-full w-full">
@@ -730,10 +773,12 @@ export default function PartViewer({
       {hasDiff && !flipped && diffInfo && showDiff && (
         <div
           className="absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur"
-          title={t('viewer.diffTitle', {
-            extra: percent(diffInfo.extra),
-            missing: percent(diffInfo.missing),
-          })}
+          title={
+            t('viewer.diffTitle', {
+              over: percent(diffInfo.over),
+              under: percent(diffInfo.under),
+            }) + (diffInfo.approximate ? '' : ` · ${t('viewer.facesHiddenNote')}`)
+          }
         >
           {diffClean ? (
             <>
@@ -757,12 +802,12 @@ export default function PartViewer({
                 className="inline-block size-3 rounded-sm border border-red-400"
                 style={{ background: 'rgba(239, 68, 68, 0.65)' }}
               />
-              <span className="text-red-300">{t('viewer.extraManufactured')}</span>
+              <span className="text-red-300">{t('viewer.overcut')}</span>
               <span
                 className="inline-block size-3 rounded-sm border border-blue-400"
                 style={{ background: 'rgba(59, 130, 246, 0.65)' }}
               />
-              <span className="text-blue-300">{t('viewer.missingManufactured')}</span>
+              <span className="text-blue-300">{t('viewer.undercut')}</span>
             </>
           )}
         </div>

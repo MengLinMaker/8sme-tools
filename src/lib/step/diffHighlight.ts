@@ -195,41 +195,65 @@ function minDistanceSquaredToMesh(
   return best
 }
 
-/** Per-vertex flags: true when the vertex sits further than `tolerance` off the target mesh. */
-function flagDifferentVertices(
-  source: number[],
-  targetVertices: number[],
-  targetTriangles: number[],
-  targetIndex: Map<string, number[]>,
-  tolerance: number,
-  cell: number,
-): Uint8Array {
-  const tolSquared = tolerance * tolerance
-  const count = Math.floor(source.length / 3)
-  const flags = new Uint8Array(count)
-  for (let v = 0; v < count; v++) {
-    const px = source[v * 3]
-    const py = source[v * 3 + 1]
-    const pz = source[v * 3 + 2]
-    const key = cellKey(Math.floor(px / cell), Math.floor(py / cell), Math.floor(pz / cell))
-    const distance = minDistanceSquaredToMesh(
-      px,
-      py,
-      pz,
-      targetVertices,
-      targetTriangles,
-      targetIndex.get(key),
-    )
-    if (!(distance <= tolSquared)) flags[v] = 1
-  }
-  return flags
-}
-
 export interface MeshDiff {
   /** per-triangle flags for `aTriangles` (1 = further than tolerance off mesh B) */
   aDiff: Uint8Array
   /** per-triangle flags for `bTriangles` (1 = further than tolerance off mesh A) */
   bDiff: Uint8Array
+}
+
+/**
+ * A target mesh with its spatial index built once, for repeated distance
+ * queries (per-component filtering builds the index once per side instead of
+ * once per component).
+ */
+export interface MeshQuery {
+  tolerance: number
+  /**
+   * Flags the given triangles (1 = further than tolerance off the target).
+   * `aTriangles` index into `aVertices`; a triangle is different when any of
+   * its three vertices is.
+   */
+  flagFar(aVertices: number[], aTriangles: number[]): Uint8Array
+}
+
+/** Builds the reusable query state for a target mesh. */
+export function createMeshQuery(
+  targetVertices: number[],
+  targetTriangles: number[],
+  tolerance: number,
+): MeshQuery {
+  const cell = Math.max(2, tolerance * 2)
+  const index = buildTriangleIndex(targetVertices, targetTriangles, tolerance, cell)
+  const tolSquared = tolerance * tolerance
+  return {
+    tolerance,
+    flagFar(aVertices: number[], aTriangles: number[]): Uint8Array {
+      const triCount = Math.floor(aTriangles.length / 3)
+      const mask = new Uint8Array(triCount)
+      for (let t = 0; t < triCount; t++) {
+        for (let k = 0; k < 3; k++) {
+          const vi = aTriangles[t * 3 + k] ?? 0
+          const px = aVertices[vi * 3] ?? 0
+          const py = aVertices[vi * 3 + 1] ?? 0
+          const pz = aVertices[vi * 3 + 2] ?? 0
+          const distance = minDistanceSquaredToMesh(
+            px,
+            py,
+            pz,
+            targetVertices,
+            targetTriangles,
+            index.get(cellKey(Math.floor(px / cell), Math.floor(py / cell), Math.floor(pz / cell))),
+          )
+          if (!(distance <= tolSquared)) {
+            mask[t] = 1
+            break
+          }
+        }
+      }
+      return mask
+    },
+  }
 }
 
 /**
@@ -244,40 +268,20 @@ export function computeDiffMasks(
   bTriangles: number[],
   tolerance: number,
 ): MeshDiff {
-  const cell = Math.max(2, tolerance * 2)
   const aTriCount = Math.floor(aTriangles.length / 3)
   const bTriCount = Math.floor(bTriangles.length / 3)
-  const aDiff = new Uint8Array(aTriCount)
-  const bDiff = new Uint8Array(bTriCount)
   if (aTriCount === 0 || bTriCount === 0) {
     // One side has no surface at all — everything on the other side is different.
+    const aDiff = new Uint8Array(aTriCount)
+    const bDiff = new Uint8Array(bTriCount)
     aDiff.fill(aTriCount === 0 ? 0 : 1)
     bDiff.fill(bTriCount === 0 ? 0 : 1)
     return { aDiff, bDiff }
   }
-  const bIndex = buildTriangleIndex(bVertices, bTriangles, tolerance, cell)
-  const aIndex = buildTriangleIndex(aVertices, aTriangles, tolerance, cell)
-  const aBadVerts = flagDifferentVertices(aVertices, bVertices, bTriangles, bIndex, tolerance, cell)
-  const bBadVerts = flagDifferentVertices(bVertices, aVertices, aTriangles, aIndex, tolerance, cell)
-  for (let t = 0; t < aTriCount; t++) {
-    if (
-      aBadVerts[aTriangles[t * 3]] === 1 ||
-      aBadVerts[aTriangles[t * 3 + 1]] === 1 ||
-      aBadVerts[aTriangles[t * 3 + 2]] === 1
-    ) {
-      aDiff[t] = 1
-    }
+  return {
+    aDiff: createMeshQuery(bVertices, bTriangles, tolerance).flagFar(aVertices, aTriangles),
+    bDiff: createMeshQuery(aVertices, aTriangles, tolerance).flagFar(bVertices, bTriangles),
   }
-  for (let t = 0; t < bTriCount; t++) {
-    if (
-      bBadVerts[bTriangles[t * 3]] === 1 ||
-      bBadVerts[bTriangles[t * 3 + 1]] === 1 ||
-      bBadVerts[bTriangles[t * 3 + 2]] === 1
-    ) {
-      bDiff[t] = 1
-    }
-  }
-  return { aDiff, bDiff }
 }
 
 /** Fraction of flagged triangles (0–1), for the overlay legend. */

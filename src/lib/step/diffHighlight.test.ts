@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { computeDiffMasks, diffFraction, resolveDiffTolerance } from './diffHighlight'
+import {
+  computeDiffMasks,
+  createMeshQuery,
+  diffFraction,
+  resolveDiffTolerance,
+} from './diffHighlight'
 
 // A 10 mm cube at the origin: 8 vertices, 12 triangles.
 const CUBE_VERTS = [
@@ -65,5 +70,15 @@ describe('mesh diff highlighting', () => {
     expect(resolveDiffTolerance(0)).toBe(1.5)
     expect(resolveDiffTolerance(200)).toBe(1)
     expect(resolveDiffTolerance(1500)).toBe(2)
+  })
+
+  it('answers repeated queries from one built index', () => {
+    const query = createMeshQuery(CUBE_VERTS, CUBE_TRIS, 1.5)
+    const moved = translated(CUBE_VERTS, 5, 0, 0)
+    expect([...query.flagFar(CUBE_VERTS, CUBE_TRIS)].every((flag) => flag === 0)).toBe(true)
+    expect(diffFraction(query.flagFar(moved, CUBE_TRIS))).toBeGreaterThan(0.3)
+    // Same answers as the one-shot comparison.
+    const direct = computeDiffMasks(CUBE_VERTS, CUBE_TRIS, moved, CUBE_TRIS, 1.5)
+    expect([...query.flagFar(moved, CUBE_TRIS)]).toEqual([...direct.bDiff])
   })
 })

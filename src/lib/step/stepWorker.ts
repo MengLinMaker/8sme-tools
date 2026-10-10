@@ -1,7 +1,7 @@
-import { type MeasurableShape, measureShape, measureStep, type StepMeasure } from './measure'
+import { type MeasurableShape, measureShape, type StepMeasure } from './measure'
 import { meshStepFile } from './mesh'
 import { ensureOc } from './occInit'
-import { reconstructStepFromNc } from './reconstructFromNc'
+import { reconstructSolidFromNc } from './reconstructFromNc'
 import { type MeshableShape, type SabreResult, sabreShape } from './sabre'
 import type {
   InspectResult,
@@ -84,17 +84,19 @@ async function reconstruct(request: {
   measure?: boolean
   simplify?: boolean
 }): Promise<ReconstructResult> {
-  const step = await reconstructStepFromNc(request.ncText, {
+  const built = await reconstructSolidFromNc(request.ncText, {
     reference: request.reference,
     simplify: request.simplify,
   })
   let measure: StepMeasure | null = null
-  if (step && request.measure) {
+  if (built && request.measure) {
     try {
-      measure = await measureStep(new TextEncoder().encode(step))
+      // Measure the live solid — it is what `step` was exported from, so re-importing the STEP
+      // text here would just redo the export + parse for identical geometry.
+      measure = await measureShape(built.solid)
     } catch {
       measure = null
     }
   }
-  return { step, measure }
+  return { step: built?.step ?? null, measure }
 }
