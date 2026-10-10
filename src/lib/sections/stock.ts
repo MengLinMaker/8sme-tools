@@ -148,13 +148,26 @@ function rectangle(width: number, height: number): [number, number][] {
   ]
 }
 
-function angleL(legA: number, legB: number, thickness: number): [number, number][] {
+function angleL(legA: number, legB: number, thickness: number, radius = 0): [number, number][] {
   const t = thickness
+  const r = Math.max(0, Math.min(radius, legA - t, legB - t))
+  if (r <= 0) {
+    return centre([
+      [0, 0],
+      [legA, 0],
+      [legA, t],
+      [t, t],
+      [t, legB],
+      [0, legB],
+    ])
+  }
+  // Root fillet at the inner corner (t, t): arc from (t + r, t) to (t, t + r).
   return centre([
     [0, 0],
     [legA, 0],
     [legA, t],
-    [t, t],
+    [t + r, t],
+    ...arcPoints(t + r, t + r, r, -Math.PI / 2, -Math.PI),
     [t, legB],
     [0, legB],
   ])
@@ -375,10 +388,10 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
       break
     }
     case 'angle-equal':
-      if (n.length >= 3) points = angleL(n[0], n[0], n[2])
+      if (n.length >= 3) points = angleL(n[0], n[0], n[2], dims[4] ?? 0)
       break
     case 'angle-unequal':
-      if (n.length >= 3) points = angleL(n[0], n[1], n[2])
+      if (n.length >= 3) points = angleL(n[0], n[1], n[2], dims[4] ?? 0)
       break
     case 'rhs':
     case 'shs': {
@@ -499,12 +512,13 @@ export function partSectionForCode(
       return null
     }
     case 'angle-equal':
-      if (n.length >= 3) return { points: angleL(n[0], n[0], n[2]) }
-      if (dims.length >= 3) return { points: angleL(dims[0], dims[1] || dims[0], dims[2]) }
+      if (n.length >= 3) return { points: angleL(n[0], n[0], n[2], dims[4] ?? 0) }
+      if (dims.length >= 3)
+        return { points: angleL(dims[0], dims[1] || dims[0], dims[2], dims[4] ?? 0) }
       return null
     case 'angle-unequal':
-      if (n.length >= 3) return { points: angleL(n[0], n[1], n[2]) }
-      if (dims.length >= 3) return { points: angleL(dims[0], dims[1], dims[2]) }
+      if (n.length >= 3) return { points: angleL(n[0], n[1], n[2], dims[4] ?? 0) }
+      if (dims.length >= 3) return { points: angleL(dims[0], dims[1], dims[2], dims[4] ?? 0) }
       return null
     case 'rhs':
     case 'shs': {

@@ -41,22 +41,14 @@ import {
   compareModels,
   compareSize,
   type ModelComparison,
-  measureStep,
   type SizeCheck,
   type StepMeasure,
 } from '@/lib/step/measure'
 import { reconstructStepFromNc } from '@/lib/step/reconstructFromNc'
-import { type SabreResult, sabreTest } from '@/lib/step/sabre'
+import type { SabreResult } from '@/lib/step/sabre'
+import { getStepWorkerPool } from '@/lib/step/stepPool'
 import { cn } from '@/lib/utils'
 import { createOrbitBus, requestView, type ViewPreset } from './orbitSync'
-import {
-  ANALYSIS_VERSION,
-  fingerprintEntries,
-  loadPreflightCache,
-  type PreflightCacheEntry,
-  preflightCacheEnabled,
-  savePreflightCache,
-} from './preflightCache'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 const Nc3dViewer = lazy(() => import('./Nc3dViewer'))
@@ -194,6 +186,9 @@ export function PreflightPage() {
   const [drawingChecking, setDrawingChecking] = useState(false)
   const [drawingDone, setDrawingDone] = useState(0)
   const [drawingTotal, setDrawingTotal] = useState(0)
+  /** Progress of the model (OCC) phases: measure + light-sabre, then NC rebuild. */
+  const [modelDone, setModelDone] = useState(0)
+  const [modelTotal, setModelTotal] = useState(0)
   const search = useSearch({ from: '/preflight' })
   const navigate = useNavigate({ from: '/preflight' })
   const filter: Filter = search.severity ?? 'all'
@@ -205,11 +200,6 @@ export function PreflightPage() {
     [navigate],
   )
 
-  /** The analysis whose results came from the dev cache, so the effect can skip re-running it. */
-  const restoredResultRef = useRef<AuditResult | null>(null)
-  /** The last cached run, for fingerprinting a re-dropped job without a full re-analysis. */
-  const cacheRef = useRef<PreflightCacheEntry | null>(null)
-
   const handleBundle = useCallback(
     (input: InputBundle) => {
       setError(null)
@@ -217,56 +207,11 @@ export function PreflightPage() {
       setViewing(null)
       setStepOverrides(new Map())
       setFilter('all')
-
-      // Dev-only: re-dropping the same job reuses the cached analysis instead of re-measuring.
-      const cached = cacheRef.current
-      if (
-        preflightCacheEnabled &&
-        cached &&
-        fingerprintEntries(input.entries) === cached.fingerprint
-      ) {
-        const restored = auditEntries(input.sourceName, input.entries)
-        restoredResultRef.current = restored
-        setResult(restored)
-        setDrawingMaterials(new Map(cached.drawingMaterials))
-        setModelChecks(new Map(cached.modelChecks))
-        setManufactureChecks(new Map(cached.manufactureChecks))
-        setCutIssues(new Map(cached.cutIssues))
-        setSabreChecks(new Map(cached.sabreChecks ?? []))
-        setAnalyzing(false)
-        return
-      }
-
-      restoredResultRef.current = null
       setAnalyzing(true)
       setResult(auditEntries(input.sourceName, input.entries))
     },
     [setFilter],
   )
-
-  // Dev-only: restore the last run on mount so a hot reload skips re-parsing the drawings and
-  // re-measuring every STEP through the OCC kernel.
-  useEffect(() => {
-    if (!preflightCacheEnabled) return
-    let cancelled = false
-    void loadPreflightCache().then((cached) => {
-      if (cancelled || !cached) return
-      cacheRef.current = cached
-      const restored = auditEntries(cached.sourceName, cached.entries)
-      restoredResultRef.current = restored
-      setBundle({ sourceName: cached.sourceName, entries: cached.entries })
-      setResult(restored)
-      setDrawingMaterials(cached.drawingMaterials)
-      setModelChecks(cached.modelChecks)
-      setManufactureChecks(cached.manufactureChecks)
-      setCutIssues(cached.cutIssues)
-      setSabreChecks(new Map(cached.sabreChecks ?? []))
-      setAnalyzing(false)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
 
   const bytesByPath = useMemo(() => {
     const map = new Map<string, Uint8Array>()
@@ -357,22 +302,19 @@ export function PreflightPage() {
     setViewing(part)
   }, [])
 
-  // Read the drawings (ground-truth qty/length) first — parsed concurrently, since
-  // pdf.js does the work off-thread — then measure the STEP models (CPU-bound, so
-  // sequential). Running them in order avoids the OCC kernel and pdf.js competing.
+  // Read the drawings (ground-truth qty/length) first — parsed concurrently, since pdf.js does the
+  // work off-thread. Then the CPU-bound STEP work (measure, light-sabre, NC rebuild) runs across a
+  // small pool of OCC workers, off the main thread and in parallel across parts.
   useEffect(() => {
     if (!result) {
-      setAnalyzing(false)
-      return
-    }
-    // Results restored from the dev cache (or the same job re-dropped) are already complete.
-    if (result === restoredResultRef.current) {
       setAnalyzing(false)
       return
     }
     setDrawingMaterials(new Map())
     setDrawingDone(0)
     setDrawingTotal(0)
+    setModelDone(0)
+    setModelTotal(0)
     setModelChecks(new Map())
     setManufactureChecks(new Map())
     setCutIssues(new Map())
@@ -439,107 +381,123 @@ export function PreflightPage() {
       if (cancelled) return
       setCutIssues(issues)
 
-      // Phase 3: STEP model sizes (empty/degenerate measurement is fine).
+      // Phases 3 & 5: measure each STEP and run the light-sabre test on it. Both need the same
+      // imported model, so one worker task does both. Phase 4 rebuilds each part from its NC and
+      // measures the result. All of it runs off the main thread across a small worker pool, so the
+      // UI stays responsive and independent parts are processed in parallel (~pool-size faster).
       setChecking(true)
+      const pool = getStepWorkerPool()
       const checks = new Map<string, SizeCheck>()
       const measures = new Map<string, StepMeasure>()
-      for (const part of result.parts) {
-        if (cancelled) return
-        const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
-        // Length is compared against the drawing (ground truth) when available.
-        const length = materials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
-        const cross = part.nc?.dimensions?.slice(0, 2) ?? []
-        if (!bytes || length == null || cross.length < 2) {
-          checks.set(part.mark, { ok: false, error: 'noDims' })
-          continue
-        }
-        try {
-          const measured = await measureStep(bytes)
-          measures.set(part.mark, measured)
-          checks.set(
-            part.mark,
-            compareSize(measured.size, length, cross, measured.bodies, measured.extra),
-          )
-        } catch {
-          checks.set(part.mark, { ok: false, error: 'measureFailed' })
-        }
-      }
+      const sabre = new Map<string, SabreResult>()
+
+      const stepParts = result.parts.filter(
+        (part) => (part.step ? bytesByPath.get(part.step.path) : undefined) != null,
+      )
+      setModelDone(0)
+      setModelTotal(stepParts.length)
+      let inspectedCount = 0
+      const bumpInspected = () => setModelDone(++inspectedCount)
+
+      await Promise.all(
+        result.parts.map(async (part) => {
+          const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
+          if (!bytes) {
+            checks.set(part.mark, { ok: false, error: 'noDims' })
+            return
+          }
+          // Length is compared against the drawing (ground truth) when available.
+          const length =
+            materials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
+          const cross = part.nc?.dimensions?.slice(0, 2) ?? []
+          try {
+            const inspected = await pool.inspect(bytes)
+            if (cancelled) return
+            if (inspected.sabre) sabre.set(part.mark, inspected.sabre)
+            if (length == null || cross.length < 2) {
+              checks.set(part.mark, { ok: false, error: 'noDims' })
+            } else if (!inspected.measure) {
+              checks.set(part.mark, { ok: false, error: 'measureFailed' })
+            } else {
+              measures.set(part.mark, inspected.measure)
+              checks.set(
+                part.mark,
+                compareSize(
+                  inspected.measure.size,
+                  length,
+                  cross,
+                  inspected.measure.bodies,
+                  inspected.measure.extra,
+                ),
+              )
+            }
+          } catch {
+            checks.set(part.mark, { ok: false, error: 'measureFailed' })
+          }
+          bumpInspected()
+        }),
+      )
       if (cancelled) return
       setModelChecks(new Map(checks))
 
       // Phase 4: does the NC-built geometry match the STEP? Rebuild each part from its NC and
       // compare sizes/volume. Mismatches get an offer to regenerate the STEP (viewer / findings).
       const manufacture = new Map<string, ModelComparison>()
-      for (const part of result.parts) {
-        if (cancelled) return
-        const ncPath = part.nc?.path
-        const ncText = ncPath ? bytesByPath.get(ncPath) : undefined
-        const stepMeasure = measures.get(part.mark)
-        if (!ncText || !stepMeasure) continue
-        try {
-          const built = await reconstructStepFromNc(new TextDecoder().decode(ncText))
-          if (!built) continue
-          const madeMeasure = await measureStep(new TextEncoder().encode(built))
-          manufacture.set(part.mark, compareModels(stepMeasure, madeMeasure))
-          // Cutting straight through (no bevel) detaches piece(s) the STEP keeps attached —
-          // the "tiny end piece" that a bevel/angled cut exists to avoid.
-          const extra = madeMeasure.bodies - stepMeasure.bodies
-          if (extra > 0) {
-            const list = issues.get(part.mark) ?? []
-            list.push({
-              severity: 'warning',
-              code: 'CUT_END_PIECE',
-              mark: part.mark,
-              message: `Cutting straight through would detach ${extra} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)`,
-              params: { extra },
+      const rebuildParts = result.parts.filter((part) => {
+        const ncBytes = part.nc ? bytesByPath.get(part.nc.path) : undefined
+        return ncBytes != null && measures.get(part.mark) != null
+      })
+      setModelDone(0)
+      setModelTotal(rebuildParts.length)
+      let rebuiltCount = 0
+      const bumpRebuilt = () => setModelDone(++rebuiltCount)
+
+      await Promise.all(
+        result.parts.map(async (part) => {
+          const ncPath = part.nc?.path
+          const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
+          const stepMeasure = measures.get(part.mark)
+          if (!ncBytes || !stepMeasure) return
+          try {
+            const made = await pool.reconstruct(new TextDecoder().decode(ncBytes), {
+              measure: true,
             })
-            issues.set(part.mark, list)
+            if (cancelled) return
+            if (made.measure) {
+              manufacture.set(part.mark, compareModels(stepMeasure, made.measure))
+              // Cutting straight through (no bevel) detaches piece(s) the STEP keeps attached —
+              // the "tiny end piece" that a bevel/angled cut exists to avoid.
+              const extra = made.measure.bodies - stepMeasure.bodies
+              if (extra > 0) {
+                const list = issues.get(part.mark) ?? []
+                list.push({
+                  severity: 'warning',
+                  code: 'CUT_END_PIECE',
+                  mark: part.mark,
+                  message: `Cutting straight through would detach ${extra} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)`,
+                  params: { extra },
+                })
+                issues.set(part.mark, list)
+              }
+            }
+          } catch {
+            // best-effort: skip parts the rebuild can't handle
           }
-        } catch {
-          // best-effort: skip parts the rebuild can't handle
-        }
-      }
-      // Phase 5: the light-sabre test — can a ~35 mm straight beam cut each surface in one clean
-      // pass, or does it end up inside the body? Run on the STEP solid (real geometry).
-      const sabre = new Map<string, SabreResult>()
-      for (const part of result.parts) {
-        if (cancelled) return
-        const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
-        if (!bytes) continue
-        try {
-          sabre.set(part.mark, await sabreTest(new Uint8Array(bytes)))
-        } catch {
-          // best-effort: a model the tester can't mesh is skipped
-        }
-      }
+          bumpRebuilt()
+        }),
+      )
       if (!cancelled) {
         setManufactureChecks(new Map(manufacture))
         setCutIssues(new Map(issues))
         setSabreChecks(new Map(sabre))
         setChecking(false)
         setAnalyzing(false)
-        if (preflightCacheEnabled) {
-          const entries = Array.from(bytesByPath, ([path, bytes]) => ({ path, bytes }))
-          const cacheEntry: PreflightCacheEntry = {
-            sourceName: result.sourceName,
-            entries,
-            drawingMaterials: materials,
-            modelChecks: checks,
-            manufactureChecks: manufacture,
-            cutIssues: issues,
-            sabreChecks: sabre,
-            analysisVersion: ANALYSIS_VERSION,
-            fingerprint: fingerprintEntries(entries),
-            savedAt: Date.now(),
-          }
-          cacheRef.current = cacheEntry
-          void savePreflightCache(cacheEntry)
-        }
       }
     })()
 
     return () => {
       cancelled = true
+      getStepWorkerPool().abort()
     }
   }, [result, bytesByPath])
 
@@ -985,7 +943,10 @@ export function PreflightPage() {
                 )}
                 {checking && (
                   <span className="text-xs font-normal text-muted-foreground">
-                    {t('preflight.parts.measuringModels')}
+                    {t('preflight.parts.measuringModels', {
+                      done: modelDone,
+                      total: modelTotal,
+                    })}
                   </span>
                 )}
               </CardTitle>

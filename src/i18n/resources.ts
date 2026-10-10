@@ -111,7 +111,7 @@ export const en = {
     parts: {
       title: 'Parts',
       readingDrawings: 'reading drawings… {{done}}/{{total}}',
-      measuringModels: 'measuring models…',
+      measuringModels: 'measuring models… {{done}}/{{total}}',
     },
     columns: {
       mark: 'Mark',
@@ -381,7 +381,7 @@ export const zh = {
     parts: {
       title: '零件',
       readingDrawings: '正在读取图纸… {{done}}/{{total}}',
-      measuringModels: '正在测量模型…',
+      measuringModels: '正在测量模型… {{done}}/{{total}}',
     },
     columns: {
       mark: '标记',

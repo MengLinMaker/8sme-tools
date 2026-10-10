@@ -28,8 +28,8 @@ export interface SabreFailure {
   point: [number, number, number]
   /** outward face normal (beam fires along its negation) */
   normal: [number, number, number]
-  /** material boundary crossings within the beam length */
-  crossings: number
+  /** material depth (mm) the beam must travel through at this point */
+  thickness: number
   /** area (mm²) of the offending surface patch */
   area: number
 }
@@ -39,6 +39,11 @@ export interface SabreResult {
   /** triangles tested */
   checked: number
   failures: SabreFailure[]
+}
+
+/** The minimum a shape must expose to be light-sabre tested — an already-imported OCC shape. */
+export interface MeshableShape {
+  mesh: (options?: unknown) => { vertices: number[]; triangles: number[] }
 }
 
 const SABRE_LENGTH = 35
@@ -114,12 +119,22 @@ function longAxis(vertices: number[]): Vector3 {
 export async function sabreTest(bytes: Uint8Array, length = SABRE_LENGTH): Promise<SabreResult> {
   await ensureOc()
   const { importSTEP } = await import('replicad')
-  const shape = await importSTEP(new Blob([new Uint8Array(bytes)], { type: 'model/step' }))
-  const mesh = (
-    shape as unknown as {
-      mesh: (o?: unknown) => { vertices: number[]; triangles: number[] }
-    }
-  ).mesh({ tolerance: 0.1, angularTolerance: 0.3 })
+  const shape = (await importSTEP(
+    new Blob([new Uint8Array(bytes)], { type: 'model/step' }),
+  )) as unknown as MeshableShape & { delete: () => void }
+  try {
+    return sabreShape(shape, length)
+  } finally {
+    shape.delete()
+  }
+}
+
+/**
+ * Runs the light-sabre test on an already-imported OCC shape. Split out from {@link sabreTest} so
+ * a worker can import a STEP once and reuse the same shape for several checks (measure + sabre).
+ */
+export function sabreShape(shape: MeshableShape, length = SABRE_LENGTH): SabreResult {
+  const mesh = shape.mesh({ tolerance: 0.1, angularTolerance: 0.3 })
 
   const geometry = new BufferGeometry()
   geometry.setAttribute('position', new BufferAttribute(Float32Array.from(mesh.vertices), 3))
@@ -130,32 +145,57 @@ export async function sabreTest(bytes: Uint8Array, length = SABRE_LENGTH): Promi
   const axis = longAxis(mesh.vertices)
   const maxArea = tris.reduce((max, t) => Math.max(max, t.area), 0)
   const minArea = maxArea * MIN_AREA_FRACTION
+  // Only *tilted* faces (mitres, shaves) are cut with a non-radial beam — the surfaces where an
+  // axial beam could end inside the body. Square ends (|n·axis|≈1) are traced by the perimeter
+  // and side walls (|n·axis|≈0) are cut radially through their thin wall; neither is a risk.
   const sampled = tris
-    .filter((t) => t.area >= minArea && Math.abs(t.normal.dot(axis)) < 0.4)
+    .filter((t) => {
+      const axial = Math.abs(t.normal.dot(axis))
+      return t.area >= minArea && axial > 0.05 && axial < 0.98
+    })
     .sort((a, b) => b.area - a.area)
     .slice(0, MAX_SAMPLES)
 
   const raycaster = new Raycaster()
+  const probe = new Raycaster()
   const direction = new Vector3()
   const origin = new Vector3()
+  const flipDir = new Vector3(0.123, 0.456, 0.789).normalize()
   const failures: SabreFailure[] = []
 
+  // OCC triangulation normals are not guaranteed outward; a beam fired the wrong way "never
+  // exits" and looks like a failure. Probe a point just outside along the normal: if it is
+  // inside the solid, the normal points inward, so flip it.
+  const orientOutward = (tri: Tri): void => {
+    origin.copy(tri.centroid).addScaledVector(tri.normal, 0.3)
+    probe.set(origin, flipDir)
+    probe.near = 0
+    probe.far = Number.POSITIVE_INFINITY
+    const inside = probe.intersectObject(target, false).length % 2 === 1
+    if (inside) tri.normal.negate()
+  }
+
   for (const tri of sampled) {
+    orientOutward(tri)
     // Start just outside the surface and fire straight in (opposite the outward normal).
     origin.copy(tri.centroid).addScaledVector(tri.normal, 0.05)
     direction.copy(tri.normal).negate()
     raycaster.set(origin, direction)
     raycaster.near = 0
-    raycaster.far = length + 0.05
-    const crossings = raycaster
+    raycaster.far = 2000
+    const hits = raycaster
       .intersectObject(target, false)
-      .filter((hit) => hit.distance > 0.01 && hit.distance <= length).length
-    // One clean pass = enter + exit = 2 crossings.
-    if (crossings !== 2) {
+      .map((hit) => hit.distance)
+      .filter((d) => d > 0.01)
+      .sort((a, b) => a - b)
+    // First hit is the surface entering the material, the next is where the beam exits. The
+    // distance between them is the material the beam must travel through.
+    const thickness = hits.length >= 2 ? hits[1] - hits[0] : Number.POSITIVE_INFINITY
+    if (thickness > length) {
       failures.push({
         point: [tri.centroid.x, tri.centroid.y, tri.centroid.z],
         normal: [tri.normal.x, tri.normal.y, tri.normal.z],
-        crossings,
+        thickness,
         area: tri.area,
       })
     }

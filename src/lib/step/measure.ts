@@ -22,6 +22,12 @@ type AnyShapeish = {
   delete: () => void
 }
 
+/** The minimum a shape must expose to be measured — an already-imported OCC shape. */
+export interface MeasurableShape {
+  boundingBox: Bounds
+  solids: { boundingBox: Bounds }[]
+}
+
 function extents(box: Bounds): [number, number, number] {
   const [min, max] = box.bounds
   return [max[0] - min[0], max[1] - min[1], max[2] - min[2]]
@@ -33,33 +39,42 @@ function growsBeyond(whole: [number, number, number], main: [number, number, num
 
 export async function measureStep(bytes: Uint8Array): Promise<StepMeasure> {
   await ensureOc()
-  const { importSTEP, measureVolume } = await import('replicad')
+  const { importSTEP } = await import('replicad')
   const shape = (await importSTEP(
     new Blob([new Uint8Array(bytes)], { type: 'model/step' }),
   )) as unknown as AnyShapeish
   try {
-    const whole = extents(shape.boundingBox)
-    const solids = shape.solids
-    if (solids.length === 0) return { size: whole, bodies: 0, extra: false, volume: 0 }
-
-    let main = solids[0]
-    let largest = measureVolume(main as never)
-    for (const solid of solids.slice(1)) {
-      const volume = measureVolume(solid as never)
-      if (volume > largest) {
-        largest = volume
-        main = solid
-      }
-    }
-    const size = extents(main.boundingBox)
-    return {
-      size,
-      bodies: solids.length,
-      extra: solids.length > 1 || growsBeyond(whole, size),
-      volume: largest,
-    }
+    return await measureShape(shape)
   } finally {
     shape.delete()
+  }
+}
+
+/**
+ * Measures an already-imported OCC shape. Split out from {@link measureStep} so a worker can
+ * import a STEP once and reuse the same shape for several checks (measure + light-sabre).
+ */
+export async function measureShape(shape: MeasurableShape): Promise<StepMeasure> {
+  const { measureVolume } = await import('replicad')
+  const whole = extents(shape.boundingBox)
+  const solids = shape.solids
+  if (solids.length === 0) return { size: whole, bodies: 0, extra: false, volume: 0 }
+
+  let main = solids[0]
+  let largest = measureVolume(main as never)
+  for (const solid of solids.slice(1)) {
+    const volume = measureVolume(solid as never)
+    if (volume > largest) {
+      largest = volume
+      main = solid
+    }
+  }
+  const size = extents(main.boundingBox)
+  return {
+    size,
+    bodies: solids.length,
+    extra: solids.length > 1 || growsBeyond(whole, size),
+    volume: largest,
   }
 }
 
