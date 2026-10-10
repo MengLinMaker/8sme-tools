@@ -193,8 +193,12 @@ export const en = {
       cancelFix: 'Undo',
       stepCleaned: 'STEP cleaned — this is what the export ships.',
       stepRegenerated: 'STEP regenerated — this is what the export ships.',
+      stepSimplified:
+        'STEP simplified (bevel-cut surface left flat) — this is what the export ships.',
       strayBodies: 'Stray floating body/bodies shown in orange — cleaning keeps the real geometry.',
       ncMismatch: "NC build doesn't match the STEP — regenerating rebuilds the STEP from the NC.",
+      cutEndPiece:
+        'Straight-through cut would detach a bevel-cut end piece — simplifying leaves that surface uncut.',
     },
   },
   nesting: {
@@ -290,7 +294,7 @@ export const en = {
     overcut: 'Overcut — cannot fix',
     undercut: 'Undercut — can fix',
     diffTitle: 'Red = overcut vs STEP ideal ({{over}}) · Blue = undercut vs STEP ({{under}})',
-    facesHiddenNote: 'Thin sheets show only faces over 1 mm out',
+    facesHiddenNote: 'Invisible at 1 mm · solid by 2 mm',
     noDifferences: 'Models match — no differences',
   },
   findings: {
@@ -315,6 +319,10 @@ export const en = {
     PART_LIST_NO_FILES: 'Part list lists {{part}} but no NC/STEP/PDF files were found',
     NO_PART_LIST: 'No part list (.xlsx) found — quantity cross-checks were skipped',
     STRAY_BODY: 'STEP has {{bodies}} solid bodies — extra floating piece(s); can be cleaned',
+    CUT_END_PIECE:
+      'Cutting straight through would detach {{extra}} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)',
+    CUT_STEP:
+      'Not manufacturable: a sudden {{depth}} mm thickness change on face(s) {{faces}} is past the ~30 mm the head can reach — it would damage the machine. Cut at an angle on the radius (a manual judgement), it cannot be swept in one pass',
     CUT_SABRE:
       'Light-sabre test failed: a straight ~35 mm beam ends inside the body on {{count}} surface(s) (~{{area}} mm²) — not manufacturable',
     MANUFACTURE_MISMATCH: '{{note}} — the model is badly wrong; regenerate the STEP from the NC',
@@ -515,8 +523,10 @@ export const zh = {
       cancelFix: '撤销',
       stepCleaned: 'STEP 已清理——导出的即为该文件。',
       stepRegenerated: 'STEP 已重建——导出的即为该文件。',
+      stepSimplified: 'STEP 已简化（坡口面保留为平面）——导出的即为该文件。',
       strayBodies: '橙色显示的是多余悬浮实体——清理会保留真实几何。',
       ncMismatch: 'NC 构建与 STEP 不一致——重建将根据 NC 重新生成 STEP。',
+      cutEndPiece: '直线切透会切掉坡口切割的端部小件——简化将保留该面不切。',
     },
   },
   nesting: {
@@ -611,7 +621,7 @@ export const zh = {
     overcut: '切割过度——无法修复',
     undercut: '切割不足——可以修复',
     diffTitle: '红色 = 相对 STEP 理想模型切割过度（{{over}}）· 蓝色 = 切割不足（{{under}}）',
-    facesHiddenNote: '薄层仅显示超出 1 mm 的面',
+    facesHiddenNote: '1 mm 处不可见 · 2 mm 以上为实色',
     noDifferences: '模型一致——无差异',
   },
   findings: {
@@ -636,6 +646,9 @@ export const zh = {
     PART_LIST_NO_FILES: '零件清单列出了 {{part}}，但未找到对应的 NC/STEP/PDF 文件',
     NO_PART_LIST: '未找到零件清单（.xlsx）——已跳过数量交叉核对',
     STRAY_BODY: 'STEP 含 {{bodies}} 个实体——存在多余悬浮件；可清理',
+    CUT_END_PIECE: '直线切透会切掉图纸上保留的 {{extra}} 个小件——需要坡口/斜切（或该面不切）',
+    CUT_STEP:
+      '不可制造：{{faces}} 面上 {{depth}} mm 的厚度突变超出了机头约 30 mm 的加工范围——会损坏机器。需在圆弧处斜切（人工判断），无法一次扫切成型',
     CUT_SABRE:
       '光剑测试未通过：约 35 mm 的直光束在 {{count}} 个表面处终止于零件内部（约 {{area}} mm²）——无法制造',
     MANUFACTURE_MISMATCH: '{{note}}——模型严重错误；请根据 NC 重建 STEP',

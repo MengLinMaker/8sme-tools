@@ -104,9 +104,10 @@ export function parseNcGeometry(text: string): NcGeometry {
       holes.push({ face, x, y, diameter: Number.isFinite(diameter) ? diameter : 0 })
     } else {
       current.push([x, y])
-      // R then up to four welding-preparation values (two angle/distance pairs).
+      // Welding-preparation / bevel pairs (two angle/distance values) AFTER the radius at
+      // `index + 2`: the radius is a corner blend, not a bevel, so it must not count.
       const bevel: number[] = []
-      for (let i = index + 2; i <= index + 5; i++) {
+      for (let i = index + 3; i <= index + 6; i++) {
         const value = num(tokens[i])
         bevel.push(Number.isFinite(value) ? value : 0)
       }

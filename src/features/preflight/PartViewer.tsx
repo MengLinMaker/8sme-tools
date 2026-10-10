@@ -33,6 +33,7 @@ import {
   booleanDiff,
   cachedBooleanDiff,
   type DiffPresence,
+  diffAlpha,
   probeDiffPresence,
 } from '@/lib/step/booleanDiff'
 import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step/diffHighlight'
@@ -45,8 +46,9 @@ const COMPARE_COLOR = 0xf59e0b
 const STRAY_COLOR = 0xf97316
 /** Overcut vs the STEP ideal (NC took too much — scrap, cannot fix). */
 const OVERCUT_COLOR = 0xef4444
+const OVERCUT_RGB: [number, number, number] = [0xef / 255, 0x44 / 255, 0x44 / 255]
 /** Undercut vs the STEP ideal (leftover — can still be cut). */
-const UNDERCUT_COLOR = 0x3b82f6
+const UNDERCUT_RGB: [number, number, number] = [0x3b / 255, 0x82 / 255, 0xf6 / 255]
 const FACE_MATERIAL = { color: 0xaebfd0, metalness: 0.55, roughness: 0.45 }
 /** Roll about the length axis for each `detectOrientation` result (world YZ → profile-local). */
 const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]
@@ -54,6 +56,32 @@ const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]
 /** Formats a 0–1 fraction as a percentage, keeping a decimal for tiny-but-nonzero shares. */
 function percent(value: number): string {
   return `${(value * 100).toFixed(value > 0 && value < 0.01 ? 1 : 0)}%`
+}
+
+/**
+ * Paints per-face alpha onto a diff geometry from per-triangle clearances, so
+ * barely-out faces whisper and far-out faces pop. The geometry must be
+ * non-indexed with one triangle per three vertices, and `distances` aligned
+ * with it (as `filterDrawableFaces` returns).
+ */
+function paintDiffAlpha(
+  geometry: BufferGeometry,
+  distances: number[],
+  rgb: [number, number, number],
+): void {
+  const triCount = Math.floor((geometry.getAttribute('position')?.count ?? 0) / 3)
+  const colors = new Float32Array(Math.max(triCount, 0) * 12)
+  for (let t = 0; t < triCount; t++) {
+    const alpha = diffAlpha(distances[t] ?? 0)
+    for (let k = 0; k < 3; k++) {
+      const o = (t * 3 + k) * 4
+      colors[o] = rgb[0]
+      colors[o + 1] = rgb[1]
+      colors[o + 2] = rgb[2]
+      colors[o + 3] = alpha
+    }
+  }
+  geometry.setAttribute('color', new Float32BufferAttribute(colors, 4))
 }
 
 /** An extruded section outline drawn as a translucent overlay. */
@@ -126,6 +154,7 @@ function extrudeOverlay(
   length: number,
   xAxis: Vector3,
   yAxis: Vector3,
+  dim?: boolean,
 ): Group {
   const shape = new Shape()
   shape.moveTo(profile[0][0], profile[0][1])
@@ -152,7 +181,7 @@ function extrudeOverlay(
       new MeshStandardMaterial({
         color: GHOST_COLOR,
         transparent: true,
-        opacity: 0.16,
+        opacity: dim ? 0.08 : 0.16,
         depthWrite: false,
         side: DoubleSide,
       }),
@@ -161,7 +190,11 @@ function extrudeOverlay(
   group.add(
     new LineSegments(
       new EdgesGeometry(geometry, 15),
-      new LineBasicMaterial({ color: GHOST_COLOR, transparent: true, opacity: 0.6 }),
+      new LineBasicMaterial({
+        color: GHOST_COLOR,
+        transparent: true,
+        opacity: dim ? 0.3 : 0.6,
+      }),
     ),
   )
   return group
@@ -309,12 +342,15 @@ function mountScene(
   // Overlay mode (a second model is present): both base shells go translucent so
   // the solid red/blue diffs read through them from any angle. Opaque renders
   // first, so the diffs draw before the shells blend over them. Single-model
-  // views keep their solid faces.
+  // views keep their solid faces. Shells stay dim on purpose — the diffs are
+  // the subject here, and dimmer bases raise their contrast (opaque edge lines
+  // keep carrying the shape).
   const isOverlay = Boolean(compareStep && compareStep.bodies.length > 0)
   if (isOverlay) {
     faceMaterial.transparent = true
-    faceMaterial.opacity = 0.45
+    faceMaterial.opacity = 0.35
     faceMaterial.depthWrite = false
+    compareMaterial.opacity = 0.3
   }
 
   const primary = buildGroup(step, faceMaterial, true, highlightStray ? strayMaterial : null)
@@ -359,12 +395,13 @@ function mountScene(
       length,
       xAxis,
       yAxis,
+      isOverlay,
     )
     scene.add(overlay)
     overlays.push(overlay)
   }
   if (beam && Array.isArray(beam.profile) && beam.profile.length >= 3 && beam.length > 0) {
-    const overlay = extrudeOverlay(beam.profile, [], beam.length, unit(0, 1), unit(1, 1))
+    const overlay = extrudeOverlay(beam.profile, [], beam.length, unit(0, 1), unit(1, 1), isOverlay)
     scene.add(overlay)
     overlays.push(overlay)
   }
@@ -415,24 +452,29 @@ function mountScene(
             compareGroup.matrixWorld,
           )
     if (boolean) {
-      // X-ray style: fully solid colours drawn after the shells with no depth
-      // test, so the diffs composite at full strength over everything instead
-      // of being dimmed by the translucent bases in front of them.
+      // X-ray style: colours drawn after the shells with no depth test, so the
+      // diffs composite over everything instead of being dimmed by the
+      // translucent bases in front of them. Strength is per-face alpha from
+      // the clearance distance (faint just past tolerance, solid a few mm
+      // out), so thin skins whisper while real cuts pop — via RGBA vertex
+      // colours, which is why the materials themselves stay white.
       const overcutMaterial = new MeshStandardMaterial({
-        color: OVERCUT_COLOR,
-        emissive: 0x7f1d1d,
-        emissiveIntensity: 0.55,
-        metalness: 0.15,
+        color: 0xffffff,
+        vertexColors: true,
+        emissive: 0xff2222,
+        emissiveIntensity: 1.2,
+        metalness: 0,
         roughness: 0.5,
         transparent: true,
         depthTest: false,
         depthWrite: false,
       })
       const undercutMaterial = new MeshStandardMaterial({
-        color: UNDERCUT_COLOR,
-        emissive: 0x1e3a8a,
-        emissiveIntensity: 0.55,
-        metalness: 0.15,
+        color: 0xffffff,
+        vertexColors: true,
+        emissive: 0x2f7bff,
+        emissiveIntensity: 1.2,
+        metalness: 0,
         roughness: 0.5,
         transparent: true,
         depthTest: false,
@@ -440,12 +482,14 @@ function mountScene(
       })
       materials.push(overcutMaterial, undercutMaterial)
       if (boolean.over) {
+        paintDiffAlpha(boolean.over, boolean.overDistance, OVERCUT_RGB)
         const mesh = new Mesh(boolean.over, overcutMaterial)
         mesh.renderOrder = 10
         scene.add(mesh)
         diffMeshes.push(mesh)
       }
       if (boolean.under) {
+        paintDiffAlpha(boolean.under, boolean.underDistance, UNDERCUT_RGB)
         const mesh = new Mesh(boolean.under, undercutMaterial)
         mesh.renderOrder = 10
         scene.add(mesh)
@@ -472,9 +516,9 @@ function mountScene(
       )
       const diffMaterial = new MeshStandardMaterial({
         color: OVERCUT_COLOR,
-        emissive: 0x7f1d1d,
-        emissiveIntensity: 0.6,
-        metalness: 0.15,
+        emissive: 0xff2222,
+        emissiveIntensity: 1,
+        metalness: 0,
         roughness: 0.5,
         transparent: true,
         depthTest: false,

@@ -247,6 +247,12 @@ export interface MeshQuery {
    * its three vertices is.
    */
   flagFar(aVertices: number[], aTriangles: number[]): Uint8Array
+  /**
+   * Maximum vertex distance per triangle (same order as `aTriangles`). Used to
+   * graduate rendering strength: faint just past tolerance, solid further out.
+   * Vertices with no nearby target triangles report Infinity.
+   */
+  distances(aVertices: number[], aTriangles: number[]): Float32Array
 }
 
 /** Builds the reusable query state for a target mesh. */
@@ -258,6 +264,17 @@ export function createMeshQuery(
   const cell = Math.max(8, tolerance * 2)
   const index = buildTriangleIndex(targetVertices, targetTriangles, tolerance, cell)
   const tolSquared = tolerance * tolerance
+  const vertexDistance = (px: number, py: number, pz: number): number => {
+    const distance = minDistanceSquaredToMesh(
+      px,
+      py,
+      pz,
+      targetVertices,
+      targetTriangles,
+      index.get(cellKey(Math.floor(px / cell), Math.floor(py / cell), Math.floor(pz / cell))),
+    )
+    return Math.sqrt(distance)
+  }
   return {
     tolerance,
     flagFar(aVertices: number[], aTriangles: number[]): Uint8Array {
@@ -284,6 +301,24 @@ export function createMeshQuery(
         }
       }
       return mask
+    },
+    distances(aVertices: number[], aTriangles: number[]): Float32Array {
+      const triCount = Math.floor(aTriangles.length / 3)
+      const out = new Float32Array(triCount)
+      for (let t = 0; t < triCount; t++) {
+        let best = 0
+        for (let k = 0; k < 3; k++) {
+          const vi = aTriangles[t * 3 + k] ?? 0
+          const d = vertexDistance(
+            aVertices[vi * 3] ?? 0,
+            aVertices[vi * 3 + 1] ?? 0,
+            aVertices[vi * 3 + 2] ?? 0,
+          )
+          if (d > best) best = d
+        }
+        out[t] = best
+      }
+      return out
     },
   }
 }

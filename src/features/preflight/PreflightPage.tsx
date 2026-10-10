@@ -89,11 +89,12 @@ const SEVERITY_VARIANT = {
 } as const
 
 /**
- * A per-part STEP fix the user applied: cleaned (stray bodies dropped) or rebuilt from the NC.
- * There is deliberately no auto "simplify" fix — a sudden uncuttable step is a judgement call
- * (cut at an angle on the radius), so it is flagged as an error and left alone.
+ * A per-part STEP fix the user applied: cleaned (stray bodies dropped), regenerated from the
+ * NC, or simplified (a bevel-cut surface left flat/uncut so a sloped end stays attached).
+ * There is deliberately no auto "simplify" fix for CUT_STEP — a sudden uncuttable step is a
+ * judgement call (cut at an angle on the radius), so it is flagged as an error and left alone.
  */
-type StepFixKind = 'cleaned' | 'regenerated'
+type StepFixKind = 'cleaned' | 'regenerated' | 'simplified'
 interface StepOverride {
   bytes: Uint8Array
   kind: StepFixKind
@@ -103,7 +104,17 @@ interface StepOverride {
 function resolvedFindings(kind: StepFixKind): string[] {
   if (kind === 'regenerated')
     return ['STRAY_BODY', 'MANUFACTURE_MISMATCH', 'MANUFACTURE_BORDERLINE']
+  if (kind === 'simplified') return ['CUT_END_PIECE']
   return ['STRAY_BODY']
+}
+
+/** The one-click STEP fix a finding code maps to, when the warning is fixable at all. */
+type FindingFix = 'clean' | 'regenerate' | 'simplify'
+function fixForFinding(code: string): FindingFix | null {
+  if (code === 'STRAY_BODY') return 'clean'
+  if (code === 'MANUFACTURE_MISMATCH' || code === 'MANUFACTURE_BORDERLINE') return 'regenerate'
+  if (code === 'CUT_END_PIECE') return 'simplify'
+  return null
 }
 
 /** Grades an NC-vs-STEP mismatch: massive = error, borderline = warning, close = ok. */
@@ -753,6 +764,17 @@ export function PreflightPage() {
     [manufactureChecks, stepOverrides],
   )
 
+  /** A part can be simplified when a straight-through cut would detach a bevel-cut end piece. */
+  const isSimplifiable = useCallback(
+    (part: PartRecord | undefined) =>
+      Boolean(
+        part?.nc &&
+          cutIssues.get(part.mark)?.some((issue) => issue.code === 'CUT_END_PIECE') &&
+          stepOverrides.get(part.mark)?.kind !== 'simplified',
+      ),
+    [cutIssues, stepOverrides],
+  )
+
   const setOverride = useCallback((mark: string, bytes: Uint8Array, kind: StepFixKind) => {
     setStepOverrides((prev) => {
       const next = new Map(prev)
@@ -800,6 +822,32 @@ export function PreflightPage() {
         const reference = part.step ? bytesByPath.get(part.step.path) : undefined
         const step = await reconstructForViewer(new TextDecoder().decode(ncBytes), { reference })
         if (step) setOverride(part.mark, step, 'regenerated')
+      } catch {
+        // leave the original in place if the rebuild fails
+      } finally {
+        setFixingMark(null)
+      }
+    },
+    [bytesByPath, setOverride],
+  )
+
+  /**
+   * Rebuilds a part's STEP from its NC leaving the bevel-cut surface uncut, so a sloped end the
+   * straight-through cut would detach stays attached (resolves CUT_END_PIECE).
+   */
+  const simplifyPart = useCallback(
+    async (part: PartRecord) => {
+      const ncPath = part.nc?.path
+      const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
+      if (!ncBytes) return
+      setFixingMark(part.mark)
+      try {
+        const reference = part.step ? bytesByPath.get(part.step.path) : undefined
+        const step = await reconstructForViewer(new TextDecoder().decode(ncBytes), {
+          reference,
+          simplify: true,
+        })
+        if (step) setOverride(part.mark, step, 'simplified')
       } catch {
         // leave the original in place if the rebuild fails
       } finally {
@@ -1091,6 +1139,18 @@ export function PreflightPage() {
                                       : t('common.actions.regenerateStep')}
                                   </Button>
                                 )}
+                                {!resolved && isSimplifiable(viewable) && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={fixingMark === viewable?.mark}
+                                    onClick={() => viewable && void simplifyPart(viewable)}
+                                  >
+                                    {fixingMark === viewable?.mark
+                                      ? t('common.actions.working')
+                                      : t('common.actions.simplify')}
+                                  </Button>
+                                )}
                                 {!resolved && isCleanable(viewable) && (
                                   <Button
                                     variant="outline"
@@ -1283,6 +1343,18 @@ export function PreflightPage() {
                                           : t('common.actions.regenerateStep')}
                                       </Button>
                                     )}
+                                    {isSimplifiable(part) && (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={fixingMark === part.mark}
+                                        onClick={() => void simplifyPart(part)}
+                                      >
+                                        {fixingMark === part.mark
+                                          ? t('common.actions.working')
+                                          : t('common.actions.simplify')}
+                                      </Button>
+                                    )}
                                     {isCleanable(part) && (
                                       <Button
                                         variant="outline"
@@ -1332,9 +1404,11 @@ export function PreflightPage() {
                 override: overrideFor(viewing)?.kind,
                 canClean: isCleanable(viewing),
                 canRegenerate: isRegeneratable(viewing),
+                canSimplify: isSimplifiable(viewing),
                 pending: fixingMark === viewing.mark,
                 onClean: () => void cleanPart(viewing),
                 onRegenerate: () => void regeneratePart(viewing),
+                onSimplify: () => void simplifyPart(viewing),
                 onUndo: () => undoOverride(viewing.mark),
               }}
             />
@@ -1546,10 +1620,44 @@ interface ViewerFix {
   override?: StepFixKind
   canClean: boolean
   canRegenerate: boolean
+  canSimplify: boolean
   pending: boolean
   onClean: () => void
   onRegenerate: () => void
+  onSimplify: () => void
   onUndo: () => void
+}
+
+/** Which fix action a viewer Fix button runs, with its labels. */
+function viewerFixAction(
+  t: TFunction,
+  fix: ViewerFix,
+  kind: FindingFix,
+): { label: string; pendingLabel: string; run: () => void } {
+  if (kind === 'clean')
+    return {
+      label: t('common.actions.cleanStep'),
+      pendingLabel: t('common.actions.cleaning'),
+      run: fix.onClean,
+    }
+  if (kind === 'regenerate')
+    return {
+      label: t('common.actions.regenerateStep'),
+      pendingLabel: t('common.actions.working'),
+      run: fix.onRegenerate,
+    }
+  return {
+    label: t('common.actions.simplify'),
+    pendingLabel: t('common.actions.working'),
+    run: fix.onSimplify,
+  }
+}
+
+/** Whether the part-level fix behind a finding kind is currently available. */
+function viewerFixAvailable(fix: ViewerFix, kind: FindingFix): boolean {
+  if (kind === 'clean') return fix.canClean
+  if (kind === 'regenerate') return fix.canRegenerate
+  return fix.canSimplify
 }
 
 /** Findings + file problems for the viewed part, shown above the 3D so debugging is fast. */
@@ -1566,7 +1674,9 @@ function ViewerWarnings({
   const findingText = (finding: Finding) =>
     t(`findings.${finding.code}`, { ...finding.params, defaultValue: finding.message })
   const invalid = step && !step.valid ? step.problems.join('; ') : null
-  const hasFixRow = Boolean(fix?.override || fix?.canClean || fix?.canRegenerate)
+  const hasFixRow = Boolean(
+    fix?.override || fix?.canClean || fix?.canRegenerate || fix?.canSimplify,
+  )
   if (findings.length === 0 && !invalid && !hasFixRow) return null
   return (
     <div className="flex flex-col gap-2 border-b border-border bg-card px-5 py-3">
@@ -1574,6 +1684,9 @@ function ViewerWarnings({
         const resolved = Boolean(
           fix?.override && resolvedFindings(fix.override).includes(finding.code),
         )
+        const fixKind = fix && !resolved ? fixForFinding(finding.code) : null
+        const fixable = Boolean(fixKind && fix && viewerFixAvailable(fix, fixKind))
+        const action = fixKind && fix ? viewerFixAction(t, fix, fixKind) : null
         return (
           <div
             key={`${finding.code}-${finding.message}`}
@@ -1582,14 +1695,25 @@ function ViewerWarnings({
             <Badge variant={SEVERITY_VARIANT[finding.severity]}>
               {t(`common.severity.${finding.severity}`)}
             </Badge>
-            <div className="flex flex-col">
+            <div className="flex min-w-0 flex-col">
               <span className="font-mono text-xs text-muted-foreground">{finding.code}</span>
               <span className={cn(resolved && 'line-through')}>{findingText(finding)}</span>
             </div>
             {resolved && (
-              <Badge variant="success" className="ml-auto align-middle">
+              <Badge variant="success" className="ml-auto shrink-0 align-middle">
                 {fix?.override ? t(`common.fix.${fix.override}`) : ''}
               </Badge>
+            )}
+            {fixable && action && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-auto shrink-0"
+                disabled={fix?.pending}
+                onClick={action.run}
+              >
+                {fix?.pending ? action.pendingLabel : action.label}
+              </Button>
             )}
           </div>
         )
@@ -1604,7 +1728,9 @@ function ViewerWarnings({
           <span>
             {fix.override === 'cleaned'
               ? t('preflight.warnings.stepCleaned')
-              : t('preflight.warnings.stepRegenerated')}
+              : fix.override === 'simplified'
+                ? t('preflight.warnings.stepSimplified')
+                : t('preflight.warnings.stepRegenerated')}
           </span>
           <Button variant="ghost" size="sm" onClick={fix.onUndo}>
             <Undo2 />
@@ -1626,6 +1752,14 @@ function ViewerWarnings({
               <span>{t('preflight.warnings.ncMismatch')}</span>
               <Button variant="outline" size="sm" disabled={fix.pending} onClick={fix.onRegenerate}>
                 {fix.pending ? t('common.actions.working') : t('common.actions.regenerateStep')}
+              </Button>
+            </div>
+          )}
+          {fix?.canSimplify && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              <span>{t('preflight.warnings.cutEndPiece')}</span>
+              <Button variant="outline" size="sm" disabled={fix.pending} onClick={fix.onSimplify}>
+                {fix.pending ? t('common.actions.working') : t('common.actions.simplify')}
               </Button>
             </div>
           )}

@@ -4,6 +4,7 @@ import {
   booleanDiff,
   cachedBooleanDiff,
   type DiffSoup,
+  diffAlpha,
   extractComponents,
   toWorldSoup,
 } from './booleanDiff'
@@ -209,5 +210,24 @@ describe('extractComponents', () => {
     expect(components.length).toBe(1)
     // Union holds on open geometry (exact signed sum depends on group surgery).
     expect(components[0]?.volume ?? 0).toBeGreaterThan(0)
+  })
+})
+
+describe('diffAlpha', () => {
+  it('hides the thinnest fringe and saturates real cuts', () => {
+    expect(diffAlpha(0)).toBe(0)
+    expect(diffAlpha(1)).toBe(0)
+    const mid = diffAlpha(1.5)
+    expect(mid).toBeGreaterThan(0)
+    expect(mid).toBeLessThan(1)
+    expect(diffAlpha(2)).toBe(1)
+    expect(diffAlpha(100)).toBe(1)
+    // Monotonic: nearer never renders stronger than farther.
+    let last = -1
+    for (let d = 0; d <= 5; d += 0.25) {
+      const a = diffAlpha(d)
+      expect(a).toBeGreaterThanOrEqual(last)
+      last = a
+    }
   })
 })

@@ -41,11 +41,28 @@ export interface BooleanDiff {
   over: BufferGeometry | null
   /** manufactured-minus-STEP solid (undercut, blue), world coordinates (null when empty) */
   under: BufferGeometry | null
+  /** max-vertex distance per rendered triangle, same order as the geometries */
+  overDistance: number[]
+  underDistance: number[]
   /** volumes measured on what is drawn, so the legend number matches the picture */
   overVolume: number
   underVolume: number
   /** volume of the manufactured model, so the legend can show shares */
   primaryVolume: number
+}
+
+/** Invisible at tolerance, fully solid a couple mm out: thinnest fringe vanishes, real cuts pop. */
+export const DIFF_ALPHA_FLOOR = 0
+export const DIFF_ALPHA_FULL_MM = 2
+
+/** Maps a per-triangle clearance (mm) to a render alpha. */
+export function diffAlpha(distanceMm: number): number {
+  const t = Math.min(
+    1,
+    Math.max(0, (distanceMm - KEEP_CLEAR_MM) / (DIFF_ALPHA_FULL_MM - KEEP_CLEAR_MM)),
+  )
+  const smooth = t * t * (3 - 2 * t)
+  return DIFF_ALPHA_FLOOR + (1 - DIFF_ALPHA_FLOOR) * smooth
 }
 
 interface DiffComponent {
@@ -170,16 +187,20 @@ function geometryFromTriangles(vertices: Float32Array, triangles: number[]): Buf
  * Rebuilds a diff solid from the result components worth drawing (null when
  * nothing survives). Volumes are the kept components' own, so the legend number
  * matches the picture. See the KEEP_* bars above for the keep rules.
+ * Also returns the max-vertex distance per rendered triangle (same order as
+ * the rebuilt geometry), so the viewer can fade barely-out faces instead of
+ * hiding them.
  */
 export function filterDrawableFaces(
   geometry: BufferGeometry,
   query: MeshQuery,
-): { geometry: BufferGeometry | null; volume: number } {
+): { geometry: BufferGeometry | null; volume: number; distances: number[] } {
   const { vertices, triangles } = triangleSoup(geometry)
   const count = Math.floor(triangles.length / 3)
-  if (count === 0) return { geometry: null, volume: 0 }
+  if (count === 0) return { geometry: null, volume: 0, distances: [] }
   const floor = KEEP_SIZE_ABS_MM3
   const kept: number[] = []
+  const keptDistances: number[] = []
   let volume = 0
   const sharedVertices = Array.from(vertices)
   for (const component of extractComponents(geometry)) {
@@ -190,29 +211,32 @@ export function filterDrawableFaces(
     }
     // One query object per side — its spatial index is built once and reused
     // across every component, instead of rebuilt per component.
-    const aDiff = query.flagFar(sharedVertices, corners)
+    const dists = query.distances(sharedVertices, corners)
+    let far = 0
+    for (const d of dists) if (d >= query.tolerance) far++
     // Kept components draw only their far faces: coplanar hairlines, section
     // skins and sharp-vs-rolled edges sit below tolerance and vanish, while
     // genuinely out faces draw whether they form a whole slab or a notch
     // bottom. Volume stays the component's own so the number matches the kept
     // piece, not an open patch shell (whose signed sum is meaningless).
-    if (diffFraction(aDiff) >= KEEP_CLEAR_SHARE) {
+    if (far / dists.length >= KEEP_CLEAR_SHARE) {
       for (let t = 0; t < component.triangles.length; t++) {
-        if (aDiff[t] === 1) {
+        if ((dists[t] ?? 0) >= query.tolerance) {
           const original = component.triangles[t] ?? 0
           kept.push(
             triangles[original * 3] ?? 0,
             triangles[original * 3 + 1] ?? 0,
             triangles[original * 3 + 2] ?? 0,
           )
+          keptDistances.push(dists[t] ?? 0)
         }
       }
       volume += component.volume
     }
   }
   const filtered = geometryFromTriangles(vertices, kept)
-  if (!filtered) return { geometry: null, volume: 0 }
-  return { geometry: filtered, volume }
+  if (!filtered) return { geometry: null, volume: 0, distances: [] }
+  return { geometry: filtered, volume, distances: keptDistances }
 }
 
 /** Concatenates bodies into one world-space soup (bakes the seating transform). */
@@ -397,21 +421,27 @@ export function booleanDiff(
   // component (that rebuild was the filter's main cost).
   const queryPrimary = createMeshQuery(primary.vertices, primary.triangles, KEEP_CLEAR_MM)
   const queryCompare = createMeshQuery(compare.vertices, compare.triangles, KEEP_CLEAR_MM)
+  let overDistance: number[] = []
+  let underDistance: number[] = []
   if (raw.over) {
     const filtered = filterDrawableFaces(raw.over, queryPrimary)
     overFiltered = filtered.geometry
     overVolume = filtered.volume
+    overDistance = filtered.distances
     raw.over.dispose()
   }
   if (raw.under) {
     const filtered = filterDrawableFaces(raw.under, queryCompare)
     underFiltered = filtered.geometry
     underVolume = filtered.volume
+    underDistance = filtered.distances
     raw.under.dispose()
   }
   return {
     over: overFiltered,
     under: underFiltered,
+    overDistance,
+    underDistance,
     overVolume,
     underVolume,
     primaryVolume: raw.primaryVolume,
@@ -422,6 +452,8 @@ interface CachedDiff {
   matrixKey: string
   overPos: Float32Array | null
   underPos: Float32Array | null
+  overDistance: number[]
+  underDistance: number[]
   overVolume: number
   underVolume: number
   primaryVolume: number
@@ -461,6 +493,8 @@ export function cachedBooleanDiff(
     return {
       over: hit.overPos ? geometryFromPositions(hit.overPos) : null,
       under: hit.underPos ? geometryFromPositions(hit.underPos) : null,
+      overDistance: [...hit.overDistance],
+      underDistance: [...hit.underDistance],
       overVolume: hit.overVolume,
       underVolume: hit.underVolume,
       primaryVolume: hit.primaryVolume,
@@ -481,6 +515,8 @@ export function cachedBooleanDiff(
     matrixKey,
     overPos: positions(result.over),
     underPos: positions(result.under),
+    overDistance: [...result.overDistance],
+    underDistance: [...result.underDistance],
     overVolume: result.overVolume,
     underVolume: result.underVolume,
     primaryVolume: result.primaryVolume,

@@ -2,6 +2,7 @@ import { contourHasBevel, contourStepDepth } from '@/lib/audit/manufacturability
 import { parseDstv } from '@/lib/parsers/dstv'
 import { type NcContour, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { partSectionForCode } from '@/lib/sections/stock'
+import { stripStraySolids } from './clean'
 import type { MeasurableShape } from './measure'
 import { ensureOc } from './occInit'
 
@@ -365,6 +366,11 @@ export async function reconstructSolidFromNc(
       solid = solid.cut(cyl.translate(0, shift, 0) as unknown as SolidOps)
     }
   }
+
+  // NC booleans can leave floating slivers alongside the real body. Strip them on the
+  // live shape — same rule as cleanStep, but with no STEP round trip — so orientation
+  // (centre-of-mass ranking), measure and export all see the manufactured body only.
+  solid = (await stripStraySolids(solid as unknown as MeasurableShape)).solid as unknown as SolidOps
 
   if (options.reference && !options.measureOnly)
     solid = await orientToReference(solid, options.reference)
