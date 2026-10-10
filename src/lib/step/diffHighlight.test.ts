@@ -6,8 +6,8 @@ const CUBE_VERTS = [
   0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0, 0, 0, 10, 10, 0, 10, 10, 10, 10, 0, 10, 10,
 ]
 const CUBE_TRIS = [
-  0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 1, 5, 6, 1, 6, 2, 2, 6, 7, 2,
-  7, 3, 3, 7, 4, 3, 4, 0,
+  0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 1, 5, 6, 1, 6, 2, 2, 6, 7, 2, 7, 3, 3, 7, 4,
+  3, 4, 0,
 ]
 
 function translated(verts: number[], dx: number, dy: number, dz: number): number[] {
@@ -18,7 +18,13 @@ function translated(verts: number[], dx: number, dy: number, dz: number): number
 
 describe('mesh diff highlighting', () => {
   it('flags nothing for identical meshes', () => {
-    const { aDiff, bDiff } = computeDiffMasks(CUBE_VERTS, CUBE_TRIS, [...CUBE_VERTS], [...CUBE_TRIS], 1.5)
+    const { aDiff, bDiff } = computeDiffMasks(
+      CUBE_VERTS,
+      CUBE_TRIS,
+      [...CUBE_VERTS],
+      [...CUBE_TRIS],
+      1.5,
+    )
     expect([...aDiff].every((flag) => flag === 0)).toBe(true)
     expect([...bDiff].every((flag) => flag === 0)).toBe(true)
     expect(diffFraction(aDiff)).toBe(0)

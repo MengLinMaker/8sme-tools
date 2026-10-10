@@ -241,6 +241,12 @@ export const en = {
     strayBody: 'Stray body',
     noNc1: 'No NC1 geometry.',
     unknownError: 'unknown error',
+    hideDiff: 'Hide diff',
+    showDiff: 'Show diff',
+    differences: 'Differences in red',
+    differencesTitle:
+      'Red faces differ by over ~{{tol}} mm (this model {{primary}} · overlay {{compare}})',
+    noDifferences: 'Models match — no differences',
   },
   findings: {
     PART_LIST_UNREADABLE: '{{file}} has no recognisable part list rows',
@@ -511,6 +517,11 @@ export const zh = {
     strayBody: '悬浮实体',
     noNc1: '无 NC1 几何。',
     unknownError: '未知错误',
+    hideDiff: '隐藏差异',
+    showDiff: '显示差异',
+    differences: '红色为差异处',
+    differencesTitle: '红色面差异超过约 {{tol}} mm（本模型 {{primary}} · 叠加 {{compare}}）',
+    noDifferences: '模型一致——无差异',
   },
   findings: {
     PART_LIST_UNREADABLE: '{{file}} 没有可识别的零件清单行',

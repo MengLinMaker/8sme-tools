@@ -308,9 +308,7 @@ export function PreflightPage() {
   // Both panes stay mounted across mode switches (hidden with CSS, never unmounted),
   // so toggling views reuses the live three.js scenes instead of rebuilding them.
   const mfgPaneActive =
-    effectiveMode === 'split' ||
-    effectiveMode === 'manufactured' ||
-    effectiveMode === 'overlay'
+    effectiveMode === 'split' || effectiveMode === 'manufactured' || effectiveMode === 'overlay'
   const stepPaneActive = effectiveMode === 'step' || effectiveMode === 'split'
   const showMfgPane =
     mfgPaneActive && (hasManufactured || (ncBytes != null && mfgStatus === 'pending'))

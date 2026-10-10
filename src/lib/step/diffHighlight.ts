@@ -211,11 +211,7 @@ function flagDifferentVertices(
     const px = source[v * 3]
     const py = source[v * 3 + 1]
     const pz = source[v * 3 + 2]
-    const key = cellKey(
-      Math.floor(px / cell),
-      Math.floor(py / cell),
-      Math.floor(pz / cell),
-    )
+    const key = cellKey(Math.floor(px / cell), Math.floor(py / cell), Math.floor(pz / cell))
     const distance = minDistanceSquaredToMesh(
       px,
       py,

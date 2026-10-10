@@ -4,10 +4,12 @@ import { syncGeometries } from 'replicad-threejs-helper'
 import {
   AmbientLight,
   Box3,
+  BufferGeometry,
   DirectionalLight,
   DoubleSide,
   EdgesGeometry,
   ExtrudeGeometry,
+  Float32BufferAttribute,
   Group,
   HemisphereLight,
   LineBasicMaterial,
@@ -27,6 +29,8 @@ import {
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
+import { booleanDiff } from '@/lib/step/booleanDiff'
+import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { meshForViewer } from '@/lib/step/viewerModel'
 import { attachOrbit, type OrbitBus } from './orbitSync'
@@ -34,9 +38,18 @@ import { attachOrbit, type OrbitBus } from './orbitSync'
 const GHOST_COLOR = 0x3ddc84
 const COMPARE_COLOR = 0xf59e0b
 const STRAY_COLOR = 0xf97316
+/** Extra manufactured material vs the STEP ideal (boolean manufactured − STEP). */
+const EXTRA_COLOR = 0xef4444
+/** STEP-ideal material the manufactured build lacks (boolean STEP − manufactured). */
+const MISSING_COLOR = 0x3b82f6
 const FACE_MATERIAL = { color: 0xaebfd0, metalness: 0.55, roughness: 0.45 }
 /** Roll about the length axis for each `detectOrientation` result (world YZ → profile-local). */
 const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]
+
+/** Formats a 0–1 fraction as a percentage, keeping a decimal for tiny-but-nonzero shares. */
+function percent(value: number): string {
+  return `${(value * 100).toFixed(value > 0 && value < 0.01 ? 1 : 0)}%`
+}
 
 /** An extruded section outline drawn as a translucent overlay. */
 export interface BeamOutline {
@@ -153,6 +166,60 @@ interface SceneHandle {
   dispose: () => void
   overlays: Group[]
   setFlip: (flip: boolean) => void
+  setDiffVisible: (visible: boolean) => void
+  diffStats: DiffStats | null
+}
+
+/** Share of each boolean direction vs the STEP ideal, for the overlay legend. */
+export interface DiffStats {
+  /** manufactured-minus-STEP share of the manufactured volume (red = extra material) */
+  extra: number
+  /** STEP-minus-manufactured share (blue = ideal material the build lacks) */
+  missing: number
+  tolerance: number
+  /** true when the CSG kernel couldn't run and red surface flagging was used instead */
+  approximate: boolean
+}
+
+/** Concatenates every body's triangles into one index soup (offsets match `meshed.vertices`). */
+function concatTriangles(meshed: MeshedStep): { triangles: number[]; offsets: number[] } {
+  const triangles: number[] = []
+  const offsets: number[] = []
+  let vertexBase = 0
+  for (const body of meshed.bodies) {
+    offsets.push(Math.floor(triangles.length / 3))
+    const local = body.mesh.faces.triangles
+    for (let i = 0; i < local.length; i++) triangles.push(local[i] + vertexBase)
+    vertexBase += Math.floor(body.mesh.faces.vertices.length / 3)
+  }
+  return { triangles, offsets }
+}
+
+/**
+ * Builds a red overlay geometry from the subset of a body's triangles flagged as
+ * different. Local coordinates — the mesh joins the model's seated group so it
+ * follows the model (including the manual flip).
+ */
+function buildDiffGeometry(
+  localVertices: number[],
+  localTriangles: number[],
+  mask: Uint8Array,
+  triOffset: number,
+): BufferGeometry | null {
+  const index: number[] = []
+  const triCount = Math.floor(localTriangles.length / 3)
+  for (let t = 0; t < triCount; t++) {
+    if (mask[triOffset + t] === 1) {
+      index.push(localTriangles[t * 3], localTriangles[t * 3 + 1], localTriangles[t * 3 + 2])
+    }
+  }
+  if (index.length === 0) return null
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new Float32BufferAttribute(localVertices, 3))
+  geometry.setIndex(index)
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  return geometry
 }
 
 /** Builds the three.js scene for a set of meshes and returns a disposer. */
@@ -288,6 +355,125 @@ function mountScene(
   const fitSize = fit.getSize(new Vector3())
   const fitCentre = fit.getCenter(new Vector3())
 
+  // Boolean difference overlays, with the STEP treated as ideal. Both groups are
+  // already seated in the same frame, so the booleans run in world coordinates:
+  // red = manufactured-minus-STEP (extra material vs the ideal), blue =
+  // STEP-minus-manufactured (ideal material the build lacks). Coincident surfaces
+  // cancel, leaving only the volumetric leftovers. When the CSG kernel can't run
+  // (over budget or failing input), fall back to red surface-distance flagging.
+  const diffMeshes: Mesh[] = []
+  let diffStats: DiffStats | null = null
+  if (compareStep && compareGroup) {
+    const diagonal = Math.hypot(fitSize.x, fitSize.y, fitSize.z)
+    const tolerance = resolveDiffTolerance(diagonal)
+    primary.group.updateMatrixWorld(true)
+    compareGroup.updateMatrixWorld(true)
+    const soups = (meshed: MeshedStep) =>
+      meshed.bodies.map((body) => ({
+        vertices: body.mesh.faces.vertices,
+        triangles: body.mesh.faces.triangles,
+      }))
+    const boolean = booleanDiff(
+      soups(step),
+      soups(compareStep),
+      primary.group.matrixWorld,
+      compareGroup.matrixWorld,
+    )
+    if (boolean) {
+      const extraMaterial = new MeshStandardMaterial({
+        color: EXTRA_COLOR,
+        emissive: 0x7f1d1d,
+        emissiveIntensity: 0.55,
+        metalness: 0.15,
+        roughness: 0.5,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      })
+      const missingMaterial = new MeshStandardMaterial({
+        color: MISSING_COLOR,
+        emissive: 0x1e3a8a,
+        emissiveIntensity: 0.55,
+        metalness: 0.15,
+        roughness: 0.5,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      })
+      materials.push(extraMaterial, missingMaterial)
+      if (boolean.extra) {
+        const mesh = new Mesh(boolean.extra, extraMaterial)
+        scene.add(mesh)
+        diffMeshes.push(mesh)
+      }
+      if (boolean.missing) {
+        const mesh = new Mesh(boolean.missing, missingMaterial)
+        scene.add(mesh)
+        diffMeshes.push(mesh)
+      }
+      const volume = boolean.primaryVolume > 0 ? boolean.primaryVolume : 1
+      diffStats = {
+        extra: boolean.extraVolume / volume,
+        missing: boolean.missingVolume / volume,
+        tolerance,
+        approximate: false,
+      }
+    } else {
+      const primaryWorld = transformVertices(primary.raw, primary.group.matrixWorld)
+      const compareWorld = transformVertices(compareStep.vertices, compareGroup.matrixWorld)
+      const primaryTris = concatTriangles(step)
+      const compareTris = concatTriangles(compareStep)
+      const { aDiff, bDiff } = computeDiffMasks(
+        primaryWorld,
+        primaryTris.triangles,
+        compareWorld,
+        compareTris.triangles,
+        tolerance,
+      )
+      const diffMaterial = new MeshStandardMaterial({
+        color: EXTRA_COLOR,
+        emissive: 0x7f1d1d,
+        emissiveIntensity: 0.6,
+        metalness: 0.15,
+        roughness: 0.5,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      })
+      materials.push(diffMaterial)
+      step.bodies.forEach((body, index) => {
+        const geometry = buildDiffGeometry(
+          body.mesh.faces.vertices,
+          body.mesh.faces.triangles,
+          aDiff,
+          primaryTris.offsets[index],
+        )
+        if (!geometry) return
+        const mesh = new Mesh(geometry, diffMaterial)
+        primary.group.add(mesh)
+        diffMeshes.push(mesh)
+      })
+      compareStep.bodies.forEach((body, index) => {
+        const geometry = buildDiffGeometry(
+          body.mesh.faces.vertices,
+          body.mesh.faces.triangles,
+          bDiff,
+          compareTris.offsets[index],
+        )
+        if (!geometry) return
+        const mesh = new Mesh(geometry, diffMaterial)
+        compareGroup.add(mesh)
+        diffMeshes.push(mesh)
+      })
+      diffStats = {
+        extra: diffFraction(aDiff),
+        missing: diffFraction(bDiff),
+        tolerance,
+        approximate: true,
+      }
+    }
+  }
+
   const maxDim = Math.max(fitSize.x, fitSize.y, fitSize.z) || 1
   // Cover the model's bounding-box diagonal, so it is never cropped at any preset view or
   // free-orbit angle (a fixed `maxDim` frame cuts long or wide parts).
@@ -354,10 +540,14 @@ function mountScene(
 
   return {
     overlays,
+    diffStats,
     setFlip(flip: boolean) {
       if (!compareGroup || !compareBaseQuaternion) return
       compareGroup.quaternion.copy(compareBaseQuaternion)
       compareGroup.rotateOnAxis(unit(0, 1), flip ? Math.PI : 0)
+    },
+    setDiffVisible(visible: boolean) {
+      for (const mesh of diffMeshes) mesh.visible = visible
     },
     dispose() {
       cancelAnimationFrame(raf)
@@ -374,6 +564,7 @@ function mountScene(
           geometry.lines.dispose()
         }
       }
+      for (const mesh of diffMeshes) mesh.geometry.dispose()
       for (const material of materials) material.dispose()
       for (const overlay of overlays) {
         overlay.traverse((object) => {
@@ -418,11 +609,14 @@ export default function PartViewer({
   const containerRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<SceneHandle | null>(null)
   const showStockRef = useRef(true)
+  const showDiffRef = useRef(true)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
   const [showStock, setShowStock] = useState(true)
   const [flipped, setFlipped] = useState(false)
   const [hasStray, setHasStray] = useState(false)
+  const [showDiff, setShowDiff] = useState(true)
+  const [diffInfo, setDiffInfo] = useState<DiffStats | null>(null)
 
   useEffect(() => {
     if (!bytes) {
@@ -436,6 +630,7 @@ export default function PartViewer({
     setMessage(null)
     setFlipped(false)
     setHasStray(false)
+    setDiffInfo(null)
 
     meshForViewer(name, bytes)
       .then(async (step) => {
@@ -452,8 +647,10 @@ export default function PartViewer({
         handle = mountScene(containerRef.current, step, compare, stock, beam, bus, highlightStray)
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handle.setFlip(false)
+        handle.setDiffVisible(showDiffRef.current)
         handleRef.current = handle
         setHasStray(highlightStray && step.bodies.some((body) => body.stray))
+        setDiffInfo(handle.diffStats)
         setStatus('ready')
       })
       .catch((error: unknown) => {
@@ -476,10 +673,18 @@ export default function PartViewer({
 
   useEffect(() => {
     handleRef.current?.setFlip(flipped)
-  }, [flipped])
+    // The red diff is only meaningful in the seated alignment — flipping spins the
+    // overlay 180° about the length axis, so the diff hides until it is unflipped.
+    handleRef.current?.setDiffVisible(showDiff && !flipped)
+  }, [flipped, showDiff])
 
+  useEffect(() => {
+    showDiffRef.current = showDiff
+  }, [showDiff])
   const hasOverlay = Boolean((stock || beam) && status === 'ready')
   const hasCompare = Boolean(compareBytes && status === 'ready')
+  const hasDiff = Boolean(hasCompare && diffInfo)
+  const diffClean = diffInfo != null && diffInfo.extra < 0.001 && diffInfo.missing < 0.001
 
   return (
     <div className="relative h-full w-full">
@@ -503,6 +708,15 @@ export default function PartViewer({
             {t('viewer.flip', { label: compareLabel })}
           </button>
         )}
+        {hasDiff && (
+          <button
+            type="button"
+            onClick={() => setShowDiff((value) => !value)}
+            className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
+          >
+            {showDiff ? t('viewer.hideDiff') : t('viewer.showDiff')}
+          </button>
+        )}
         {hasStray && (
           <span className="flex items-center gap-2 rounded-md border border-orange-500/50 bg-card/80 px-2.5 py-1 text-xs font-medium text-orange-300 backdrop-blur">
             <span
@@ -513,6 +727,46 @@ export default function PartViewer({
           </span>
         )}
       </div>
+      {hasDiff && !flipped && diffInfo && showDiff && (
+        <div
+          className="absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur"
+          title={t('viewer.diffTitle', {
+            extra: percent(diffInfo.extra),
+            missing: percent(diffInfo.missing),
+          })}
+        >
+          {diffClean ? (
+            <>
+              <span
+                className="inline-block size-3 rounded-sm border border-emerald-400"
+                style={{ background: 'rgba(52, 211, 153, 0.5)' }}
+              />
+              <span className="text-emerald-300">{t('viewer.noDifferences')}</span>
+            </>
+          ) : diffInfo.approximate ? (
+            <>
+              <span
+                className="inline-block size-3 rounded-sm border border-red-400"
+                style={{ background: 'rgba(239, 68, 68, 0.65)' }}
+              />
+              <span className="text-red-300">{t('viewer.differences')}</span>
+            </>
+          ) : (
+            <>
+              <span
+                className="inline-block size-3 rounded-sm border border-red-400"
+                style={{ background: 'rgba(239, 68, 68, 0.65)' }}
+              />
+              <span className="text-red-300">{t('viewer.extraManufactured')}</span>
+              <span
+                className="inline-block size-3 rounded-sm border border-blue-400"
+                style={{ background: 'rgba(59, 130, 246, 0.65)' }}
+              />
+              <span className="text-blue-300">{t('viewer.missingManufactured')}</span>
+            </>
+          )}
+        </div>
+      )}
       {status !== 'ready' && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center px-6 text-center">
           <p className="max-w-sm text-sm text-muted-foreground">
