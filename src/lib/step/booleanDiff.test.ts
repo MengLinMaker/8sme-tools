@@ -183,17 +183,15 @@ function soupGeometry(soup: DiffSoup): BufferGeometry {
 }
 
 describe('extractComponents', () => {
-  it('splits disjoint boxes into closed components with volumes', () => {
+  it('splits disjoint boxes into components with volumes', () => {
     const merged = toWorldSoup([boxSoup(10, 10, 10), boxSoup(5, 5, 5, 30, 0, 0)], IDENTITY)
     const components = extractComponents(soupGeometry(merged)).sort((a, b) => b.volume - a.volume)
     expect(components.length).toBe(2)
-    expect(components[0]?.closed).toBe(true)
     expect(components[0]?.volume ?? 0).toBeCloseTo(1000, 0)
-    expect(components[1]?.closed).toBe(true)
     expect(components[1]?.volume ?? 0).toBeCloseTo(125, 0)
   })
 
-  it('marks an open sheet as not closed', () => {
+  it('keeps an open sheet as one component', () => {
     const grid = new BoxGeometry(20, 20, 0.2, 4, 4, 1)
     const position = grid.getAttribute('position')
     const index = grid.getIndex()
@@ -209,6 +207,7 @@ describe('extractComponents', () => {
     }
     const components = extractComponents(soupGeometry(open))
     expect(components.length).toBe(1)
-    expect(components[0]?.closed).toBe(false)
+    // Union holds on open geometry (exact signed sum depends on group surgery).
+    expect(components[0]?.volume ?? 0).toBeGreaterThan(0)
   })
 })

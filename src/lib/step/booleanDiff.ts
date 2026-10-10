@@ -18,29 +18,23 @@ export interface DiffSoup {
 export const BOOLEAN_TRIANGLE_BUDGET = 200_000
 
 /**
- * Keep bars for a diff component. A component is kept when it is big enough to
- * machine AND either enough of it stands clear of the other model or it is a
- * chunky open void fill (a notch/cope the NC left solid — every one of its
- * faces touches solid, so clearance alone can never see it). What renders
- * depends on shape: chunky components render whole, thin sheets render only
- * their far faces (a full-flange 0.04 mm skin held up by hole rims must not
- * drag the whole sheet along):
- * - SIZE_FLOOR: below a 2 mm cube it is a CSG crumb. Deliberately absolute, not
- *   relative: a real notch is real at any part size (a relative floor eats
- *   171 mm³ notch chunks on large beams);
+ * Keep bars for a diff component. Exact boolean first, then tolerance: a
+ * component is kept when it is big enough to machine and enough of it stands
+ * clear of the other model. Faces within tolerance never draw — coplanar
+ * hairlines, section-table skins and sharp-vs-rolled edges all sit below it —
+ * while genuinely out faces always do, whether they form a whole slab or a
+ * notch bottom:
+ * - SIZE_FLOOR: below a 2 mm cube it is a CSG crumb;
  * - CLEAR_MM / CLEAR_SHARE: at least this share of the component's triangles
  *   sits this far off the other surface. A share, not any-vertex: one far spike
  *   (glitch triangle, hole-rim sliver) must not rescue a whole thin skin, while
- *   a wedge or slab easily clears it;
- * - OPEN_SKIN_MM: an open (mouth-missing) component at least this thick on
- *   average renders whole — a real cope, not a coplanar hairline. Closed
- *   shells are judged by clearance only — their enclosed volume says nothing
- *   about the skin (a 0.25 mm uniform oversize shell encloses the whole part).
+ *   a wedge, slab or notch easily clears it.
+ * Volumes are the kept components' own, so the legend number matches the
+ * picture (signed sums over open patch shells are meaningless).
  */
 export const KEEP_SIZE_ABS_MM3 = 8
 export const KEEP_CLEAR_MM = 1
 export const KEEP_CLEAR_SHARE = 0.01
-export const KEEP_OPEN_SKIN_MM = 0.5
 
 export interface BooleanDiff {
   /** STEP-minus-manufactured solid (overcut, red), world coordinates (null when empty) */
@@ -57,12 +51,12 @@ export interface BooleanDiff {
 interface DiffComponent {
   triangles: number[]
   volume: number
-  area: number
-  /** true when every edge is shared by exactly two triangles (watertight) */
-  closed: boolean
 }
 
-/** Splits a result solid into vertex-connected components with volume/area/closedness. */
+/**
+ * Splits a result solid into vertex-connected components with volumes.
+ * Corner keys are computed once up front and reused for grouping and volume.
+ */
 export function extractComponents(geometry: BufferGeometry): DiffComponent[] {
   const position = geometry.getAttribute('position')
   const count = triangleCount(geometry)
@@ -71,9 +65,7 @@ export function extractComponents(geometry: BufferGeometry): DiffComponent[] {
   const index = geometry.getIndex()
   const corner = (t: number, k: number) => (index ? index.getX(t * 3 + k) : t * 3 + k)
 
-  // Union-find over triangles sharing a (1 µm-welded) vertex. Corner keys are
-  // computed once up front and reused for grouping, edge-closedness and
-  // volume/area below — previously re-derived per pass.
+  // Union-find over triangles sharing a (1 µm-welded) vertex.
   const parent = Array.from({ length: count }, (_, i) => i)
   const find = (i: number): number => {
     let root = i
@@ -86,7 +78,6 @@ export function extractComponents(geometry: BufferGeometry): DiffComponent[] {
     return root
   }
   const seen = new Map<string, number>()
-  const edgeUses = new Map<string, number>()
   const keys: string[] = new Array(count * 3)
   const weld = (v: number) =>
     `${Math.round(array[v * 3] * 1000)},${Math.round(array[v * 3 + 1] * 1000)},${Math.round(array[v * 3 + 2] * 1000)}`
@@ -103,8 +94,6 @@ export function extractComponents(geometry: BufferGeometry): DiffComponent[] {
         const b = find(first)
         if (a !== b) parent[a] = b
       }
-      const edge = [keys[t * 3 + k] ?? '', keys[t * 3 + ((k + 1) % 3)] ?? ''].sort().join('|')
-      edgeUses.set(edge, (edgeUses.get(edge) ?? 0) + 1)
     }
   }
 
@@ -119,9 +108,6 @@ export function extractComponents(geometry: BufferGeometry): DiffComponent[] {
   const components: DiffComponent[] = []
   for (const tris of groups.values()) {
     let volume = 0
-    let area = 0
-    let closed = true
-    const seenEdges = new Set<string>()
     for (const t of tris) {
       const a = corner(t, 0) * 3
       const b = corner(t, 1) * 3
@@ -139,15 +125,8 @@ export function extractComponents(geometry: BufferGeometry): DiffComponent[] {
       const ny = abz * acx - abx * acz
       const nz = abx * acy - aby * acx
       volume += (ax * nx + ay * ny + az * nz) / 6
-      area += Math.hypot(nx, ny, nz) / 2
-      for (let k = 0; k < 3; k++) {
-        const edge = [keys[t * 3 + k] ?? '', keys[t * 3 + ((k + 1) % 3)] ?? ''].sort().join('|')
-        if (seenEdges.has(edge)) continue
-        seenEdges.add(edge)
-        if (edgeUses.get(edge) !== 2) closed = false
-      }
     }
-    components.push({ triangles: tris, volume: Math.abs(volume), area, closed })
+    components.push({ triangles: tris, volume: Math.abs(volume) })
   }
   return components
 }
@@ -209,25 +188,14 @@ export function filterDrawableFaces(
     for (const t of component.triangles) {
       corners.push(triangles[t * 3] ?? 0, triangles[t * 3 + 1] ?? 0, triangles[t * 3 + 2] ?? 0)
     }
-    const thickness = component.area > 0 ? (2 * component.volume) / component.area : 0
-    // Chunky open fills (notch copes) keep without any distance query — volume
-    // and thickness are already known, so this skips the queries entirely.
-    if (!component.closed && thickness >= KEEP_OPEN_SKIN_MM) {
-      kept.push(...corners)
-      volume += component.volume
-      continue
-    }
     // One query object per side — its spatial index is built once and reused
     // across every component, instead of rebuilt per component.
     const aDiff = query.flagFar(sharedVertices, corners)
-    // Whole chunky component, or just the far faces of a thin sheet. Volume is
-    // always the component's own — signed sums over open patch shells are
-    // meaningless, so the number follows the kept components, not the picture.
-    if (diffFraction(aDiff) >= KEEP_CLEAR_SHARE && thickness >= KEEP_OPEN_SKIN_MM) {
-      kept.push(...corners)
-      volume += component.volume
-      continue
-    }
+    // Kept components draw only their far faces: coplanar hairlines, section
+    // skins and sharp-vs-rolled edges sit below tolerance and vanish, while
+    // genuinely out faces draw whether they form a whole slab or a notch
+    // bottom. Volume stays the component's own so the number matches the kept
+    // piece, not an open patch shell (whose signed sum is meaningless).
     if (diffFraction(aDiff) >= KEEP_CLEAR_SHARE) {
       for (let t = 0; t < component.triangles.length; t++) {
         if (aDiff[t] === 1) {

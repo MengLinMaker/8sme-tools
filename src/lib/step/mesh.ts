@@ -23,15 +23,15 @@ interface CompoundShape extends MeshableShape {
 }
 
 /**
- * Viewer tessellation. `tolerance` is the linear deflection in mm; note
- * `angularTolerance` goes straight to OCC in *radians*, so the 20 below is
- * effectively no angular limit — bends are meshed purely by the 0.1 mm
- * deflection, which already resolves fillets and hole rims finely. Deliberately
- * left there: tightening the angular cap (tried: 0.2 rad) more than doubles
- * triangle counts on fillet-heavy sections and blows up CSG splitting time
- * (~12× slower on a PFC) for no visible gain.
+ * Viewer tessellation: linear deflection in mm; `angularTolerance` goes
+ * straight to OCC in radians, so 20 is effectively no angular limit and bends
+ * mesh purely by deflection. Coarser flats halve triangle counts and CSG time
+ * with identical diff verdicts (measured across PFC/SHS/T parts); 0.3 mm
+ * facets stay far below the 1 mm diff bar. (A real angular cap was tried and
+ * abandoned: 0.2 rad densified fillets 2.3× and slowed CSG ~12×; 0.3 rad still
+ * cost +58% tris and 4× CSG for the same verdicts.)
  */
-const MESH_OPTIONS = { tolerance: 0.1, angularTolerance: 20 }
+const MESH_OPTIONS = { tolerance: 0.3, angularTolerance: 20 }
 
 function meshShape(name: string, shape: MeshableShape): ReplicadMesh {
   return {
