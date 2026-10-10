@@ -11,6 +11,8 @@ export interface StepMeasure {
   bodies: number
   /** the model's whole bounding box is bigger than the main body — a stray body/surface exists */
   extra: boolean
+  /** volume (mm³) of the main (largest-volume) solid body */
+  volume: number
 }
 
 type Bounds = { bounds: [number[], number[]] }
@@ -38,7 +40,7 @@ export async function measureStep(bytes: Uint8Array): Promise<StepMeasure> {
   try {
     const whole = extents(shape.boundingBox)
     const solids = shape.solids
-    if (solids.length === 0) return { size: whole, bodies: 0, extra: false }
+    if (solids.length === 0) return { size: whole, bodies: 0, extra: false, volume: 0 }
 
     let main = solids[0]
     let largest = measureVolume(main as never)
@@ -50,7 +52,12 @@ export async function measureStep(bytes: Uint8Array): Promise<StepMeasure> {
       }
     }
     const size = extents(main.boundingBox)
-    return { size, bodies: solids.length, extra: solids.length > 1 || growsBeyond(whole, size) }
+    return {
+      size,
+      bodies: solids.length,
+      extra: solids.length > 1 || growsBeyond(whole, size),
+      volume: largest,
+    }
   } finally {
     shape.delete()
   }
@@ -103,4 +110,39 @@ export function compareSize(
     bodyText
 
   return { ok: lengthOk && crossOk, note, bodies, stray: extra }
+}
+
+export interface ModelComparison {
+  ok: boolean
+  note: string
+}
+
+/** Human-readable sorted extents, e.g. `2590 × 134 × 103 mm`. */
+function sizeText(measure: StepMeasure): string {
+  const [a, b, c] = [...measure.size].sort((x, y) => y - x)
+  return `${a.toFixed(0)} × ${b.toFixed(0)} × ${c.toFixed(0)} mm`
+}
+
+/**
+ * Checks whether a model (e.g. the NC-built "manufactured" geometry) matches a reference
+ * (the STEP export), by bounding-box size and volume. Orientation-agnostic: the extents are
+ * sorted largest-first before matching, so a part seated differently still lines up.
+ */
+export function compareModels(reference: StepMeasure, other: StepMeasure): ModelComparison {
+  const ref = [...reference.size].sort((a, b) => b - a)
+  const got = [...other.size].sort((a, b) => b - a)
+  const sizeOk = ref.every((value, index) => {
+    const tol = Math.max(3, value * 0.02)
+    return Math.abs(value - got[index]) <= tol
+  })
+  const volRef = reference.volume
+  const volumeDelta = volRef > 0 ? (other.volume - volRef) / volRef : 0
+  // The NC rebuild omits end-arc radii, so allow a few percent slack before calling it a mismatch.
+  const volOk = Math.abs(volumeDelta) <= 0.05
+  const ok = sizeOk && volOk
+  const note = ok
+    ? `NC build matches STEP (${sizeText(other)})`
+    : `NC build ${sizeText(other)} vs STEP ${sizeText(reference)}` +
+      (volOk ? '' : ` · volume ${volumeDelta >= 0 ? '+' : ''}${(volumeDelta * 100).toFixed(1)}%`)
+  return { ok, note }
 }

@@ -1,6 +1,6 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { zipSync } from 'fflate'
-import { Eye } from 'lucide-react'
+import { Eye, Undo2 } from 'lucide-react'
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
@@ -19,13 +19,20 @@ import { auditEntries } from '@/lib/audit/auditJob'
 import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { SeverityFilter } from '@/lib/audit/schemas'
-import type { AuditResult, Finding, PartRecord, Severity } from '@/lib/audit/types'
+import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
 import { downloadBlob, downloadText } from '@/lib/download'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
 import { resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
 import { cleanStep } from '@/lib/step/clean'
-import { compareSize, measureStep, type SizeCheck } from '@/lib/step/measure'
+import {
+  compareModels,
+  compareSize,
+  type ModelComparison,
+  measureStep,
+  type SizeCheck,
+  type StepMeasure,
+} from '@/lib/step/measure'
 import { reconstructStepFromNc } from '@/lib/step/reconstructFromNc'
 import { cn } from '@/lib/utils'
 import { createOrbitBus, requestView, type ViewPreset } from './orbitSync'
@@ -82,12 +89,27 @@ const SEVERITY_VARIANT = {
   info: 'info',
 } as const
 
+/** A per-part STEP fix the user applied: cleaned (stray bodies dropped) or rebuilt from the NC. */
+type StepFixKind = 'cleaned' | 'regenerated'
+interface StepOverride {
+  bytes: Uint8Array
+  kind: StepFixKind
+}
+
+/** A finding an override resolves — greyed out in the list, with an undo. */
+function resolvedFindings(kind: StepFixKind): string[] {
+  return kind === 'regenerated' ? ['STRAY_BODY', 'MANUFACTURE_MISMATCH'] : ['STRAY_BODY']
+}
+
 export function PreflightPage() {
   const [result, setResult] = useState<AuditResult | null>(null)
   const [bundle, setBundle] = useState<InputBundle | null>(null)
   const [viewing, setViewing] = useState<PartRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [modelChecks, setModelChecks] = useState<Map<string, SizeCheck>>(new Map())
+  const [manufactureChecks, setManufactureChecks] = useState<Map<string, ModelComparison>>(
+    new Map(),
+  )
   const [checking, setChecking] = useState(false)
   const [drawingMaterials, setDrawingMaterials] = useState<Map<string, DrawingMaterial>>(new Map())
   const [drawingChecking, setDrawingChecking] = useState(false)
@@ -109,6 +131,7 @@ export function PreflightPage() {
       setError(null)
       setBundle(input)
       setViewing(null)
+      setStepOverrides(new Map())
       setResult(auditEntries(input.sourceName, input.entries))
       setFilter('all')
     },
@@ -153,8 +176,15 @@ export function PreflightPage() {
   }, [viewing, bytesByPath])
 
   const [rightTab, setRightTab] = useState<'drawing' | 'nc1'>('drawing')
+  // Per-part STEP fixes keyed by mark (cleaned or regenerated). The viewer and the export both
+  // prefer these over the originals, so a fix is what you see and what ships — and it can be undone.
+  const [stepOverrides, setStepOverrides] = useState<Map<string, StepOverride>>(new Map())
+  const [fixingMark, setFixingMark] = useState<string | null>(null)
   const ncBytes = viewing?.nc ? bytesByPath.get(viewing.nc.path) : undefined
-  const stepBytes = viewing?.step ? bytesByPath.get(viewing.step.path) : undefined
+  const stepBytes = viewing
+    ? (stepOverrides.get(viewing.mark)?.bytes ??
+      (viewing.step ? bytesByPath.get(viewing.step.path) : undefined))
+    : undefined
 
   // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
   const [viewMode, setViewMode] = useState<ViewMode>('split')
@@ -201,6 +231,7 @@ export function PreflightPage() {
     setDrawingDone(0)
     setDrawingTotal(0)
     setModelChecks(new Map())
+    setManufactureChecks(new Map())
     if (!result) return
     let cancelled = false
 
@@ -245,6 +276,7 @@ export function PreflightPage() {
       // Phase 2: STEP model sizes (empty/degenerate measurement is fine).
       setChecking(true)
       const checks = new Map<string, SizeCheck>()
+      const measures = new Map<string, StepMeasure>()
       for (const part of result.parts) {
         if (cancelled) return
         const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
@@ -257,6 +289,7 @@ export function PreflightPage() {
         }
         try {
           const measured = await measureStep(bytes)
+          measures.set(part.mark, measured)
           checks.set(
             part.mark,
             compareSize(measured.size, length, cross, measured.bodies, measured.extra),
@@ -265,8 +298,29 @@ export function PreflightPage() {
           checks.set(part.mark, { ok: false, note: 'measure failed' })
         }
       }
+      if (cancelled) return
+      setModelChecks(new Map(checks))
+
+      // Phase 3: does the NC-built geometry match the STEP? Rebuild each part from its NC and
+      // compare sizes/volume. Mismatches get an offer to regenerate the STEP (viewer / findings).
+      const manufacture = new Map<string, ModelComparison>()
+      for (const part of result.parts) {
+        if (cancelled) return
+        const ncPath = part.nc?.path
+        const ncText = ncPath ? bytesByPath.get(ncPath) : undefined
+        const stepMeasure = measures.get(part.mark)
+        if (!ncText || !stepMeasure) continue
+        try {
+          const built = await reconstructStepFromNc(new TextDecoder().decode(ncText))
+          if (!built) continue
+          const madeMeasure = await measureStep(new TextEncoder().encode(built))
+          manufacture.set(part.mark, compareModels(stepMeasure, madeMeasure))
+        } catch {
+          // best-effort: skip parts the rebuild can't handle
+        }
+      }
       if (!cancelled) {
-        setModelChecks(new Map(checks))
+        setManufactureChecks(new Map(manufacture))
         setChecking(false)
       }
     })()
@@ -307,6 +361,15 @@ export function PreflightPage() {
           message: `STEP has ${check.bodies ?? '2+'} solid bodies — extra floating piece(s); can be cleaned`,
         })
       }
+      const manufacture = manufactureChecks.get(part.mark)
+      if (manufacture && !manufacture.ok) {
+        extra.push({
+          severity: 'warning',
+          code: 'MANUFACTURE_MISMATCH',
+          mark: part.mark,
+          message: `${manufacture.note} — can regenerate STEP from the NC`,
+        })
+      }
     }
     return [...result.findings, ...extra]
       .filter((finding) => finding.severity !== 'info')
@@ -315,7 +378,7 @@ export function PreflightPage() {
           SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
           (a.mark ?? '').localeCompare(b.mark ?? ''),
       )
-  }, [result, drawingMaterials, modelChecks])
+  }, [result, drawingMaterials, modelChecks, manufactureChecks])
 
   const counts = useMemo(() => {
     const result = { error: 0, warning: 0, info: 0 }
@@ -328,6 +391,12 @@ export function PreflightPage() {
       ? allFindings
       : allFindings.filter((finding) => finding.severity === filter)
   }, [allFindings, filter])
+
+  /** Findings for the part currently open in the viewer, shown above the 3D to debug fast. */
+  const viewerFindings = useMemo(
+    () => (viewing ? allFindings.filter((finding) => finding.mark === viewing.mark) : []),
+    [viewing, allFindings],
+  )
 
   // Parts table sorting — defaults to worst-problem-first so triage is quick.
   const [sort, setSort] = useState<{ key: PartSortKey; dir: 1 | -1 }>({ key: 'severity', dir: 1 })
@@ -346,40 +415,110 @@ export function PreflightPage() {
     [result, sort, allFindings, drawingMaterials, modelChecks],
   )
 
-  // Parts whose STEP carries stray bodies that we can clean up.
-  const cleanable = useMemo(
-    () => (result ? result.parts.filter((p) => modelChecks.get(p.mark)?.stray && p.step) : []),
-    [result, modelChecks],
-  )
-  const [cleaning, setCleaning] = useState(false)
+  const partByMark = useMemo(() => {
+    const map = new Map<string, PartRecord>()
+    for (const part of result?.parts ?? []) map.set(part.mark, part)
+    return map
+  }, [result])
 
-  /** Cleans every stray STEP in the job and re-exports the whole folder as a zip. */
-  const cleanAndExport = useCallback(async () => {
-    if (!result || !bundle) return
-    setCleaning(true)
-    try {
-      const out: Record<string, Uint8Array> = {}
-      for (const entry of bundle.entries) out[entry.path] = entry.bytes
-      for (const part of cleanable) {
-        const path = part.step?.path
-        const bytes = path ? bytesByPath.get(path) : undefined
-        if (!path || !bytes) continue
-        try {
-          const cleanedStep = await cleanStep(bytes)
-          if (cleanedStep && cleanedStep.removed > 0) out[path] = cleanedStep.bytes
-        } catch {
-          // leave the original in place if cleaning fails
-        }
+  /** The override a part carries, if any (cleaned or regenerated). */
+  const overrideFor = useCallback(
+    (part: PartRecord | undefined) => (part ? stepOverrides.get(part.mark) : undefined),
+    [stepOverrides],
+  )
+
+  /** A part can be cleaned when its STEP still carries stray floating bodies (and isn't fixed). */
+  const isCleanable = useCallback(
+    (part: PartRecord | undefined) =>
+      Boolean(
+        part?.step &&
+          modelChecks.get(part.mark)?.stray &&
+          stepOverrides.get(part.mark)?.kind !== 'cleaned',
+      ),
+    [modelChecks, stepOverrides],
+  )
+
+  /** A part can be regenerated when its NC build doesn't match the STEP (and isn't regenerated). */
+  const isRegeneratable = useCallback(
+    (part: PartRecord | undefined) =>
+      Boolean(
+        part?.nc &&
+          manufactureChecks.get(part.mark)?.ok === false &&
+          stepOverrides.get(part.mark)?.kind !== 'regenerated',
+      ),
+    [manufactureChecks, stepOverrides],
+  )
+
+  const setOverride = useCallback((mark: string, bytes: Uint8Array, kind: StepFixKind) => {
+    setStepOverrides((prev) => {
+      const next = new Map(prev)
+      next.set(mark, { bytes, kind })
+      return next
+    })
+  }, [])
+
+  const undoOverride = useCallback((mark: string) => {
+    setStepOverrides((prev) => {
+      if (!prev.has(mark)) return prev
+      const next = new Map(prev)
+      next.delete(mark)
+      return next
+    })
+  }, [])
+
+  /** Cleans one part's stray STEP bodies, keeping the real geometry untouched. */
+  const cleanPart = useCallback(
+    async (part: PartRecord) => {
+      const path = part.step?.path
+      const bytes = path ? bytesByPath.get(path) : undefined
+      if (!path || !bytes) return
+      setFixingMark(part.mark)
+      try {
+        const cleaned = await cleanStep(bytes)
+        if (cleaned && cleaned.removed > 0) setOverride(part.mark, cleaned.bytes, 'cleaned')
+      } catch {
+        // leave the original in place if cleaning fails
+      } finally {
+        setFixingMark(null)
       }
-      const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
-      downloadBlob(
-        `cleaned-${safeName || 'job'}.zip`,
-        new Blob([zipSync(out)], { type: 'application/zip' }),
-      )
-    } finally {
-      setCleaning(false)
+    },
+    [bytesByPath, setOverride],
+  )
+
+  /** Rebuilds a part's STEP from its NC, so the export matches what will be manufactured. */
+  const regeneratePart = useCallback(
+    async (part: PartRecord) => {
+      const ncPath = part.nc?.path
+      const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
+      if (!ncBytes) return
+      setFixingMark(part.mark)
+      try {
+        const step = await reconstructStepFromNc(new TextDecoder().decode(ncBytes))
+        if (step) setOverride(part.mark, new TextEncoder().encode(step), 'regenerated')
+      } catch {
+        // leave the original in place if the rebuild fails
+      } finally {
+        setFixingMark(null)
+      }
+    },
+    [bytesByPath, setOverride],
+  )
+
+  /** Exports the job with every STEP the user fixed (cleaned/regenerated) substituted in. */
+  const exportFixed = useCallback(() => {
+    if (!result || !bundle || stepOverrides.size === 0) return
+    const out: Record<string, Uint8Array> = {}
+    for (const entry of bundle.entries) out[entry.path] = entry.bytes
+    for (const [mark, override] of stepOverrides) {
+      const path = result.parts.find((part) => part.mark === mark)?.step?.path
+      if (path) out[path] = override.bytes
     }
-  }, [result, bundle, cleanable, bytesByPath])
+    const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
+    downloadBlob(
+      `fixed-${safeName || 'job'}.zip`,
+      new Blob([zipSync(out)], { type: 'application/zip' }),
+    )
+  }, [result, bundle, stepOverrides])
 
   return (
     <div className="flex flex-col gap-6">
@@ -449,14 +588,9 @@ export function PreflightPage() {
                 >
                   Export parts
                 </Button>
-                {cleanable.length > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void cleanAndExport()}
-                    disabled={cleaning}
-                  >
-                    {cleaning ? 'Cleaning…' : `Clean & export (${cleanable.length})`}
+                {stepOverrides.size > 0 && (
+                  <Button variant="outline" size="sm" onClick={exportFixed}>
+                    {`Export fixed (${stepOverrides.size})`}
                   </Button>
                 )}
               </div>
@@ -472,23 +606,88 @@ export function PreflightPage() {
                       <TableHead>Code</TableHead>
                       <TableHead>Mark</TableHead>
                       <TableHead>Message</TableHead>
+                      <TableHead className="text-right">Debug</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {findings.map((finding) => (
-                      <TableRow key={`${finding.code}-${finding.mark ?? ''}-${finding.message}`}>
-                        <TableCell>
-                          <Badge variant={SEVERITY_VARIANT[finding.severity]}>
-                            {finding.severity}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">
-                          {finding.code}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{finding.mark ?? '—'}</TableCell>
-                        <TableCell>{finding.message}</TableCell>
-                      </TableRow>
-                    ))}
+                    {findings.map((finding) => {
+                      const part = finding.mark ? partByMark.get(finding.mark) : undefined
+                      const viewable = part && (part.step || part.nc) ? part : undefined
+                      const override = overrideFor(part)
+                      const resolved = Boolean(
+                        override && resolvedFindings(override.kind).includes(finding.code),
+                      )
+                      return (
+                        <TableRow
+                          key={`${finding.code}-${finding.mark ?? ''}-${finding.message}`}
+                          className={cn(resolved && 'opacity-50')}
+                        >
+                          <TableCell>
+                            <Badge variant={SEVERITY_VARIANT[finding.severity]}>
+                              {finding.severity}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">
+                            {finding.code}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">{finding.mark ?? '—'}</TableCell>
+                          <TableCell>
+                            <span className={cn(resolved && 'line-through')}>
+                              {finding.message}
+                            </span>
+                            {resolved && (
+                              <Badge variant="success" className="ml-2 align-middle">
+                                {override?.kind}
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              {resolved && viewable && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => undoOverride(viewable.mark)}
+                                >
+                                  <Undo2 />
+                                  Undo
+                                </Button>
+                              )}
+                              {!resolved && isRegeneratable(viewable) && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={fixingMark === viewable?.mark}
+                                  onClick={() => viewable && void regeneratePart(viewable)}
+                                >
+                                  {fixingMark === viewable?.mark ? 'Working…' : 'Regenerate STEP'}
+                                </Button>
+                              )}
+                              {!resolved && isCleanable(viewable) && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={fixingMark === viewable?.mark}
+                                  onClick={() => viewable && void cleanPart(viewable)}
+                                >
+                                  {fixingMark === viewable?.mark ? 'Cleaning…' : 'Clean'}
+                                </Button>
+                              )}
+                              {viewable && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => openPart(viewable)}
+                                >
+                                  <Eye />
+                                  View
+                                </Button>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                   </TableBody>
                 </Table>
               )}
@@ -559,7 +758,9 @@ export function PreflightPage() {
                         <Status value={part.pdf ? part.pdf.valid : null} />
                       </TableCell>
                       <TableCell className="text-xs">
-                        {modelChecks.has(part.mark) ? (
+                        {overrideFor(part) ? (
+                          <Badge variant="success">{overrideFor(part)?.kind}</Badge>
+                        ) : modelChecks.has(part.mark) ? (
                           <span
                             className={
                               modelChecks.get(part.mark)?.ok ? 'text-emerald-400' : 'text-amber-400'
@@ -573,10 +774,45 @@ export function PreflightPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         {part.step || part.nc ? (
-                          <Button variant="ghost" size="sm" onClick={() => openPart(part)}>
-                            <Eye />
-                            View
-                          </Button>
+                          <div className="flex justify-end gap-1">
+                            {overrideFor(part) ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => undoOverride(part.mark)}
+                              >
+                                <Undo2 />
+                                Undo
+                              </Button>
+                            ) : (
+                              <>
+                                {isRegeneratable(part) && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={fixingMark === part.mark}
+                                    onClick={() => void regeneratePart(part)}
+                                  >
+                                    {fixingMark === part.mark ? 'Working…' : 'Regenerate'}
+                                  </Button>
+                                )}
+                                {isCleanable(part) && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={fixingMark === part.mark}
+                                    onClick={() => void cleanPart(part)}
+                                  >
+                                    {fixingMark === part.mark ? 'Cleaning…' : 'Clean'}
+                                  </Button>
+                                )}
+                              </>
+                            )}
+                            <Button variant="ghost" size="sm" onClick={() => openPart(part)}>
+                              <Eye />
+                              View
+                            </Button>
+                          </div>
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
                         )}
@@ -598,6 +834,19 @@ export function PreflightPage() {
       >
         {viewing && (viewing.step || viewing.nc) && (
           <>
+            <ViewerWarnings
+              findings={viewerFindings}
+              step={viewing.step}
+              fix={{
+                override: overrideFor(viewing)?.kind,
+                canClean: isCleanable(viewing),
+                canRegenerate: isRegeneratable(viewing),
+                pending: fixingMark === viewing.mark,
+                onClean: () => void cleanPart(viewing),
+                onRegenerate: () => void regeneratePart(viewing),
+                onUndo: () => undoOverride(viewing.mark),
+              }}
+            />
             <div className="flex flex-col lg:flex-row">
               <div className="relative h-[45vh] min-h-72 w-full bg-[#0b0f14] lg:h-[70vh] lg:flex-1">
                 <Suspense
@@ -633,6 +882,7 @@ export function PreflightPage() {
                           bytes={stepBytes}
                           stock={stock}
                           bus={orbitBus}
+                          highlightStray
                         />
                         <PaneTag tone="step">STEP</PaneTag>
                       </div>
@@ -650,6 +900,7 @@ export function PreflightPage() {
                       bytes={stepBytes}
                       stock={stock}
                       bus={orbitBus}
+                      highlightStray
                     />
                   )}
                 </Suspense>
@@ -774,21 +1025,102 @@ function PartMeta({ part, material }: { part: PartRecord; material?: DrawingMate
     ['Entities', part.step ? part.step.entityCount.toLocaleString() : '—'],
   ]
   return (
-    <>
-      <dl className="grid grid-cols-2 gap-x-6 gap-y-2 border-t border-border px-5 py-4 text-sm sm:grid-cols-3">
-        {rows.map(([label, value]) => (
-          <div key={label} className="flex flex-col gap-0.5">
-            <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
-            <dd className="font-mono text-xs break-words">{value}</dd>
+    <dl className="grid grid-cols-2 gap-x-6 gap-y-2 border-t border-border px-5 py-4 text-sm sm:grid-cols-3">
+      {rows.map(([label, value]) => (
+        <div key={label} className="flex flex-col gap-0.5">
+          <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
+          <dd className="font-mono text-xs break-words">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+interface ViewerFix {
+  override?: StepFixKind
+  canClean: boolean
+  canRegenerate: boolean
+  pending: boolean
+  onClean: () => void
+  onRegenerate: () => void
+  onUndo: () => void
+}
+
+/** Findings + file problems for the viewed part, shown above the 3D so debugging is fast. */
+function ViewerWarnings({
+  findings,
+  step,
+  fix,
+}: {
+  findings: Finding[]
+  step?: StepFile
+  fix?: ViewerFix
+}) {
+  const invalid = step && !step.valid ? step.problems.join('; ') : null
+  const hasFixRow = Boolean(fix?.override || fix?.canClean || fix?.canRegenerate)
+  if (findings.length === 0 && !invalid && !hasFixRow) return null
+  return (
+    <div className="flex flex-col gap-2 border-b border-border bg-card px-5 py-3">
+      {findings.map((finding) => {
+        const resolved = Boolean(
+          fix?.override && resolvedFindings(fix.override).includes(finding.code),
+        )
+        return (
+          <div
+            key={`${finding.code}-${finding.message}`}
+            className={cn('flex items-start gap-2 text-sm', resolved && 'opacity-50')}
+          >
+            <Badge variant={SEVERITY_VARIANT[finding.severity]}>{finding.severity}</Badge>
+            <div className="flex flex-col">
+              <span className="font-mono text-xs text-muted-foreground">{finding.code}</span>
+              <span className={cn(resolved && 'line-through')}>{finding.message}</span>
+            </div>
+            {resolved && (
+              <Badge variant="success" className="ml-auto align-middle">
+                {fix?.override}
+              </Badge>
+            )}
           </div>
-        ))}
-      </dl>
-      {part.step && !part.step.valid && (
-        <div className="border-t border-destructive/40 bg-destructive/10 px-5 py-2 text-xs text-destructive-foreground">
-          {part.step.problems.join('; ')}
+        )
+      })}
+      {invalid && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive-foreground">
+          {invalid}
         </div>
       )}
-    </>
+      {fix?.override ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          <span>STEP {fix.override} — this is what the export ships.</span>
+          <Button variant="ghost" size="sm" onClick={fix.onUndo}>
+            <Undo2 />
+            Undo
+          </Button>
+        </div>
+      ) : (
+        <>
+          {fix?.canClean && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              <span>
+                Stray floating body/bodies shown in orange — cleaning keeps the real geometry.
+              </span>
+              <Button variant="outline" size="sm" disabled={fix.pending} onClick={fix.onClean}>
+                {fix.pending ? 'Cleaning…' : 'Clean STEP'}
+              </Button>
+            </div>
+          )}
+          {fix?.canRegenerate && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              <span>
+                NC build doesn't match the STEP — regenerating rebuilds the STEP from the NC.
+              </span>
+              <Button variant="outline" size="sm" disabled={fix.pending} onClick={fix.onRegenerate}>
+                {fix.pending ? 'Working…' : 'Regenerate STEP'}
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
   )
 }
 

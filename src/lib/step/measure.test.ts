@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest'
-import { compareSize } from './measure'
+import { compareModels, compareSize, type StepMeasure } from './measure'
+
+function measure(size: [number, number, number], volume: number): StepMeasure {
+  return { size, bodies: 1, extra: false, volume }
+}
+
+describe('compareModels', () => {
+  it('matches a size- and volume-equivalent model regardless of orientation', () => {
+    const step = measure([2591, 134, 103], 3_500_000)
+    const made = measure([103, 2590, 134], 3_550_000)
+    expect(compareModels(step, made).ok).toBe(true)
+  })
+
+  it('flags a size mismatch', () => {
+    const step = measure([2591, 134, 103], 3_500_000)
+    const made = measure([2591, 200, 103], 3_500_000)
+    expect(compareModels(step, made).ok).toBe(false)
+  })
+
+  it('flags a volume mismatch beyond the rebuild slack', () => {
+    const step = measure([2591, 134, 103], 3_500_000)
+    const made = measure([2591, 134, 103], 3_000_000)
+    const result = compareModels(step, made)
+    expect(result.ok).toBe(false)
+    expect(result.note).toContain('volume')
+  })
+})
 
 describe('compareSize', () => {
   it('accepts a part matching the expected size', () => {

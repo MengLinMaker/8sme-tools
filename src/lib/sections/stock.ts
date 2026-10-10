@@ -74,12 +74,67 @@ function centre(points: [number, number][]): [number, number][] {
   return points.map(([x, y]) => [x - cx, y - cy] as [number, number])
 }
 
-function inflate(points: [number, number][], amount: number): [number, number][] {
-  let half = 0
-  for (const [x, y] of points) half = Math.max(half, Math.abs(x), Math.abs(y))
-  if (half <= 0) return points
-  const scale = 1 + amount / half
-  return points.map(([x, y]) => [x * scale, y * scale] as [number, number])
+/** Signed area of a closed polygon (positive = counter-clockwise). */
+function signedArea(points: [number, number][]): number {
+  let twice = 0
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    twice += points[j][0] * points[i][1] - points[i][0] * points[j][1]
+  }
+  return twice / 2
+}
+
+/** Intersection of two infinite lines (a→b and c→d), or null when parallel. */
+function lineIntersection(
+  a: [number, number],
+  b: [number, number],
+  c: [number, number],
+  d: [number, number],
+): [number, number] | null {
+  const rx = b[0] - a[0]
+  const ry = b[1] - a[1]
+  const sx = d[0] - c[0]
+  const sy = d[1] - c[1]
+  const denom = rx * sy - ry * sx
+  if (Math.abs(denom) < 1e-9) return null
+  const t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / denom
+  return [a[0] + t * rx, a[1] + t * ry]
+}
+
+/**
+ * Offsets a closed outline outward by a **constant** `distance` — every face moves the same
+ * amount along its normal (via mitered corners). A uniform scale would short-change the thin
+ * axis of an elongated section (e.g. a PFC flange vs its depth), so the clearance must be a
+ * true offset instead.
+ */
+function inflate(points: [number, number][], distance: number): [number, number][] {
+  const n = points.length
+  if (n < 3) return points
+  const ccw = signedArea(points) >= 0 ? points : ([...points].reverse() as [number, number][])
+  const out: [number, number][] = []
+  for (let i = 0; i < n; i++) {
+    const prev = ccw[(i - 1 + n) % n]
+    const cur = ccw[i]
+    const next = ccw[(i + 1) % n]
+    // Unit edge vectors of the two edges meeting at `cur`.
+    const e0x = cur[0] - prev[0]
+    const e0y = cur[1] - prev[1]
+    const e1x = next[0] - cur[0]
+    const e1y = next[1] - cur[1]
+    const l0 = Math.hypot(e0x, e0y) || 1
+    const l1 = Math.hypot(e1x, e1y) || 1
+    // Exterior normals of a CCW polygon point to the right of each edge: (dy, -dx).
+    const n0: [number, number] = [e0y / l0, -e0x / l0]
+    const n1: [number, number] = [e1y / l1, -e1x / l1]
+    const a: [number, number] = [prev[0] + n0[0] * distance, prev[1] + n0[1] * distance]
+    const b: [number, number] = [cur[0] + n0[0] * distance, cur[1] + n0[1] * distance]
+    const c: [number, number] = [cur[0] + n1[0] * distance, cur[1] + n1[1] * distance]
+    const d: [number, number] = [next[0] + n1[0] * distance, next[1] + n1[1] * distance]
+    const hit = lineIntersection(a, b, c, d)
+    out.push(
+      hit ?? [cur[0] + ((n0[0] + n1[0]) / 2) * distance, cur[1] + ((n0[1] + n1[1]) / 2) * distance],
+    )
+  }
+  return out
 }
 
 function rectangle(width: number, height: number): [number, number][] {

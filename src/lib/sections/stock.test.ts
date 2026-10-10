@@ -124,4 +124,16 @@ describe('stockOutlineForCode', () => {
     expect(stockOutlineForCode('RHS150*100*9.0', [150, 100, 9, 9, 22.5])?.mass).toBeCloseTo(30.6, 0)
     expect(stockOutlineForCode('EA75*75*6', [75, 75, 6, 6, 8])?.mass).toBeCloseTo(6.8, 0)
   })
+
+  it('offsets every stock face by the same clearance (not a uniform scale)', () => {
+    // The old scale-based inflate squeezed the short axis: PFC100*50 grew 3 mm in depth but
+    // only 1.5 mm across the flange, so the ghost looked like the wrong section.
+    const pfc = bbox(stockOutlineForCode('100PFC', [100, 50, 6.7, 4.2, 8])?.points ?? [])
+    expect(pfc.width - 50).toBeCloseTo(3, 1)
+    expect(pfc.height - 100).toBeCloseTo(3, 1)
+
+    const ua = bbox(stockOutlineForCode('UA100*75*6', [])?.points ?? [])
+    expect(ua.width - 100).toBeCloseTo(3, 1)
+    expect(ua.height - 75).toBeCloseTo(3, 1)
+  })
 })

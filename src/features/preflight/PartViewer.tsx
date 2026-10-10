@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { type ReplicadMesh, syncGeometries } from 'replicad-threejs-helper'
+import { syncGeometries } from 'replicad-threejs-helper'
 import {
   AmbientLight,
   Box3,
@@ -26,11 +26,12 @@ import {
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
-import { meshStepFile } from '@/lib/step/mesh'
+import { type MeshedStep, meshStepFile } from '@/lib/step/mesh'
 import { attachOrbit, type OrbitBus } from './orbitSync'
 
 const GHOST_COLOR = 0x3ddc84
 const COMPARE_COLOR = 0xf59e0b
+const STRAY_COLOR = 0xf97316
 const FACE_MATERIAL = { color: 0xaebfd0, metalness: 0.55, roughness: 0.45 }
 /** Roll about the length axis for each `detectOrientation` result (world YZ → profile-local). */
 const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]
@@ -155,11 +156,12 @@ interface SceneHandle {
 /** Builds the three.js scene for a set of meshes and returns a disposer. */
 function mountScene(
   container: HTMLElement,
-  replicadMeshes: ReplicadMesh[],
-  compareMeshes: ReplicadMesh[] | null,
+  step: MeshedStep,
+  compareStep: MeshedStep | null,
   stock: StockOutline | null,
   beam: BeamOutline | null,
   bus: OrbitBus | null,
+  highlightStray: boolean,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -180,17 +182,22 @@ function mountScene(
     Array.isArray(stock?.points) && stock.points.length >= 3 ? stock.points : undefined
 
   const buildGroup = (
-    meshes: ReplicadMesh[],
+    meshed: MeshedStep,
     material: MeshStandardMaterial,
     withLines: boolean,
+    strayMaterial: MeshStandardMaterial | null,
   ) => {
-    const geometries = syncGeometries(meshes, [])
+    const geometries = syncGeometries(
+      meshed.bodies.map((body) => body.mesh),
+      [],
+    )
     const group = new Group()
-    for (const geometry of geometries) {
-      group.add(new Mesh(geometry.faces, material))
+    geometries.forEach((geometry, index) => {
+      const body = meshed.bodies[index]
+      group.add(new Mesh(geometry.faces, strayMaterial && body.stray ? strayMaterial : material))
       if (withLines) group.add(new LineSegments(geometry.lines, lineMaterial))
-    }
-    const raw = meshes[0]?.faces.vertices ?? []
+    })
+    const raw = meshed.vertices
     const seat = profile ? seatQuaternion(raw, profile) : new Quaternion()
     const box = bboxOfVertices(raw)
     const centre = box.getCenter(new Vector3())
@@ -201,6 +208,13 @@ function mountScene(
   }
 
   const faceMaterial = new MeshStandardMaterial(FACE_MATERIAL)
+  const strayMaterial = new MeshStandardMaterial({
+    color: STRAY_COLOR,
+    emissive: 0x9a3412,
+    emissiveIntensity: 0.45,
+    metalness: 0.25,
+    roughness: 0.55,
+  })
   const lineMaterial = new LineBasicMaterial({ color: 0x0b0f14 })
   const compareMaterial = new MeshStandardMaterial({
     color: COMPARE_COLOR,
@@ -211,18 +225,18 @@ function mountScene(
     metalness: 0.2,
     roughness: 0.6,
   })
-  const materials: Material[] = [faceMaterial, lineMaterial]
+  const materials: Material[] = [faceMaterial, strayMaterial, lineMaterial]
 
-  const primary = buildGroup(replicadMeshes, faceMaterial, true)
+  const primary = buildGroup(step, faceMaterial, true, highlightStray ? strayMaterial : null)
   const size = bboxOfVertices(primary.raw).getSize(new Vector3())
   scene.add(primary.group)
 
   const compareGeometries: ReturnType<typeof syncGeometries>[] = []
   let compareGroup: Group | null = null
   let compareBaseQuaternion: Quaternion | null = null
-  if (compareMeshes && compareMeshes.length > 0) {
+  if (compareStep && compareStep.bodies.length > 0) {
     materials.push(compareMaterial)
-    const compare = buildGroup(compareMeshes, compareMaterial, false)
+    const compare = buildGroup(compareStep, compareMaterial, false, null)
     compareGeometries.push(compare.geometries)
     compareGroup = compare.group
     compareBaseQuaternion = compare.group.quaternion.clone()
@@ -308,6 +322,8 @@ function mountScene(
   const controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.08
+  // Zoom where the pointer is, not always toward the centre — far handier for inspecting a part.
+  controls.zoomToCursor = true
   controls.target.copy(fitCentre)
   const detachOrbit = bus
     ? attachOrbit(bus, camera, controls, {
@@ -382,6 +398,8 @@ export interface PartViewerProps {
   stock?: StockOutline | null
   beam?: BeamOutline | null
   bus?: OrbitBus | null
+  /** highlight stray floating bodies in orange, to tell them from the real part (STEP debug) */
+  highlightStray?: boolean
 }
 
 export default function PartViewer({
@@ -392,6 +410,7 @@ export default function PartViewer({
   stock = null,
   beam = null,
   bus = null,
+  highlightStray = false,
 }: PartViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<SceneHandle | null>(null)
@@ -400,6 +419,7 @@ export default function PartViewer({
   const [message, setMessage] = useState<string | null>(null)
   const [showStock, setShowStock] = useState(true)
   const [flipped, setFlipped] = useState(false)
+  const [hasStray, setHasStray] = useState(false)
 
   useEffect(() => {
     if (!bytes) {
@@ -412,23 +432,25 @@ export default function PartViewer({
     setStatus('loading')
     setMessage(null)
     setFlipped(false)
+    setHasStray(false)
 
     meshStepFile(name, bytes)
-      .then(async (meshes) => {
+      .then(async (step) => {
         const compare = compareBytes ? await meshStepFile(`${name}·compare`, compareBytes) : null
-        return { meshes, compare }
+        return { step, compare }
       })
-      .then(({ meshes, compare }) => {
+      .then(({ step, compare }) => {
         if (disposed || !containerRef.current) return
-        if (meshes[0]?.faces.triangles.length === 0) {
+        if (step.bodies[0]?.mesh.faces.triangles.length === 0) {
           setStatus('error')
           setMessage('The model contains no renderable geometry.')
           return
         }
-        handle = mountScene(containerRef.current, meshes, compare, stock, beam, bus)
+        handle = mountScene(containerRef.current, step, compare, stock, beam, bus, highlightStray)
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handle.setFlip(false)
         handleRef.current = handle
+        setHasStray(highlightStray && step.bodies.some((body) => body.stray))
         setStatus('ready')
       })
       .catch((error: unknown) => {
@@ -442,7 +464,7 @@ export default function PartViewer({
       handle?.dispose()
       handleRef.current = null
     }
-  }, [name, bytes, compareBytes, stock, beam, bus])
+  }, [name, bytes, compareBytes, stock, beam, bus, highlightStray])
 
   useEffect(() => {
     showStockRef.current = showStock
@@ -477,6 +499,15 @@ export default function PartViewer({
           >
             Flip {compareLabel}
           </button>
+        )}
+        {hasStray && (
+          <span className="flex items-center gap-2 rounded-md border border-orange-500/50 bg-card/80 px-2.5 py-1 text-xs font-medium text-orange-300 backdrop-blur">
+            <span
+              className="inline-block size-3 rounded-sm border border-orange-400"
+              style={{ background: 'rgba(249, 115, 22, 0.5)' }}
+            />
+            Stray body
+          </span>
         )}
       </div>
       {status !== 'ready' && (
