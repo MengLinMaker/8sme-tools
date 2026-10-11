@@ -99,7 +99,7 @@ describe('projectNc', () => {
   })
 
   it('drops a cut that has no material on its face', () => {
-    // An L-ish section: material only on the +y side (like a T stem), so an `u`-face cut
+    // An L-ish section: material only on the +y side (like a T stem), so an `o`-face cut
     // hanging in the void is not a cut.
     const oneSided: [number, number][] = [
       [-100, 0],
@@ -110,7 +110,7 @@ describe('projectNc', () => {
     const nc: NcGeometry = {
       contours: [
         {
-          face: 'u',
+          face: 'o',
           kind: 'outer',
           points: [
             [0, 0],
