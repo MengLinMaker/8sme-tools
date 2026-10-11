@@ -42,6 +42,14 @@ const BEAM_REACH = 35
 export const LASER_KERF = 0.2
 
 /**
+ * Minimum gap (mm) between a face-outline's own end and the member's global end before the
+ * "band" squares that face off to the global extent. The band exists so an OTHER face's
+ * bevel/mitre wedge is not severed by this axis's trim. It must not fire on a face that already
+ * reaches the end (a near-zero gap), or it squares a mitre off into a full-height end wall.
+ */
+const BAND_MIN_GAP = 0.5
+
+/**
  * Erodes a closed outline inward by `d` (mm): each edge shifts along its inward normal and
  * adjacent shifted edges re-intersect. Returns `null` when the loop is degenerate, too small,
  * or an intersection blows up (a tight concave spike) — callers fall back to the exact outline,
@@ -309,10 +317,6 @@ export async function reconstructSolidFromNc(
   const halfOf = (axis: Axis): number => faceHalf(frame, axis)
   const pointsByAxis: Record<Axis, Pt[]> = { 0: [], 1: [] }
   const drawingsByAxis: Record<Axis, ReturnType<typeof poly>[]> = { 0: [], 1: [] }
-  // Exact (uneroded) axis-1 pens, alongside the kerf-eroded ones: eroded loops can still
-  // trip the 2D fuse splitter on real job outlines, and then the trim falls back to these
-  // (the proven path) instead of failing the whole rebuild.
-  const exactDrawings: ReturnType<typeof poly>[] = []
 
   // Base prism: cross-section in the (width=Y, depth=Z) plane, extruded along the member (X).
   let solid = poly(section.points)
@@ -332,17 +336,11 @@ export async function reconstructSolidFromNc(
     const half = halfOf(axis)
     const pts = dedupe(c.points).map(([x, y]) => [x, y - half] as Pt)
     pointsByAxis[axis].push(...pts)
-    // The axis-1 trim removes material, so its outlines are eroded by half the laser kerf:
-    // the removal tool then overlaps the finished surface instead of sharing its faces
-    // exactly (which makes OCC drop the cut and leave floating bodies). Falls back to the
-    // exact outline per contour when erosion refuses a degenerate loop.
-    if (axis === 1) {
-      const eroded = erodePolygon(pts, LASER_KERF / 2)
-      drawingsByAxis[axis].push(poly(eroded ?? pts))
-      exactDrawings.push(poly(pts))
-    } else {
-      drawingsByAxis[axis].push(poly(pts))
-    }
+    // Exact outline for both axes. The axis-1 outline used to be kerf-eroded (0.1 mm inset) to
+    // stop OCC sharing the trim's faces with the base prism — but the inset left a 0.1 mm ledge
+    // beside every real edge and mis-aligned with the end "band", walling the bevel off as a
+    // staircase. stripStraySolids now absorbs any floating debris instead.
+    drawingsByAxis[axis].push(poly(pts))
   }
 
   // Global member-end extent over every outer face outline. Faces routinely disagree in X at
@@ -361,9 +359,9 @@ export async function reconstructSolidFromNc(
     const drawings = drawingsByAxis[axis]
     if (drawings.length === 0) continue
     const half = halfOf(axis)
-    // 2D fuse throws (rather than returning null) on some real outlines — an eroded loop
-    // or a near-tangent band edge can break the curve splitter. Skipping the thrower keeps
-    // today's behaviour for the rest instead of failing the rebuild.
+    // 2D fuse throws (rather than returning null) on some real outlines — a near-tangent
+    // band edge can break the curve splitter. Skipping the thrower keeps today's behaviour
+    // for the rest instead of failing the rebuild.
     const fusePens = (pens: ReturnType<typeof poly>[]): ReturnType<typeof poly> | null => {
       let fused = pens[0]
       if (!fused) return null
@@ -378,7 +376,6 @@ export async function reconstructSolidFromNc(
       return fused
     }
     let shape = fusePens(drawings)
-    if (!shape && axis === 1) shape = fusePens(exactDrawings)
     if (!shape) continue
     const fuseIn = (other: ReturnType<typeof poly>): void => {
       try {
@@ -413,9 +410,9 @@ export async function reconstructSolidFromNc(
         [x1, half + 2],
         [x0, half + 2],
       ])
-    if (loopMinX + 1 - endMinX > 1e-9 && otherSpans(endMinX, loopMinX + 1))
+    if (loopMinX - endMinX > BAND_MIN_GAP && otherSpans(endMinX, loopMinX + 1))
       fuseIn(band(endMinX, loopMinX + 1))
-    if (endMaxX - (loopMaxX - 1) > 1e-9 && otherSpans(loopMaxX - 1, endMaxX))
+    if (endMaxX - loopMaxX > BAND_MIN_GAP && otherSpans(loopMaxX - 1, endMaxX))
       fuseIn(band(loopMaxX - 1, endMaxX))
     // Simplifying: leave the face flat rather than reproducing a step, or a bevel whose
     // straight-through cut would sever a piece it is meant to keep.
