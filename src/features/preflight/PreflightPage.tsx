@@ -2,7 +2,16 @@ import { useNavigate, useSearch } from '@tanstack/react-router'
 import { zipSync } from 'fflate'
 import type { TFunction } from 'i18next'
 import { ChevronDown, Eye, Undo2 } from 'lucide-react'
-import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  lazy,
+  type ReactNode,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
@@ -37,8 +46,8 @@ import {
   type StepMeasure,
 } from '@/lib/step/measure'
 import type { SabreResult } from '@/lib/step/sabre'
-import { locateSabreStations, type SabreStation } from '@/lib/step/sabreToNc'
-import { getStepWorkerPool, prebootStepWorkers } from '@/lib/step/stepPool'
+import { locateSabreStations, type SabreStation, specifiedBevelAngle } from '@/lib/step/sabreToNc'
+import { getStepWorkerPool, PRIORITY_FOREGROUND, prebootStepWorkers } from '@/lib/step/stepPool'
 import { clearViewerModels, meshForViewer, reconstructForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { createOrbitBus, requestView, type ViewPreset } from './orbitSync'
@@ -372,6 +381,29 @@ export function PreflightPage() {
     setDrawingChecking(pdfParts.length > 0)
 
     void (async () => {
+      // Phase 0: laser-cut manufacturability — sudden thickness changes a single-face sweep
+      // can't reach. Cheap (NC text only, no OCC), so publish it first: bad faces draw red in
+      // the NC view even while drawings + models still run.
+      const issues = new Map<string, Finding[]>()
+      for (const part of result.parts) {
+        const ncPath = part.nc?.path
+        const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
+        if (!ncBytes) continue
+        for (const issue of assessManufacturability(new TextDecoder().decode(ncBytes))) {
+          const list = issues.get(part.mark) ?? []
+          list.push({
+            severity: issue.severity,
+            code: issue.code,
+            mark: part.mark,
+            message: issue.message,
+            params: issue.params,
+          })
+          issues.set(part.mark, list)
+        }
+      }
+      if (cancelled) return
+      if (issues.size > 0) setCutIssues(new Map(issues))
+
       // Phase 1: drawings, up to CONCURRENCY at a time.
       const materials = new Map<string, DrawingMaterial>()
       let done = 0
@@ -402,32 +434,12 @@ export function PreflightPage() {
       setDrawingDone(pdfParts.length)
       setDrawingChecking(false)
 
-      // Phase 2: laser-cut manufacturability — sudden thickness changes a single-face sweep
-      // can't reach. Cheap (text only), so do it before the heavy model work.
-      const issues = new Map<string, Finding[]>()
-      for (const part of result.parts) {
-        const ncPath = part.nc?.path
-        const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
-        if (!ncBytes) continue
-        for (const issue of assessManufacturability(new TextDecoder().decode(ncBytes))) {
-          const list = issues.get(part.mark) ?? []
-          list.push({
-            severity: issue.severity,
-            code: issue.code,
-            mark: part.mark,
-            message: issue.message,
-            params: issue.params,
-          })
-          issues.set(part.mark, list)
-        }
-      }
-      if (cancelled) return
-      setCutIssues(issues)
-
-      // Phases 3 & 5: measure each STEP and run the light-sabre test on it. Both need the same
-      // imported model, so one worker task does both. Phase 4 rebuilds each part from its NC and
-      // measures the result. All of it runs off the main thread across a small worker pool, so the
-      // UI stays responsive and independent parts are processed in parallel (~pool-size faster).
+      // Phases 2 & 4: measure each STEP and run the light-sabre test on it. Both need the
+      // same imported model, so one worker task does both. Phase 3 rebuilds each part from its
+      // NC and measures the result. All of it runs off the main thread across a small worker
+      // pool, so the UI stays responsive and independent parts are processed in parallel
+      // (~pool-size faster). Results stream per part as they land, so findings/badges show up
+      // long before the whole job finishes; viewer (foreground) tasks jump ahead of this queue.
       setChecking(true)
       setModelPhase('measure')
       const pool = getStepWorkerPool()
@@ -442,12 +454,23 @@ export function PreflightPage() {
       setModelTotal(stepParts.length)
       let inspectedCount = 0
       const bumpInspected = () => setModelDone(++inspectedCount)
+      /** Publish one part's inspect result immediately so its issues visualise upfront. */
+      const publishInspect = (mark: string, check: SizeCheck, sabreResult?: SabreResult | null) => {
+        checks.set(mark, check)
+        setModelChecks(new Map(checks))
+        if (sabreResult) {
+          sabre.set(mark, sabreResult)
+          setSabreChecks(new Map(sabre))
+        }
+        bumpInspected()
+      }
 
       await Promise.all(
         result.parts.map(async (part) => {
           const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
           if (!bytes) {
-            checks.set(part.mark, { ok: false, error: 'noDims' })
+            if (cancelled) return
+            publishInspect(part.mark, { ok: false, error: 'noDims' })
             return
           }
           // Length is compared against the drawing (ground truth) when available.
@@ -457,14 +480,13 @@ export function PreflightPage() {
           try {
             const inspected = await pool.inspect(bytes)
             if (cancelled) return
-            if (inspected.sabre) sabre.set(part.mark, inspected.sabre)
             if (length == null || cross.length < 2) {
-              checks.set(part.mark, { ok: false, error: 'noDims' })
+              publishInspect(part.mark, { ok: false, error: 'noDims' }, inspected.sabre)
             } else if (!inspected.measure) {
-              checks.set(part.mark, { ok: false, error: 'measureFailed' })
+              publishInspect(part.mark, { ok: false, error: 'measureFailed' }, inspected.sabre)
             } else {
               measures.set(part.mark, inspected.measure)
-              checks.set(
+              publishInspect(
                 part.mark,
                 compareSize(
                   inspected.measure.size,
@@ -473,18 +495,18 @@ export function PreflightPage() {
                   inspected.measure.bodies,
                   inspected.measure.extra,
                 ),
+                inspected.sabre,
               )
             }
           } catch {
-            checks.set(part.mark, { ok: false, error: 'measureFailed' })
+            if (cancelled) return
+            publishInspect(part.mark, { ok: false, error: 'measureFailed' })
           }
-          bumpInspected()
         }),
       )
       if (cancelled) return
-      setModelChecks(new Map(checks))
 
-      // Phase 4: does the NC-built geometry match the STEP? Rebuild each part from its NC and
+      // Phase 3: does the NC-built geometry match the STEP? Rebuild each part from its NC and
       // compare sizes/volume. Mismatches get an offer to regenerate the STEP (viewer / findings).
       const manufacture = new Map<string, ModelComparison>()
       const rebuildParts = result.parts.filter((part) => {
@@ -496,6 +518,32 @@ export function PreflightPage() {
       setModelTotal(rebuildParts.length)
       let rebuiltCount = 0
       const bumpRebuilt = () => setModelDone(++rebuiltCount)
+      /** Publish one part's rebuild result immediately (mismatch + end-piece findings). */
+      const publishRebuild = (
+        mark: string,
+        comparison: ModelComparison,
+        stepMeasure: StepMeasure,
+        madeBodies: number,
+      ) => {
+        manufacture.set(mark, comparison)
+        setManufactureChecks(new Map(manufacture))
+        // Cutting straight through (no bevel) detaches piece(s) the STEP keeps attached —
+        // the "tiny end piece" that a bevel/angled cut exists to avoid.
+        const extra = madeBodies - stepMeasure.bodies
+        if (extra > 0) {
+          const list = issues.get(mark) ?? []
+          list.push({
+            severity: 'warning',
+            code: 'CUT_END_PIECE',
+            mark,
+            message: `Cutting straight through would detach ${extra} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)`,
+            params: { extra },
+          })
+          issues.set(mark, list)
+          setCutIssues(new Map(issues))
+        }
+        bumpRebuilt()
+      }
 
       await Promise.all(
         result.parts.map(async (part) => {
@@ -512,26 +560,20 @@ export function PreflightPage() {
             })
             if (cancelled) return
             if (made.measure) {
-              manufacture.set(part.mark, compareModels(stepMeasure, made.measure))
-              // Cutting straight through (no bevel) detaches piece(s) the STEP keeps attached —
-              // the "tiny end piece" that a bevel/angled cut exists to avoid.
-              const extra = made.measure.bodies - stepMeasure.bodies
-              if (extra > 0) {
-                const list = issues.get(part.mark) ?? []
-                list.push({
-                  severity: 'warning',
-                  code: 'CUT_END_PIECE',
-                  mark: part.mark,
-                  message: `Cutting straight through would detach ${extra} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)`,
-                  params: { extra },
-                })
-                issues.set(part.mark, list)
-              }
+              publishRebuild(
+                part.mark,
+                compareModels(stepMeasure, made.measure),
+                stepMeasure,
+                made.measure.bodies,
+              )
+            } else {
+              bumpRebuilt()
             }
           } catch {
             // best-effort: skip parts the rebuild can't handle
+            if (cancelled) return
+            bumpRebuilt()
           }
-          bumpRebuilt()
         }),
       )
       if (!cancelled) {
@@ -548,6 +590,92 @@ export function PreflightPage() {
       getStepWorkerPool().abort()
     }
   }, [result, bytesByPath])
+
+  /** Marks already fast-tracked for the viewer, so map updates don't re-fire the same work. */
+  const fastTrackInFlight = useRef(new Set<string>())
+  // On-demand fast-track: the part the user is viewing jumps ahead of the background queue.
+  // Meshing/reconstruction for the 3D panes already run at foreground priority via viewerModel;
+  // this covers the *analysis* (measure / light-sabre / NC-rebuild comparison) so the viewed
+  // part's warnings, red faces and cut lines appear without waiting for the whole job.
+  useEffect(() => {
+    if (!result || !viewing) return
+    const part = result.parts.find((candidate) => candidate.mark === viewing.mark) ?? viewing
+    const mark = part.mark
+    const stepBytes = part.step ? bytesByPath.get(part.step.path) : undefined
+    const ncPath = part.nc?.path
+    const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
+    const needsInspect = stepBytes != null && !modelChecks.has(mark)
+    const needsRebuild = ncBytes != null && stepBytes != null && !manufactureChecks.has(mark)
+    if ((!needsInspect && !needsRebuild) || fastTrackInFlight.current.has(mark)) return
+    fastTrackInFlight.current.add(mark)
+    let cancelled = false
+    void (async () => {
+      try {
+        const pool = getStepWorkerPool()
+        let measure: StepMeasure | null = null
+        if (stepBytes && (needsInspect || needsRebuild)) {
+          const inspected = await pool.inspect(stepBytes, undefined, {
+            priority: PRIORITY_FOREGROUND,
+          })
+          if (cancelled) return
+          measure = inspected.measure
+          if (needsInspect) {
+            const length =
+              drawingMaterials.get(mark)?.length ?? part.expected?.length ?? part.nc?.length
+            const cross = part.nc?.dimensions?.slice(0, 2) ?? []
+            const check: SizeCheck =
+              length == null || cross.length < 2
+                ? { ok: false, error: 'noDims' }
+                : !measure
+                  ? { ok: false, error: 'measureFailed' }
+                  : compareSize(measure.size, length, cross, measure.bodies, measure.extra)
+            setModelChecks((prev) => new Map(prev).set(mark, check))
+            if (inspected.sabre) {
+              const sabreResult = inspected.sabre
+              setSabreChecks((prev) => new Map(prev).set(mark, sabreResult))
+            }
+          }
+        }
+        if (needsRebuild && ncBytes && measure) {
+          const made = await pool.reconstruct(new TextDecoder().decode(ncBytes), {
+            measure: true,
+            measureOnly: true,
+            priority: PRIORITY_FOREGROUND,
+          })
+          if (cancelled || !made.measure) return
+          const comparison = compareModels(measure, made.measure)
+          setManufactureChecks((prev) => new Map(prev).set(mark, comparison))
+          const extra = made.measure.bodies - measure.bodies
+          if (extra > 0) {
+            setCutIssues((prev) => {
+              const next = new Map(prev)
+              const list = next.get(mark) ?? []
+              if (!list.some((finding) => finding.code === 'CUT_END_PIECE')) {
+                next.set(mark, [
+                  ...list,
+                  {
+                    severity: 'warning' as const,
+                    code: 'CUT_END_PIECE',
+                    mark,
+                    message: `Cutting straight through would detach ${extra} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)`,
+                    params: { extra },
+                  },
+                ])
+              }
+              return next
+            })
+          }
+        }
+      } catch {
+        // best-effort: aborted or unmeasurable — the background pass will retry at its turn
+      } finally {
+        fastTrackInFlight.current.delete(mark)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [result, viewing, bytesByPath, drawingMaterials, modelChecks, manufactureChecks])
 
   const allFindings = useMemo(() => {
     if (!result) return []
@@ -709,7 +837,7 @@ export function PreflightPage() {
     return [...faces]
   }, [viewing, cutIssues])
 
-  /** Light-sabre failures of the viewed part — the STEP view draws cut lines + bevel ticks. */
+  /** Light-sabre failures of the viewed part — the manufactured view draws the cut lines. */
   const viewerSabreFailures = useMemo(() => {
     if (!viewing) return null
     const failures = sabreChecks.get(viewing.mark)?.failures
@@ -744,6 +872,15 @@ export function PreflightPage() {
       cancelled = true
     }
   }, [viewing, viewerSabreFailures, ncBytes, referenceStepBytes])
+
+  /** Bevel angle the NC specifies at the guilty cut (whole degrees), for both viewers. */
+  const viewerSabreBevelAngle = useMemo(() => {
+    if (!ncBytes || !viewerSabreStations) return null
+    return specifiedBevelAngle(
+      parseNcGeometry(new TextDecoder().decode(ncBytes)),
+      viewerSabreStations,
+    )
+  }, [ncBytes, viewerSabreStations])
 
   // Collapsible sections — long jobs push the tables far down, so profiles,
   // findings and parts all collapse like an accordion.
@@ -1431,10 +1568,10 @@ export function PreflightPage() {
         open={viewing !== null}
         onClose={() => setViewing(null)}
         title={viewing ? t('preflight.viewer.dialogTitle', { mark: viewing.mark }) : undefined}
-        className="max-w-6xl"
+        className="h-[90vh] max-w-[96vw]"
       >
         {viewing && (viewing.step || viewing.nc) && (
-          <>
+          <div className="flex h-full flex-col">
             <ViewerWarnings
               findings={viewerFindings}
               step={viewing.step}
@@ -1450,8 +1587,8 @@ export function PreflightPage() {
                 onUndo: () => undoOverride(viewing.mark),
               }}
             />
-            <div className="flex flex-col lg:flex-row">
-              <div className="relative h-[45vh] min-h-72 w-full bg-[#0b0f14] lg:h-[70vh] lg:flex-1">
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="relative min-h-72 w-full flex-1 bg-[#0b0f14]">
                 <Suspense
                   fallback={
                     <div className="grid h-full place-items-center text-sm text-muted-foreground">
@@ -1472,6 +1609,7 @@ export function PreflightPage() {
                           // The rebuild is oriented to the STEP frame, so the guilty-cut
                           // marks land on what the laser will actually cut — not the ideal.
                           sabreFailures={viewerSabreFailures}
+                          sabreBevelAngle={viewerSabreBevelAngle}
                           smoothLines
                         />
                       ) : (
@@ -1504,6 +1642,7 @@ export function PreflightPage() {
                           // The STEP is the ideal, not what gets cut — the marks live on
                           // the manufactured pane, except as a fallback when it is absent.
                           sabreFailures={showMfgPane ? null : viewerSabreFailures}
+                          sabreBevelAngle={showMfgPane ? null : viewerSabreBevelAngle}
                         />
                       ) : null}
                       {twoPane && <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>}
@@ -1556,7 +1695,7 @@ export function PreflightPage() {
                   </div>
                 )}
               </div>
-              <div className="flex h-[45vh] w-full flex-col border-t border-border lg:h-[70vh] lg:flex-1 lg:border-l lg:border-t-0">
+              <div className="flex h-[40vh] w-full shrink-0 flex-col border-t border-border">
                 <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
                   {[
                     { id: 'drawing' as const, labelKey: 'preflight.viewer.drawing' },
@@ -1599,6 +1738,7 @@ export function PreflightPage() {
                         bus={orbitBus}
                         badFaces={viewerBadFaces}
                         sabreStations={viewerSabreStations}
+                        sabreBevelAngle={viewerSabreBevelAngle}
                       />
                     </Suspense>
                   ) : pdfUrl ? (
@@ -1616,7 +1756,7 @@ export function PreflightPage() {
               </div>
             </div>
             {stock && (
-              <div className="flex items-center gap-2 border-t border-border px-5 py-2 text-xs text-muted-foreground">
+              <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-2 text-xs text-muted-foreground">
                 <span
                   className="inline-block size-3 rounded-sm border"
                   style={{
@@ -1633,7 +1773,7 @@ export function PreflightPage() {
               </div>
             )}
             <PartMeta part={viewing} material={drawingMaterials.get(viewing.mark)} />
-          </>
+          </div>
         )}
       </Dialog>
     </div>
@@ -1655,7 +1795,7 @@ function PartMeta({ part, material }: { part: PartRecord; material?: DrawingMate
     [t('preflight.meta.entities'), part.step ? part.step.entityCount.toLocaleString() : '—'],
   ]
   return (
-    <dl className="grid grid-cols-2 gap-x-6 gap-y-2 border-t border-border px-5 py-4 text-sm sm:grid-cols-3">
+    <dl className="grid shrink-0 grid-cols-2 gap-x-6 gap-y-2 border-t border-border px-5 py-4 text-sm sm:grid-cols-3">
       {rows.map(([label, value]) => (
         <div key={label} className="flex flex-col gap-0.5">
           <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
@@ -1729,7 +1869,7 @@ function ViewerWarnings({
   )
   if (findings.length === 0 && !invalid && !hasFixRow) return null
   return (
-    <div className="flex flex-col gap-2 border-b border-border bg-card px-5 py-3">
+    <div className="flex shrink-0 flex-col gap-2 border-b border-border bg-card px-5 py-3">
       {findings.map((finding) => {
         const resolved = Boolean(
           fix?.override && resolvedFindings(fix.override).includes(finding.code),

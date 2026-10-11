@@ -773,12 +773,12 @@ export function NestingPage() {
         open={viewing !== null}
         onClose={() => setViewing(null)}
         title={viewing ? t('nesting.dialogTitle', { name: viewing.name }) : undefined}
-        className="max-w-6xl"
+        className="h-[90vh] max-w-[96vw]"
       >
         {viewing && (
-          <div className="flex flex-col">
+          <div className="flex h-full flex-col">
             {viewing.bodies !== 1 && (
-              <div className="border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+              <div className="shrink-0 border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
                 <div className="font-medium">
                   {t('nesting.bodiesNote', { count: viewing.bodies })}
                 </div>
@@ -800,8 +800,8 @@ export function NestingPage() {
                 )}
               </div>
             )}
-            <div className="flex flex-col lg:flex-row">
-              <div className="relative h-[45vh] min-h-72 w-full bg-[#0b0f14] lg:h-[70vh] lg:flex-1">
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="relative min-h-72 w-full flex-1 bg-[#0b0f14]">
                 <Suspense
                   fallback={
                     <div className="grid h-full place-items-center text-sm text-muted-foreground">
@@ -915,7 +915,7 @@ export function NestingPage() {
                   })}
                 </div>
               </div>
-              <div className="flex h-[45vh] w-full flex-col border-t border-border lg:h-[70vh] lg:flex-1 lg:border-l lg:border-t-0">
+              <div className="flex h-[40vh] w-full shrink-0 flex-col border-t border-border">
                 <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
                   {[
                     { id: 'preview' as const, labelKey: 'nesting.viewer.previewTab' },
