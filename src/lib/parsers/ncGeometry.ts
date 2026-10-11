@@ -17,6 +17,10 @@ export interface NcContour {
    * welding-preparation / bevel pairs — up to two `angle, distance` values (`0` = none).
    */
   bevels: number[][]
+  /** Per-vertex arc bulge/radius to the next vertex (mm; `0` = straight), aligned with `points`. */
+  radii?: number[]
+  /** Per-vertex reference-edge / notch suffix letter (`o`/`s`/`u`/`t`/`w`), aligned with `points`. */
+  refs?: (string | null)[]
 }
 
 export interface NcHole {
@@ -26,9 +30,26 @@ export interface NcHole {
   diameter: number
 }
 
+/**
+ * A DSTV **notch** instruction (`AK` block). Per the DSTV spec a notched corner adds an extra
+ * line that is *not* part of the contour: the corner coordinates plus the notch type — `t`
+ * (tangential) or `w` (hole-like). It is easy to mistake for a duplicate contour vertex, so it
+ * is separated out here.
+ */
+export interface NcNotch {
+  face: NcFace
+  /** corner X along the member (mm) */
+  x: number
+  /** corner Y within the face (mm) */
+  y: number
+  /** `t` = tangential notch, `w` = hole-like notch */
+  type: 't' | 'w'
+}
+
 export interface NcGeometry {
   contours: NcContour[]
   holes: NcHole[]
+  notches: NcNotch[]
 }
 
 const BLOCK_CODES = new Set([
@@ -54,15 +75,27 @@ function num(token: string | undefined): number {
   return match ? Number(match[0]) : Number.NaN
 }
 
+/**
+ * The trailing letter on a coordinate token. Reference-edge suffixes are `o` (top) / `s` (axis) /
+ * `u` (bottom); notch types are `t` (tangential) / `w` (hole-like). Null when there is no letter.
+ */
+function coordSuffix(token: string | undefined): 'o' | 's' | 'u' | 't' | 'w' | null {
+  const match = token?.match(/([a-z])$/i)
+  return match ? (match[1].toLowerCase() as 'o' | 's' | 'u' | 't' | 'w') : null
+}
+
 export function parseNcGeometry(text: string): NcGeometry {
   const lines = text.split(/\r?\n/).map((line) => line.trim())
   const contours: NcContour[] = []
   const holes: NcHole[] = []
+  const notches: NcNotch[] = []
 
   let block = ''
   let face: NcFace | null = null
   let current: [number, number][] = []
   let currentBevels: number[][] = []
+  let currentRadii: number[] = []
+  let currentRefs: (string | null)[] = []
 
   const flush = () => {
     if ((block === 'AK' || block === 'IK') && face && current.length >= 2) {
@@ -71,10 +104,14 @@ export function parseNcGeometry(text: string): NcGeometry {
         kind: block === 'IK' ? 'inner' : 'outer',
         points: current,
         bevels: currentBevels,
+        radii: currentRadii,
+        refs: currentRefs,
       })
     }
     current = []
     currentBevels = []
+    currentRadii = []
+    currentRefs = []
   }
 
   for (const line of lines) {
@@ -102,19 +139,28 @@ export function parseNcGeometry(text: string): NcGeometry {
     if (block === 'BO') {
       const diameter = num(tokens[index + 2])
       holes.push({ face, x, y, diameter: Number.isFinite(diameter) ? diameter : 0 })
-    } else {
-      current.push([x, y])
-      // Welding-preparation / bevel pairs (two angle/distance values) AFTER the radius at
-      // `index + 2`: the radius is a corner blend, not a bevel, so it must not count.
-      const bevel: number[] = []
-      for (let i = index + 3; i <= index + 6; i++) {
-        const value = num(tokens[i])
-        bevel.push(Number.isFinite(value) ? value : 0)
-      }
-      currentBevels.push(bevel)
+      continue
     }
+    // A notched corner adds an extra `AK` line — the corner coords carrying `t`/`w` — that is not
+    // a contour vertex. Record it separately instead of letting it collapse as a duplicate point.
+    const suffix = coordSuffix(tokens[index]) ?? coordSuffix(tokens[index + 1])
+    if (suffix === 't' || suffix === 'w') {
+      notches.push({ face, x, y, type: suffix })
+      continue
+    }
+    current.push([x, y])
+    currentRadii.push(num(tokens[index + 2]))
+    currentRefs.push(coordSuffix(tokens[index]) ?? coordSuffix(tokens[index + 1]))
+    // Welding-preparation / bevel pairs (two angle/distance values) AFTER the radius at
+    // `index + 2`: the radius is a corner blend, not a bevel, so it must not count.
+    const bevel: number[] = []
+    for (let i = index + 3; i <= index + 6; i++) {
+      const value = num(tokens[i])
+      bevel.push(Number.isFinite(value) ? value : 0)
+    }
+    currentBevels.push(bevel)
   }
   flush()
 
-  return { contours, holes }
+  return { contours, holes, notches }
 }

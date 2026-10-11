@@ -561,6 +561,7 @@ export function NestingPage() {
     if (!viewing) return null
     const contours: NcGeometry['contours'] = []
     const holes: NcGeometry['holes'] = []
+    const notches: NcGeometry['notches'] = []
     for (const item of viewing.ncItems) {
       for (const contour of item.geometry.contours) {
         contours.push({
@@ -569,8 +570,9 @@ export function NestingPage() {
         })
       }
       for (const hole of item.geometry.holes) holes.push({ ...hole, x: hole.x + item.start })
+      for (const notch of item.geometry.notches) notches.push({ ...notch, x: notch.x + item.start })
     }
-    return contours.length > 0 || holes.length > 0 ? { contours, holes } : null
+    return contours.length > 0 || holes.length > 0 ? { contours, holes, notches } : null
   }, [viewing])
 
   return (

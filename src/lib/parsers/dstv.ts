@@ -91,6 +91,15 @@ export const dstvMarkSchema = z.object({
 })
 export type DstvMark = z.infer<typeof dstvMarkSchema>
 
+/** A DSTV notch label (`AK` extra line): corner coords + `t` (tangential) / `w` (hole-like). */
+export const dstvNotchSchema = z.object({
+  face: faceSchema,
+  x: z.number(),
+  y: z.number(),
+  type: z.enum(['t', 'w']),
+})
+export type DstvNotch = z.infer<typeof dstvNotchSchema>
+
 export const dstvHeaderSchema = z.object({
   orderId: z.string().optional(),
   mark: z.string(),
@@ -111,7 +120,14 @@ export const dstvFileSchema = z.object({
   holes: z.array(dstvHoleSchema),
   contours: z.array(dstvContourSchema),
   marks: z.array(dstvMarkSchema),
+  notches: z.array(dstvNotchSchema),
   blocks: z.array(z.string()),
+  /**
+   * Raw data lines of every block, keyed by block code (`BO`, `AK`, `PU`, `KO`, `KA`, `SC`,
+   * `TO`, `UE`, `PR`, `IN`, …). Nothing in the file is dropped, even for blocks we don't yet
+   * model structurally.
+   */
+  raw: z.record(z.string(), z.array(z.string())),
 })
 export type DstvFile = z.infer<typeof dstvFileSchema>
 
@@ -203,6 +219,9 @@ function parseContours(code: 'AK' | 'IK', lines: string[]): DstvContour[] {
       contours.push(current)
     }
     if (!current) continue
+    // Skip a DSTV notch label (`t`/`w`) — it is not a contour vertex.
+    const index = face ? 1 : 0
+    if (notchSuffix(tokens[index]) ?? notchSuffix(tokens[index + 1])) continue
     // One vertex per line: x, y, radius, then extra fields (bevel/angles).
     if (nums.length >= 2) {
       current.vertices.push(
@@ -211,6 +230,36 @@ function parseContours(code: 'AK' | 'IK', lines: string[]): DstvContour[] {
     }
   }
   return contours
+}
+
+/** Trailing notch-type letter on a coordinate token: `w` (hole-like) / `t` (tangential). */
+function notchSuffix(token: string | undefined): 't' | 'w' | null {
+  const match = token?.match(/([tw])$/i)
+  return match ? (match[1].toLowerCase() as 't' | 'w') : null
+}
+
+/**
+ * DSTV notch labels (`AK` extra lines): the corner coords carrying `t`/`w`. They are *not*
+ * contour vertices, so they are collected separately rather than as duplicate points.
+ */
+function parseNotches(lines: string[]): DstvNotch[] {
+  const notches: DstvNotch[] = []
+  let face: DstvFace | null = null
+  for (const line of lines) {
+    const tokens = line.split(/\s+/)
+    const parsedFace = parseFace(tokens[0])
+    if (parsedFace) face = parsedFace
+    if (!face) continue
+    const index = parsedFace ? 1 : 0
+    const xTok = tokens[index]
+    const yTok = tokens[index + 1]
+    const type = notchSuffix(xTok) ?? notchSuffix(yTok)
+    if (!type) continue
+    const x = parseNumber(xTok ?? '')
+    const y = parseNumber(yTok ?? '')
+    if (Number.isFinite(x) && Number.isFinite(y)) notches.push({ face, x, y, type })
+  }
+  return notches
 }
 
 function parseMarks(lines: string[]): DstvMark[] {
@@ -251,12 +300,20 @@ export function parseDstv(text: string): DstvFile {
     ...parseContours('IK', byCode.get('IK') ?? []),
   ]
   const marks = parseMarks(byCode.get('SI') ?? [])
+  const notches = [...parseNotches(byCode.get('AK') ?? []), ...parseNotches(byCode.get('IK') ?? [])]
+
+  const raw: Record<string, string[]> = {}
+  for (const block of blocks) {
+    raw[block.code] = [...(raw[block.code] ?? []), ...block.lines]
+  }
 
   return dstvFileSchema.parse({
     header: parseHeader(headerLines),
     holes,
     contours,
     marks,
+    notches,
     blocks: blocks.map((b) => b.code),
+    raw,
   })
 }

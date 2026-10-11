@@ -54,6 +54,9 @@ export interface NcLineSets {
 /** Segments around each hole ring — enough to read as a circle at part scale. */
 const HOLE_STEPS = 24
 
+/** Samples taken along a cut segment when testing whether any of it has material (see `reached`). */
+const REACH_SAMPLES = 8
+
 /** Default spur length (mm) shown for an angle-only bevel that carries no distance. */
 const DEFAULT_BEVEL_SPUR = 3
 
@@ -137,6 +140,9 @@ export function faceThickness(
 export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets {
   const { frame, section, toScene, normal } = projection
   const byFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
+  /** Corner coordinates of the DSTV notch labels on a face — real cuts even where material recedes. */
+  const notchCorners = (face: NcFace): [number, number][] =>
+    nc.notches.filter((n) => n.face === face).map((n) => [n.x, n.y])
 
   const place = (face: NcFace, x: number, y: number) => {
     const point = placeNcFace(frame, face, x, y)
@@ -154,11 +160,29 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
         push(byFace[contour.face], a.world, b.world)
         continue
       }
-      // A cut with no material on its face (edge of stock / one-sided section) removes nothing.
-      const reached =
-        materialReaches(frame, section, contour.face, a.point.cross) ||
-        materialReaches(frame, section, contour.face, b.point.cross)
-      if (!reached) continue
+      // A cut with no material anywhere along it (edge of stock / one-sided section) removes
+      // nothing. Sample along the segment: checking only the *ends* wrongly drops a full-width end
+      // cut, whose ends sit in the corner radius where the face plane recedes from the material.
+      let reached = false
+      for (let s = 0; s <= REACH_SAMPLES; s++) {
+        const t = s / REACH_SAMPLES
+        const cross: [number, number] = [
+          a.point.cross[0] + (b.point.cross[0] - a.point.cross[0]) * t,
+          a.point.cross[1] + (b.point.cross[1] - a.point.cross[1]) * t,
+        ]
+        if (materialReaches(frame, section, contour.face, cross)) {
+          reached = true
+          break
+        }
+      }
+      if (!reached) {
+        // A DSTV notch label (`t`/`w`) marks a real cut at a corner where the face plane recedes
+        // (e.g. the necked end of a shaft). Keep the segment so its cut line is drawn.
+        const notched = notchCorners(contour.face).some(
+          ([nx, ny]) => Math.hypot(x0 - nx, y0 - ny) < 2 || Math.hypot(x1 - nx, y1 - ny) < 2,
+        )
+        if (!notched) continue
+      }
       // A segment lying along the stock's own edge (the section boundary, both ends at the same
       // span extreme) removes nothing either — it's the raw-stock outline, not a cut.
       const span = faceSpanAxis(frame, contour.face)

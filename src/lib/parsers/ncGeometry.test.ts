@@ -1,5 +1,16 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parseNcGeometry } from './ncGeometry'
+
+/** A real shaft whose o/u ends carry DSTV notch lines (`w`). */
+const M147 = join(
+  process.env.USERPROFILE ?? '',
+  'Downloads',
+  'Failed tests',
+  '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
+  'm147.nc1',
+)
 
 // Real geometry from the NW31 m170.nc1 (a part whose STEP is wrong).
 const M170 = `ST
@@ -43,5 +54,34 @@ describe('parseNcGeometry', () => {
 
   it('returns nothing for a header-only NC', () => {
     expect(parseNcGeometry('ST\n  CO-7255\nEN').contours).toEqual([])
+  })
+
+  it('separates DSTV notch lines (t/w) from contour vertices', () => {
+    // A notched corner adds an extra AK line — the corner coords carrying `w` — that must not be
+    // mistaken for a (duplicate) contour vertex.
+    const text = `ST
+  m1
+AK
+  o       0.00       0.00       0.00       0.00       0.00       0.00       0.00
+          0.00     100.00       0.00       0.00       0.00       0.00       0.00
+         45.53      93.45       0.00       0.00       0.00       0.00       0.00
+         45.53      93.45w      0.00       0.00       0.00       0.00       0.00
+         45.49     100.00       0.00       0.00       0.00       0.00       0.00
+EN`
+    const geometry = parseNcGeometry(text)
+    expect(geometry.contours[0]?.points).toEqual([
+      [0, 0],
+      [0, 100],
+      [45.53, 93.45],
+      [45.49, 100],
+    ])
+    expect(geometry.notches).toEqual([{ face: 'o', x: 45.53, y: 93.45, type: 'w' }])
+  })
+
+  it.skipIf(!existsSync(M147))("parses m147's 8 notch lines (o/u ends)", () => {
+    const geometry = parseNcGeometry(readFileSync(M147, 'utf8'))
+    expect(geometry.notches).toHaveLength(8)
+    expect(geometry.notches.every((n) => n.type === 'w')).toBe(true)
+    expect([...new Set(geometry.notches.map((n) => n.face))].sort()).toEqual(['o', 'u'])
   })
 })

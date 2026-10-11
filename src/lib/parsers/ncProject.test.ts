@@ -35,6 +35,7 @@ describe('resolveNcFaceFrame', () => {
         },
       ],
       holes: [],
+      notches: [],
     }
     expect(resolveNcFaceFrame(section, nc)).toEqual({ extent: [200, 100], axisVH: 1, axisOU: 0 })
   })
@@ -90,6 +91,7 @@ describe('projectNc', () => {
         },
       ],
       holes: [{ face: 'v', x: 5, y: 5, diameter: 10 }],
+      notches: [],
     }
     const out = projectNc(nc, { frame, section, toScene, normal })
     // Cut lines are grouped by wall thickness: the `o` face (100 mm) and the `v` hole (200 mm).
@@ -121,6 +123,7 @@ describe('projectNc', () => {
         },
       ],
       holes: [],
+      notches: [],
     }
     const out = projectNc(nc, { frame, section: oneSided, toScene, normal })
     expect(out.cuts).toHaveLength(0)

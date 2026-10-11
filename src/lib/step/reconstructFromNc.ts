@@ -154,15 +154,26 @@ interface SolidOps {
   cut: (other: SolidOps) => SolidOps
 }
 
-function dedupe(pts: Pt[]): Pt[] {
-  const out = pts.filter((p, i) => i === 0 || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1])
+/** Drops consecutive (and closing) duplicate points, keeping the per-vertex arc radii aligned. */
+function dedupeWithRadii(pts: Pt[], radii: number[]): { pts: Pt[]; radii: number[] } {
+  const outPts: Pt[] = []
+  const outRadii: number[] = []
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i]
+    if (!p) continue
+    if (i > 0 && p[0] === pts[i - 1]?.[0] && p[1] === pts[i - 1]?.[1]) continue
+    outPts.push(p)
+    outRadii.push(radii[i] ?? 0)
+  }
   if (
-    out.length > 1 &&
-    out[0][0] === out[out.length - 1][0] &&
-    out[0][1] === out[out.length - 1][1]
-  )
-    out.pop()
-  return out
+    outPts.length > 1 &&
+    outPts[0]?.[0] === outPts[outPts.length - 1]?.[0] &&
+    outPts[0]?.[1] === outPts[outPts.length - 1]?.[1]
+  ) {
+    outPts.pop()
+    outRadii.pop()
+  }
+  return { pts: outPts, radii: outRadii }
 }
 
 interface ShapeOps {
@@ -300,9 +311,26 @@ export async function reconstructSolidFromNc(
 
   await ensureOc()
   const { draw, drawCircle } = await import('replicad')
-  const poly = (pts: Pt[]) => {
+  const poly = (pts: Pt[], radii?: number[]) => {
     let pen = draw(pts[0])
-    for (let i = 1; i < pts.length; i++) pen = pen.lineTo(pts[i])
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1]
+      const b = pts[i]
+      if (!a || !b) continue
+      // A non-zero DSTV vertex radius is an arc to the next vertex. Draw a real arc (sagitta
+      // derived from the chord + radius) instead of the straight chord that used to stand in for
+      // it — the standing "end-arc radii drawn straight" deficit.
+      const radius = radii?.[i - 1] ?? 0
+      if (radius !== 0) {
+        const chord = Math.hypot(b[0] - a[0], b[1] - a[1])
+        if (chord > 0 && Math.abs(radius) > chord / 2) {
+          const sagitta = Math.abs(radius) - Math.sqrt(radius * radius - (chord / 2) ** 2)
+          pen = pen.sagittaArcTo(b, radius >= 0 ? sagitta : -sagitta)
+          continue
+        }
+      }
+      pen = pen.lineTo(b)
+    }
     return pen.close()
   }
 
@@ -336,13 +364,14 @@ export async function reconstructSolidFromNc(
   for (const c of outer) {
     const axis = faceAxis(c.face)
     const half = halfOf(axis)
-    const pts = dedupe(c.points).map(([x, y]) => [x, y - half] as Pt)
+    const { pts: rawPts, radii } = dedupeWithRadii(c.points, c.radii ?? [])
+    const pts = rawPts.map(([x, y]) => [x, y - half] as Pt)
     pointsByAxis[axis].push(...pts)
     // Exact outline for both axes. The axis-1 outline used to be kerf-eroded (0.1 mm inset) to
     // stop OCC sharing the trim's faces with the base prism — but the inset left a 0.1 mm ledge
     // beside every real edge and mis-aligned with the end "band", walling the bevel off as a
     // staircase. stripStraySolids now absorbs any floating debris instead.
-    drawingsByAxis[axis].push(poly(pts))
+    drawingsByAxis[axis].push(poly(pts, radii))
   }
 
   // Global member-end extent over every outer face outline. Faces routinely disagree in X at
