@@ -27,8 +27,9 @@ import {
   WebGLRenderer,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { faceNormal, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import type { NcFace, NcGeometry } from '@/lib/parsers/ncGeometry'
-import { type NcLineSets, projectNc, resolveNcFaceAxes, type Vec3 } from '@/lib/parsers/ncProject'
+import { type NcLineSets, type NcProjection, projectNc, type Vec3 } from '@/lib/parsers/ncProject'
 import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
 import {
@@ -77,8 +78,8 @@ function ncLineObject(points: number[], color: number): LineSegments | null {
 }
 
 /** Appends the four NC line sets to a scene as coloured segments, returning them for disposal. */
-function addNcLines(nc: NcGeometry, placement: Parameters<typeof projectNc>[1]): LineSegments[] {
-  const sets: NcLineSets = projectNc(nc, placement)
+function addNcLines(nc: NcGeometry, projection: NcProjection): LineSegments[] {
+  const sets: NcLineSets = projectNc(nc, projection)
   const entries: [number[], number][] = [
     [sets.outer, NC_COLOR.outer],
     [sets.bevel, NC_COLOR.bevel],
@@ -91,17 +92,6 @@ function addNcLines(nc: NcGeometry, placement: Parameters<typeof projectNc>[1]):
     if (line) lines.push(line)
   }
   return lines
-}
-
-/** Extent (max − min) of a 2D outline along one axis. */
-function extentOf(points: [number, number][], axis: 0 | 1): number {
-  let min = Number.POSITIVE_INFINITY
-  let max = Number.NEGATIVE_INFINITY
-  for (const p of points) {
-    min = Math.min(min, p[axis])
-    max = Math.max(max, p[axis])
-  }
-  return max - min
 }
 
 /** Formats a 0–1 fraction as a percentage, keeping a decimal for tiny-but-nonzero shares. */
@@ -329,6 +319,7 @@ function mountScene(
   deferDiff?: boolean,
   sabre?: SabreFailure[] | null,
   nc?: NcGeometry | null,
+  ncSection?: [number, number][] | null,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -414,7 +405,9 @@ function mountScene(
     compareMaterial.opacity = 0.3
   }
 
-  const primary = buildGroup(step, faceMaterial, true, highlightStray ? strayMaterial : null)
+  // When the NC toolpath is projected onto the model, its lines replace the manufactured
+  // model's own tessellated edges — same cuts, drawn once, so there is no double line clutter.
+  const primary = buildGroup(step, faceMaterial, !nc, highlightStray ? strayMaterial : null)
   const size = bboxOfVertices(primary.raw).getSize(new Vector3())
   scene.add(primary.group)
 
@@ -464,38 +457,32 @@ function mountScene(
     scene.add(overlay)
     overlays.push(overlay)
 
-    // Project the NC toolpath onto the stock section: each per-face (x along the member, y
-    // across the face) point is placed on the section's bounding face, mapped through the same
-    // orientation basis as the ghost. The stock's own 1.5 mm inflation keeps the lines just
-    // proud of the model surface, so they never z-fight yet still read as the cut path.
+    // Project the NC toolpath onto the face each cut lands on, using the shared section face
+    // frame (the same rule the NC→solid rebuild uses). A cut with no material on its face (the
+    // edge of the stock) is dropped. The projection uses the *exact* section (`ncSection`) when
+    // available, not the inflated ghost, so cuts and holes land exactly on the manufactured
+    // surface; a hair of offset keeps them clear of z-fighting.
     if (nc) {
-      const ex = extentOf(profile, 0)
-      const ey = extentOf(profile, 1)
-      const axes = resolveNcFaceAxes(profile, nc)
-      const half = (axis: 0 | 1): number => (axis === 0 ? ex : ey) / 2
+      const section = ncSection ?? profile
+      const frame = resolveNcFaceFrame(section, nc)
       const OFF = 0.4
-      const faceAxis = (face: string): 0 | 1 => (face === 'v' || face === 'h' ? axes.vh : axes.ou)
-      const positive = (face: string): 1 | -1 => (face === 'o' || face === 'v' ? 1 : -1)
-      const place = (face: NcFace, x: number, y: number): Vec3 => {
-        const span = faceAxis(face)
-        const other = (1 - span) as 0 | 1
-        const local: [number, number] = [0, 0]
-        local[span] = y - half(span)
-        local[other] = positive(face) * (half(other) + OFF)
-        const along = x - length / 2
+      const toScene = (along: number, cross: [number, number], face: NcFace): Vec3 => {
+        const n = faceNormal(frame, face)
+        const local: [number, number] = [cross[0], cross[1]]
+        local[n.axis] += n.sign * OFF
+        const x = along - length / 2
         return [
-          along + local[0] * xAxis.x + local[1] * yAxis.x,
+          x + local[0] * xAxis.x + local[1] * yAxis.x,
           local[0] * xAxis.y + local[1] * yAxis.y,
           local[0] * xAxis.z + local[1] * yAxis.z,
         ]
       }
       const normal = (face: NcFace): Vec3 => {
-        const other = (1 - faceAxis(face)) as 0 | 1
-        const base = other === 0 ? xAxis : yAxis
-        const sign = positive(face)
-        return [base.x * sign, base.y * sign, base.z * sign]
+        const n = faceNormal(frame, face)
+        const base = n.axis === 0 ? xAxis : yAxis
+        return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
       }
-      for (const line of addNcLines(nc, { place, normal })) {
+      for (const line of addNcLines(nc, { frame, section, toScene, normal })) {
         scene.add(line)
         ncObjects.push(line)
       }
@@ -510,26 +497,19 @@ function mountScene(
     // toolpath for each nested piece sits directly on it, so the transverse cuts and holes
     // read on the solid that the beam NC produces.
     if (nc) {
-      const ex = extentOf(beam.profile, 0)
-      const ey = extentOf(beam.profile, 1)
-      const half = (axis: 0 | 1): number => (axis === 0 ? ex : ey) / 2
+      const frame = resolveNcFaceFrame(beam.profile, nc)
       const OFF = 0.6
-      const faceAxis = (face: string): 0 | 1 => (face === 'v' || face === 'h' ? 1 : 0)
-      const positive = (face: string): 1 | -1 => (face === 'o' || face === 'v' ? 1 : -1)
-      const place = (face: NcFace, x: number, y: number): Vec3 => {
-        const span = faceAxis(face)
-        const other = (1 - span) as 0 | 1
-        const local: [number, number] = [0, 0]
-        local[span] = y - half(span)
-        local[other] = positive(face) * (half(other) + OFF)
-        return [local[0], local[1], x - beam.length / 2]
+      const toScene = (along: number, cross: [number, number], face: NcFace): Vec3 => {
+        const n = faceNormal(frame, face)
+        const local: [number, number] = [cross[0], cross[1]]
+        local[n.axis] += n.sign * OFF
+        return [local[0], local[1], along - beam.length / 2]
       }
       const normal = (face: NcFace): Vec3 => {
-        const other = (1 - faceAxis(face)) as 0 | 1
-        const sign = positive(face)
-        return other === 0 ? [sign, 0, 0] : [0, sign, 0]
+        const n = faceNormal(frame, face)
+        return n.axis === 0 ? [n.sign, 0, 0] : [0, n.sign, 0]
       }
-      for (const line of addNcLines(nc, { place, normal })) {
+      for (const line of addNcLines(nc, { frame, section: beam.profile, toScene, normal })) {
         scene.add(line)
         ncObjects.push(line)
       }
@@ -887,6 +867,8 @@ export interface PartViewerProps {
   sabreBevelAngle?: number | null
   /** NC toolpath geometry to project onto this (manufactured) model */
   nc?: NcGeometry | null
+  /** Exact (un-inflated) section outline the NC was matched against, for the projection */
+  ncSection?: [number, number][] | null
 }
 
 export default function PartViewer({
@@ -902,6 +884,7 @@ export default function PartViewer({
   sabreFailures = null,
   sabreBevelAngle = null,
   nc = null,
+  ncSection = null,
 }: PartViewerProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -961,6 +944,7 @@ export default function PartViewer({
           true,
           sabreFailures,
           nc,
+          ncSection,
         )
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handle.setFlip(false)
@@ -1000,6 +984,7 @@ export default function PartViewer({
     smoothModelLines,
     sabreFailures,
     nc,
+    ncSection,
     t,
   ])
 

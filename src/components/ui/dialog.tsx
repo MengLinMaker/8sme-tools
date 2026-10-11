@@ -10,9 +10,10 @@ export interface DialogProps {
   title?: ReactNode
   children: ReactNode
   className?: string
+  fullscreen?: boolean
 }
 
-export function Dialog({ open, onClose, title, children, className }: DialogProps) {
+export function Dialog({ open, onClose, title, children, className, fullscreen }: DialogProps) {
   const { t } = useTranslation()
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -34,7 +35,9 @@ export function Dialog({ open, onClose, title, children, className }: DialogProp
   if (!open) return null
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      className={cn('fixed inset-0 z-50 flex items-center justify-center', !fullscreen && 'p-4')}
+    >
       <button
         type="button"
         className="absolute inset-0 cursor-default bg-black/70 backdrop-blur-sm"
@@ -49,6 +52,7 @@ export function Dialog({ open, onClose, title, children, className }: DialogProp
         tabIndex={-1}
         className={cn(
           'relative z-10 flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-2xl outline-none',
+          fullscreen && 'h-full max-h-none max-w-none rounded-none border-0',
           className,
         )}
       >

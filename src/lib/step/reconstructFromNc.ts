@@ -1,6 +1,7 @@
 import { contourHasBevel, contourStepDepth } from '@/lib/audit/manufacturability'
 import { parseDstv } from '@/lib/parsers/dstv'
-import { type NcContour, parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { faceHalf, faceSpanAxis, resolveNcFaceFrame, sectionSpanAt } from '@/lib/parsers/ncFaces'
+import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stripStraySolids } from './clean'
 import type { MeasurableShape } from './measure'
@@ -143,20 +144,6 @@ interface SolidOps {
   cut: (other: SolidOps) => SolidOps
 }
 
-function extent(points: Pt[], axis: Axis): number {
-  let min = Number.POSITIVE_INFINITY
-  let max = Number.NEGATIVE_INFINITY
-  for (const p of points) {
-    min = Math.min(min, p[axis])
-    max = Math.max(max, p[axis])
-  }
-  return max - min
-}
-
-function maxCoord(contour: NcContour, axis: Axis): number {
-  return Math.max(...contour.points.map((p) => p[axis]))
-}
-
 function dedupe(pts: Pt[]): Pt[] {
   const out = pts.filter((p, i) => i === 0 || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1])
   if (
@@ -166,31 +153,6 @@ function dedupe(pts: Pt[]): Pt[] {
   )
     out.pop()
   return out
-}
-
-/**
- * Cross-section interior span along one axis at a position on the other
- * (even-odd scanline over the outline). Picks the drill side for one-sided
- * sections: a T flange lives on one side only, so face-pair symmetry (+v/−h)
- * cannot tell where the material is — but the outline can. Symmetric sections
- * reach both sides, so the pairing table stands for them.
- */
-function sectionSpanAt(points: Pt[], crossAxis: Axis, c: number): [number, number] {
-  const drillAxis = (1 - crossAxis) as Axis
-  let lo = Number.POSITIVE_INFINITY
-  let hi = Number.NEGATIVE_INFINITY
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i] ?? [0, 0]
-    const q = points[(i + 1) % points.length] ?? [0, 0]
-    const pc = p[crossAxis] ?? 0
-    const qc = q[crossAxis] ?? 0
-    if (pc <= c === qc <= c) continue
-    const t = (c - pc) / (qc - pc)
-    const xd = (p[drillAxis] ?? 0) + t * ((q[drillAxis] ?? 0) - (p[drillAxis] ?? 0))
-    if (xd < lo) lo = xd
-    if (xd > hi) hi = xd
-  }
-  return [lo, hi]
 }
 
 interface ShapeOps {
@@ -334,27 +296,17 @@ export async function reconstructSolidFromNc(
     return pen.close()
   }
 
-  const ex = extent(section.points, 0)
-  const ey = extent(section.points, 1)
+  // `v`/`h` faces share one cross-section axis, `o`/`u` the other; the shared frame resolves
+  // which by matching a contour's across-extent to the section's two dimensions (the same rule
+  // the viewer uses to project cuts onto the face the laser cuts).
+  const frame = resolveNcFaceFrame(section.points, geo)
   const outer = geo.contours.filter((c) => c.kind === 'outer')
   const maxX = Math.max(
     ...geo.contours.flatMap((c) => c.points.map((p) => p[0])),
     ...geo.holes.map((h) => h.x + h.diameter),
   )
-  const matchAxis = (yMax: number): Axis => (Math.abs(yMax - ex) <= Math.abs(yMax - ey) ? 0 : 1)
-
-  // `v`/`h` faces share one cross-section axis, `o`/`u` the other. Decide which by matching
-  // the contour's Y-extent to the section's two dimensions.
-  const vh = outer.find((c) => c.face === 'v' || c.face === 'h')
-  const ou = outer.find((c) => c.face === 'o' || c.face === 'u')
-  const axisVH: Axis = vh
-    ? matchAxis(maxCoord(vh, 1))
-    : ou
-      ? ((1 - matchAxis(maxCoord(ou, 1))) as Axis)
-      : 0
-  const axisOU: Axis = (1 - axisVH) as Axis
-  const faceAxis = (face: string): Axis => (face === 'v' || face === 'h' ? axisVH : axisOU)
-  const halfOf = (axis: Axis): number => (axis === 0 ? ex / 2 : ey / 2)
+  const faceAxis = (face: string): Axis => faceSpanAxis(frame, face as NcFace)
+  const halfOf = (axis: Axis): number => faceHalf(frame, axis)
   const pointsByAxis: Record<Axis, Pt[]> = { 0: [], 1: [] }
   const drawingsByAxis: Record<Axis, ReturnType<typeof poly>[]> = { 0: [], 1: [] }
   // Exact (uneroded) axis-1 pens, alongside the kerf-eroded ones: eroded loops can still

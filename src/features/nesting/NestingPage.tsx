@@ -8,7 +8,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
-import { createOrbitBus, requestView, type ViewPreset } from '@/features/preflight/orbitSync'
+import { createOrbitBus } from '@/features/preflight/orbitSync'
+import { ViewCube } from '@/features/preflight/ViewCube'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { downloadBlob } from '@/lib/download'
 import { buildBarNc } from '@/lib/nesting/nc'
@@ -82,13 +83,6 @@ interface NcItem {
   headerLength: number | null
   geometry: NcGeometry
 }
-
-const VIEW_PRESETS: { id: ViewPreset; labelKey: string }[] = [
-  { id: 'iso', labelKey: 'preflight.viewer.iso' },
-  { id: 'front', labelKey: 'preflight.viewer.front' },
-  { id: 'top', labelKey: 'preflight.viewer.top' },
-  { id: 'side', labelKey: 'preflight.viewer.side' },
-]
 
 /** How the 3D area shows the manufactured (cut-beam) model against the nested STEP. */
 type NestViewMode = 'step' | 'manufactured' | 'split' | 'overlay'
@@ -887,6 +881,7 @@ export function NestingPage() {
                         bus={orbitBus}
                       />
                       {twoPane && <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>}
+                      <ViewCube bus={orbitBus} className="absolute right-3 top-3 z-10 h-28 w-28" />
                     </div>
                     {!showMfgPane && !showStepPane && (
                       <div className="grid h-full place-items-center px-6 text-center">
@@ -897,18 +892,6 @@ export function NestingPage() {
                     )}
                   </div>
                 </Suspense>
-                <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur">
-                  {VIEW_PRESETS.map((preset) => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      onClick={() => requestView(orbitBus, preset.id)}
-                      className="rounded px-2 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                    >
-                      {t(preset.labelKey)}
-                    </button>
-                  ))}
-                </div>
                 {/* Always visible (unlike the first cut): manufactured / split / overlay disable
                     until the cut-beam build lands, so the Overlay option is discoverable while it
                     builds instead of appearing out of nowhere. */}

@@ -149,6 +149,26 @@ function mountScene(
   controls.dampingFactor = 0.08
   controls.zoomToCursor = true
   controls.target.copy(centre)
+
+  // Keep the orbit pivot on the beam's longitudinal centre line: pan may slide along the beam
+  // and cursor-zoom may try to move the target, but the pivot can never leave the line, so the
+  // beam's centre line always passes through the middle of the viewport.
+  const axisLimit = stockLength / 2
+  const axisY = centre.y
+  const axisZ = centre.z
+  const confinePivot = (): void => {
+    const x = Math.max(-axisLimit, Math.min(axisLimit, controls.target.x))
+    const dx = x - controls.target.x
+    const dy = axisY - controls.target.y
+    const dz = axisZ - controls.target.z
+    if (dx === 0 && dy === 0 && dz === 0) return
+    controls.target.set(x, axisY, axisZ)
+    camera.position.x += dx
+    camera.position.y += dy
+    camera.position.z += dz
+  }
+  controls.addEventListener('change', confinePivot)
+
   const detachOrbit = attachOrbit(bus, camera, controls, {
     centre: [centre.x, centre.y, centre.z],
     distance,
@@ -182,6 +202,7 @@ function mountScene(
     cancelAnimationFrame(raf)
     observer.disconnect()
     detachOrbit()
+    controls.removeEventListener('change', confinePivot)
     controls.dispose()
     for (const line of lines) line.geometry.dispose()
     for (const material of materials) material.dispose()

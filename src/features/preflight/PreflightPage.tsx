@@ -34,7 +34,7 @@ import { downloadBlob, downloadText } from '@/lib/download'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
-import { resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
+import { partSectionForCode, resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
 import { cleanStep } from '@/lib/step/clean'
 import {
   compareModels,
@@ -48,7 +48,9 @@ import { locateSabreStations, type SabreStation, specifiedBevelAngle } from '@/l
 import { getStepWorkerPool, PRIORITY_FOREGROUND, prebootStepWorkers } from '@/lib/step/stepPool'
 import { clearViewerModels, meshForViewer, reconstructForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
-import { createOrbitBus, requestView, type ViewPreset } from './orbitSync'
+import { DrawingViewer } from './DrawingViewer'
+import { createOrbitBus } from './orbitSync'
+import { ViewCube } from './ViewCube'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 
@@ -63,13 +65,6 @@ const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [
   { labelKey: 'preflight.columns.qty', key: 'qty' },
   { labelKey: 'preflight.columns.profile', key: 'profile' },
   { labelKey: 'preflight.columns.model', key: 'model' },
-]
-
-const VIEW_PRESETS: { id: ViewPreset; labelKey: string }[] = [
-  { id: 'iso', labelKey: 'preflight.viewer.iso' },
-  { id: 'front', labelKey: 'preflight.viewer.front' },
-  { id: 'top', labelKey: 'preflight.viewer.top' },
-  { id: 'side', labelKey: 'preflight.viewer.side' },
 ]
 
 /** How the 3D area shows the manufactured (NC) model against the STEP model. */
@@ -247,17 +242,7 @@ export function PreflightPage() {
     }
   }, [viewing, bytesByPath])
 
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null)
-  useEffect(() => {
-    const bytes = viewing?.pdf ? bytesByPath.get(viewing.pdf.path) : undefined
-    if (!bytes) {
-      setPdfUrl(null)
-      return
-    }
-    const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/pdf' }))
-    setPdfUrl(url)
-    return () => URL.revokeObjectURL(url)
-  }, [viewing, bytesByPath])
+  const viewingPdfBytes = viewing?.pdf ? bytesByPath.get(viewing.pdf.path) : undefined
 
   const [stepOverrides, setStepOverrides] = useState<Map<string, StepOverride>>(new Map())
   const [fixingMark, setFixingMark] = useState<string | null>(null)
@@ -274,6 +259,12 @@ export function PreflightPage() {
     () => (ncBytes ? parseNcGeometry(new TextDecoder().decode(ncBytes)) : null),
     [ncBytes],
   )
+  // The exact (un-inflated) section the NC was matched against, so the projected toolpath lands
+  // on the real manufactured surface rather than the inflated ghost outline.
+  const viewingNcSection = useMemo(() => {
+    if (!viewing?.nc) return null
+    return partSectionForCode(viewing.nc.profile, viewing.nc.dimensions ?? [])?.points ?? null
+  }, [viewing])
 
   // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
   const [viewMode, setViewMode] = useState<ViewMode>('split')
@@ -1417,10 +1408,11 @@ export function PreflightPage() {
             </div>
           ) : undefined
         }
-        className="h-[90vh] max-w-[96vw]"
+        fullscreen
       >
         {viewing && (viewing.step || viewing.nc) && (
-          <div className="flex h-full flex-col">
+          <div className="flex h-full min-h-0 flex-col">
+            <PartSummary part={viewing} material={drawingMaterials.get(viewing.mark)} />
             <ViewerWarnings
               findings={viewerFindings}
               step={viewing.step}
@@ -1460,6 +1452,7 @@ export function PreflightPage() {
                           sabreFailures={viewerSabreFailures}
                           sabreBevelAngle={viewerSabreBevelAngle}
                           nc={viewingNcGeom}
+                          ncSection={viewingNcSection}
                           smoothLines
                         />
                       ) : (
@@ -1496,6 +1489,7 @@ export function PreflightPage() {
                         />
                       ) : null}
                       {twoPane && <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>}
+                      <ViewCube bus={orbitBus} className="absolute right-3 top-3 z-10 h-28 w-28" />
                     </div>
                     {!showMfgPane && !showStepPane && (
                       <div className="grid h-full place-items-center px-6 text-center">
@@ -1506,18 +1500,6 @@ export function PreflightPage() {
                     )}
                   </div>
                 </Suspense>
-                <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur">
-                  {VIEW_PRESETS.map((preset) => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      onClick={() => requestView(orbitBus, preset.id)}
-                      className="rounded px-2 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                    >
-                      {t(preset.labelKey)}
-                    </button>
-                  ))}
-                </div>
                 {hasManufactured && (
                   <div className="absolute bottom-3 left-3 z-10 flex gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur">
                     {VIEW_MODES.map((mode) => {
@@ -1545,40 +1527,16 @@ export function PreflightPage() {
                   </div>
                 )}
               </div>
-              <div className="flex h-[40vh] w-full shrink-0 flex-col border-t border-border">
-                <div className="min-h-0 flex-1 overflow-hidden">
-                  {pdfUrl ? (
-                    <iframe
-                      title={`${viewing.mark} drawing`}
-                      src={pdfUrl}
-                      className="h-full w-full border-0"
-                    />
-                  ) : (
-                    <div className="grid h-full place-items-center text-sm text-muted-foreground">
-                      {t('preflight.viewer.noDrawing')}
-                    </div>
-                  )}
-                </div>
+              <div className="w-full shrink-0 border-t border-border">
+                {viewingPdfBytes ? (
+                  <DrawingViewer bytes={viewingPdfBytes} />
+                ) : (
+                  <div className="grid h-[clamp(14rem,40vh,32rem)] place-items-center text-sm text-muted-foreground">
+                    {t('preflight.viewer.noDrawing')}
+                  </div>
+                )}
               </div>
             </div>
-            {stock && (
-              <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-2 text-xs text-muted-foreground">
-                <span
-                  className="inline-block size-3 rounded-sm border"
-                  style={{
-                    borderColor: '#3ddc84',
-                    background: 'rgba(61, 220, 132, 0.18)',
-                  }}
-                />
-                {stock.mass
-                  ? t('preflight.viewer.greenOutlineMass', {
-                      label: stock.label,
-                      mass: stock.mass.toFixed(1),
-                    })
-                  : t('preflight.viewer.greenOutline', { label: stock.label })}
-              </div>
-            )}
-            <PartMeta part={viewing} material={drawingMaterials.get(viewing.mark)} />
           </div>
         )}
       </Dialog>
@@ -1586,29 +1544,26 @@ export function PreflightPage() {
   )
 }
 
-function PartMeta({ part, material }: { part: PartRecord; material?: DrawingMaterial }) {
+function PartSummary({ part, material }: { part: PartRecord; material?: DrawingMaterial }) {
   const { t } = useTranslation()
-  const pdfLength = material?.length ?? part.expected?.length ?? null
-  const pdfQty = material?.qty ?? part.expected?.qty ?? null
-  const rows: [string, string][] = [
-    [t('preflight.meta.file'), part.step?.path.split('/').pop() ?? '—'],
-    [t('preflight.meta.profile'), part.nc?.profile ?? part.expected?.profile ?? '—'],
-    [t('preflight.meta.ncLength'), part.nc?.length != null ? `${part.nc.length} mm` : '—'],
-    [t('preflight.meta.pdfLength'), pdfLength != null ? `${pdfLength} mm` : '—'],
-    [t('preflight.meta.ncQty'), part.nc?.quantity != null ? String(part.nc.quantity) : '—'],
-    [t('preflight.meta.pdfQty'), pdfQty != null ? String(pdfQty) : '—'],
-    [t('preflight.meta.schema'), part.step?.schema ?? '—'],
-    [t('preflight.meta.entities'), part.step ? part.step.entityCount.toLocaleString() : '—'],
+  const profile = part.nc?.profile ?? part.expected?.profile ?? '—'
+  const qty = material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
+  const length = material?.length ?? part.expected?.length ?? part.nc?.length ?? null
+  const stats: [string, string][] = [
+    [t('preflight.columns.profile'), profile],
+    [t('preflight.columns.qty'), qty != null ? String(qty) : '—'],
+    [t('preflight.meta.length'), length != null ? `${length} mm` : '—'],
   ]
   return (
-    <dl className="grid shrink-0 grid-cols-2 gap-x-6 gap-y-2 border-t border-border px-5 py-4 text-sm sm:grid-cols-3">
-      {rows.map(([label, value]) => (
-        <div key={label} className="flex flex-col gap-0.5">
-          <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
-          <dd className="font-mono text-xs break-words">{value}</dd>
-        </div>
+    <div className="flex shrink-0 flex-wrap items-baseline gap-x-5 gap-y-1 border-b border-border bg-card px-5 py-2">
+      <span className="text-sm font-semibold">{part.mark}</span>
+      {stats.map(([label, value]) => (
+        <span key={label} className="flex items-baseline gap-1.5 text-xs">
+          <span className="uppercase tracking-wide text-muted-foreground">{label}</span>
+          <span className="font-mono text-sm">{value}</span>
+        </span>
       ))}
-    </dl>
+    </div>
   )
 }
 

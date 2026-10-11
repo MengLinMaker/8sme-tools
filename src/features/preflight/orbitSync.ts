@@ -14,6 +14,9 @@ export interface OrbitState {
 /** Named viewing angles for quick technical comparison. */
 export type ViewPreset = 'iso' | 'front' | 'top' | 'side'
 
+/** An arbitrary view direction (from the target toward the camera), one of the 26 cube faces. */
+export type ViewDirection = [number, number, number]
+
 /** A viewport's fitted frame, used to place preset cameras. */
 export interface OrbitFrame {
   centre: [number, number, number]
@@ -23,18 +26,43 @@ export interface OrbitFrame {
 export interface OrbitBus {
   orbit: OrbitState | null
   preset: ViewPreset | null
+  direction: ViewDirection | null
   listeners: Set<(orbit: OrbitState) => void>
   presetListeners: Set<(preset: ViewPreset) => void>
+  directionListeners: Set<(dir: ViewDirection) => void>
 }
 
 export function createOrbitBus(): OrbitBus {
-  return { orbit: null, preset: null, listeners: new Set(), presetListeners: new Set() }
+  return {
+    orbit: null,
+    preset: null,
+    direction: null,
+    listeners: new Set(),
+    presetListeners: new Set(),
+    directionListeners: new Set(),
+  }
 }
 
 /** Broadcasts a named view angle to every locked viewport (and remembers it for late mounts). */
 export function requestView(bus: OrbitBus, preset: ViewPreset): void {
   bus.preset = preset
+  bus.direction = null
   for (const listener of bus.presetListeners) listener(preset)
+}
+
+/** Broadcasts an arbitrary view direction (view-cube faces/edges/corners). */
+export function requestDirection(bus: OrbitBus, direction: ViewDirection): void {
+  bus.direction = direction
+  bus.preset = null
+  for (const listener of bus.directionListeners) listener(direction)
+}
+
+/** Broadcasts a full camera orbit (view-cube dragging), preserving distance and zoom. */
+export function requestOrbit(bus: OrbitBus, orbit: OrbitState): void {
+  bus.orbit = orbit
+  bus.preset = null
+  bus.direction = null
+  for (const listener of bus.listeners) listener(orbit)
 }
 
 const EPSILON = 0.001
@@ -93,12 +121,13 @@ export function attachOrbit(
     }
     bus.orbit = orbit
     bus.preset = null
+    bus.direction = null
     for (const listener of bus.listeners) if (listener !== apply) listener(orbit)
   }
 
-  const applyPreset = (preset: ViewPreset): void => {
-    const [dx, dy, dz] = PRESET_DIRECTION[preset]
-    const length = Math.hypot(dx, dy, dz)
+  const applyDirection = (direction: ViewDirection): void => {
+    const [dx, dy, dz] = direction
+    const length = Math.hypot(dx, dy, dz) || 1
     const orbit: OrbitState = {
       position: [
         frame.centre[0] + (dx / length) * frame.distance,
@@ -113,16 +142,21 @@ export function attachOrbit(
     for (const listener of bus.listeners) if (listener !== apply) listener(orbit)
   }
 
+  const applyPreset = (preset: ViewPreset): void => applyDirection(PRESET_DIRECTION[preset])
+
   controls.enableDamping = false
   controls.addEventListener('change', onChange)
   bus.listeners.add(apply)
   bus.presetListeners.add(applyPreset)
+  bus.directionListeners.add(applyDirection)
   if (bus.orbit) apply(bus.orbit)
+  else if (bus.direction) applyDirection(bus.direction)
   else if (bus.preset) applyPreset(bus.preset)
 
   return () => {
     controls.removeEventListener('change', onChange)
     bus.listeners.delete(apply)
     bus.presetListeners.delete(applyPreset)
+    bus.directionListeners.delete(applyDirection)
   }
 }
