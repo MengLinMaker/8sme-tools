@@ -240,7 +240,9 @@ describe('NW31 issue parts', () => {
           const m = q.flagFar(madeSoup.vertices, madeSoup.triangles)
           const qm = createMeshQuery(madeSoup.vertices, madeSoup.triangles, tol)
           const s = qm.flagFar(stepSoup.vertices, stepSoup.triangles)
-          farLine.push(`${tol}mm:made ${(diffFraction(m) * 100).toFixed(0)}%/step ${(diffFraction(s) * 100).toFixed(0)}%`)
+          farLine.push(
+            `${tol}mm:made ${(diffFraction(m) * 100).toFixed(0)}%/step ${(diffFraction(s) * 100).toFixed(0)}%`,
+          )
         }
         // Same, but a triangle is flagged only when the MAJORITY of a spread of samples is far —
         // the fix for one stray corner painting a whole coarse face.
@@ -250,7 +252,9 @@ describe('NW31 issue parts', () => {
           const m = q.flagFarBySamples(madeSoup.vertices, madeSoup.triangles)
           const qm = createMeshQuery(madeSoup.vertices, madeSoup.triangles, tol)
           const s = qm.flagFarBySamples(stepSoup.vertices, stepSoup.triangles)
-          sampleLine.push(`${tol}mm:made ${(diffFraction(m) * 100).toFixed(0)}%/step ${(diffFraction(s) * 100).toFixed(0)}%`)
+          sampleLine.push(
+            `${tol}mm:made ${(diffFraction(m) * 100).toFixed(0)}%/step ${(diffFraction(s) * 100).toFixed(0)}%`,
+          )
         }
 
         const a = booleanDiff(soups(made), soups(step), I, I)
@@ -268,15 +272,9 @@ describe('NW31 issue parts', () => {
         const mf = manifoldBooleanDiff(top, soups(made), soups(step), I, I)
         const occLine: string[] = []
         for (const f of [0.1, 0.3, 0.5, 1]) {
-          const o = await occFuzzyDiff(
-            new TextEncoder().encode(built.step),
-            stepBytes,
-            I,
-            I,
-            f,
-          )
+          const o = await occFuzzyDiff(new TextEncoder().encode(built.step), stepBytes, I, I, f)
           occLine.push(
-            `${f}:over=${o ? o.overVolume.toFixed(0) : '-'}/under=${o ? o.underVolume.toFixed(0) : '-'}/t${o ? (Math.floor((o.over?.getAttribute('position').count ?? 0) / 3) + Math.floor((o.under?.getAttribute('position').count ?? 0) / 3)) : 0}`,
+            `${f}:over=${o ? o.overVolume.toFixed(0) : '-'}/under=${o ? o.underVolume.toFixed(0) : '-'}/t${o ? Math.floor((o.over?.getAttribute('position').count ?? 0) / 3) + Math.floor((o.under?.getAttribute('position').count ?? 0) / 3) : 0}`,
           )
         }
         const dFlagged = d ? Math.floor((d.overDistance.length + d.underDistance.length) * 1) : 0

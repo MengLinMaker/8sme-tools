@@ -1,5 +1,5 @@
 import { BufferGeometry, Float32BufferAttribute, type Matrix4 } from 'three'
-import { type BooleanDiff, type DiffSoup } from './booleanDiff'
+import type { BooleanDiff, DiffSoup } from './booleanDiff'
 import { meshStepFile } from './mesh'
 import { ensureOc } from './occInit'
 
@@ -100,8 +100,7 @@ export async function occFuzzyDiff(
   // The OCC instance is untyped in the bindings; the boolean classes are used directly.
   const oc = getOC() as any
 
-  const toBlob = (bytes: Uint8Array) =>
-    new Blob([new Uint8Array(bytes)], { type: 'model/step' })
+  const toBlob = (bytes: Uint8Array) => new Blob([new Uint8Array(bytes)], { type: 'model/step' })
   const primary = (await importSTEP(toBlob(primaryBytes))) as unknown as OcShape
   const compare = (await importSTEP(toBlob(compareBytes))) as unknown as OcShape
   try {
