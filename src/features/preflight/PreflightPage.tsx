@@ -76,6 +76,24 @@ function findingLocationOf(finding: Finding): number | null {
   return typeof raw === 'number' ? raw : null
 }
 
+/** Finding codes the viewer draws a 3D cut marker for (and hence the eye can toggle). */
+const VISUALISABLE_CODES = new Set(['CUT_DEPTH', 'CUT_CORNER'])
+
+/**
+ * Whether the viewer can point at this finding in 3D. Only the profile cut checks carry a marker
+ * `index`; audit/drawing findings (length mismatch, stray bodies, …) have no geometry to show, so
+ * they get no eye toggle.
+ */
+function isVisualisable(finding: Finding): boolean {
+  return VISUALISABLE_CODES.has(finding.code) && typeof finding.params?.index === 'number'
+}
+
+/** The viewer marker index a finding points at, or null when it has none. */
+function markerIndexOf(finding: Finding): number | null {
+  const raw = finding.params?.index
+  return typeof raw === 'number' ? raw : null
+}
+
 /** How many drawings to parse at once. Matches the pdf.js worker pool size. */
 const CONCURRENCY = 6
 
@@ -1042,12 +1060,17 @@ export function PreflightPage() {
         : 'drawing',
     )
   }, [viewing, allFindings])
-  /** Indices of the issues whose sub-cuts are shown in the 3D (row toggled on). */
+  /** Marker indices whose sub-cuts are shown in the 3D (row toggled on). */
   const visibleSpans = useMemo(
-    () => viewerFindings.map((_, index) => index).filter((index) => shownIssues.has(index)),
+    () =>
+      viewerFindings
+        .map((finding, index) => ({ finding, index }))
+        .filter(({ index }) => shownIssues.has(index))
+        .map(({ finding }) => markerIndexOf(finding))
+        .filter((value): value is number => value != null),
     [viewerFindings, shownIssues],
   )
-  /** Sub-cut index to glow in the 3D while its issue row is hovered (only `CUT_DEPTH` maps to one). */
+  /** Sub-cut index to glow in the 3D while its issue row is hovered (only cut checks map to one). */
   const highlightSpan = useMemo(() => {
     if (hoverIssueIndex == null) return null
     const index = viewerFindings[hoverIssueIndex]?.params?.index
@@ -1063,18 +1086,25 @@ export function PreflightPage() {
   }, [])
   const toggleAllIssues = useCallback(() => {
     setShownIssues((prev) =>
-      prev.size > 0 ? new Set() : new Set(viewerFindings.map((_, index) => index)),
+      prev.size > 0
+        ? new Set()
+        : new Set(
+            viewerFindings
+              .map((finding, index) => ({ finding, index }))
+              .filter(({ finding }) => isVisualisable(finding))
+              .map(({ index }) => index),
+          ),
     )
   }, [viewerFindings])
   /** Row click: toggle the issue's marker, and when turning it on, pan/zoom/rotate onto it. */
   const activateIssue = useCallback(
     (index: number) => {
       const finding = viewerFindings[index]
+      // Only findings with a 3D marker are interactive; the rest have no eye.
+      if (!finding || !isVisualisable(finding)) return
       const turningOn = !shownIssues.has(index)
       toggleIssue(index)
-      // Only issues that sit somewhere on the member move the view; others (CUT_STEP, audit
-      // findings) just toggle their marker so they never yank the camera.
-      if (turningOn && finding && findingLocationOf(finding) != null) focusFinding(finding)
+      if (turningOn && findingLocationOf(finding) != null) focusFinding(finding)
     },
     [viewerFindings, shownIssues, toggleIssue, focusFinding],
   )
@@ -2145,35 +2175,46 @@ function ViewerWarnings({
               const fixKind = fix && !resolved ? fixForFinding(finding.code) : null
               const fixable = Boolean(fixKind && fix && viewerFixAvailable(fix, fixKind))
               const action = fixKind && fix ? viewerFixAction(t, fix, fixKind) : null
+              // Only findings the viewer can point at in 3D get an eye toggle / are clickable.
+              const showable = isVisualisable(finding)
               return (
                 <TableRow
                   key={`${finding.code}-${finding.params?.index ?? finding.message}`}
-                  tabIndex={0}
-                  onClick={onToggleCheck ? () => onToggleCheck(index) : undefined}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      onToggleCheck?.(index)
-                    }
-                  }}
-                  className="cursor-pointer outline-none focus-visible:bg-accent/60"
-                  onMouseEnter={onHover ? () => onHover(index) : undefined}
-                  onMouseLeave={onHover ? () => onHover(null) : undefined}
+                  tabIndex={showable ? 0 : undefined}
+                  onClick={showable && onToggleCheck ? () => onToggleCheck(index) : undefined}
+                  onKeyDown={
+                    showable
+                      ? (event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            onToggleCheck?.(index)
+                          }
+                        }
+                      : undefined
+                  }
+                  className={cn(
+                    'outline-none focus-visible:bg-accent/60',
+                    showable && 'cursor-pointer',
+                  )}
+                  onMouseEnter={showable && onHover ? () => onHover(index) : undefined}
+                  onMouseLeave={showable && onHover ? () => onHover(null) : undefined}
                 >
                   <TableCell className="py-1">
-                    <span
-                      title={t('preflight.warnings.toggleIssue')}
-                      className={cn(
-                        'inline-flex rounded p-0.5',
-                        isChecked?.(index) ? 'text-primary' : 'text-muted-foreground',
-                      )}
-                    >
-                      {isChecked?.(index) ? (
-                        <Eye className="size-4" />
-                      ) : (
-                        <EyeOff className="size-4" />
-                      )}
-                    </span>
+                    {showable ? (
+                      <span
+                        title={t('preflight.warnings.toggleIssue')}
+                        className={cn(
+                          'inline-flex rounded p-0.5',
+                          isChecked?.(index) ? 'text-primary' : 'text-muted-foreground',
+                        )}
+                      >
+                        {isChecked?.(index) ? (
+                          <Eye className="size-4" />
+                        ) : (
+                          <EyeOff className="size-4" />
+                        )}
+                      </span>
+                    ) : null}
                   </TableCell>
                   <TableCell className="py-1">
                     <span

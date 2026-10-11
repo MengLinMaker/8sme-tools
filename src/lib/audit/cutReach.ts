@@ -442,12 +442,17 @@ export function assessCutReachGeometry(
         const worst = run.reduce((p, q) => (q.path > p.path ? q : p))
         const first = run[0] as Probe
         const last = run[run.length - 1] as Probe
-        const spanMm = Math.hypot(last.x - first.x, last.y - first.y)
+        // A corner risk implicates the whole cut line (any part of it can shift onto the curve),
+        // so mark the full edge; a reach/wall failure marks only its failing subsection.
+        const isCorner = worst.status === 'corner'
+        const from: [number, number] = isCorner ? [a[0], a[1]] : [first.x, first.y]
+        const to: [number, number] = isCorner ? [b[0], b[1]] : [last.x, last.y]
+        const spanMm = Math.hypot(to[0] - from[0], to[1] - from[1])
         const failure: CutReachFailure = {
-          reason: worst.status === 'wall' ? 'wall' : worst.status === 'corner' ? 'corner' : 'reach',
+          reason: worst.status === 'wall' ? 'wall' : isCorner ? 'corner' : 'reach',
           face,
-          from: [first.x, first.y],
-          to: [last.x, last.y],
+          from,
+          to,
           spanMm,
           x: worst.x,
           entry: worst.entry,

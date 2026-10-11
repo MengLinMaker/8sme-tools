@@ -99,6 +99,11 @@ const SABRE_HALO_OPACITY = 0.32
 const SABRE_HIGHLIGHT_WIDTH = 6
 /** The other markers dim to this while one is hovered, so the hovered one reads at a glance. */
 const SABRE_DIM_OPACITY = 0.2
+/**
+ * Length (mm) of the marker drawn for a failure that collapsed to a point — a corner-risk run can
+ * be a single sample (`from` == `to`), which would otherwise draw a zero-length, invisible line.
+ */
+const SABRE_TICK_MM = 4
 
 /** Builds one fat-line (Line2) object from a flat XYZ pair list, or null when there is nothing. */
 function ncLineObject(
@@ -609,10 +614,19 @@ function mountScene(
           // down (which would make the up-vector ambiguous).
           const faceDir = normal(failure.face)
           sabreDirections.push([faceDir[0] + 0.45, faceDir[1] + 0.45, faceDir[2] + 0.45])
-          const a = placeNcFace(frame, failure.face, failure.from[0], failure.from[1]).cross
-          const b = placeNcFace(frame, failure.face, failure.to[0], failure.to[1]).cross
-          const pA = toScene(failure.from[0], a, failure.face)
-          const pB = toScene(failure.to[0], b, failure.face)
+          // A failure can collapse to a point (a corner-risk run of a single sample). Draw a short
+          // tick along the member so it still reads in the 3D.
+          let from = failure.from
+          let to = failure.to
+          if (Math.hypot(to[0] - from[0], to[1] - from[1]) < 0.1) {
+            const half = SABRE_TICK_MM / 2
+            from = [failure.from[0] - half, failure.from[1]]
+            to = [failure.from[0] + half, failure.from[1]]
+          }
+          const a = placeNcFace(frame, failure.face, from[0], from[1]).cross
+          const b = placeNcFace(frame, failure.face, to[0], to[1]).cross
+          const pA = toScene(from[0], a, failure.face)
+          const pB = toScene(to[0], b, failure.face)
           const positions = [pA[0], pA[1], pA[2], pB[0], pB[1], pB[2]]
           const mark = ncLineObject(positions, SABRE_CUT_COLOR, ncResolution, ncMaterials, true)
           if (mark) {
