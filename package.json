@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Tools for 8 Star Metal Engineering - CNC tube laser workflow helpers",
   "scripts": {
-    "preinstall": "only-allow pnpm",
+    "preinstall": "npx only-allow pnpm",
     "dev": "vite",
     "generate": "tsr generate",
     "build": "tsr generate && tsc --noEmit && vite build",
