@@ -3,9 +3,15 @@ import { describe, expect, it } from 'vitest'
 import {
   booleanDiff,
   cachedBooleanDiff,
+  DIFF_ALPHA_FLOOR,
+  DIFF_ALPHA_FULL_MM,
+  DIFF_ALPHA_INTERFACE,
   type DiffSoup,
   diffAlpha,
   extractComponents,
+  KEEP_CLEAR_MM,
+  pruneThinSkin,
+  SKIN_MAX_THICKNESS_MM,
   toWorldSoup,
 } from './booleanDiff'
 
@@ -122,10 +128,36 @@ describe('boolean diff (STEP is ideal)', () => {
     expect(result?.underVolume ?? 0).toBeGreaterThan(100)
   })
 
-  it('trims a thin sheet to its far faces instead of drawing it whole', () => {
-    // Closed 20×20×0.2 box hovering over a table, one third lifted 2 mm: the
-    // sheet is thin, so only the lifted share renders — but the volume stays
-    // the component's own (signed sums over open patch shells are meaningless).
+  it('draws a kept component whole so the diff reads as a solid', () => {
+    // Closed 20×20×2 box hovering over a table, one third lifted 2 mm. The whole
+    // component renders now (far and near faces), so the volume closes into a solid
+    // instead of an open shell with a face missing. Volume stays the component's own.
+    const table = boxSoup(100, 100, 10)
+    const plate = new BoxGeometry(20, 20, 2, 16, 16, 1)
+    plate.translate(0, 0, 6.02)
+    const position = plate.getAttribute('position')
+    for (let v = 0; v < position.count; v++) {
+      if (position.getY(v) > 5) position.setZ(v, position.getZ(v) + 2)
+    }
+    const index = plate.getIndex()
+    const plateSoup: DiffSoup = {
+      vertices: Array.from(position.array as Float32Array),
+      triangles: index ? Array.from(index.array as Uint16Array | Uint32Array) : [],
+    }
+    const merged = toWorldSoup([table, plateSoup], IDENTITY)
+    const result = booleanDiff([merged], [table], IDENTITY, IDENTITY)
+    expect(result?.under).not.toBeNull()
+    expect(result?.underVolume ?? 0).toBeCloseTo(800, 0)
+    const under = result?.under
+    expect(under).not.toBeNull()
+    if (!under) return
+    expect(isClosed(under)).toBe(true)
+  })
+
+  it('drops the flush skin of a mostly-flat component', () => {
+    // Same idea as m128: a sheet that is almost entirely flush with the table (0.12 mm) with
+    // only a small share lifted 2 mm. Its surface is mostly interface, so it is a skin — only
+    // the proud faces draw, and the big sub-tolerance membrane never shows.
     const table = boxSoup(100, 100, 10)
     const plate = new BoxGeometry(20, 20, 0.2, 16, 16, 1)
     plate.translate(0, 0, 5.12)
@@ -138,14 +170,11 @@ describe('boolean diff (STEP is ideal)', () => {
       vertices: Array.from(position.array as Float32Array),
       triangles: index ? Array.from(index.array as Uint16Array | Uint32Array) : [],
     }
-    const fullTris = Math.floor(plateSoup.triangles.length / 3)
     const merged = toWorldSoup([table, plateSoup], IDENTITY)
     const result = booleanDiff([merged], [table], IDENTITY, IDENTITY)
     expect(result?.under).not.toBeNull()
-    expect(result?.underVolume ?? 0).toBeCloseTo(80, 0)
-    const drawnTris = Math.floor((result?.under?.getAttribute('position')?.count ?? 0) / 3)
-    expect(drawnTris).toBeGreaterThan(0)
-    expect(drawnTris).toBeLessThan(fullTris)
+    // Every drawn face stands proud — no interface faces survive in the skin.
+    expect((result?.underDistance ?? []).every((d) => d >= KEEP_CLEAR_MM)).toBe(true)
   })
 
   it('bails out over the triangle budget', () => {
@@ -183,6 +212,31 @@ function soupGeometry(soup: DiffSoup): BufferGeometry {
   return geometry
 }
 
+/** True when every edge is shared by exactly two triangles — i.e. the surface is a closed solid. */
+function isClosed(geometry: BufferGeometry): boolean {
+  const position = geometry.getAttribute('position')
+  const index = geometry.getIndex()
+  const triCount = Math.floor((index ? index.count : position.count) / 3)
+  const vertex = (i: number): number => (index ? index.getX(i) : i)
+  const key = (vi: number): string =>
+    `${position.getX(vi).toFixed(3)},${position.getY(vi).toFixed(3)},${position.getZ(vi).toFixed(3)}`
+  const edges = new Map<string, number>()
+  for (let t = 0; t < triCount; t++) {
+    const a = key(vertex(t * 3))
+    const b = key(vertex(t * 3 + 1))
+    const c = key(vertex(t * 3 + 2))
+    for (const [p, q] of [
+      [a, b],
+      [b, c],
+      [c, a],
+    ]) {
+      const k = p < q ? `${p}|${q}` : `${q}|${p}`
+      edges.set(k, (edges.get(k) ?? 0) + 1)
+    }
+  }
+  return [...edges.values()].every((n) => n === 2)
+}
+
 describe('extractComponents', () => {
   it('splits disjoint boxes into components with volumes', () => {
     const merged = toWorldSoup([boxSoup(10, 10, 10), boxSoup(5, 5, 5, 30, 0, 0)], IDENTITY)
@@ -214,13 +268,16 @@ describe('extractComponents', () => {
 })
 
 describe('diffAlpha', () => {
-  it('hides the thinnest fringe and saturates real cuts', () => {
-    expect(diffAlpha(0)).toBe(0)
-    expect(diffAlpha(1)).toBe(0)
-    const mid = diffAlpha(1.5)
-    expect(mid).toBeGreaterThan(0)
+  it('keeps small details visible and saturates real cuts', () => {
+    // The zero-clearance interface ghosts; a real detail at the clear bar reads.
+    expect(DIFF_ALPHA_INTERFACE).toBeGreaterThan(0)
+    expect(DIFF_ALPHA_INTERFACE).toBeLessThan(DIFF_ALPHA_FLOOR)
+    expect(diffAlpha(0)).toBe(DIFF_ALPHA_INTERFACE)
+    expect(diffAlpha(KEEP_CLEAR_MM)).toBe(DIFF_ALPHA_FLOOR)
+    const mid = diffAlpha((KEEP_CLEAR_MM + DIFF_ALPHA_FULL_MM) / 2)
+    expect(mid).toBeGreaterThan(DIFF_ALPHA_FLOOR)
     expect(mid).toBeLessThan(1)
-    expect(diffAlpha(2)).toBe(1)
+    expect(diffAlpha(DIFF_ALPHA_FULL_MM)).toBe(1)
     expect(diffAlpha(100)).toBe(1)
     // Monotonic: nearer never renders stronger than farther.
     let last = -1
@@ -229,5 +286,35 @@ describe('diffAlpha', () => {
       expect(a).toBeGreaterThanOrEqual(last)
       last = a
     }
+  })
+})
+
+describe('pruneThinSkin', () => {
+  it('drops a paper-thin opposite pair', () => {
+    const geometry = new BufferGeometry()
+    geometry.setAttribute(
+      'position',
+      new Float32BufferAttribute(
+        [
+          // A triangle at z=0 and its opposite 0.2 mm behind — a skin, no volume.
+          0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0.2, 0, 1, 0.2, 1, 0, 0.2,
+        ],
+        3,
+      ),
+    )
+    const { geometry: pruned, keep } = pruneThinSkin(geometry, SKIN_MAX_THICKNESS_MM)
+    expect(Array.from(keep)).toEqual([0, 0])
+    expect(pruned).toBeNull()
+  })
+
+  it('keeps a chunky solid', () => {
+    const { keep } = pruneThinSkin(new BoxGeometry(10, 10, 2), SKIN_MAX_THICKNESS_MM)
+    expect(Array.from(keep).every((k) => k === 1)).toBe(true)
+  })
+
+  it('strips a thin sheet but keeps its 10 mm side walls', () => {
+    const { keep } = pruneThinSkin(new BoxGeometry(10, 10, 0.2), SKIN_MAX_THICKNESS_MM)
+    const removed = Array.from(keep).filter((k) => k === 0).length
+    expect(removed).toBe(4) // the two 0.2 mm-apart z-faces (2 tris each)
   })
 })

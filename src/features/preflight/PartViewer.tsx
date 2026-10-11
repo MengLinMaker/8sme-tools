@@ -46,7 +46,7 @@ import {
 } from '@/lib/step/booleanDiff'
 import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
-import { type SabreFailure, sabreBoundary } from '@/lib/step/sabre'
+import type { SabreFailure } from '@/lib/step/sabre'
 import { meshForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { NcLegend } from './NcLegend'
@@ -81,6 +81,8 @@ const NC_COLOR = {
 
 /** NC toolpath line width in screen pixels (fat lines, so they read clearly over the model). */
 const NC_LINE_WIDTH = 3
+/** Bevel arrows within this many mm of a light-sabre failure are drawn red (uncuttable cut). */
+const DANGER_RADIUS = 18
 
 /** Builds one fat-line (Line2) object from a flat XYZ pair list, or null when there is nothing. */
 function ncLineObject(
@@ -104,26 +106,82 @@ function ncLineObject(
   return new LineSegments2(geometry, material)
 }
 
-/** Appends the four NC line sets to a scene as coloured fat lines, returning them for disposal. */
+/**
+ * Builds the NC line sets as coloured fat lines. Bevel arrows within `DANGER_RADIUS` of a
+ * light-sabre failure point are drawn red (an uncuttable cut) and returned separately.
+ */
 function addNcLines(
   nc: NcGeometry,
   projection: NcProjection,
   resolution: Vector2,
   materials: LineMaterial[],
-): LineSegments2[] {
+  dangerPoints: Vec3[] = [],
+): { lines: LineSegments2[]; danger: LineSegments2 | null } {
   const sets: NcLineSets = projectNc(nc, projection)
-  const entries: [number[], number][] = [
-    [sets.outer, NC_COLOR.outer],
-    [sets.bevel, NC_COLOR.bevel],
-    [sets.inner, NC_COLOR.inner],
-    [sets.holes, NC_COLOR.holes],
-  ]
   const lines: LineSegments2[] = []
-  for (const [points, color] of entries) {
+  const add = (points: number[], color: number): LineSegments2 | null => {
     const line = ncLineObject(points, color, resolution, materials)
     if (line) lines.push(line)
+    return line
   }
-  return lines
+  add(sets.outer, NC_COLOR.outer)
+  add(sets.inner, NC_COLOR.inner)
+  add(sets.holes, NC_COLOR.holes)
+  add(sets.bevel, NC_COLOR.bevel)
+  // Flag the specific cut section at each failure: the nearest point on the nearest cut segment
+  // gets a short red mark, so only the guilty span lights up (not the whole cut).
+  let danger: LineSegments2 | null = null
+  if (dangerPoints.length > 0) {
+    const segments = [...sets.outer, ...sets.bevel, ...sets.inner, ...sets.holes]
+    const marks: number[] = []
+    for (const dp of dangerPoints) {
+      let best = DANGER_RADIUS
+      let px = 0
+      let py = 0
+      let pz = 0
+      let ux = 1
+      let uy = 0
+      let uz = 0
+      for (let i = 0; i + 5 < segments.length; i += 6) {
+        const ax = segments[i]
+        const ay = segments[i + 1]
+        const az = segments[i + 2]
+        const ex = segments[i + 3] - ax
+        const ey = segments[i + 4] - ay
+        const ez = segments[i + 5] - az
+        const l2 = ex * ex + ey * ey + ez * ez || 1
+        let t = ((dp[0] - ax) * ex + (dp[1] - ay) * ey + (dp[2] - az) * ez) / l2
+        t = Math.max(0, Math.min(1, t))
+        const cx = ax + ex * t
+        const cy = ay + ey * t
+        const cz = az + ez * t
+        const d = Math.hypot(dp[0] - cx, dp[1] - cy, dp[2] - cz)
+        if (d < best) {
+          best = d
+          px = cx
+          py = cy
+          pz = cz
+          const length = Math.sqrt(l2)
+          ux = ex / length
+          uy = ey / length
+          uz = ez / length
+        }
+      }
+      if (best < DANGER_RADIUS) {
+        const half = 5
+        marks.push(
+          px - ux * half,
+          py - uy * half,
+          pz - uz * half,
+          px + ux * half,
+          py + uy * half,
+          pz + uz * half,
+        )
+      }
+    }
+    danger = add(marks, SABRE_CUT_COLOR)
+  }
+  return { lines, danger }
 }
 
 /** Formats a 0–1 fraction as a percentage, keeping a decimal for tiny-but-nonzero shares. */
@@ -463,6 +521,8 @@ function mountScene(
   const ncObjects: LineSegments2[] = []
   const ncMaterials: LineMaterial[] = []
   const ncResolution = new Vector2(container.clientWidth || 1, container.clientHeight || 1)
+  // Red bevel arrows at uncuttable cuts (light-sabre failures) — toggled as one object.
+  const sabreObjects: LineSegments2[] = []
   const extents = [size.x, size.y, size.z]
   const nativeLongAxis = extents.indexOf(Math.max(...extents))
   const length = extents[nativeLongAxis]
@@ -518,14 +578,27 @@ function mountScene(
         const base = n.axis === 0 ? xAxis : yAxis
         return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
       }
-      for (const line of addNcLines(
+      const dangerPoints: Vec3[] = sabre
+        ? sabre.map((failure) => {
+            const point = new Vector3(failure.point[0], failure.point[1], failure.point[2])
+            point.applyMatrix4(primary.group.matrixWorld)
+            return [point.x, point.y, point.z]
+          })
+        : []
+      const built = addNcLines(
         nc,
         { frame, section, toScene, normal },
         ncResolution,
         ncMaterials,
-      )) {
+        dangerPoints,
+      )
+      for (const line of built.lines) {
         scene.add(line)
         ncObjects.push(line)
+      }
+      if (built.danger) {
+        scene.add(built.danger)
+        sabreObjects.push(built.danger)
       }
     }
   }
@@ -555,7 +628,7 @@ function mountScene(
         { frame, section: beam.profile, toScene, normal },
         ncResolution,
         ncMaterials,
-      )) {
+      ).lines) {
         scene.add(line)
         ncObjects.push(line)
       }
@@ -764,43 +837,8 @@ function mountScene(
   }
   if (!deferDiff) runDiff()
 
-  // Light-sabre overlay: red cut lines tracing the guilty patch perimeter. Only boundary
-  // edges draw — shared internal diagonals are dropped, so a tiled patch reads as one loop,
-  // not a hatch. The bevel itself is a side cut line with a specified angle (kept in the NC
-  // weld-prep data and shown as a label), never a face-normal arrow. Local coordinates,
-  // parented to the seated primary group so the marks follow the model. Depth test off +
-  // high render order, so the guilty lines read through the solid.
-  const sabreObjects: LineSegments[] = []
-  if (sabre && sabre.length > 0) {
-    const biggest = [...sabre].sort((a, b) => b.area - a.area).slice(0, 200)
-    const cutPts: number[] = []
-    for (const edge of sabreBoundary(biggest)) {
-      const n = edge.normal
-      // Nudge just off the surface along the outward normal so lines never z-fight.
-      const off = (p: [number, number, number]): [number, number, number] => [
-        p[0] + n[0] * 0.15,
-        p[1] + n[1] * 0.15,
-        p[2] + n[2] * 0.15,
-      ]
-      cutPts.push(...off(edge.a), ...off(edge.b))
-    }
-    if (cutPts.length > 0) {
-      const lineGeometry = new BufferGeometry()
-      lineGeometry.setAttribute('position', new Float32BufferAttribute(cutPts, 3))
-      const lineMaterial = new LineBasicMaterial({
-        color: SABRE_CUT_COLOR,
-        depthTest: false,
-        depthWrite: false,
-        transparent: true,
-        opacity: 0.95,
-      })
-      const lines = new LineSegments(lineGeometry, lineMaterial)
-      lines.renderOrder = 11
-      primary.group.add(lines)
-      sabreObjects.push(lines)
-      materials.push(lineMaterial)
-    }
-  }
+  // An uncuttable cut (light-sabre failure) is shown as a red error arrow on its bevel — built in
+  // `addNcLines` and collected into `sabreObjects` — not as a red surface patch.
 
   const maxDim = Math.max(fitSize.x, fitSize.y, fitSize.z) || 1
   // Cover the model's bounding-box diagonal, so it is never cropped at any preset view or
@@ -924,8 +962,9 @@ function mountScene(
         ;(line.material as LineMaterial).dispose()
       }
       for (const lines of sabreObjects) {
-        primary.group.remove(lines)
+        scene.remove(lines)
         lines.geometry.dispose()
+        ;(lines.material as LineMaterial).dispose()
       }
       for (const material of materials) material.dispose()
       for (const overlay of overlays) {
@@ -997,7 +1036,6 @@ export default function PartViewer({
   highlightStray = false,
   smoothLines: smoothModelLines = false,
   sabreFailures = null,
-  sabreBevelAngle = null,
   nc = null,
   ncSection = null,
   showNcLegend = true,
@@ -1273,17 +1311,6 @@ export default function PartViewer({
             style={{ background: 'rgba(255, 43, 43, 0.65)' }}
           />
           <span className="text-red-300">{t('viewer.sabreCut')}</span>
-          {sabreBevelAngle != null && (
-            <>
-              <span
-                className="inline-block size-3 rounded-sm border border-amber-400"
-                style={{ background: 'rgba(251, 191, 36, 0.65)' }}
-              />
-              <span className="text-amber-300">
-                {t('viewer.sabreBevelAngle', { angle: sabreBevelAngle })}
-              </span>
-            </>
-          )}
         </div>
       )}
       {hasNc && showNcLegend && (

@@ -13,7 +13,7 @@
  * `normal` for orienting bevel spurs.
  */
 
-import { materialReaches, type NcFaceFrame, placeNcFace } from './ncFaces'
+import { faceHalf, faceSpanAxis, materialReaches, type NcFaceFrame, placeNcFace } from './ncFaces'
 import type { NcFace, NcGeometry } from './ncGeometry'
 
 export type Vec3 = [number, number, number]
@@ -46,6 +46,45 @@ const HOLE_STEPS = 24
 
 /** Default spur length (mm) shown for an angle-only bevel that carries no distance. */
 const DEFAULT_BEVEL_SPUR = 3
+
+/** Bevel arrowhead size (mm) and spacing along the cut line (mm). */
+const ARROW_SIZE = 5
+const ARROW_SPACING = 40
+/** A bevel within this many degrees of the surface normal is a plain (regular) cut — no arrow. */
+const REGULAR_CUT_DEG = 8
+
+function normalize(v: Vec3): Vec3 {
+  const length = Math.hypot(v[0], v[1], v[2]) || 1
+  return [v[0] / length, v[1] / length, v[2] / length]
+}
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/**
+ * A stemmed arrow. The stem runs from the cut line outward along `dir`; the head sits at the cut
+ * line and points back inward (against `dir`) along the same line.
+ */
+function arrow(target: number[], at: Vec3, dir: Vec3, spread: Vec3, size: number): void {
+  const stem = size * 2
+  const tail: Vec3 = [at[0] + dir[0] * stem, at[1] + dir[1] * stem, at[2] + dir[2] * stem]
+  push(target, at, tail)
+  const half = size * 0.5
+  const bx = at[0] + dir[0] * size
+  const by = at[1] + dir[1] * size
+  const bz = at[2] + dir[2] * size
+  push(target, at, [bx + spread[0] * half, by + spread[1] * half, bz + spread[2] * half])
+  push(target, at, [bx - spread[0] * half, by - spread[1] * half, bz - spread[2] * half])
+}
+
+/** Signed bevel angle (degrees) at a vertex — the larger-magnitude of its two angle/distance pairs. */
+function bevelAngle(bevel: number[] | undefined): number {
+  if (!bevel) return 0
+  const a0 = bevel[0] ?? 0
+  const a1 = bevel[2] ?? 0
+  return Math.abs(a0) >= Math.abs(a1) ? a0 : a1
+}
 
 /** Bevel distance to draw for a vertex, or 0 when the vertex is a plain cut. */
 function bevelDistance(bevel: number[] | undefined): number {
@@ -89,24 +128,63 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
         materialReaches(frame, section, contour.face, a.point.cross) ||
         materialReaches(frame, section, contour.face, b.point.cross)
       if (!reached) continue
+      // A segment lying along the stock's own edge (the section boundary, both ends at the same
+      // span extreme) removes nothing either — it's the raw-stock outline, not a cut.
+      const span = faceSpanAxis(frame, contour.face)
+      const halfSpan = faceHalf(frame, span)
+      const ca = a.point.cross[span]
+      const cb = b.point.cross[span]
+      if (
+        Math.sign(ca) === Math.sign(cb) &&
+        Math.abs(Math.abs(ca) - halfSpan) < 0.5 &&
+        Math.abs(Math.abs(cb) - halfSpan) < 0.5
+      ) {
+        continue
+      }
       const d0 = bevelDistance(contour.bevels[i])
       const d1 = bevelDistance(contour.bevels[i + 1])
-      if (d0 > 0 || d1 > 0) {
-        push(bevel, a.world, b.world)
-        if (d0 > 0)
-          push(bevel, a.world, [
-            a.world[0] + spur[0] * d0,
-            a.world[1] + spur[1] * d0,
-            a.world[2] + spur[2] * d0,
-          ])
-        if (d1 > 0)
-          push(bevel, b.world, [
-            b.world[0] + spur[0] * d1,
-            b.world[1] + spur[1] * d1,
-            b.world[2] + spur[2] * d1,
-          ])
-      } else {
+      if (d0 <= 0 && d1 <= 0) {
         push(outer, a.world, b.world)
+        continue
+      }
+      push(bevel, a.world, b.world)
+
+      // The cut face is tilted off the surface normal by the bevel angle; show that tilt with an
+      // arrow perpendicular to the cut line (in the plane of the normal), plotted periodically.
+      // A bevel within REGULAR_CUT_DEG of the normal is just a plain cut — no arrow.
+      const deg =
+        Math.abs(bevelAngle(contour.bevels[i])) >= Math.abs(bevelAngle(contour.bevels[i + 1]))
+          ? bevelAngle(contour.bevels[i])
+          : bevelAngle(contour.bevels[i + 1])
+      if (Math.abs(deg) < REGULAR_CUT_DEG) continue
+      const line = normalize([
+        b.world[0] - a.world[0],
+        b.world[1] - a.world[1],
+        b.world[2] - a.world[2],
+      ])
+      const perp = normalize(cross(spur, line))
+      const theta = (Math.abs(deg) * Math.PI) / 180
+      const side = deg >= 0 ? -1 : 1
+      // Outward tilt from the surface normal: at 0° it is the normal (regular), grows toward perp.
+      const dir = normalize([
+        spur[0] * Math.cos(theta) + perp[0] * Math.sin(theta) * side,
+        spur[1] * Math.cos(theta) + perp[1] * Math.sin(theta) * side,
+        spur[2] * Math.cos(theta) + perp[2] * Math.sin(theta) * side,
+      ])
+      const length = Math.hypot(
+        b.world[0] - a.world[0],
+        b.world[1] - a.world[1],
+        b.world[2] - a.world[2],
+      )
+      const count = Math.max(1, Math.round(length / ARROW_SPACING))
+      for (let k = 1; k <= count; k++) {
+        const t = k / (count + 1)
+        const at: Vec3 = [
+          a.world[0] + (b.world[0] - a.world[0]) * t,
+          a.world[1] + (b.world[1] - a.world[1]) * t,
+          a.world[2] + (b.world[2] - a.world[2]) * t,
+        ]
+        arrow(bevel, at, dir, line, ARROW_SIZE)
       }
     }
   }

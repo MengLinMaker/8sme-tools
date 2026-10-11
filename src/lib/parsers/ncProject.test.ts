@@ -59,13 +59,14 @@ describe('projectNc', () => {
   it('splits plain cuts, bevels, inner cut-outs and holes into their own lists', () => {
     const nc: NcGeometry = {
       contours: [
-        // Only segment is beveled at the second vertex (angle-only → default spur).
+        // Only segment is beveled at the second vertex (angle-only → default spur). Kept clear of
+        // the section edge (across = 50 → interior) so it isn't dropped as stock outline.
         {
           face: 'o',
           kind: 'outer',
           points: [
-            [0, 0],
-            [10, 0],
+            [0, 50],
+            [10, 50],
           ],
           bevels: [
             [0, 0, 0, 0],
@@ -92,8 +93,8 @@ describe('projectNc', () => {
     }
     const out = projectNc(nc, { frame, section, toScene, normal })
     expect(out.outer).toHaveLength(0)
-    // One beveled segment + one spur from the beveled vertex.
-    expect(out.bevel).toHaveLength(2 * 2 * 3)
+    // The beveled segment plus one stemmed arrow (stem + two head arms = 3 segments more).
+    expect(out.bevel).toHaveLength(4 * 2 * 3)
     expect(out.inner).toHaveLength(2 * 2 * 3)
     expect(out.holes).toHaveLength(24 * 2 * 3)
   })

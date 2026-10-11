@@ -1,5 +1,7 @@
+import { PlaneGeometry } from 'three'
 import { describe, expect, it } from 'vitest'
 import {
+  closeDiffMask,
   computeDiffMasks,
   createMeshQuery,
   diffFraction,
@@ -80,5 +82,62 @@ describe('mesh diff highlighting', () => {
     // Same answers as the one-shot comparison.
     const direct = computeDiffMasks(CUBE_VERTS, CUBE_TRIS, moved, CUBE_TRIS, 1.5)
     expect([...query.flagFar(moved, CUBE_TRIS)]).toEqual([...direct.bDiff])
+  })
+})
+
+describe('computeDiffMasks sampling modes', () => {
+  const plane = {
+    vertices: [-100, -100, 0, 100, -100, 0, 100, 100, 0, -100, 100, 0],
+    triangles: [0, 1, 2, 0, 2, 3],
+  }
+  // A face lying on the plane except one corner lifted 2 mm (tolerance 1 mm).
+  const tri = { vertices: [0, 0, 0, 10, 0, 0, 0, 10, 2], triangles: [0, 1, 2] }
+
+  it('vertex mode flags a face with a single far corner', () => {
+    const { aDiff } = computeDiffMasks(
+      tri.vertices,
+      tri.triangles,
+      plane.vertices,
+      plane.triangles,
+      1,
+      'vertex',
+    )
+    expect(aDiff[0]).toBe(1)
+  })
+
+  it('samples mode spares a face that is mostly flush', () => {
+    const { aDiff } = computeDiffMasks(
+      tri.vertices,
+      tri.triangles,
+      plane.vertices,
+      plane.triangles,
+      1,
+      'samples',
+    )
+    expect(aDiff[0]).toBe(0)
+  })
+})
+
+describe('closeDiffMask', () => {
+  const grid = () => {
+    const geometry = new PlaneGeometry(4, 4, 4, 4)
+    return {
+      vertices: Array.from(geometry.getAttribute('position').array as Float32Array),
+      triangles: Array.from(geometry.getIndex()?.array ?? []),
+    }
+  }
+
+  it('drops a lone speck with no flagged neighbour', () => {
+    const { vertices, triangles } = grid()
+    const mask = new Uint8Array(triangles.length / 3)
+    mask[16] = 1
+    expect([...closeDiffMask(vertices, triangles, mask)].every((v) => v === 0)).toBe(true)
+  })
+
+  it('fills a hole enclosed by flagged faces', () => {
+    const { vertices, triangles } = grid()
+    const mask = new Uint8Array(triangles.length / 3).fill(1)
+    mask[16] = 0
+    expect(closeDiffMask(vertices, triangles, mask)[16]).toBe(1)
   })
 })

@@ -1,6 +1,11 @@
 import { BufferGeometry, Float32BufferAttribute, type Matrix4, Vector3 } from 'three'
 import { Brush, computeMeshVolume, Evaluator, SUBTRACTION } from 'three-bvh-csg'
-import { createMeshQuery, diffFraction, type MeshQuery } from './diffHighlight'
+import {
+  createMeshQuery,
+  diffFraction,
+  type MeshQuery,
+  pointTriangleDistanceSquared,
+} from './diffHighlight'
 
 /**
  * True boolean difference of the two overlay models, with the STEP treated as ideal.
@@ -33,8 +38,28 @@ export const BOOLEAN_TRIANGLE_BUDGET = 200_000
  * picture (signed sums over open patch shells are meaningless).
  */
 export const KEEP_SIZE_ABS_MM3 = 8
+// 1 mm: the machining tolerance, and the floor that keeps OCC's 0.3 mm facets honest — two
+// models tessellated independently can differ ~0.6 mm at a fillet, so a sub-millimetre bar
+// would false-flag real geometry as a diff.
 export const KEEP_CLEAR_MM = 1
 export const KEEP_CLEAR_SHARE = 0.01
+
+/**
+ * A kept component draws whole (closed) only when at least this share of its surface stands
+ * proud of the other model. Below it the component is mostly *flush* with the other model — a
+ * shallow skin (the kerf/shave offset over a face) — and only its proud faces draw, so the big
+ * sub-tolerance membrane never shows. A genuine knob/slab/protrusion clears this easily; m128's
+ * shaved PFC face sits at ~0.19 and is treated as a skin.
+ */
+export const KEEP_SOLID_SHARE = 0.5
+
+/**
+ * A face with a roughly opposite partner within this gap is a paper-thin skin, so it is pruned.
+ * Kept deliberately low (below the ~0.6 mm worst-case near-coincident gap): the prune only nicks
+ * the razor-thin core and the Laplacian smoother in {@link smoothGeometry} absorbs the rest, so
+ * the removal is gentle and never carves into real material.
+ */
+export const SKIN_MAX_THICKNESS_MM = 0.4
 
 export interface BooleanDiff {
   /** STEP-minus-manufactured solid (overcut, red), world coordinates (null when empty) */
@@ -51,12 +76,24 @@ export interface BooleanDiff {
   primaryVolume: number
 }
 
-/** Invisible at tolerance, fully solid a couple mm out: thinnest fringe vanishes, real cuts pop. */
-export const DIFF_ALPHA_FLOOR = 0
-export const DIFF_ALPHA_FULL_MM = 2
+/**
+ * A kept face is already clearly visible at the 1 mm clear bar (FLOOR) and fully solid half a
+ * millimetre past it, so a real detail reads instead of vanishing, while a barely-out fringe
+ * still whispers below the big cuts.
+ */
+export const DIFF_ALPHA_FLOOR = 0.45
+export const DIFF_ALPHA_FULL_MM = 1.5
+
+/**
+ * The interface faces close the solid on the part surface at zero clearance — where the two
+ * models converge the boolean leaves a paper-thin sliver. A light ghost tint keeps the volume
+ * closed without that coplanar sliver reading as a solid skin.
+ */
+export const DIFF_ALPHA_INTERFACE = 0.15
 
 /** Maps a per-triangle clearance (mm) to a render alpha. */
 export function diffAlpha(distanceMm: number): number {
+  if (distanceMm < KEEP_CLEAR_MM) return DIFF_ALPHA_INTERFACE
   const t = Math.min(
     1,
     Math.max(0, (distanceMm - KEEP_CLEAR_MM) / (DIFF_ALPHA_FULL_MM - KEEP_CLEAR_MM)),
@@ -214,22 +251,24 @@ export function filterDrawableFaces(
     const dists = query.distances(sharedVertices, corners)
     let far = 0
     for (const d of dists) if (d >= query.tolerance) far++
-    // Kept components draw only their far faces: coplanar hairlines, section
-    // skins and sharp-vs-rolled edges sit below tolerance and vanish, while
-    // genuinely out faces draw whether they form a whole slab or a notch
-    // bottom. Volume stays the component's own so the number matches the kept
-    // piece, not an open patch shell (whose signed sum is meaningless).
-    if (far / dists.length >= KEEP_CLEAR_SHARE) {
+    const farShare = far / dists.length
+    // A genuine solid (enough of it stands proud) draws whole: the far faces are the material,
+    // the near faces close the volume on the model surface. A skin (mostly flush with the other
+    // model) draws only its proud faces — keeping its near faces would render the whole
+    // sub-tolerance membrane as a ghost sheet. The CLEAR_SHARE gate drops components with no real
+    // protrusion at all; volume stays the component's own so the number matches the kept piece.
+    if (farShare >= KEEP_CLEAR_SHARE) {
+      const whole = farShare >= KEEP_SOLID_SHARE
       for (let t = 0; t < component.triangles.length; t++) {
-        if ((dists[t] ?? 0) >= query.tolerance) {
-          const original = component.triangles[t] ?? 0
-          kept.push(
-            triangles[original * 3] ?? 0,
-            triangles[original * 3 + 1] ?? 0,
-            triangles[original * 3 + 2] ?? 0,
-          )
-          keptDistances.push(dists[t] ?? 0)
-        }
+        const d = dists[t] ?? 0
+        if (!whole && d < query.tolerance) continue
+        const original = component.triangles[t] ?? 0
+        kept.push(
+          triangles[original * 3] ?? 0,
+          triangles[original * 3 + 1] ?? 0,
+          triangles[original * 3 + 2] ?? 0,
+        )
+        keptDistances.push(d)
       }
       volume += component.volume
     }
@@ -237,6 +276,289 @@ export function filterDrawableFaces(
   const filtered = geometryFromTriangles(vertices, kept)
   if (!filtered) return { geometry: null, volume: 0, distances: [] }
   return { geometry: filtered, volume, distances: keptDistances }
+}
+
+/**
+ * Removes paper-thin skins: a triangle with a roughly parallel, oppositely-facing partner within
+ * `minThickness` is a membrane (a sub-tolerance sliver where the two models nearly coincide), not
+ * real material, so both are dropped. Genuine walls are further apart and survive, so the diff
+ * keeps its solid volume without the razor edges a membrane throws off. One centroid-grid pass,
+ * O(n); returns the rebuilt geometry plus the per-triangle keep mask (to re-filter the distances).
+ */
+export function pruneThinSkin(
+  geometry: BufferGeometry | null,
+  minThickness: number,
+): { geometry: BufferGeometry | null; keep: Uint8Array } {
+  if (!geometry) return { geometry: null, keep: new Uint8Array(0) }
+  const position = geometry.getAttribute('position')
+  const index = geometry.getIndex()
+  const triCount = index ? Math.floor(index.count / 3) : Math.floor(position.count / 3)
+  const keep = new Uint8Array(triCount).fill(1)
+  if (triCount === 0) return { geometry, keep }
+
+  const corner = (t: number, k: number): number => (index ? index.getX(t * 3 + k) : t * 3 + k)
+  const nx = new Float64Array(triCount)
+  const ny = new Float64Array(triCount)
+  const nz = new Float64Array(triCount)
+  const cornerX = new Float64Array(triCount * 3)
+  const cornerY = new Float64Array(triCount * 3)
+  const cornerZ = new Float64Array(triCount * 3)
+  for (let t = 0; t < triCount; t++) {
+    const a = corner(t, 0)
+    const b = corner(t, 1)
+    const c = corner(t, 2)
+    const ax = position.getX(a)
+    const ay = position.getY(a)
+    const az = position.getZ(a)
+    const bx = position.getX(b)
+    const by = position.getY(b)
+    const bz = position.getZ(b)
+    const dx = position.getX(c)
+    const dy = position.getY(c)
+    const dz = position.getZ(c)
+    cornerX[t * 3] = ax
+    cornerX[t * 3 + 1] = bx
+    cornerX[t * 3 + 2] = dx
+    cornerY[t * 3] = ay
+    cornerY[t * 3 + 1] = by
+    cornerY[t * 3 + 2] = dy
+    cornerZ[t * 3] = az
+    cornerZ[t * 3 + 1] = bz
+    cornerZ[t * 3 + 2] = dz
+    const ux = bx - ax
+    const uy = by - ay
+    const uz = bz - az
+    const vx = dx - ax
+    const vy = dy - ay
+    const vz = dz - az
+    let ex = uy * vz - uz * vy
+    let ey = uz * vx - ux * vz
+    let ez = ux * vy - uy * vx
+    const len = Math.hypot(ex, ey, ez)
+    if (len > 0) {
+      ex /= len
+      ey /= len
+      ez /= len
+    }
+    nx[t] = ex
+    ny[t] = ey
+    nz[t] = ez
+  }
+
+  // Bucket each triangle under every `minThickness`-wide cell its bounding box covers, so a vertex
+  // of a face on the far side of a membrane lands in a cell that face was filed in. A centroid-only
+  // bucket misses it: opposite faces of a box triangulate mirror-imaged, so their centroids differ.
+  const cell = Math.max(minThickness, 0.05)
+  const grid = new Map<string, number[]>()
+  const key = (ix: number, iy: number, iz: number): string => `${ix},${iy},${iz}`
+  const MAX_CELLS = 4096
+  for (let t = 0; t < triCount; t++) {
+    const ax = cornerX[t * 3] ?? 0
+    const ay = cornerY[t * 3] ?? 0
+    const az = cornerZ[t * 3] ?? 0
+    const bx = cornerX[t * 3 + 1] ?? 0
+    const by = cornerY[t * 3 + 1] ?? 0
+    const bz = cornerZ[t * 3 + 1] ?? 0
+    const dx = cornerX[t * 3 + 2] ?? 0
+    const dy = cornerY[t * 3 + 2] ?? 0
+    const dz = cornerZ[t * 3 + 2] ?? 0
+    const x0 = Math.floor(Math.min(ax, bx, dx) / cell)
+    const x1 = Math.floor(Math.max(ax, bx, dx) / cell)
+    const y0 = Math.floor(Math.min(ay, by, dy) / cell)
+    const y1 = Math.floor(Math.max(ay, by, dy) / cell)
+    const z0 = Math.floor(Math.min(az, bz, dz) / cell)
+    const z1 = Math.floor(Math.max(az, bz, dz) / cell)
+    const spans = (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1)
+    const whole = spans > MAX_CELLS // huge triangle: fall back to its centroid cell only
+    const lo = whole
+      ? [
+          Math.floor((ax + bx + dx) / 3 / cell),
+          Math.floor((ay + by + dy) / 3 / cell),
+          Math.floor((az + bz + dz) / 3 / cell),
+        ]
+      : [x0, y0, z0]
+    const hi = whole ? lo : [x1, y1, z1]
+    for (let ix = lo[0] ?? 0; ix <= (hi[0] ?? 0); ix++) {
+      for (let iy = lo[1] ?? 0; iy <= (hi[1] ?? 0); iy++) {
+        for (let iz = lo[2] ?? 0; iz <= (hi[2] ?? 0); iz++) {
+          const k = key(ix, iy, iz)
+          const list = grid.get(k)
+          if (list) list.push(t)
+          else grid.set(k, [t])
+        }
+      }
+    }
+  }
+
+  const OPPOSITE_DOT = -0.5 // normals ≥120° apart: a fold, or the two sides of a membrane
+  const minGap = 0.05 // a shared edge reads as ~0 gap; only a genuine membrane clears this
+  let removed = 0
+  for (let t = 0; t < triCount; t++) {
+    if (keep[t] === 0) continue
+    let hit = false
+    for (let k = 0; k < 3 && !hit; k++) {
+      const px = cornerX[t * 3 + k] ?? 0
+      const py = cornerY[t * 3 + k] ?? 0
+      const pz = cornerZ[t * 3 + k] ?? 0
+      const gx = Math.floor(px / cell)
+      const gy = Math.floor(py / cell)
+      const gz = Math.floor(pz / cell)
+      for (let ox = -1; ox <= 1 && !hit; ox++) {
+        for (let oy = -1; oy <= 1 && !hit; oy++) {
+          for (let oz = -1; oz <= 1 && !hit; oz++) {
+            const list = grid.get(key(gx + ox, gy + oy, gz + oz))
+            if (!list) continue
+            for (const s of list) {
+              if (s === t || keep[s] === 0) continue
+              const dot =
+                (nx[t] ?? 0) * (nx[s] ?? 0) +
+                (ny[t] ?? 0) * (ny[s] ?? 0) +
+                (nz[t] ?? 0) * (nz[s] ?? 0)
+              if (dot > OPPOSITE_DOT) continue
+              const gap = Math.sqrt(
+                pointTriangleDistanceSquared(
+                  px,
+                  py,
+                  pz,
+                  cornerX[s * 3] ?? 0,
+                  cornerY[s * 3] ?? 0,
+                  cornerZ[s * 3] ?? 0,
+                  cornerX[s * 3 + 1] ?? 0,
+                  cornerY[s * 3 + 1] ?? 0,
+                  cornerZ[s * 3 + 1] ?? 0,
+                  cornerX[s * 3 + 2] ?? 0,
+                  cornerY[s * 3 + 2] ?? 0,
+                  cornerZ[s * 3 + 2] ?? 0,
+                ),
+              )
+              if (gap <= minThickness && gap > minGap) {
+                keep[t] = 0
+                keep[s] = 0
+                removed += 2
+                hit = true
+                break
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  if (removed === 0) return { geometry, keep }
+
+  const surviving: number[] = []
+  for (let t = 0; t < triCount; t++) {
+    if (keep[t] === 0) continue
+    surviving.push(corner(t, 0), corner(t, 1), corner(t, 2))
+  }
+  if (surviving.length === 0) return { geometry: null, keep }
+  const positions = new Float32Array(surviving.length * 3)
+  for (let i = 0; i < surviving.length; i++) {
+    const v = surviving[i] ?? 0
+    positions[i * 3] = position.getX(v)
+    positions[i * 3 + 1] = position.getY(v)
+    positions[i * 3 + 2] = position.getZ(v)
+  }
+  const pruned = new BufferGeometry()
+  pruned.setAttribute('position', new Float32BufferAttribute(positions, 3))
+  pruned.computeVertexNormals()
+  pruned.computeBoundingBox()
+  return { geometry: pruned, keep }
+}
+
+/**
+ * Light smoothing pass over a diff solid: welds coincident vertices and runs one gentle Laplacian
+ * round, so the skin-pruned result reads as clean surfaces without rounding the real geometry away.
+ * Boundary vertices are included (no clamping) — the diff is a display solid, so a slight shrink
+ * is harmless and it removes residual spikes.
+ */
+export function smoothGeometry(
+  geometry: BufferGeometry | null,
+  iterations = 1,
+  lambda = 0.01,
+): BufferGeometry | null {
+  if (!geometry) return null
+  const position = geometry.getAttribute('position')
+  const index = geometry.getIndex()
+  const count = position.count
+  if (count === 0) return geometry
+  const vertex = (i: number): number => (index ? index.getX(i) : i)
+  const triCount = Math.floor((index ? index.count : count) / 3)
+  if (triCount === 0) return geometry
+
+  // Weld by position so the Laplacian uses real connectivity, not per-triangle duplicates.
+  const map = new Map<string, number>()
+  const rep = new Int32Array(count)
+  const px: number[] = []
+  const py: number[] = []
+  const pz: number[] = []
+  for (let v = 0; v < count; v++) {
+    const x = position.getX(v)
+    const y = position.getY(v)
+    const z = position.getZ(v)
+    const key = `${Math.round(x * 100)},${Math.round(y * 100)},${Math.round(z * 100)}`
+    let idx = map.get(key)
+    if (idx === undefined) {
+      idx = px.length
+      map.set(key, idx)
+      px.push(x)
+      py.push(y)
+      pz.push(z)
+    }
+    rep[v] = idx
+  }
+  const adjacency: Set<number>[] = Array.from({ length: px.length }, () => new Set<number>())
+  for (let t = 0; t < triCount; t++) {
+    const a = rep[vertex(t * 3)] ?? 0
+    const b = rep[vertex(t * 3 + 1)] ?? 0
+    const c = rep[vertex(t * 3 + 2)] ?? 0
+    adjacency[a]?.add(b)
+    adjacency[a]?.add(c)
+    adjacency[b]?.add(a)
+    adjacency[b]?.add(c)
+    adjacency[c]?.add(a)
+    adjacency[c]?.add(b)
+  }
+  for (let round = 0; round < iterations; round++) {
+    const nx = px.slice()
+    const ny = py.slice()
+    const nz = pz.slice()
+    for (let v = 0; v < px.length; v++) {
+      const neighbours = adjacency[v]
+      if (!neighbours || neighbours.size === 0) continue
+      let sx = 0
+      let sy = 0
+      let sz = 0
+      for (const n of neighbours) {
+        sx += px[n] ?? 0
+        sy += py[n] ?? 0
+        sz += pz[n] ?? 0
+      }
+      const k = neighbours.size
+      nx[v] = (px[v] ?? 0) * (1 - lambda) + (sx / k) * lambda
+      ny[v] = (py[v] ?? 0) * (1 - lambda) + (sy / k) * lambda
+      nz[v] = (pz[v] ?? 0) * (1 - lambda) + (sz / k) * lambda
+    }
+    for (let v = 0; v < px.length; v++) {
+      px[v] = nx[v] ?? 0
+      py[v] = ny[v] ?? 0
+      pz[v] = nz[v] ?? 0
+    }
+  }
+  const positions = new Float32Array(triCount * 9)
+  for (let t = 0; t < triCount; t++) {
+    for (let k = 0; k < 3; k++) {
+      const u = rep[vertex(t * 3 + k)] ?? 0
+      positions[(t * 3 + k) * 3] = px[u] ?? 0
+      positions[(t * 3 + k) * 3 + 1] = py[u] ?? 0
+      positions[(t * 3 + k) * 3 + 2] = pz[u] ?? 0
+    }
+  }
+  const out = new BufferGeometry()
+  out.setAttribute('position', new Float32BufferAttribute(positions, 3))
+  out.computeVertexNormals()
+  out.computeBoundingBox()
+  return out
 }
 
 /** Concatenates bodies into one world-space soup (bakes the seating transform). */
@@ -425,16 +747,18 @@ export function booleanDiff(
   let underDistance: number[] = []
   if (raw.over) {
     const filtered = filterDrawableFaces(raw.over, queryPrimary)
-    overFiltered = filtered.geometry
+    const pruned = pruneThinSkin(filtered.geometry, SKIN_MAX_THICKNESS_MM)
+    overFiltered = smoothGeometry(pruned.geometry)
     overVolume = filtered.volume
-    overDistance = filtered.distances
+    overDistance = filtered.distances.filter((_, i) => pruned.keep[i] === 1)
     raw.over.dispose()
   }
   if (raw.under) {
     const filtered = filterDrawableFaces(raw.under, queryCompare)
-    underFiltered = filtered.geometry
+    const pruned = pruneThinSkin(filtered.geometry, SKIN_MAX_THICKNESS_MM)
+    underFiltered = smoothGeometry(pruned.geometry)
     underVolume = filtered.volume
-    underDistance = filtered.distances
+    underDistance = filtered.distances.filter((_, i) => pruned.keep[i] === 1)
     raw.under.dispose()
   }
   return {
