@@ -20,7 +20,16 @@ interface Task {
   transfer: Transferable[]
   resolve: (value: unknown) => void
   reject: (reason: unknown) => void
+  /** Higher runs first. Background analysis = 0, viewer (on-demand) = 10, warm = -10. */
+  priority: number
 }
+
+/** Queued behind everything else (worker boot) — must never delay a viewer mesh. */
+const PRIORITY_WARM = -10
+/** Bulk background analysis across the whole job. */
+const PRIORITY_BACKGROUND = 0
+/** Something the user is looking at right now — jumps ahead of the background queue. */
+export const PRIORITY_FOREGROUND = 10
 
 interface WorkerHandle {
   worker: Worker
@@ -39,11 +48,16 @@ class StepWorkerPool {
   private nextId = 1
 
   /** Measure a STEP and run the light-sabre test on it, importing the model only once. */
-  inspect(bytes: Uint8Array, sabreLength?: number): Promise<InspectResult> {
+  inspect(
+    bytes: Uint8Array,
+    sabreLength?: number,
+    options: { priority?: number } = {},
+  ): Promise<InspectResult> {
     const copy = new Uint8Array(bytes)
     return this.run<InspectResult>(
       { id: this.nextId++, kind: 'inspect', step: copy, sabreLength },
       [copy.buffer],
+      options.priority ?? PRIORITY_BACKGROUND,
     )
   }
 
@@ -55,6 +69,7 @@ class StepWorkerPool {
       measure?: boolean
       simplify?: boolean
       measureOnly?: boolean
+      priority?: number
     } = {},
   ): Promise<ReconstructResult> {
     const reference = options.reference ? new Uint8Array(options.reference) : undefined
@@ -69,24 +84,28 @@ class StepWorkerPool {
         measureOnly: options.measureOnly,
       },
       reference ? [reference.buffer] : [],
+      options.priority ?? PRIORITY_BACKGROUND,
     )
   }
 
   /** Tessellate a STEP into three.js-ready meshes, off the main thread and in the warm OCC worker. */
-  mesh(name: string, bytes: Uint8Array): Promise<MeshedStep> {
+  mesh(name: string, bytes: Uint8Array, options: { priority?: number } = {}): Promise<MeshedStep> {
     const copy = new Uint8Array(bytes)
-    return this.run<MeshedStep>({ id: this.nextId++, kind: 'mesh', step: copy, name }, [
-      copy.buffer,
-    ])
+    return this.run<MeshedStep>(
+      { id: this.nextId++, kind: 'mesh', step: copy, name },
+      [copy.buffer],
+      options.priority ?? PRIORITY_BACKGROUND,
+    )
   }
 
   /**
    * Boot the ~23 MB OCC kernel in every worker ahead of time, so the first real task (e.g. opening
    * the viewer) does not pay for the WASM fetch/compile. Best-effort: a rejected warm is ignored.
+   * Queued at the lowest priority so it never delays on-demand viewer work.
    */
   warm(): void {
     for (let i = 0; i < this.max; i++) {
-      void this.run<null>({ id: this.nextId++, kind: 'warm' }, []).catch(() => {})
+      void this.run<null>({ id: this.nextId++, kind: 'warm' }, [], PRIORITY_WARM).catch(() => {})
     }
   }
 
@@ -102,9 +121,20 @@ class StepWorkerPool {
     }
   }
 
-  private run<T>(request: StepRequest, transfer: Transferable[]): Promise<T> {
+  private run<T>(request: StepRequest, transfer: Transferable[], priority: number): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      this.queue.push({ request, transfer, resolve: resolve as (value: unknown) => void, reject })
+      const task: Task = {
+        request,
+        transfer,
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        priority,
+      }
+      // Stable priority insert: foreground (viewer) tasks jump ahead of queued background
+      // analysis but keep FIFO order among themselves.
+      const index = this.queue.findIndex((queued) => queued.priority < priority)
+      if (index < 0) this.queue.push(task)
+      else this.queue.splice(index, 0, task)
       this.wake()
     })
   }

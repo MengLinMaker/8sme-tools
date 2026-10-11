@@ -1,5 +1,5 @@
 import type { MeshedStep } from './mesh'
-import { getStepWorkerPool } from './stepPool'
+import { getStepWorkerPool, PRIORITY_FOREGROUND } from './stepPool'
 
 /**
  * Viewer models built on the shared OCC worker pool, memoised by input.
@@ -16,7 +16,8 @@ export function meshForViewer(name: string, bytes: Uint8Array): Promise<MeshedSt
   const hit = meshCache.get(bytes)
   if (hit) return hit
   const promise = getStepWorkerPool()
-    .mesh(name, bytes)
+    // On-demand: the user is looking at this right now, so jump ahead of background analysis.
+    .mesh(name, bytes, { priority: PRIORITY_FOREGROUND })
     .catch((error) => {
       meshCache.delete(bytes)
       throw error
@@ -63,7 +64,12 @@ export function reconstructForViewer(
     return hit
   }
   const promise = getStepWorkerPool()
-    .reconstruct(ncText, { reference: options.reference, simplify: options.simplify })
+    // On-demand: the user is looking at this right now, so jump ahead of background analysis.
+    .reconstruct(ncText, {
+      reference: options.reference,
+      simplify: options.simplify,
+      priority: PRIORITY_FOREGROUND,
+    })
     .then((result) => (result.step ? new TextEncoder().encode(result.step) : null))
     .catch((error) => {
       reconstructCache.delete(key)

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { NcGeometry } from '@/lib/parsers/ncGeometry'
 import type { SabreFailure } from './sabre'
-import { locateSabreStations } from './sabreToNc'
+import { locateSabreStations, specifiedBevelAngle } from './sabreToNc'
 
 /** Beam along X (0–1000), cross-section 100×100 in Y/Z. */
 function beamVertices(): number[] {
@@ -159,5 +159,68 @@ describe('locateSabreStations', () => {
     expect(
       locateSabreStations(beamVertices(), [failureAt(500)], { contours: [], holes: [] }),
     ).toEqual([])
+  })
+})
+
+/**
+ * NC beam (length 1000) whose v-face carries a weld-prep bevel `angle` at x=980, and whose
+ * o-face runs the full length so the member length stays 1000. Mirrors m110: an angle on one
+ * cut-line vertex near a slanted end.
+ */
+function ncBeamWithBevel(angle: number): NcGeometry {
+  const noBevel = [
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+  ]
+  return {
+    contours: [
+      {
+        face: 'v',
+        kind: 'outer',
+        points: [
+          [0, 0],
+          [980, 0],
+          [980, 100],
+          [0, 100],
+        ],
+        bevels: [
+          [0, 0, 0, 0],
+          [angle, 4.2, 0, 0],
+          [0, 0, 0, 0],
+          [0, 0, 0, 0],
+        ],
+      },
+      {
+        face: 'o',
+        kind: 'outer',
+        points: [
+          [0, 0],
+          [1000, 0],
+          [1000, 100],
+          [0, 100],
+        ],
+        bevels: noBevel,
+      },
+    ],
+    holes: [],
+  }
+}
+
+describe('specifiedBevelAngle', () => {
+  it('reads the weld-prep angle at the guilty station', () => {
+    const stations = locateSabreStations(beamVertices(), [failureAt(980)], ncBeam(0))
+    expect(specifiedBevelAngle(ncBeamWithBevel(-20), stations)).toBe(20)
+  })
+
+  it('ignores angles outside the station window', () => {
+    const stations = locateSabreStations(beamVertices(), [failureAt(500)], ncBeam(0))
+    expect(specifiedBevelAngle(ncBeamWithBevel(-20), stations)).toBeNull()
+  })
+
+  it('is null when the NC specifies no bevel', () => {
+    const stations = locateSabreStations(beamVertices(), [failureAt(980)], ncBeam(0))
+    expect(specifiedBevelAngle(ncBeam(0), stations)).toBeNull()
   })
 })

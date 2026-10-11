@@ -1,7 +1,6 @@
-import { useNavigate, useSearch } from '@tanstack/react-router'
 import { zipSync } from 'fflate'
 import type { TFunction } from 'i18next'
-import { ChevronDown, Eye, Undo2 } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, Undo2, Wrench } from 'lucide-react'
 import {
   lazy,
   type ReactNode,
@@ -30,7 +29,6 @@ import { auditEntries } from '@/lib/audit/auditJob'
 import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
-import type { SeverityFilter } from '@/lib/audit/schemas'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
 import { downloadBlob, downloadText } from '@/lib/download'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
@@ -53,7 +51,6 @@ import { cn } from '@/lib/utils'
 import { createOrbitBus, requestView, type ViewPreset } from './orbitSync'
 
 const PartViewer = lazy(() => import('./PartViewer'))
-const Nc3dViewer = lazy(() => import('./Nc3dViewer'))
 
 const SEVERITY_ORDER: Record<Severity, number> = { error: 0, warning: 1, info: 2 }
 
@@ -67,8 +64,6 @@ const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [
   { labelKey: 'preflight.columns.profile', key: 'profile' },
   { labelKey: 'preflight.columns.model', key: 'model' },
 ]
-
-type Filter = SeverityFilter
 
 const VIEW_PRESETS: { id: ViewPreset; labelKey: string }[] = [
   { id: 'iso', labelKey: 'preflight.viewer.iso' },
@@ -85,12 +80,6 @@ const VIEW_MODES: { id: ViewMode; labelKey: string }[] = [
   { id: 'step', labelKey: 'preflight.viewer.step' },
   { id: 'split', labelKey: 'preflight.viewer.sideBySide' },
   { id: 'overlay', labelKey: 'preflight.viewer.overlay' },
-]
-
-const FILTERS: { id: Filter; labelKey: string }[] = [
-  { id: 'all', labelKey: 'preflight.filters.all' },
-  { id: 'error', labelKey: 'preflight.filters.error' },
-  { id: 'warning', labelKey: 'preflight.filters.warning' },
 ]
 
 const SEVERITY_VARIANT = {
@@ -126,6 +115,18 @@ function fixForFinding(code: string): FindingFix | null {
   if (code === 'MANUFACTURE_MISMATCH' || code === 'MANUFACTURE_BORDERLINE') return 'regenerate'
   if (code === 'CUT_END_PIECE') return 'simplify'
   return null
+}
+
+/** One status pill in the parts table: a distinct finding code, grouped with a count. */
+interface StatusPill {
+  code: string
+  severity: Severity
+  count: number
+  /** A one-click STEP fix exists for this code (shown with a wrench). */
+  fixable: boolean
+  /** An applied override already resolves this code. */
+  resolved: boolean
+  finding: Finding
 }
 
 /** Grades an NC-vs-STEP mismatch: massive = error, borderline = warning, close = ok. */
@@ -204,16 +205,6 @@ export function PreflightPage() {
   const [modelTotal, setModelTotal] = useState(0)
   /** Which model phase the progress counters belong to, so each shows its own label. */
   const [modelPhase, setModelPhase] = useState<'measure' | 'rebuild'>('measure')
-  const search = useSearch({ from: '/preflight' })
-  const navigate = useNavigate({ from: '/preflight' })
-  const filter: Filter = search.severity ?? 'all'
-
-  const setFilter = useCallback(
-    (next: Filter) => {
-      void navigate({ search: { severity: next }, replace: true })
-    },
-    [navigate],
-  )
 
   // Boot the OCC worker kernels the moment the page mounts, so the first model (measure / rebuild /
   // viewer mesh) does not wait on the ~23 MB WASM load.
@@ -221,19 +212,15 @@ export function PreflightPage() {
     prebootStepWorkers()
   }, [])
 
-  const handleBundle = useCallback(
-    (input: InputBundle) => {
-      setError(null)
-      setBundle(input)
-      setViewing(null)
-      setStepOverrides(new Map())
-      setFilter('all')
-      setAnalyzing(true)
-      clearViewerModels()
-      setResult(auditEntries(input.sourceName, input.entries))
-    },
-    [setFilter],
-  )
+  const handleBundle = useCallback((input: InputBundle) => {
+    setError(null)
+    setBundle(input)
+    setViewing(null)
+    setStepOverrides(new Map())
+    setAnalyzing(true)
+    clearViewerModels()
+    setResult(auditEntries(input.sourceName, input.entries))
+  }, [])
 
   const bytesByPath = useMemo(() => {
     const map = new Map<string, Uint8Array>()
@@ -272,9 +259,6 @@ export function PreflightPage() {
     return () => URL.revokeObjectURL(url)
   }, [viewing, bytesByPath])
 
-  const [rightTab, setRightTab] = useState<'drawing' | 'nc1'>('drawing')
-  // Per-part STEP fixes keyed by mark (cleaned or regenerated). The viewer and the export both
-  // prefer these over the originals, so a fix is what you see and what ships — and it can be undone.
   const [stepOverrides, setStepOverrides] = useState<Map<string, StepOverride>>(new Map())
   const [fixingMark, setFixingMark] = useState<string | null>(null)
   const ncBytes = viewing?.nc ? bytesByPath.get(viewing.nc.path) : undefined
@@ -284,6 +268,12 @@ export function PreflightPage() {
     : undefined
   // The part's own STEP file, used to give the manufactured model the file's orientation.
   const referenceStepBytes = viewing?.step ? bytesByPath.get(viewing.step.path) : undefined
+  // Parsed NC toolpath geometry, projected onto the manufactured model so the cut lines,
+  // holes and bevels read on the part the laser actually produces.
+  const viewingNcGeom = useMemo(
+    () => (ncBytes ? parseNcGeometry(new TextDecoder().decode(ncBytes)) : null),
+    [ncBytes],
+  )
 
   // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
   const [viewMode, setViewMode] = useState<ViewMode>('split')
@@ -340,7 +330,6 @@ export function PreflightPage() {
   // One orbit bus per part, shared by the STEP and NC viewports so they rotate together.
   const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
   const openPart = useCallback((part: PartRecord) => {
-    setRightTab('drawing')
     setViewMode('split')
     setOrbitBus(createOrbitBus())
     setViewing(part)
@@ -351,7 +340,6 @@ export function PreflightPage() {
   useEffect(() => {
     if (!result) return
     void import('./PartViewer')
-    void import('./Nc3dViewer')
   }, [result])
 
   // Read the drawings (ground-truth qty/length) first — parsed concurrently, since pdf.js does the
@@ -799,43 +787,39 @@ export function PreflightPage() {
       .sort((a, b) => b.lengthMm - a.lengthMm || b.pieces - a.pieces)
   }, [result, drawingMaterials])
 
-  /** Per-part worst severity, so the table shows clean vs warning/error at a glance. */
-  const partSeverity = useMemo(() => {
-    const map = new Map<string, { error: number; warning: number }>()
+  /** One status pill per distinct finding code, so the parts table carries its own triage. */
+  const issuesByMark = useMemo(() => {
+    const map = new Map<string, StatusPill[]>()
     for (const finding of allFindings) {
       if (!finding.mark) continue
-      const current = map.get(finding.mark) ?? { error: 0, warning: 0 }
-      if (finding.severity === 'error') current.error++
-      else if (finding.severity === 'warning') current.warning++
-      map.set(finding.mark, current)
+      const override = stepOverrides.get(finding.mark)
+      const resolved = Boolean(override && resolvedFindings(override.kind).includes(finding.code))
+      const fixable = fixForFinding(finding.code) != null
+      const list = map.get(finding.mark) ?? []
+      const existing = list.find((pill) => pill.code === finding.code)
+      if (existing) {
+        existing.count++
+        existing.resolved = existing.resolved && resolved
+      } else {
+        list.push({
+          code: finding.code,
+          severity: finding.severity,
+          count: 1,
+          fixable,
+          resolved,
+          finding,
+        })
+      }
+      map.set(finding.mark, list)
     }
     return map
-  }, [allFindings])
-
-  const findings = useMemo(() => {
-    return filter === 'all'
-      ? allFindings
-      : allFindings.filter((finding) => finding.severity === filter)
-  }, [allFindings, filter])
+  }, [allFindings, stepOverrides])
 
   /** Findings for the part currently open in the viewer, shown above the 3D to debug fast. */
   const viewerFindings = useMemo(
     () => (viewing ? allFindings.filter((finding) => finding.mark === viewing.mark) : []),
     [viewing, allFindings],
   )
-
-  /** Faces of the viewed part flagged not-manufacturable, so the NC view can draw them red. */
-  const viewerBadFaces = useMemo(() => {
-    if (!viewing) return []
-    const faces = new Set<string>()
-    for (const issue of cutIssues.get(viewing.mark) ?? []) {
-      for (const face of String(issue.params?.faces ?? '').split(',')) {
-        const trimmed = face.trim()
-        if (trimmed) faces.add(trimmed)
-      }
-    }
-    return [...faces]
-  }, [viewing, cutIssues])
 
   /** Light-sabre failures of the viewed part — the manufactured view draws the cut lines. */
   const viewerSabreFailures = useMemo(() => {
@@ -882,10 +866,9 @@ export function PreflightPage() {
     )
   }, [ncBytes, viewerSabreStations])
 
-  // Collapsible sections — long jobs push the tables far down, so profiles,
-  // findings and parts all collapse like an accordion.
+  // Collapsible sections — long jobs push the tables far down, so profiles
+  // and parts collapse like an accordion.
   const [profilesOpen, setProfilesOpen] = useState(true)
-  const [findingsOpen, setFindingsOpen] = useState(true)
   const [partsOpen, setPartsOpen] = useState(true)
 
   // Parts table sorting — defaults to worst-problem-first so triage is quick.
@@ -905,11 +888,49 @@ export function PreflightPage() {
     [result, sort, allFindings, drawingMaterials, modelChecks],
   )
 
-  const partByMark = useMemo(() => {
-    const map = new Map<string, PartRecord>()
-    for (const part of result?.parts ?? []) map.set(part.mark, part)
-    return map
-  }, [result])
+  /** The parts in table order that have something to show in the viewer — the next/prev ring. */
+  const viewableParts = useMemo(
+    () => sortedParts.filter((part) => part.step || part.nc),
+    [sortedParts],
+  )
+  const viewingIndex = useMemo(
+    () => (viewing ? viewableParts.findIndex((part) => part.mark === viewing.mark) : -1),
+    [viewing, viewableParts],
+  )
+  /** Steps to the previous/next product (mark) in the current sort order. */
+  const gotoOffset = useCallback(
+    (delta: number) => {
+      if (viewingIndex < 0) return
+      const next = viewableParts[viewingIndex + delta]
+      if (next) openPart(next)
+    },
+    [viewingIndex, viewableParts, openPart],
+  )
+
+  // Arrow keys walk the product list while the viewer is open (never while typing in a field).
+  useEffect(() => {
+    if (!viewing) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      )
+        return
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        gotoOffset(-1)
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        gotoOffset(1)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [viewing, gotoOffset])
 
   /** The override a part carries, if any (cleaned or regenerated). */
   const overrideFor = useCallback(
@@ -1176,194 +1197,6 @@ export function PreflightPage() {
             <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between">
               <button
                 type="button"
-                onClick={() => setFindingsOpen((open) => !open)}
-                aria-expanded={findingsOpen}
-                className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <ChevronDown
-                  className={cn(
-                    'size-4 shrink-0 text-muted-foreground transition-transform',
-                    !findingsOpen && '-rotate-90',
-                  )}
-                />
-                <CardTitle>
-                  {t('preflight.findings.title')}
-                  <span className="ml-2 text-sm font-normal text-muted-foreground">
-                    ({findings.length})
-                  </span>
-                </CardTitle>
-              </button>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="inline-flex gap-1 rounded-full border border-border bg-secondary p-1">
-                  {FILTERS.map((filterOption) => (
-                    <button
-                      key={filterOption.id}
-                      type="button"
-                      className={cn(
-                        'rounded-full px-3 py-1 text-xs font-semibold transition-colors',
-                        filter === filterOption.id
-                          ? 'bg-primary text-primary-foreground'
-                          : 'text-muted-foreground hover:text-foreground',
-                      )}
-                      onClick={() => setFilter(filterOption.id)}
-                    >
-                      {t(filterOption.labelKey)}
-                    </button>
-                  ))}
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    downloadText(
-                      `preflight-${result.sourceName}.csv`,
-                      findingsToCsv({ ...result, findings: allFindings }),
-                    )
-                  }
-                >
-                  {t('preflight.findings.exportFindings')}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => downloadText(`parts-${result.sourceName}.csv`, partsToCsv(result))}
-                >
-                  {t('preflight.findings.exportParts')}
-                </Button>
-                {stepOverrides.size > 0 && (
-                  <Button variant="outline" size="sm" onClick={exportFixed}>
-                    {t('preflight.findings.exportFixed', { count: stepOverrides.size })}
-                  </Button>
-                )}
-              </div>
-            </CardHeader>
-            {findingsOpen && (
-              <CardContent>
-                {analyzing ? (
-                  <p className="text-sm text-muted-foreground">
-                    {t('preflight.findings.analyzing')}
-                  </p>
-                ) : findings.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">{t('preflight.findings.empty')}</p>
-                ) : (
-                  <Table containerClassName="max-h-[60vh] overflow-auto">
-                    <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:border-b [&_th]:border-border [&_th]:bg-card">
-                      <TableRow className="hover:bg-transparent">
-                        <TableHead>{t('preflight.table.severity')}</TableHead>
-                        <TableHead>{t('preflight.table.code')}</TableHead>
-                        <TableHead>{t('preflight.table.mark')}</TableHead>
-                        <TableHead>{t('preflight.table.message')}</TableHead>
-                        <TableHead className="text-right">{t('preflight.table.debug')}</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {findings.map((finding) => {
-                        const part = finding.mark ? partByMark.get(finding.mark) : undefined
-                        const viewable = part && (part.step || part.nc) ? part : undefined
-                        const override = overrideFor(part)
-                        const resolved = Boolean(
-                          override && resolvedFindings(override.kind).includes(finding.code),
-                        )
-                        return (
-                          <TableRow
-                            key={`${finding.code}-${finding.mark ?? ''}-${finding.message}`}
-                            className={cn(resolved && 'opacity-50')}
-                          >
-                            <TableCell>
-                              <Badge variant={SEVERITY_VARIANT[finding.severity]}>
-                                {t(`common.severity.${finding.severity}`)}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="font-mono text-xs text-muted-foreground">
-                              {finding.code}
-                            </TableCell>
-                            <TableCell className="font-mono text-xs">
-                              {finding.mark ?? '—'}
-                            </TableCell>
-                            <TableCell>
-                              <span className={cn(resolved && 'line-through')}>
-                                {findingText(finding)}
-                              </span>
-                              {resolved && (
-                                <Badge variant="success" className="ml-2 align-middle">
-                                  {override?.kind ? t(`common.fix.${override.kind}`) : ''}
-                                </Badge>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <div className="flex justify-end gap-1">
-                                {resolved && viewable && (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => undoOverride(viewable.mark)}
-                                  >
-                                    <Undo2 />
-                                    {t('common.actions.undo')}
-                                  </Button>
-                                )}
-                                {!resolved && isRegeneratable(viewable) && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={fixingMark === viewable?.mark}
-                                    onClick={() => viewable && void regeneratePart(viewable)}
-                                  >
-                                    {fixingMark === viewable?.mark
-                                      ? t('common.actions.working')
-                                      : t('common.actions.regenerateStep')}
-                                  </Button>
-                                )}
-                                {!resolved && isSimplifiable(viewable) && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={fixingMark === viewable?.mark}
-                                    onClick={() => viewable && void simplifyPart(viewable)}
-                                  >
-                                    {fixingMark === viewable?.mark
-                                      ? t('common.actions.working')
-                                      : t('common.actions.simplify')}
-                                  </Button>
-                                )}
-                                {!resolved && isCleanable(viewable) && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={fixingMark === viewable?.mark}
-                                    onClick={() => viewable && void cleanPart(viewable)}
-                                  >
-                                    {fixingMark === viewable?.mark
-                                      ? t('common.actions.cleaning')
-                                      : t('common.actions.cleanStep')}
-                                  </Button>
-                                )}
-                                {viewable && (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => openPart(viewable)}
-                                  >
-                                    <Eye />
-                                    {t('common.actions.view')}
-                                  </Button>
-                                )}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            )}
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <button
-                type="button"
                 onClick={() => setPartsOpen((open) => !open)}
                 aria-expanded={partsOpen}
                 className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1402,6 +1235,32 @@ export function PreflightPage() {
                   )}
                 </CardTitle>
               </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    downloadText(
+                      `preflight-${result.sourceName}.csv`,
+                      findingsToCsv({ ...result, findings: allFindings }),
+                    )
+                  }
+                >
+                  {t('preflight.findings.exportFindings')}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => downloadText(`parts-${result.sourceName}.csv`, partsToCsv(result))}
+                >
+                  {t('preflight.findings.exportParts')}
+                </Button>
+                {stepOverrides.size > 0 && (
+                  <Button variant="outline" size="sm" onClick={exportFixed}>
+                    {t('preflight.findings.exportFixed', { count: stepOverrides.size })}
+                  </Button>
+                )}
+              </div>
             </CardHeader>
             {partsOpen && (
               <CardContent>
@@ -1417,38 +1276,54 @@ export function PreflightPage() {
                           onSort={toggleSort}
                         />
                       ))}
-                      <TableHead className="text-right">{t('preflight.table.threeD')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card">
                     {sortedParts.map((part) => {
-                      const severity = partSeverity.get(part.mark)
-                      const errorCount = severity?.error ?? 0
-                      const warningCount = severity?.warning ?? 0
                       const material = drawingMaterials.get(part.mark)
                       const pdfQty = material?.qty ?? part.expected?.qty ?? null
                       const ncQty = part.nc?.quantity ?? null
                       const qtyMismatch = pdfQty != null && ncQty != null && pdfQty !== ncQty
                       const qtyFallback = pdfQty == null && ncQty != null
+                      const pills = issuesByMark.get(part.mark) ?? []
                       return (
-                        <TableRow key={part.mark}>
+                        <TableRow
+                          key={part.mark}
+                          tabIndex={0}
+                          onClick={() => openPart(part)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              openPart(part)
+                            }
+                          }}
+                          className="cursor-pointer outline-none focus-visible:bg-accent/60"
+                        >
                           <TableCell className="font-mono text-xs">{part.mark}</TableCell>
                           <TableCell>
-                            <Badge
-                              variant={
-                                errorCount > 0
-                                  ? 'destructive'
-                                  : warningCount > 0
-                                    ? 'warning'
-                                    : 'success'
-                              }
-                            >
-                              {errorCount > 0
-                                ? `${t('preflight.status.error')}${errorCount > 1 ? ` ×${errorCount}` : ''}`
-                                : warningCount > 0
-                                  ? `${t('preflight.status.warning')}${warningCount > 1 ? ` ×${warningCount}` : ''}`
-                                  : t('preflight.status.ok')}
-                            </Badge>
+                            {pills.length === 0 ? (
+                              <Badge variant="success">{t('preflight.status.ok')}</Badge>
+                            ) : (
+                              <div className="flex flex-wrap gap-1">
+                                {pills.map((pill) => (
+                                  <Badge
+                                    key={pill.code}
+                                    variant={SEVERITY_VARIANT[pill.severity]}
+                                    className={cn('gap-1 font-mono', pill.resolved && 'opacity-50')}
+                                    title={
+                                      findingText(pill.finding) +
+                                      (pill.fixable ? ` · ${t('preflight.status.autoFix')}` : '')
+                                    }
+                                  >
+                                    {pill.fixable && (
+                                      <Wrench className="size-3 shrink-0" aria-hidden />
+                                    )}
+                                    {pill.code}
+                                    {pill.count > 1 && ` ×${pill.count}`}
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell
                             className={cn(
@@ -1492,67 +1367,6 @@ export function PreflightPage() {
                               <span className="text-muted-foreground">—</span>
                             )}
                           </TableCell>
-                          <TableCell className="text-right">
-                            {part.step || part.nc ? (
-                              <div className="flex justify-end gap-1">
-                                {overrideFor(part) ? (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => undoOverride(part.mark)}
-                                  >
-                                    <Undo2 />
-                                    {t('common.actions.undo')}
-                                  </Button>
-                                ) : (
-                                  <>
-                                    {isRegeneratable(part) && (
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={fixingMark === part.mark}
-                                        onClick={() => void regeneratePart(part)}
-                                      >
-                                        {fixingMark === part.mark
-                                          ? t('common.actions.working')
-                                          : t('common.actions.regenerateStep')}
-                                      </Button>
-                                    )}
-                                    {isSimplifiable(part) && (
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={fixingMark === part.mark}
-                                        onClick={() => void simplifyPart(part)}
-                                      >
-                                        {fixingMark === part.mark
-                                          ? t('common.actions.working')
-                                          : t('common.actions.simplify')}
-                                      </Button>
-                                    )}
-                                    {isCleanable(part) && (
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={fixingMark === part.mark}
-                                        onClick={() => void cleanPart(part)}
-                                      >
-                                        {fixingMark === part.mark
-                                          ? t('common.actions.cleaning')
-                                          : t('common.actions.cleanStep')}
-                                      </Button>
-                                    )}
-                                  </>
-                                )}
-                                <Button variant="ghost" size="sm" onClick={() => openPart(part)}>
-                                  <Eye />
-                                  {t('common.actions.view')}
-                                </Button>
-                              </div>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">—</span>
-                            )}
-                          </TableCell>
                         </TableRow>
                       )
                     })}
@@ -1567,7 +1381,42 @@ export function PreflightPage() {
       <Dialog
         open={viewing !== null}
         onClose={() => setViewing(null)}
-        title={viewing ? t('preflight.viewer.dialogTitle', { mark: viewing.mark }) : undefined}
+        title={
+          viewing ? (
+            <div className="flex items-center gap-3">
+              <span>{t('preflight.viewer.dialogTitle', { mark: viewing.mark })}</span>
+              {viewingIndex >= 0 && (
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-7"
+                    disabled={viewingIndex <= 0}
+                    onClick={() => gotoOffset(-1)}
+                    aria-label={t('preflight.viewer.prevMark')}
+                    title={t('preflight.viewer.prevMark')}
+                  >
+                    <ChevronLeft />
+                  </Button>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {viewingIndex + 1} / {viewableParts.length}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-7"
+                    disabled={viewingIndex >= viewableParts.length - 1}
+                    onClick={() => gotoOffset(1)}
+                    aria-label={t('preflight.viewer.nextMark')}
+                    title={t('preflight.viewer.nextMark')}
+                  >
+                    <ChevronRight />
+                  </Button>
+                </div>
+              )}
+            </div>
+          ) : undefined
+        }
         className="h-[90vh] max-w-[96vw]"
       >
         {viewing && (viewing.step || viewing.nc) && (
@@ -1610,6 +1459,7 @@ export function PreflightPage() {
                           // marks land on what the laser will actually cut — not the ideal.
                           sabreFailures={viewerSabreFailures}
                           sabreBevelAngle={viewerSabreBevelAngle}
+                          nc={viewingNcGeom}
                           smoothLines
                         />
                       ) : (
@@ -1696,52 +1546,8 @@ export function PreflightPage() {
                 )}
               </div>
               <div className="flex h-[40vh] w-full shrink-0 flex-col border-t border-border">
-                <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
-                  {[
-                    { id: 'drawing' as const, labelKey: 'preflight.viewer.drawing' },
-                    { id: 'nc1' as const, labelKey: 'preflight.viewer.nc1' },
-                  ].map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      disabled={tab.id === 'nc1' && !ncBytes}
-                      title={
-                        tab.id === 'nc1' && !ncBytes && viewing?.nc
-                          ? t('preflight.viewer.ncMissingBytes', { mark: viewing.mark })
-                          : tab.id === 'nc1' && !viewing?.nc
-                            ? t('preflight.viewer.ncMissingFile', { mark: viewing?.mark ?? '' })
-                            : undefined
-                      }
-                      onClick={() => setRightTab(tab.id)}
-                      className={cn(
-                        'rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-40',
-                        rightTab === tab.id
-                          ? 'bg-accent text-accent-foreground'
-                          : 'text-muted-foreground hover:text-foreground',
-                      )}
-                    >
-                      {t(tab.labelKey)}
-                    </button>
-                  ))}
-                </div>
                 <div className="min-h-0 flex-1 overflow-hidden">
-                  {rightTab === 'nc1' && ncBytes ? (
-                    <Suspense
-                      fallback={
-                        <div className="grid h-full place-items-center text-sm text-muted-foreground">
-                          {t('preflight.viewer.loadingShort')}
-                        </div>
-                      }
-                    >
-                      <Nc3dViewer
-                        bytes={ncBytes}
-                        bus={orbitBus}
-                        badFaces={viewerBadFaces}
-                        sabreStations={viewerSabreStations}
-                        sabreBevelAngle={viewerSabreBevelAngle}
-                      />
-                    </Suspense>
-                  ) : pdfUrl ? (
+                  {pdfUrl ? (
                     <iframe
                       title={`${viewing.mark} drawing`}
                       src={pdfUrl}

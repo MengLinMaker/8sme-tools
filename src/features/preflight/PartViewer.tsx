@@ -5,7 +5,6 @@ import {
   AmbientLight,
   Box3,
   BufferGeometry,
-  ConeGeometry,
   DirectionalLight,
   DoubleSide,
   EdgesGeometry,
@@ -18,7 +17,6 @@ import {
   type Material,
   Matrix4,
   Mesh,
-  MeshBasicMaterial,
   MeshStandardMaterial,
   OrthographicCamera,
   Path,
@@ -29,6 +27,8 @@ import {
   WebGLRenderer,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import type { NcFace, NcGeometry } from '@/lib/parsers/ncGeometry'
+import { type NcLineSets, projectNc, resolveNcFaceAxes, type Vec3 } from '@/lib/parsers/ncProject'
 import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
 import {
@@ -40,7 +40,7 @@ import {
 } from '@/lib/step/booleanDiff'
 import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
-import { clusterSabre, type SabreFailure, sabreBoundary } from '@/lib/step/sabre'
+import { type SabreFailure, sabreBoundary } from '@/lib/step/sabre'
 import { meshForViewer } from '@/lib/step/viewerModel'
 import { attachOrbit, type OrbitBus } from './orbitSync'
 import { smoothLines } from './smoothLines'
@@ -48,10 +48,8 @@ import { smoothLines } from './smoothLines'
 const GHOST_COLOR = 0x3ddc84
 const COMPARE_COLOR = 0xf59e0b
 const STRAY_COLOR = 0xf97316
-/** Light-sabre cut lines: triangle edges of the surfaces the beam cannot cut. */
+/** Light-sabre cut lines: perimeter of the patch the beam cannot cut. */
 const SABRE_CUT_COLOR = 0xff2b2b
-/** Light-sabre bevel ticks: outward normals showing the guilty cut angle. */
-const SABRE_BEVEL_COLOR = 0xfbbf24
 /** Overcut vs the STEP ideal (NC took too much — scrap, cannot fix). */
 const OVERCUT_COLOR = 0xef4444
 const OVERCUT_RGB: [number, number, number] = [0xef / 255, 0x44 / 255, 0x44 / 255]
@@ -60,6 +58,51 @@ const UNDERCUT_RGB: [number, number, number] = [0x3b / 255, 0x82 / 255, 0xf6 / 2
 const FACE_MATERIAL = { color: 0xaebfd0, metalness: 0.55, roughness: 0.45 }
 /** Roll about the length axis for each `detectOrientation` result (world YZ → profile-local). */
 const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]
+
+/** Projected NC toolpath colours: plain cuts, welding bevels, inner cut-outs, holes. */
+const NC_COLOR = {
+  outer: 0x3ddc84,
+  bevel: 0xe879f9,
+  inner: 0xf59e0b,
+  holes: 0x38bdf8,
+} as const
+
+/** Builds one `LineSegments` from a flat XYZ pair list, or null when there is nothing to draw. */
+function ncLineObject(points: number[], color: number): LineSegments | null {
+  if (points.length === 0) return null
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new Float32BufferAttribute(points, 3))
+  const material = new LineBasicMaterial({ color, transparent: true, opacity: 0.95 })
+  return new LineSegments(geometry, material)
+}
+
+/** Appends the four NC line sets to a scene as coloured segments, returning them for disposal. */
+function addNcLines(nc: NcGeometry, placement: Parameters<typeof projectNc>[1]): LineSegments[] {
+  const sets: NcLineSets = projectNc(nc, placement)
+  const entries: [number[], number][] = [
+    [sets.outer, NC_COLOR.outer],
+    [sets.bevel, NC_COLOR.bevel],
+    [sets.inner, NC_COLOR.inner],
+    [sets.holes, NC_COLOR.holes],
+  ]
+  const lines: LineSegments[] = []
+  for (const [points, color] of entries) {
+    const line = ncLineObject(points, color)
+    if (line) lines.push(line)
+  }
+  return lines
+}
+
+/** Extent (max − min) of a 2D outline along one axis. */
+function extentOf(points: [number, number][], axis: 0 | 1): number {
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (const p of points) {
+    min = Math.min(min, p[axis])
+    max = Math.max(max, p[axis])
+  }
+  return max - min
+}
 
 /** Formats a 0–1 fraction as a percentage, keeping a decimal for tiny-but-nonzero shares. */
 function percent(value: number): string {
@@ -285,6 +328,7 @@ function mountScene(
   compareBytes: Uint8Array | null | undefined,
   deferDiff?: boolean,
   sabre?: SabreFailure[] | null,
+  nc?: NcGeometry | null,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -388,6 +432,9 @@ function mountScene(
 
   // Stock ghost, seated in the same canonical frame as the model.
   const overlays: Group[] = []
+  // Projected NC toolpath lines (only on the manufactured pane), parented to the scene in the
+  // same seated frame as the model so they land on the surfaces the laser actually cut.
+  const ncObjects: LineSegments[] = []
   const extents = [size.x, size.y, size.z]
   const nativeLongAxis = extents.indexOf(Math.max(...extents))
   const length = extents[nativeLongAxis]
@@ -416,11 +463,77 @@ function mountScene(
     )
     scene.add(overlay)
     overlays.push(overlay)
+
+    // Project the NC toolpath onto the stock section: each per-face (x along the member, y
+    // across the face) point is placed on the section's bounding face, mapped through the same
+    // orientation basis as the ghost. The stock's own 1.5 mm inflation keeps the lines just
+    // proud of the model surface, so they never z-fight yet still read as the cut path.
+    if (nc) {
+      const ex = extentOf(profile, 0)
+      const ey = extentOf(profile, 1)
+      const axes = resolveNcFaceAxes(profile, nc)
+      const half = (axis: 0 | 1): number => (axis === 0 ? ex : ey) / 2
+      const OFF = 0.4
+      const faceAxis = (face: string): 0 | 1 => (face === 'v' || face === 'h' ? axes.vh : axes.ou)
+      const positive = (face: string): 1 | -1 => (face === 'o' || face === 'v' ? 1 : -1)
+      const place = (face: NcFace, x: number, y: number): Vec3 => {
+        const span = faceAxis(face)
+        const other = (1 - span) as 0 | 1
+        const local: [number, number] = [0, 0]
+        local[span] = y - half(span)
+        local[other] = positive(face) * (half(other) + OFF)
+        const along = x - length / 2
+        return [
+          along + local[0] * xAxis.x + local[1] * yAxis.x,
+          local[0] * xAxis.y + local[1] * yAxis.y,
+          local[0] * xAxis.z + local[1] * yAxis.z,
+        ]
+      }
+      const normal = (face: NcFace): Vec3 => {
+        const other = (1 - faceAxis(face)) as 0 | 1
+        const base = other === 0 ? xAxis : yAxis
+        const sign = positive(face)
+        return [base.x * sign, base.y * sign, base.z * sign]
+      }
+      for (const line of addNcLines(nc, { place, normal })) {
+        scene.add(line)
+        ncObjects.push(line)
+      }
+    }
   }
   if (beam && Array.isArray(beam.profile) && beam.profile.length >= 3 && beam.length > 0) {
     const overlay = extrudeOverlay(beam.profile, [], beam.length, unit(0, 1), unit(1, 1), isOverlay)
     scene.add(overlay)
     overlays.push(overlay)
+
+    // The nested cut-beam lives in its own frame (length along Z, width X, depth Y): the NC
+    // toolpath for each nested piece sits directly on it, so the transverse cuts and holes
+    // read on the solid that the beam NC produces.
+    if (nc) {
+      const ex = extentOf(beam.profile, 0)
+      const ey = extentOf(beam.profile, 1)
+      const half = (axis: 0 | 1): number => (axis === 0 ? ex : ey) / 2
+      const OFF = 0.6
+      const faceAxis = (face: string): 0 | 1 => (face === 'v' || face === 'h' ? 1 : 0)
+      const positive = (face: string): 1 | -1 => (face === 'o' || face === 'v' ? 1 : -1)
+      const place = (face: NcFace, x: number, y: number): Vec3 => {
+        const span = faceAxis(face)
+        const other = (1 - span) as 0 | 1
+        const local: [number, number] = [0, 0]
+        local[span] = y - half(span)
+        local[other] = positive(face) * (half(other) + OFF)
+        return [local[0], local[1], x - beam.length / 2]
+      }
+      const normal = (face: NcFace): Vec3 => {
+        const other = (1 - faceAxis(face)) as 0 | 1
+        const sign = positive(face)
+        return other === 0 ? [sign, 0, 0] : [0, sign, 0]
+      }
+      for (const line of addNcLines(nc, { place, normal })) {
+        scene.add(line)
+        ncObjects.push(line)
+      }
+    }
   }
 
   // Frame the model and overlays in view.
@@ -592,14 +705,13 @@ function mountScene(
   }
   if (!deferDiff) runDiff()
 
-  // Light-sabre overlay: red cut lines tracing the guilty patch perimeter, plus one short
-  // amber arrow per patch showing the bevel direction. Only boundary edges draw — shared
-  // internal diagonals are dropped, so a tiled patch reads as one loop, not a hatch. Arrows
-  // stay short (sized to the cross-section, never the beam) so they read as surface normals
-  // instead of javelins rammed into the stock. Local coordinates, parented to the seated
-  // primary group so the marks follow the model. Depth test off + high render order, so the
-  // guilty lines read through the solid.
-  const sabreObjects: (LineSegments | Mesh)[] = []
+  // Light-sabre overlay: red cut lines tracing the guilty patch perimeter. Only boundary
+  // edges draw — shared internal diagonals are dropped, so a tiled patch reads as one loop,
+  // not a hatch. The bevel itself is a side cut line with a specified angle (kept in the NC
+  // weld-prep data and shown as a label), never a face-normal arrow. Local coordinates,
+  // parented to the seated primary group so the marks follow the model. Depth test off +
+  // high render order, so the guilty lines read through the solid.
+  const sabreObjects: LineSegments[] = []
   if (sabre && sabre.length > 0) {
     const biggest = [...sabre].sort((a, b) => b.area - a.area).slice(0, 200)
     const cutPts: number[] = []
@@ -628,55 +740,6 @@ function mountScene(
       primary.group.add(lines)
       sabreObjects.push(lines)
       materials.push(lineMaterial)
-    }
-    const crossMin = Math.min(fitSize.x, fitSize.y, fitSize.z) || 1
-    const shaftLen = Math.min(10, Math.max(5, crossMin * 0.15))
-    const coneHeight = shaftLen * 0.55
-    const coneRadius = shaftLen * 0.22
-    const up = new Vector3(0, 1, 0)
-    for (const cluster of clusterSabre(biggest)) {
-      const origin = new Vector3(...cluster.point)
-      const normal = new Vector3(...cluster.normal)
-      const shaftPts = [
-        origin.x + normal.x * 0.3,
-        origin.y + normal.y * 0.3,
-        origin.z + normal.z * 0.3,
-        origin.x + normal.x * shaftLen,
-        origin.y + normal.y * shaftLen,
-        origin.z + normal.z * shaftLen,
-      ]
-      const shaftGeometry = new BufferGeometry()
-      shaftGeometry.setAttribute('position', new Float32BufferAttribute(shaftPts, 3))
-      const shaftMaterial = new LineBasicMaterial({
-        color: SABRE_BEVEL_COLOR,
-        depthTest: false,
-        depthWrite: false,
-        transparent: true,
-        opacity: 0.95,
-      })
-      const shaft = new LineSegments(shaftGeometry, shaftMaterial)
-      shaft.renderOrder = 12
-      primary.group.add(shaft)
-      sabreObjects.push(shaft)
-      materials.push(shaftMaterial)
-      const headMaterial = new MeshBasicMaterial({
-        color: SABRE_BEVEL_COLOR,
-        depthTest: false,
-        depthWrite: false,
-        transparent: true,
-        opacity: 0.95,
-      })
-      const head = new Mesh(new ConeGeometry(coneRadius, coneHeight, 12), headMaterial)
-      head.quaternion.setFromUnitVectors(up, normal)
-      head.position.set(
-        origin.x + normal.x * (shaftLen + coneHeight / 2),
-        origin.y + normal.y * (shaftLen + coneHeight / 2),
-        origin.z + normal.z * (shaftLen + coneHeight / 2),
-      )
-      head.renderOrder = 12
-      primary.group.add(head)
-      sabreObjects.push(head)
-      materials.push(headMaterial)
     }
   }
 
@@ -776,6 +839,10 @@ function mountScene(
         }
       }
       for (const mesh of diffMeshes) mesh.geometry.dispose()
+      for (const line of ncObjects) {
+        line.geometry.dispose()
+        ;(line.material as LineBasicMaterial).dispose()
+      }
       for (const lines of sabreObjects) {
         primary.group.remove(lines)
         lines.geometry.dispose()
@@ -814,8 +881,12 @@ export interface PartViewerProps {
    * lines across flat faces that read as cuts.
    */
   smoothLines?: boolean
-  /** light-sabre failures — drawn as red cut lines + amber bevel ticks on the model */
+  /** light-sabre failures — drawn as red cut lines tracing the guilty patch perimeter */
   sabreFailures?: SabreFailure[] | null
+  /** bevel angle (whole degrees) the NC specifies at the guilty cut, for the legend */
+  sabreBevelAngle?: number | null
+  /** NC toolpath geometry to project onto this (manufactured) model */
+  nc?: NcGeometry | null
 }
 
 export default function PartViewer({
@@ -829,6 +900,8 @@ export default function PartViewer({
   highlightStray = false,
   smoothLines: smoothModelLines = false,
   sabreFailures = null,
+  sabreBevelAngle = null,
+  nc = null,
 }: PartViewerProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -887,6 +960,7 @@ export default function PartViewer({
           compareBytes,
           true,
           sabreFailures,
+          nc,
         )
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handle.setFlip(false)
@@ -925,6 +999,7 @@ export default function PartViewer({
     highlightStray,
     smoothModelLines,
     sabreFailures,
+    nc,
     t,
   ])
 
@@ -951,6 +1026,7 @@ export default function PartViewer({
   const hasOverlay = Boolean((stock || beam) && status === 'ready')
   const hasCompare = Boolean(compareBytes && status === 'ready')
   const hasSabre = Boolean(sabreFailures && sabreFailures.length > 0 && status === 'ready')
+  const hasNc = Boolean(nc && status === 'ready')
   const hasDiff = Boolean(hasCompare && diffInfo)
   const diffClean = diffInfo != null && diffInfo.over < 0.001 && diffInfo.under < 0.001
   // Fast probe verdict, shown while the exact boolean still runs.
@@ -1064,11 +1140,49 @@ export default function PartViewer({
             style={{ background: 'rgba(255, 43, 43, 0.65)' }}
           />
           <span className="text-red-300">{t('viewer.sabreCut')}</span>
-          <span
-            className="inline-block size-3 rounded-sm border border-amber-400"
-            style={{ background: 'rgba(251, 191, 36, 0.65)' }}
-          />
-          <span className="text-amber-300">{t('viewer.sabreBevel')}</span>
+          {sabreBevelAngle != null && (
+            <>
+              <span
+                className="inline-block size-3 rounded-sm border border-amber-400"
+                style={{ background: 'rgba(251, 191, 36, 0.65)' }}
+              />
+              <span className="text-amber-300">
+                {t('viewer.sabreBevelAngle', { angle: sabreBevelAngle })}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+      {hasNc && (
+        <div className="absolute left-3 top-12 z-10 flex flex-wrap items-center gap-2 rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur">
+          <span className="flex items-center gap-1.5">
+            <span
+              className="inline-block size-3 rounded-sm border border-emerald-400"
+              style={{ background: 'rgba(61, 220, 132, 0.5)' }}
+            />
+            {t('viewer.ncOuter')}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span
+              className="inline-block size-3 rounded-sm border border-fuchsia-400"
+              style={{ background: 'rgba(232, 121, 249, 0.5)' }}
+            />
+            {t('viewer.ncBevel')}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span
+              className="inline-block size-3 rounded-sm border border-amber-400"
+              style={{ background: 'rgba(245, 158, 11, 0.5)' }}
+            />
+            {t('viewer.ncInner')}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span
+              className="inline-block size-3 rounded-sm border border-sky-400"
+              style={{ background: 'rgba(56, 189, 248, 0.5)' }}
+            />
+            {t('viewer.ncHoles')}
+          </span>
         </div>
       )}
       {status !== 'ready' && (

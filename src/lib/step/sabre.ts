@@ -50,15 +50,6 @@ export interface SabreEdge {
   normal: [number, number, number]
 }
 
-/** One guilty patch: failures sharing a neighbourhood and facing the same way. */
-export interface SabreCluster {
-  /** mean surface point */
-  point: [number, number, number]
-  /** mean outward normal (unit) — the bevel direction */
-  normal: [number, number, number]
-  count: number
-}
-
 function vertexKey(point: [number, number, number]): string {
   return `${Math.round(point[0] * 1000)},${Math.round(point[1] * 1000)},${Math.round(point[2] * 1000)}`
 }
@@ -92,70 +83,6 @@ export function sabreBoundary(failures: SabreFailure[]): SabreEdge[] {
     if (count === 1) out.push(edge)
   }
   return out
-}
-
-/** Neighbourhood (mm) for grouping failures into one guilty patch. */
-const CLUSTER_DISTANCE_MM = 25
-/** Minimum normal alignment (dot) for failures to share a patch. */
-const CLUSTER_NORMAL_DOT = 0.9
-
-/**
- * Groups failures into guilty patches: same neighbourhood and same facing. One patch gets
- * one bevel arrow, instead of a stick per failing triangle.
- */
-export function clusterSabre(failures: SabreFailure[]): SabreCluster[] {
-  interface Accum {
-    point: [number, number, number]
-    normal: [number, number, number]
-    count: number
-  }
-  const clusters: Accum[] = []
-  for (const failure of failures) {
-    const hit = clusters.find((cluster) => {
-      const dx = cluster.point[0] / cluster.count - failure.point[0]
-      const dy = cluster.point[1] / cluster.count - failure.point[1]
-      const dz = cluster.point[2] / cluster.count - failure.point[2]
-      if (Math.hypot(dx, dy, dz) > CLUSTER_DISTANCE_MM) return false
-      const nx = cluster.normal[0]
-      const ny = cluster.normal[1]
-      const nz = cluster.normal[2]
-      const length = Math.hypot(nx, ny, nz) || 1
-      const dot =
-        (nx * failure.normal[0] + ny * failure.normal[1] + nz * failure.normal[2]) / length
-      return dot > CLUSTER_NORMAL_DOT
-    })
-    if (hit) {
-      hit.point[0] += failure.point[0]
-      hit.point[1] += failure.point[1]
-      hit.point[2] += failure.point[2]
-      hit.normal[0] += failure.normal[0]
-      hit.normal[1] += failure.normal[1]
-      hit.normal[2] += failure.normal[2]
-      hit.count += 1
-    } else {
-      clusters.push({
-        point: [...failure.point] as [number, number, number],
-        normal: [...failure.normal] as [number, number, number],
-        count: 1,
-      })
-    }
-  }
-  return clusters.map((cluster) => {
-    const length = Math.hypot(cluster.normal[0], cluster.normal[1], cluster.normal[2]) || 1
-    return {
-      point: [
-        cluster.point[0] / cluster.count,
-        cluster.point[1] / cluster.count,
-        cluster.point[2] / cluster.count,
-      ] as [number, number, number],
-      normal: [
-        cluster.normal[0] / length,
-        cluster.normal[1] / length,
-        cluster.normal[2] / length,
-      ] as [number, number, number],
-      count: cluster.count,
-    }
-  })
 }
 
 /** The minimum a shape must expose to be light-sabre tested — an already-imported OCC shape. */

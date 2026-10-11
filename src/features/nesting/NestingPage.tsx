@@ -37,7 +37,6 @@ import {
 } from '@/lib/step/occ'
 import { cn } from '@/lib/utils'
 import { BeamNcViewer, type BeamSlot } from './BeamNcViewer'
-import { memberLength, type StitchedNcItem, StitchedNcViewer } from './StitchedNcViewer'
 
 const PartViewer = lazy(() => import('@/features/preflight/PartViewer'))
 
@@ -61,7 +60,7 @@ interface ViewFile {
   /** Piece spans per side along the beam, driving the NC preview + cuts tab. */
   slots: BeamSlot[]
   /** Each nested piece's real NC at its slot: the stitched NC 3D view. */
-  ncItems: StitchedNcItem[]
+  ncItems: NcItem[]
   /** Marks with no NC file, omitted from the stitch. */
   ncMissing: string[]
   kerf: number
@@ -69,6 +68,19 @@ interface ViewFile {
   beam: { profile: [number, number][]; length: number }
   bodies: number
   bodyInfo: StepBody[]
+}
+
+/** One nested piece's real NC geometry at its position along the beam. */
+interface NcItem {
+  mark: string
+  side: 'L' | 'R'
+  /** Distance from the beam start to this piece's NC origin. */
+  start: number
+  /** Nominal nest slot length for this piece. */
+  slotLength: number
+  /** The NC's own ST-header declared length, if it parsed. */
+  headerLength: number | null
+  geometry: NcGeometry
 }
 
 const VIEW_PRESETS: { id: ViewPreset; labelKey: string }[] = [
@@ -132,7 +144,7 @@ export function NestingPage() {
   // build lands instead of remounting viewers when it arrives.
   const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
   const [nestViewMode, setNestViewMode] = useState<NestViewMode>('split')
-  const [rightTab, setRightTab] = useState<'nc' | 'cuts' | 'preview'>('preview')
+  const [rightTab, setRightTab] = useState<'cuts' | 'preview'>('preview')
 
   useEffect(() => {
     const data: StoredSettings = {
@@ -279,7 +291,7 @@ export function NestingPage() {
       ...span(layout.ubBar.teeBars[1].units, 'R'),
     ]
     // Stitch each piece's real NC at its slot (sync text parse — instant, no OCC involved).
-    const ncItems: StitchedNcItem[] = []
+    const ncItems: NcItem[] = []
     const ncMissing: string[] = []
     const seenMissing = new Set<string>()
     const noteMissing = (mark: string): void => {
@@ -549,6 +561,23 @@ export function NestingPage() {
   const showStepPane = Boolean(viewing) && stepPaneActive && hasStep
   const twoPane = showMfgPane && showStepPane
   const ncCuts = viewing?.ncText ? parseBeamNcCuts(viewing.ncText) : []
+  // Every nested piece's NC, shifted to its slot along the beam, so the manufactured cut-beam
+  // view can project each piece's toolpath onto the part the laser actually cuts.
+  const beamNc = useMemo<NcGeometry | null>(() => {
+    if (!viewing) return null
+    const contours: NcGeometry['contours'] = []
+    const holes: NcGeometry['holes'] = []
+    for (const item of viewing.ncItems) {
+      for (const contour of item.geometry.contours) {
+        contours.push({
+          ...contour,
+          points: contour.points.map(([x, y]) => [x + item.start, y] as [number, number]),
+        })
+      }
+      for (const hole of item.geometry.holes) holes.push({ ...hole, x: hole.x + item.start })
+    }
+    return contours.length > 0 || holes.length > 0 ? { contours, holes } : null
+  }, [viewing])
 
   return (
     <div className="flex flex-col gap-6">
@@ -825,6 +854,7 @@ export function NestingPage() {
                           // uncut-stock outline, showing what the split + kerfs removed.
                           beam={viewing.beam}
                           bus={orbitBus}
+                          nc={beamNc}
                           smoothLines
                         />
                       ) : (
@@ -919,7 +949,6 @@ export function NestingPage() {
                 <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
                   {[
                     { id: 'preview' as const, labelKey: 'nesting.viewer.previewTab' },
-                    { id: 'nc' as const, labelKey: 'nesting.viewer.ncTab' },
                     { id: 'cuts' as const, labelKey: 'nesting.viewer.cutsTab' },
                   ].map((tab) => (
                     <button
@@ -963,44 +992,6 @@ export function NestingPage() {
                         bus={orbitBus}
                       />
                     </div>
-                  ) : rightTab === 'nc' ? (
-                    viewing.ncItems.length > 0 ? (
-                      <div className="flex h-full flex-col">
-                        {viewing.ncMissing.length > 0 && (
-                          <div className="border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
-                            {t('nesting.viewer.ncMissing', {
-                              marks: viewing.ncMissing.join(', '),
-                            })}
-                          </div>
-                        )}
-                        <div className="min-h-72 flex-1">
-                          <StitchedNcViewer
-                            items={viewing.ncItems}
-                            stockLength={viewing.stockLength}
-                            bus={orbitBus}
-                          />
-                        </div>
-                        <NcReconcile items={viewing.ncItems} />
-                        {viewing.ncText && (
-                          <details className="border-t border-border">
-                            <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
-                              {t('nesting.viewer.ncSource')}
-                            </summary>
-                            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words border-t border-border px-4 py-3 font-mono text-xs leading-relaxed">
-                              {viewing.ncText}
-                            </pre>
-                          </details>
-                        )}
-                      </div>
-                    ) : viewing.ncText ? (
-                      <pre className="whitespace-pre-wrap break-words px-4 py-3 font-mono text-xs leading-relaxed">
-                        {viewing.ncText}
-                      </pre>
-                    ) : (
-                      <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
-                        {t('nesting.viewer.ncEmpty')}
-                      </div>
-                    )
                   ) : ncCuts.length === 0 ? (
                     <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">
                       {t('nesting.viewer.ncEmpty')}
@@ -1167,64 +1158,6 @@ function parseBeamNcCuts(ncText: string): BeamCut[] {
     })
   }
   return cuts.filter((cut) => Number.isFinite(cut.end))
-}
-
-/**
- * Proves whether gaps in the stitch are layout or data: three lengths per piece — the nest slot
- * (part-list length, else NC header), the NC ST header's own declared length, and the NC
- * toolpath extent the stitch actually draws. The stitch renders exactly slot vs toolpaths, so:
- * header ≈ slot >> NC means the NC file is internally short (or the reader is blind to blocks);
- * header ≈ NC << slot means the part list over-allocates. Block counts ride along to judge the
- * reader — e.g. AK:0 with holes present means the outline never reached the parser.
- */
-function NcReconcile({ items }: { items: StitchedNcItem[] }) {
-  const { t } = useTranslation()
-  const rows = items.map((item) => {
-    const nc = memberLength(item.geometry)
-    const ak = item.geometry.contours.filter((c) => c.kind === 'outer').length
-    const ik = item.geometry.contours.length - ak
-    const bo = item.geometry.holes.length
-    const values = [item.slotLength, nc]
-    if (item.headerLength != null) values.push(item.headerLength)
-    return {
-      mark: item.mark,
-      side: item.side,
-      slot: item.slotLength,
-      hdr: item.headerLength,
-      nc,
-      counts: `AK:${ak} IK:${ik} BO:${bo}`,
-      spread: Math.max(...values) - Math.min(...values),
-    }
-  })
-  const offenders = rows.filter((row) => row.spread > 2)
-  if (offenders.length === 0) {
-    const max = rows.reduce((m, row) => Math.max(m, row.spread), 0)
-    return (
-      <div className="border-t border-border px-4 py-2 text-xs text-emerald-300">
-        {t('nesting.viewer.ncReconcileOk', { delta: max.toFixed(1) })}
-      </div>
-    )
-  }
-  const dash = (value: number | null): string => (value == null ? '—' : String(Math.round(value)))
-  return (
-    <div className="border-t border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
-      <div className="font-medium">{t('nesting.viewer.ncReconcileBad')}</div>
-      <ul className="mt-1 font-mono">
-        {offenders.map((row) => (
-          <li key={`${row.side}-${row.mark}`}>
-            {t('nesting.viewer.ncReconcileRow', {
-              mark: row.mark,
-              side: row.side === 'L' ? t('nesting.left') : t('nesting.right'),
-              slot: Math.round(row.slot),
-              hdr: dash(row.hdr),
-              nc: Math.round(row.nc),
-              counts: row.counts,
-            })}
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
 }
 
 function PaneTag({ children, tone }: { children: ReactNode; tone?: 'manufactured' | 'step' }) {

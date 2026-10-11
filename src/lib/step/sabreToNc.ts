@@ -31,6 +31,11 @@ const CLUSTER_GAP_FRACTION = 0.005
 const CLUSTER_GAP_FLOOR_MM = 5
 /** An NC end counts as ragged (slanted cut) past this face-extent spread. */
 const RAGGED_THRESHOLD_MM = 2
+/**
+ * Weld-prep angle fields are `[angleA, distA, angleB, distB]` per contour vertex. Angles below
+ * this (degrees) never survive rounding to a whole-degree label, so they don't count.
+ */
+const BEVEL_ANGLE_MIN_DEG = 0.5
 const WINDOW_MARGIN_MM = 12
 const WINDOW_MIN_MM = 10
 const WINDOW_MAX_MM = 40
@@ -136,4 +141,32 @@ export function locateSabreStations(
       }
     })
     .sort((a, b) => a.x - b.x)
+}
+
+/**
+ * The bevel angle the NC *specifies* at the guilty cut: the largest weld-prep angle on any
+ * outer-contour vertex inside a guilty station window, in whole degrees. A bevel is a side
+ * cut line with an angle — not the face normal — so it is read from the cut data, never
+ * derived from the 3D surface. Null when the NC specifies no bevel there (a STEP-only
+ * shave the NC cannot express).
+ */
+export function specifiedBevelAngle(nc: NcGeometry, stations: SabreStation[]): number | null {
+  let best = 0
+  for (const contour of nc.contours) {
+    if (contour.kind !== 'outer') continue
+    for (let i = 0; i < contour.points.length; i++) {
+      const [x] = contour.points[i]
+      const near = stations.some(
+        (station) => x > station.x - station.window && x < station.x + station.window,
+      )
+      if (!near) continue
+      const bevel = contour.bevels[i] ?? []
+      for (const angle of [bevel[0], bevel[2]]) {
+        if (Number.isFinite(angle) && Math.abs(angle) >= BEVEL_ANGLE_MIN_DEG) {
+          best = Math.max(best, Math.abs(angle))
+        }
+      }
+    }
+  }
+  return best > 0 ? Math.round(best) : null
 }
