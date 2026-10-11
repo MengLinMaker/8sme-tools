@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { syncGeometries } from 'replicad-threejs-helper'
 import {
+  AdditiveBlending,
   AmbientLight,
   Box3,
   BufferGeometry,
@@ -92,6 +93,12 @@ const FALLBACK_COLOR = 0x9ca3af
 
 /** NC toolpath line width in screen pixels (fat lines, so they read clearly over the model). */
 const NC_LINE_WIDTH = 3
+/** Glow used when an issue row is hovered: a wide additive halo behind the marker + a fatter core. */
+const SABRE_HALO_WIDTH = 16
+const SABRE_HALO_OPACITY = 0.32
+const SABRE_HIGHLIGHT_WIDTH = 6
+/** The other markers dim to this while one is hovered, so the hovered one reads at a glance. */
+const SABRE_DIM_OPACITY = 0.2
 
 /** Builds one fat-line (Line2) object from a flat XYZ pair list, or null when there is nothing. */
 function ncLineObject(
@@ -121,6 +128,35 @@ function ncLineObject(
     line.renderOrder = 30
     line.layers.set(1)
   }
+  return line
+}
+
+/** A wide, additive, translucent copy of a marker's line — the glow behind a hovered finding. */
+function ncHaloObject(
+  points: number[],
+  color: number,
+  resolution: Vector2,
+  materials: LineMaterial[],
+): LineSegments2 | null {
+  if (points.length === 0) return null
+  const geometry = new LineSegmentsGeometry()
+  geometry.setPositions(points)
+  const material = new LineMaterial({
+    color,
+    transparent: true,
+    opacity: SABRE_HALO_OPACITY,
+    linewidth: SABRE_HALO_WIDTH,
+    worldUnits: false,
+    blending: AdditiveBlending,
+    depthTest: false,
+    depthWrite: false,
+  })
+  material.resolution.copy(resolution)
+  materials.push(material)
+  const line = new LineSegments2(geometry, material)
+  line.renderOrder = 29
+  line.layers.set(1)
+  line.visible = false
   return line
 }
 
@@ -300,6 +336,8 @@ interface SceneHandle {
   setSabreVisible: (visible: boolean) => void
   /** Show only the span markers whose index is in `indices` (null = all; [] = none). */
   setVisibleSpans: (indices: number[] | null) => void
+  /** Glow the sub-cut marker at `index` and dim the rest (null clears the hover highlight). */
+  highlight: (index: number | null) => void
   /** Pull every synced viewport toward the geometry behind a finding code (null = whole model). */
   focus: (code: string | null) => void
   diffStats: DiffStats | null
@@ -485,6 +523,14 @@ function mountScene(
   const sabreObjects: LineSegments2[] = []
   /** One span marker per failing sub-cut, indexed like `sabreFailures`, so a finding can zoom in. */
   const sabreSpanObjects: (LineSegments2 | null)[] = []
+  /** Glow halo behind each span marker, shown only while its issue row is hovered. */
+  const sabreHaloObjects: (LineSegments2 | null)[] = []
+  /** Span markers currently shown by the eye toggles (index → visible), before hover overrides. */
+  const spanShown: boolean[] = []
+  /** Index of the hovered finding's sub-cut, or null when nothing is hovered. */
+  let hoverSpan: number | null = null
+  /** Whether sabre markers are enabled at all (the toolbar toggle); hover can't reveal them off. */
+  let sabreVisible = true
   const extents = [size.x, size.y, size.z]
   const nativeLongAxis = extents.indexOf(Math.max(...extents))
   const length = extents[nativeLongAxis]
@@ -559,19 +605,20 @@ function mountScene(
           const b = placeNcFace(frame, failure.face, failure.to[0], failure.to[1]).cross
           const pA = toScene(failure.from[0], a, failure.face)
           const pB = toScene(failure.to[0], b, failure.face)
-          const mark = ncLineObject(
-            [pA[0], pA[1], pA[2], pB[0], pB[1], pB[2]],
-            SABRE_CUT_COLOR,
-            ncResolution,
-            ncMaterials,
-            true,
-          )
+          const positions = [pA[0], pA[1], pA[2], pB[0], pB[1], pB[2]]
+          const mark = ncLineObject(positions, SABRE_CUT_COLOR, ncResolution, ncMaterials, true)
           if (mark) {
             scene.add(mark)
             sabreObjects.push(mark)
             sabreSpanObjects.push(mark)
+            spanShown.push(false)
+            const halo = ncHaloObject(positions, SABRE_CUT_COLOR, ncResolution, ncMaterials)
+            if (halo) scene.add(halo)
+            sabreHaloObjects.push(halo)
           } else {
             sabreSpanObjects.push(null)
+            spanShown.push(false)
+            sabreHaloObjects.push(null)
           }
         }
       }
@@ -901,6 +948,24 @@ function mountScene(
   const observer = new ResizeObserver(resize)
   observer.observe(container)
 
+  // Applies the eye toggles, the sabre toggle and the hovered index together: the hovered marker
+  // is forced on (even if its eye is off) and pops bright with a halo, while the rest dim so it
+  // stands out. Every other marker keeps its toggled visibility at base opacity.
+  const refreshSpanAppearance = (): void => {
+    for (let i = 0; i < sabreSpanObjects.length; i++) {
+      const mark = sabreSpanObjects[i]
+      if (!mark) continue
+      const highlighted = hoverSpan != null && i === hoverSpan
+      const visible = sabreVisible && (highlighted || spanShown[i] === true)
+      mark.visible = visible
+      const material = mark.material as LineMaterial
+      material.linewidth = highlighted ? SABRE_HIGHLIGHT_WIDTH : NC_LINE_WIDTH
+      material.opacity = highlighted ? 1 : hoverSpan != null ? SABRE_DIM_OPACITY : 0.98
+      const halo = sabreHaloObjects[i]
+      if (halo) halo.visible = highlighted && visible
+    }
+  }
+
   return {
     overlays,
     diffStats,
@@ -916,14 +981,18 @@ function mountScene(
       for (const lines of diffEdgeLines) lines.visible = visible
     },
     setSabreVisible(visible: boolean) {
-      for (const lines of sabreObjects) lines.visible = visible
+      sabreVisible = visible
+      refreshSpanAppearance()
     },
     setVisibleSpans(indices: number[] | null) {
       const set = indices == null ? null : new Set(indices)
-      for (let i = 0; i < sabreSpanObjects.length; i++) {
-        const object = sabreSpanObjects[i]
-        if (object) object.visible = set == null || set.has(i)
-      }
+      for (let i = 0; i < sabreSpanObjects.length; i++) spanShown[i] = set == null || set.has(i)
+      refreshSpanAppearance()
+    },
+    /** Hover highlight: glow the marker at `index` (force-shown), dim the rest (null = clear). */
+    highlight(index: number | null) {
+      hoverSpan = index
+      refreshSpanAppearance()
     },
     focus(code: string | null) {
       if (!bus) return
@@ -974,6 +1043,12 @@ function mountScene(
         lines.geometry.dispose()
         ;(lines.material as LineMaterial).dispose()
       }
+      for (const halo of sabreHaloObjects) {
+        if (!halo) continue
+        scene.remove(halo)
+        halo.geometry.dispose()
+        ;(halo.material as LineMaterial).dispose()
+      }
       for (const material of materials) material.dispose()
       for (const overlay of overlays) {
         overlay.traverse((object) => {
@@ -1021,6 +1096,8 @@ export interface PartViewerProps {
   focus?: { code: string; token: number; index?: number } | null
   /** Which failing sub-cut markers to show, by index (null/undefined = all; [] = none). */
   visibleSpans?: number[] | null
+  /** Hovered finding's sub-cut index: glow that marker and dim the others (null = no highlight). */
+  highlight?: number | null
   /** Controlled overlay toggles (shared toolbar). Omit to keep the per-pane buttons. */
   showStock?: boolean
   onShowStockChange?: (visible: boolean) => void
@@ -1050,6 +1127,7 @@ export default function PartViewer({
   faceFrame = null,
   focus = null,
   visibleSpans = null,
+  highlight = null,
   showStock: showStockProp,
   onShowStockChange,
   flipped: flippedProp,
@@ -1204,6 +1282,12 @@ export default function PartViewer({
     if (status !== 'ready') return
     handleRef.current?.setVisibleSpans(showSabre ? visibleSpans : [])
   }, [visibleSpans, showSabre, status])
+
+  // Hover highlight: glow the hovered row's sub-cut marker and dim the rest.
+  useEffect(() => {
+    if (status !== 'ready') return
+    handleRef.current?.highlight(highlight)
+  }, [highlight, status])
 
   // Pan/zoom to fit the shown sub-cuts whenever the eye toggles change (not just on row click).
   const visibleKey = visibleSpans ? [...visibleSpans].sort((a, b) => a - b).join(',') : ''

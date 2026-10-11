@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -65,7 +65,8 @@ describe('sabre cost benchmark', () => {
       t = performance.now()
       const header = parseDstv(ncText).header
       const section = partSectionForCode(header.profile, header.dimensions)
-      if (section) assessCutReachGeometry(parseNcGeometry(ncText), section.points, section.holes ?? [])
+      if (section)
+        assessCutReachGeometry(parseNcGeometry(ncText), section.points, section.holes ?? [])
       const rMs = performance.now() - t
       reachMs += rMs
 

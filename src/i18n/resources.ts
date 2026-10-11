@@ -205,6 +205,7 @@ export const en = {
       toggleIssue: 'Show this issue in the 3D',
       colSeverity: 'Severity',
       colType: 'Type',
+      colLocation: 'Location',
       colIssue: 'Issue',
       sevError: 'Error',
       sevWarning: 'Warning',

@@ -1,6 +1,15 @@
 import { zipSync } from 'fflate'
 import type { TFunction } from 'i18next'
-import { ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, Undo2, Wrench } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Eye,
+  EyeOff,
+  Undo2,
+  Wrench,
+} from 'lucide-react'
 import {
   lazy,
   type ReactNode,
@@ -358,6 +367,8 @@ export function PreflightPage() {
   } | null>(null)
   /** Which issue row is selected in the viewer's issues list (stepped through one at a time). */
   const [issueIndex, setIssueIndex] = useState(0)
+  /** Issue row currently hovered in the list, so its 3D marker can glow (null = none). */
+  const [hoverIssueIndex, setHoverIssueIndex] = useState<number | null>(null)
   /** Issue indices the user has shown (eye on) — their sub-cuts render in the 3D. Default: none. */
   const [shownIssues, setShownIssues] = useState<Set<number>>(new Set())
   // Shared overlay toggles, applied to every pane from the one toolbar above the 3D.
@@ -369,6 +380,7 @@ export function PreflightPage() {
     setOrbitBus(createOrbitBus())
     setFindingFocus(null)
     setIssueIndex(0)
+    setHoverIssueIndex(null)
     setShownIssues(new Set())
     setViewing(part)
   }, [])
@@ -818,6 +830,8 @@ export function PreflightPage() {
             params: {
               index,
               face: failure.face,
+              // Station along the member (mid of the sub-cut) — used to group issues by location.
+              x: Math.round((failure.from[0] + failure.to[0]) / 2),
               span: failure.spanMm.toFixed(0),
               path: failure.path.toFixed(0),
               bevel: failure.bevel.toFixed(0),
@@ -997,6 +1011,12 @@ export function PreflightPage() {
     () => viewerFindings.map((_, index) => index).filter((index) => shownIssues.has(index)),
     [viewerFindings, shownIssues],
   )
+  /** Sub-cut index to glow in the 3D while its issue row is hovered (only `CUT_DEPTH` maps to one). */
+  const highlightSpan = useMemo(() => {
+    if (hoverIssueIndex == null) return null
+    const index = viewerFindings[hoverIssueIndex]?.params?.index
+    return typeof index === 'number' ? index : null
+  }, [viewerFindings, hoverIssueIndex])
   const toggleIssue = useCallback((index: number) => {
     setShownIssues((prev) => {
       const next = new Set(prev)
@@ -1678,6 +1698,7 @@ export function PreflightPage() {
                             ncSection={viewingNcSection}
                             faceFrame={viewingNcFrame}
                             visibleSpans={visibleSpans}
+                            highlight={highlightSpan}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
                             hideControls
@@ -1705,6 +1726,7 @@ export function PreflightPage() {
                             ncSection={viewingNcSection}
                             faceFrame={viewingNcFrame}
                             visibleSpans={visibleSpans}
+                            highlight={highlightSpan}
                             focus={manufactured ? findingFocus : null}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
@@ -1737,6 +1759,7 @@ export function PreflightPage() {
                             ncSection={viewingNcSection}
                             faceFrame={viewingNcFrame}
                             visibleSpans={visibleSpans}
+                            highlight={highlightSpan}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
                             hideControls
@@ -1783,6 +1806,7 @@ export function PreflightPage() {
                       step={viewing.step}
                       activeIndex={issueIndex}
                       onSelect={selectIssue}
+                      onHover={setHoverIssueIndex}
                       isChecked={(index) => shownIssues.has(index)}
                       onToggleCheck={toggleIssue}
                       allShown={shownIssues.size > 0}
@@ -1892,6 +1916,7 @@ function ViewerWarnings({
   fix,
   activeIndex = -1,
   onSelect,
+  onHover,
   isChecked,
   onToggleCheck,
   allShown = true,
@@ -1902,6 +1927,7 @@ function ViewerWarnings({
   fix?: ViewerFix
   activeIndex?: number
   onSelect?: (index: number) => void
+  onHover?: (index: number | null) => void
   isChecked?: (index: number) => boolean
   onToggleCheck?: (index: number) => void
   allShown?: boolean
@@ -1914,15 +1940,27 @@ function ViewerWarnings({
     activeRef.current?.scrollIntoView({ block: 'nearest' })
   }, [activeIndex])
   // Sortable issues table: by severity (worst first) or by type (code).
-  const [sort, setSort] = useState<{ key: 'severity' | 'code'; dir: 1 | -1 }>({
+  const [sort, setSort] = useState<{ key: 'severity' | 'code' | 'location'; dir: 1 | -1 }>({
     key: 'severity',
     dir: 1,
   })
-  const toggleSort = (key: 'severity' | 'code') =>
+  const toggleSort = (key: 'severity' | 'code' | 'location') =>
     setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 1 ? -1 : 1 } : { key, dir: 1 }))
+  /** Station along the member (mm) a finding sits at, or null when it has no location. */
+  const locationOf = (finding: Finding): number | null => {
+    const raw = finding.params?.x
+    return typeof raw === 'number' ? raw : null
+  }
   const rows = findings
     .map((finding, index) => ({ finding, index }))
     .sort((a, b) => {
+      if (sort.key === 'location') {
+        const xa = locationOf(a.finding) ?? Number.POSITIVE_INFINITY
+        const xb = locationOf(b.finding) ?? Number.POSITIVE_INFINITY
+        const byLocation = xa - xb
+        if (byLocation !== 0) return byLocation * sort.dir
+        return SEVERITY_ORDER[a.finding.severity] - SEVERITY_ORDER[b.finding.severity]
+      }
       if (sort.key === 'code') {
         const byCode = a.finding.code.localeCompare(b.finding.code)
         if (byCode !== 0) return byCode * sort.dir
@@ -1934,6 +1972,18 @@ function ViewerWarnings({
     })
   const findingText = (finding: Finding) =>
     t(`findings.${finding.code}`, { ...finding.params, defaultValue: finding.message })
+  /** A sortable column header, with an up/down arrow when it's the active sort. */
+  const SortHead = ({ k, label }: { k: 'severity' | 'code' | 'location'; label: string }) => (
+    <button
+      type="button"
+      className="inline-flex items-center gap-1 uppercase transition-colors hover:text-foreground"
+      onClick={() => toggleSort(k)}
+    >
+      {label}
+      {sort.key === k &&
+        (sort.dir === 1 ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />)}
+    </button>
+  )
   const invalid = step && !step.valid ? step.problems.join('; ') : null
   const hasFixRow = Boolean(
     fix?.override || fix?.canClean || fix?.canRegenerate || fix?.canSimplify,
@@ -1975,14 +2025,13 @@ function ViewerWarnings({
             <TableRow className="hover:bg-transparent">
               <TableHead className="w-8" />
               <TableHead className="w-24">
-                <button type="button" className="uppercase" onClick={() => toggleSort('severity')}>
-                  {t('preflight.warnings.colSeverity')}
-                </button>
+                <SortHead k="severity" label={t('preflight.warnings.colSeverity')} />
               </TableHead>
               <TableHead className="w-28">
-                <button type="button" className="uppercase" onClick={() => toggleSort('code')}>
-                  {t('preflight.warnings.colType')}
-                </button>
+                <SortHead k="code" label={t('preflight.warnings.colType')} />
+              </TableHead>
+              <TableHead className="w-24">
+                <SortHead k="location" label={t('preflight.warnings.colLocation')} />
               </TableHead>
               <TableHead>{t('preflight.warnings.colIssue')}</TableHead>
               <TableHead className="w-24" />
@@ -2000,6 +2049,8 @@ function ViewerWarnings({
                 <TableRow
                   key={`${finding.code}-${finding.params?.index ?? finding.message}`}
                   className={cn(resolved && 'opacity-50', index === activeIndex && 'bg-accent/60')}
+                  onMouseEnter={onHover ? () => onHover(index) : undefined}
+                  onMouseLeave={onHover ? () => onHover(null) : undefined}
                 >
                   <TableCell className="py-1">
                     <button
@@ -2042,6 +2093,9 @@ function ViewerWarnings({
                     </span>
                   </TableCell>
                   <TableCell className="py-1 font-mono text-[11px]">{finding.code}</TableCell>
+                  <TableCell className="py-1 font-mono text-[11px] text-muted-foreground">
+                    {locationOf(finding) != null ? `${locationOf(finding)} mm` : '—'}
+                  </TableCell>
                   <TableCell className="py-1">
                     <button
                       type="button"
