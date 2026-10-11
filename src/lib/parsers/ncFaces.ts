@@ -54,11 +54,15 @@ export function faceSpanAxis(frame: NcFaceFrame, face: NcFace): Axis {
   return face === 'v' || face === 'h' ? frame.axisVH : frame.axisOU
 }
 
-/** The face's outward normal: the other section axis, and the side it sits on. */
+/**
+ * The face's outward normal: the other section axis, and the side it sits on. The section
+ * builders put the web (`v`/`h`) at the −normal side and the flange(`o`)/top at +, so `v`/`u`
+ * are the negative faces and `h`/`o` the positive ones.
+ */
 export function faceNormal(frame: NcFaceFrame, face: NcFace): { axis: Axis; sign: 1 | -1 } {
   return {
     axis: (1 - faceSpanAxis(frame, face)) as Axis,
-    sign: face === 'o' || face === 'v' ? 1 : -1,
+    sign: face === 'o' || face === 'h' ? 1 : -1,
   }
 }
 
@@ -81,7 +85,7 @@ export function placeNcFace(
   const other = (1 - span) as Axis
   const cross: [number, number] = [0, 0]
   cross[span] = y - faceHalf(frame, span)
-  cross[other] = (face === 'o' || face === 'v' ? 1 : -1) * faceHalf(frame, other)
+  cross[other] = (face === 'o' || face === 'h' ? 1 : -1) * faceHalf(frame, other)
   return { along: x, cross }
 }
 

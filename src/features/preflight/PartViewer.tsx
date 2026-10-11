@@ -18,15 +18,20 @@ import {
   Matrix4,
   Mesh,
   MeshStandardMaterial,
+  type Object3D,
   OrthographicCamera,
   Path,
   Quaternion,
   Scene,
   Shape,
+  Vector2,
   Vector3,
   WebGLRenderer,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import { faceNormal, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import type { NcFace, NcGeometry } from '@/lib/parsers/ncGeometry'
 import { type NcLineSets, type NcProjection, projectNc, type Vec3 } from '@/lib/parsers/ncProject'
@@ -46,7 +51,7 @@ import { meshForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { NcLegend } from './NcLegend'
 import { attachOrbit, type OrbitBus, requestFocus } from './orbitSync'
-import { smoothLines } from './smoothLines'
+import { SMOOTH_LINE_THRESHOLD_DEG, smoothLines } from './smoothLines'
 
 const GHOST_COLOR = 0x3ddc84
 /** Stock outline: neutral grey so it reads as raw material distinct from the part. */
@@ -60,6 +65,7 @@ const SABRE_CUT_COLOR = 0xff2b2b
 const OVERCUT_COLOR = 0xef4444
 const OVERCUT_RGB: [number, number, number] = [0xef / 255, 0x44 / 255, 0x44 / 255]
 /** Undercut vs the STEP ideal (leftover — can still be cut). */
+const UNDERCUT_COLOR = 0x3b82f6
 const UNDERCUT_RGB: [number, number, number] = [0x3b / 255, 0x82 / 255, 0xf6 / 255]
 const FACE_MATERIAL = { color: 0x9aa3ad, metalness: 0.15, roughness: 0.75 }
 /** Roll about the length axis for each `detectOrientation` result (world YZ → profile-local). */
@@ -73,17 +79,38 @@ const NC_COLOR = {
   holes: 0x38bdf8,
 } as const
 
-/** Builds one `LineSegments` from a flat XYZ pair list, or null when there is nothing to draw. */
-function ncLineObject(points: number[], color: number): LineSegments | null {
+/** NC toolpath line width in screen pixels (fat lines, so they read clearly over the model). */
+const NC_LINE_WIDTH = 3
+
+/** Builds one fat-line (Line2) object from a flat XYZ pair list, or null when there is nothing. */
+function ncLineObject(
+  points: number[],
+  color: number,
+  resolution: Vector2,
+  materials: LineMaterial[],
+): LineSegments2 | null {
   if (points.length === 0) return null
-  const geometry = new BufferGeometry()
-  geometry.setAttribute('position', new Float32BufferAttribute(points, 3))
-  const material = new LineBasicMaterial({ color, transparent: true, opacity: 0.95 })
-  return new LineSegments(geometry, material)
+  const geometry = new LineSegmentsGeometry()
+  geometry.setPositions(points)
+  const material = new LineMaterial({
+    color,
+    transparent: true,
+    opacity: 0.98,
+    linewidth: NC_LINE_WIDTH,
+    worldUnits: false,
+  })
+  material.resolution.copy(resolution)
+  materials.push(material)
+  return new LineSegments2(geometry, material)
 }
 
-/** Appends the four NC line sets to a scene as coloured segments, returning them for disposal. */
-function addNcLines(nc: NcGeometry, projection: NcProjection): LineSegments[] {
+/** Appends the four NC line sets to a scene as coloured fat lines, returning them for disposal. */
+function addNcLines(
+  nc: NcGeometry,
+  projection: NcProjection,
+  resolution: Vector2,
+  materials: LineMaterial[],
+): LineSegments2[] {
   const sets: NcLineSets = projectNc(nc, projection)
   const entries: [number[], number][] = [
     [sets.outer, NC_COLOR.outer],
@@ -91,9 +118,9 @@ function addNcLines(nc: NcGeometry, projection: NcProjection): LineSegments[] {
     [sets.inner, NC_COLOR.inner],
     [sets.holes, NC_COLOR.holes],
   ]
-  const lines: LineSegments[] = []
+  const lines: LineSegments2[] = []
   for (const [points, color] of entries) {
-    const line = ncLineObject(points, color)
+    const line = ncLineObject(points, color, resolution, materials)
     if (line) lines.push(line)
   }
   return lines
@@ -433,7 +460,9 @@ function mountScene(
   const overlays: Group[] = []
   // Projected NC toolpath lines (only on the manufactured pane), parented to the scene in the
   // same seated frame as the model so they land on the surfaces the laser actually cut.
-  const ncObjects: LineSegments[] = []
+  const ncObjects: LineSegments2[] = []
+  const ncMaterials: LineMaterial[] = []
+  const ncResolution = new Vector2(container.clientWidth || 1, container.clientHeight || 1)
   const extents = [size.x, size.y, size.z]
   const nativeLongAxis = extents.indexOf(Math.max(...extents))
   const length = extents[nativeLongAxis]
@@ -489,7 +518,12 @@ function mountScene(
         const base = n.axis === 0 ? xAxis : yAxis
         return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
       }
-      for (const line of addNcLines(nc, { frame, section, toScene, normal })) {
+      for (const line of addNcLines(
+        nc,
+        { frame, section, toScene, normal },
+        ncResolution,
+        ncMaterials,
+      )) {
         scene.add(line)
         ncObjects.push(line)
       }
@@ -516,7 +550,12 @@ function mountScene(
         const n = faceNormal(frame, face)
         return n.axis === 0 ? [n.sign, 0, 0] : [0, n.sign, 0]
       }
-      for (const line of addNcLines(nc, { frame, section: beam.profile, toScene, normal })) {
+      for (const line of addNcLines(
+        nc,
+        { frame, section: beam.profile, toScene, normal },
+        ncResolution,
+        ncMaterials,
+      )) {
         scene.add(line)
         ncObjects.push(line)
       }
@@ -541,6 +580,7 @@ function mountScene(
   // The multi-second boolean is deferred: the component paints the models plus
   // a fast presence verdict first, then runs the exact solids after paint.
   const diffMeshes: Mesh[] = []
+  const diffEdgeLines: LineSegments[] = []
   let diffStats: DiffStats | null = null
   let diffPresence: DiffPresence | null = null
   const soups = (meshed: MeshedStep) =>
@@ -548,6 +588,31 @@ function mountScene(
       vertices: body.mesh.faces.vertices,
       triangles: body.mesh.faces.triangles,
     }))
+  // The diff fill is an open shell (only the faces standing past tolerance are kept), so on its
+  // own it reads as a floating skin. Outlining its sharp folds and open boundary makes the
+  // over/under region read as a bounded volume again. The same dihedral bar as the model edges
+  // (`SMOOTH_LINE_THRESHOLD_DEG`) keeps real corners (45°+) while dropping the curve facets and
+  // boolean shards, so sharp edges read more than curves. Depth test off, like the fill, so the
+  // edges never hide behind the shell they bound.
+  const addDiffEdges = (geometry: BufferGeometry, color: number, parent: Object3D): void => {
+    const edges = new EdgesGeometry(geometry, SMOOTH_LINE_THRESHOLD_DEG)
+    if ((edges.getAttribute('position')?.count ?? 0) === 0) {
+      edges.dispose()
+      return
+    }
+    const material = new LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+      depthWrite: false,
+    })
+    const lines = new LineSegments(edges, material)
+    lines.renderOrder = 12
+    parent.add(lines)
+    diffEdgeLines.push(lines)
+    materials.push(material)
+  }
   const runDiff = (): DiffStats | null => {
     if (!compareStep || !compareGroup || diffStats) return diffStats
     const diagonal = Math.hypot(fitSize.x, fitSize.y, fitSize.z)
@@ -585,6 +650,7 @@ function mountScene(
         transparent: true,
         depthTest: false,
         depthWrite: false,
+        side: DoubleSide,
       })
       const undercutMaterial = new MeshStandardMaterial({
         color: 0xffffff,
@@ -596,6 +662,7 @@ function mountScene(
         transparent: true,
         depthTest: false,
         depthWrite: false,
+        side: DoubleSide,
       })
       materials.push(overcutMaterial, undercutMaterial)
       if (boolean.over) {
@@ -604,6 +671,7 @@ function mountScene(
         mesh.renderOrder = 10
         scene.add(mesh)
         diffMeshes.push(mesh)
+        addDiffEdges(boolean.over, OVERCUT_COLOR, scene)
       }
       if (boolean.under) {
         paintDiffAlpha(boolean.under, boolean.underDistance, UNDERCUT_RGB)
@@ -611,6 +679,7 @@ function mountScene(
         mesh.renderOrder = 10
         scene.add(mesh)
         diffMeshes.push(mesh)
+        addDiffEdges(boolean.under, UNDERCUT_COLOR, scene)
       }
       const volume = boolean.primaryVolume > 0 ? boolean.primaryVolume : 1
       diffStats = {
@@ -640,6 +709,7 @@ function mountScene(
         transparent: true,
         depthTest: false,
         depthWrite: false,
+        side: DoubleSide,
       })
       materials.push(diffMaterial)
       step.bodies.forEach((body, index) => {
@@ -654,6 +724,7 @@ function mountScene(
         mesh.renderOrder = 10
         primary.group.add(mesh)
         diffMeshes.push(mesh)
+        addDiffEdges(geometry, OVERCUT_COLOR, primary.group)
       })
       compareStep.bodies.forEach((body, index) => {
         const geometry = buildDiffGeometry(
@@ -667,6 +738,7 @@ function mountScene(
         mesh.renderOrder = 10
         compareGroup.add(mesh)
         diffMeshes.push(mesh)
+        addDiffEdges(geometry, OVERCUT_COLOR, compareGroup)
       })
       diffStats = {
         over: diffFraction(aDiff),
@@ -791,6 +863,7 @@ function mountScene(
     if (!width || !height) return
     renderer.setSize(width, height)
     applyFrustum(width, height)
+    for (const material of ncMaterials) material.resolution.set(width, height)
   }
   const observer = new ResizeObserver(resize)
   observer.observe(container)
@@ -807,6 +880,7 @@ function mountScene(
     },
     setDiffVisible(visible: boolean) {
       for (const mesh of diffMeshes) mesh.visible = visible
+      for (const lines of diffEdgeLines) lines.visible = visible
     },
     setSabreVisible(visible: boolean) {
       for (const lines of sabreObjects) lines.visible = visible
@@ -844,9 +918,10 @@ function mountScene(
         }
       }
       for (const mesh of diffMeshes) mesh.geometry.dispose()
+      for (const lines of diffEdgeLines) lines.geometry.dispose()
       for (const line of ncObjects) {
         line.geometry.dispose()
-        ;(line.material as LineBasicMaterial).dispose()
+        ;(line.material as LineMaterial).dispose()
       }
       for (const lines of sabreObjects) {
         primary.group.remove(lines)
