@@ -92,11 +92,11 @@ describe('projectNc', () => {
       holes: [{ face: 'v', x: 5, y: 5, diameter: 10 }],
     }
     const out = projectNc(nc, { frame, section, toScene, normal })
-    expect(out.outer).toHaveLength(0)
-    // The beveled segment plus one stemmed arrow (stem + two head arms = 3 segments more).
-    expect(out.bevel).toHaveLength(4 * 2 * 3)
-    expect(out.inner).toHaveLength(2 * 2 * 3)
-    expect(out.holes).toHaveLength(24 * 2 * 3)
+    // Cut lines are grouped by wall thickness: the `o` face (100 mm) and the `v` hole (200 mm).
+    expect(out.cuts.map((cut) => cut.thickness)).toEqual([100, 200])
+    // `o` face: the beveled cut segment + its stemmed arrow (3 segments) + two inner cut-out segments.
+    expect(out.cuts[0]?.points).toHaveLength(6 * 2 * 3)
+    expect(out.cuts[1]?.points).toHaveLength(24 * 2 * 3)
   })
 
   it('drops a cut that has no material on its face', () => {
@@ -123,7 +123,6 @@ describe('projectNc', () => {
       holes: [],
     }
     const out = projectNc(nc, { frame, section: oneSided, toScene, normal })
-    expect(out.outer).toHaveLength(0)
-    expect(out.bevel).toHaveLength(0)
+    expect(out.cuts).toHaveLength(0)
   })
 })

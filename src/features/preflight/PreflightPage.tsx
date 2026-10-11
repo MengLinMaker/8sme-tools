@@ -32,7 +32,9 @@ import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
 import { downloadBlob, downloadText } from '@/lib/download'
+import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { cutThicknesses } from '@/lib/parsers/ncProject'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
 import { partSectionForCode, resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
@@ -275,6 +277,14 @@ export function PreflightPage() {
     if (!viewing?.nc) return null
     return partSectionForCode(viewing.nc.profile, viewing.nc.dimensions ?? [])?.points ?? null
   }, [viewing])
+  // Cut thicknesses present in this part, for the profile legend (same colours the viewer uses).
+  const viewingNcProfiles = useMemo(() => {
+    if (!viewingNcGeom) return []
+    const section = viewingNcSection ?? stock?.points ?? null
+    if (!section) return []
+    const frame = resolveNcFaceFrame(section, viewingNcGeom)
+    return cutThicknesses(frame, section, viewingNcGeom)
+  }, [viewingNcGeom, viewingNcSection, stock])
 
   // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
   const [manufactured, setManufactured] = useState<Uint8Array | null>(null)
@@ -1449,7 +1459,7 @@ export function PreflightPage() {
                     </div>
                     {viewingNcGeom && (
                       <div className="flex flex-wrap items-center gap-2">
-                        <NcLegend />
+                        <NcLegend thicknesses={viewingNcProfiles} />
                       </div>
                     )}
                   </div>

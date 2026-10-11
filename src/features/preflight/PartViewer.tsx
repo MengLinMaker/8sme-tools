@@ -17,6 +17,7 @@ import {
   type Material,
   Matrix4,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   type Object3D,
   OrthographicCamera,
@@ -34,7 +35,13 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import { faceNormal, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import type { NcFace, NcGeometry } from '@/lib/parsers/ncGeometry'
-import { type NcLineSets, type NcProjection, projectNc, type Vec3 } from '@/lib/parsers/ncProject'
+import {
+  type NcLineSets,
+  type NcProjection,
+  projectNc,
+  THICKNESS_COLORS,
+  type Vec3,
+} from '@/lib/parsers/ncProject'
 import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
 import {
@@ -51,7 +58,7 @@ import { meshForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { NcLegend } from './NcLegend'
 import { attachOrbit, type OrbitBus, requestFocus } from './orbitSync'
-import { SMOOTH_LINE_THRESHOLD_DEG, smoothLines } from './smoothLines'
+import { smoothLines } from './smoothLines'
 
 const GHOST_COLOR = 0x3ddc84
 /** Stock outline: neutral grey so it reads as raw material distinct from the part. */
@@ -67,17 +74,17 @@ const OVERCUT_RGB: [number, number, number] = [0xef / 255, 0x44 / 255, 0x44 / 25
 /** Undercut vs the STEP ideal (leftover — can still be cut). */
 const UNDERCUT_COLOR = 0x3b82f6
 const UNDERCUT_RGB: [number, number, number] = [0x3b / 255, 0x82 / 255, 0xf6 / 255]
+/**
+ * Dihedral bar for the diff-solid outlines — higher than the model edges so only genuine corners
+ * draw. The diff is a smooth shell, so its tessellated curves would otherwise clutter it.
+ */
+const DIFF_EDGE_THRESHOLD_DEG = 55
 const FACE_MATERIAL = { color: 0x9aa3ad, metalness: 0.15, roughness: 0.75 }
 /** Roll about the length axis for each `detectOrientation` result (world YZ → profile-local). */
 const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]
 
-/** Projected NC toolpath colours: plain cuts, welding bevels, inner cut-outs, holes. */
-const NC_COLOR = {
-  outer: 0x3ddc84,
-  bevel: 0xe879f9,
-  inner: 0xf59e0b,
-  holes: 0x38bdf8,
-} as const
+/** Fallback colour for a cut-thickness bucket when there are more buckets than palette colours. */
+const FALLBACK_COLOR = 0x9ca3af
 
 /** NC toolpath line width in screen pixels (fat lines, so they read clearly over the model). */
 const NC_LINE_WIDTH = 3
@@ -124,15 +131,16 @@ function addNcLines(
     if (line) lines.push(line)
     return line
   }
-  add(sets.outer, NC_COLOR.outer)
-  add(sets.inner, NC_COLOR.inner)
-  add(sets.holes, NC_COLOR.holes)
-  add(sets.bevel, NC_COLOR.bevel)
+  const cutSegments: number[] = []
+  sets.cuts.forEach((cut, index) => {
+    add(cut.points, THICKNESS_COLORS[index % THICKNESS_COLORS.length] ?? FALLBACK_COLOR)
+    cutSegments.push(...cut.points)
+  })
   // Flag the specific cut section at each failure: the nearest point on the nearest cut segment
   // gets a short red mark, so only the guilty span lights up (not the whole cut).
   let danger: LineSegments2 | null = null
   if (dangerPoints.length > 0) {
-    const segments = [...sets.outer, ...sets.bevel, ...sets.inner, ...sets.holes]
+    const segments = cutSegments
     const marks: number[] = []
     for (const dp of dangerPoints) {
       let best = DANGER_RADIUS
@@ -484,14 +492,11 @@ function mountScene(
   })
   const materials: Material[] = [faceMaterial, strayMaterial, lineMaterial]
 
-  // Overlay mode (a second model is present): the base keeps the grey but goes only slightly
-  // translucent (no depth write) so the red/blue diffs show through, while still reading as the
-  // same grey base as the other panes. The compare (STEP) shell is more see-through still.
+  // Overlay mode (a second model is present): the manufactured base keeps the *same* solid grey
+  // settings as every other pane — only the diff solid gets special treatment. The compare (STEP)
+  // shell is see-through, so where the ideal extends past the manufactured part still shows.
   const isOverlay = Boolean(compareStep && compareStep.bodies.length > 0)
   if (isOverlay) {
-    faceMaterial.transparent = true
-    faceMaterial.opacity = 0.8
-    faceMaterial.depthWrite = false
     compareMaterial.opacity = 0.3
   }
 
@@ -662,26 +667,25 @@ function mountScene(
       triangles: body.mesh.faces.triangles,
     }))
   // The diff fill is an open shell (only the faces standing past tolerance are kept), so on its
-  // own it reads as a floating skin. Outlining its sharp folds and open boundary makes the
-  // over/under region read as a bounded volume again. The same dihedral bar as the model edges
-  // (`SMOOTH_LINE_THRESHOLD_DEG`) keeps real corners (45°+) while dropping the curve facets and
-  // boolean shards, so sharp edges read more than curves. Depth test off, like the fill, so the
-  // edges never hide behind the shell they bound.
+  // own it reads as a floating skin. Outlining its sharp corners makes the over/under region read
+  // as a bounded volume. A high dihedral bar (`DIFF_EDGE_THRESHOLD_DEG`) keeps only real corners
+  // and drops the curve/curve-facet lines across the diff's smooth faces. Depth test off, like
+  // the fill, so the edges never hide behind the shell they bound.
   const addDiffEdges = (geometry: BufferGeometry, color: number, parent: Object3D): void => {
-    const edges = new EdgesGeometry(geometry, SMOOTH_LINE_THRESHOLD_DEG)
+    const edges = new EdgesGeometry(geometry, DIFF_EDGE_THRESHOLD_DEG)
     if ((edges.getAttribute('position')?.count ?? 0) === 0) {
       edges.dispose()
       return
     }
     const material = new LineBasicMaterial({
       color,
-      transparent: true,
-      opacity: 0.9,
-      depthTest: false,
-      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
     })
     const lines = new LineSegments(edges, material)
     lines.renderOrder = 12
+    lines.layers.set(1)
     parent.add(lines)
     diffEdgeLines.push(lines)
     materials.push(material)
@@ -707,41 +711,31 @@ function mountScene(
             compareGroup.matrixWorld,
           )
     if (boolean) {
-      // X-ray style: colours drawn after the shells with no depth test, so the
-      // diffs composite over everything instead of being dimmed by the
-      // translucent bases in front of them. Strength is per-face alpha from
-      // the clearance distance (faint just past tolerance, solid a few mm
-      // out), so thin skins whisper while real cuts pop — via RGBA vertex
-      // colours, which is why the materials themselves stay white.
-      const overcutMaterial = new MeshStandardMaterial({
+      // The diff is a real solid: opaque, unlit (basic) so the boolean/tessellation jank a lit
+      // surface would expose stays hidden, and depth-tested so its own far side is properly
+      // occluded. A small polygon offset lifts it just clear of the base surface it sits on
+      // (they're coincident), so it wins the depth test without z-fighting.
+      const overcutMaterial = new MeshBasicMaterial({
         color: 0xffffff,
         vertexColors: true,
-        emissive: 0xff2222,
-        emissiveIntensity: 1.2,
-        metalness: 0,
-        roughness: 0.5,
-        transparent: true,
-        depthTest: false,
-        depthWrite: false,
         side: DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
       })
-      const undercutMaterial = new MeshStandardMaterial({
+      const undercutMaterial = new MeshBasicMaterial({
         color: 0xffffff,
         vertexColors: true,
-        emissive: 0x2f7bff,
-        emissiveIntensity: 1.2,
-        metalness: 0,
-        roughness: 0.5,
-        transparent: true,
-        depthTest: false,
-        depthWrite: false,
         side: DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
       })
       materials.push(overcutMaterial, undercutMaterial)
       if (boolean.over) {
         paintDiffAlpha(boolean.over, boolean.overDistance, OVERCUT_RGB)
         const mesh = new Mesh(boolean.over, overcutMaterial)
-        mesh.renderOrder = 10
+        mesh.layers.set(1)
         scene.add(mesh)
         diffMeshes.push(mesh)
         addDiffEdges(boolean.over, OVERCUT_COLOR, scene)
@@ -749,7 +743,7 @@ function mountScene(
       if (boolean.under) {
         paintDiffAlpha(boolean.under, boolean.underDistance, UNDERCUT_RGB)
         const mesh = new Mesh(boolean.under, undercutMaterial)
-        mesh.renderOrder = 10
+        mesh.layers.set(1)
         scene.add(mesh)
         diffMeshes.push(mesh)
         addDiffEdges(boolean.under, UNDERCUT_COLOR, scene)
@@ -773,16 +767,12 @@ function mountScene(
         compareTris.triangles,
         tolerance,
       )
-      const diffMaterial = new MeshStandardMaterial({
+      const diffMaterial = new MeshBasicMaterial({
         color: OVERCUT_COLOR,
-        emissive: 0xff2222,
-        emissiveIntensity: 1,
-        metalness: 0,
-        roughness: 0.5,
-        transparent: true,
-        depthTest: false,
-        depthWrite: false,
         side: DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
       })
       materials.push(diffMaterial)
       step.bodies.forEach((body, index) => {
@@ -794,7 +784,7 @@ function mountScene(
         )
         if (!geometry) return
         const mesh = new Mesh(geometry, diffMaterial)
-        mesh.renderOrder = 10
+        mesh.layers.set(1)
         primary.group.add(mesh)
         diffMeshes.push(mesh)
         addDiffEdges(geometry, OVERCUT_COLOR, primary.group)
@@ -808,7 +798,7 @@ function mountScene(
         )
         if (!geometry) return
         const mesh = new Mesh(geometry, diffMaterial)
-        mesh.renderOrder = 10
+        mesh.layers.set(1)
         compareGroup.add(mesh)
         diffMeshes.push(mesh)
         addDiffEdges(geometry, OVERCUT_COLOR, compareGroup)
@@ -888,8 +878,17 @@ function mountScene(
     : null
 
   let raf = 0
+  // The diff lives on layer 1 and renders in a second pass after the depth buffer is cleared, so
+  // it always sits on top of the base (never hidden by it) yet still self-occludes and shows its
+  // own far side hidden — a solid floating over the part.
+  renderer.autoClear = false
   const render = () => {
     controls.update()
+    renderer.clear()
+    camera.layers.set(0)
+    renderer.render(scene, camera)
+    renderer.clearDepth()
+    camera.layers.set(1)
     renderer.render(scene, camera)
     raf = requestAnimationFrame(render)
   }

@@ -7,6 +7,7 @@ import { parseDstv } from '@/lib/parsers/dstv'
 import { detectOrientation } from '@/lib/sections/orient'
 import { partSectionForCode } from '@/lib/sections/stock'
 import {
+  booleanDiff,
   booleanDiffRaw,
   type DiffSoup,
   extractComponents,
@@ -29,16 +30,16 @@ import { reconstructStepFromNc } from './reconstructFromNc'
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 
+const NW31 = join(
+  process.env.USERPROFILE ?? '',
+  'Downloads',
+  'Failed tests',
+  '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
+)
 const FIXTURES = [
-  {
-    mark: 'm128',
-    dir: join(
-      process.env.USERPROFILE ?? '',
-      'Downloads',
-      'Failed tests',
-      '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
-    ),
-  },
+  { mark: 'm15', dir: NW31 },
+  { mark: 'm16', dir: NW31 },
+  { mark: 'm128', dir: NW31 },
   {
     mark: 'm87',
     dir: join(
@@ -244,6 +245,20 @@ describe('diff skin diagnostics', () => {
         console.log(
           `${mark} seated (app): over=${diffFraction(bSeat).toFixed(3)} under=${diffFraction(aSeat).toFixed(3)} centreShift=${shift.toFixed(2)}mm`,
         )
+
+        // Full pipeline (filter + prune + thickness-weighted smooth): how much thin wall remains?
+        const bd = booleanDiff(soups(made), soups(step), I, I)
+        for (const label of ['over', 'under'] as const) {
+          const geo = bd?.[label] ?? null
+          if (!geo) {
+            console.log(`${mark} ${label}: none`)
+            continue
+          }
+          const tris = Math.floor((geo.getAttribute('position')?.count ?? 0) / 3)
+          const { keep } = pruneThinSkin(geo, 1)
+          const remaining = Array.from(keep).filter((k) => k === 0).length
+          console.log(`${mark} ${label}: tris=${tris} remainingSkin@1mm=${remaining}`)
+        }
         expect(true).toBe(true)
       },
       600000,

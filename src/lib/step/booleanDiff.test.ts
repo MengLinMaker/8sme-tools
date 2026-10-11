@@ -129,12 +129,12 @@ describe('boolean diff (STEP is ideal)', () => {
   })
 
   it('draws a kept component whole so the diff reads as a solid', () => {
-    // Closed 20×20×2 box hovering over a table, one third lifted 2 mm. The whole
-    // component renders now (far and near faces), so the volume closes into a solid
-    // instead of an open shell with a face missing. Volume stays the component's own.
+    // Closed 20×20×6 box hovering over a table, one third lifted 2 mm. Thick enough to sit above
+    // the smoother's skin cap, so the whole component renders and its volume closes into a solid
+    // rather than an open shell. Volume stays the component's own.
     const table = boxSoup(100, 100, 10)
-    const plate = new BoxGeometry(20, 20, 2, 16, 16, 1)
-    plate.translate(0, 0, 6.02)
+    const plate = new BoxGeometry(20, 20, 6, 16, 16, 1)
+    plate.translate(0, 0, 8.02)
     const position = plate.getAttribute('position')
     for (let v = 0; v < position.count; v++) {
       if (position.getY(v) > 5) position.setZ(v, position.getZ(v) + 2)
@@ -147,7 +147,7 @@ describe('boolean diff (STEP is ideal)', () => {
     const merged = toWorldSoup([table, plateSoup], IDENTITY)
     const result = booleanDiff([merged], [table], IDENTITY, IDENTITY)
     expect(result?.under).not.toBeNull()
-    expect(result?.underVolume ?? 0).toBeCloseTo(800, 0)
+    expect(result?.underVolume ?? 0).toBeCloseTo(2400, 0)
     const under = result?.under
     expect(under).not.toBeNull()
     if (!under) return

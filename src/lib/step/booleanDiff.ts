@@ -37,7 +37,7 @@ export const BOOLEAN_TRIANGLE_BUDGET = 200_000
  * Volumes are the kept components' own, so the legend number matches the
  * picture (signed sums over open patch shells are meaningless).
  */
-export const KEEP_SIZE_ABS_MM3 = 8
+export const KEEP_SIZE_ABS_MM3 = 2
 // 1 mm: the machining tolerance, and the floor that keeps OCC's 0.3 mm facets honest — two
 // models tessellated independently can differ ~0.6 mm at a fillet, so a sub-millimetre bar
 // would false-flag real geometry as a diff.
@@ -48,18 +48,17 @@ export const KEEP_CLEAR_SHARE = 0.01
  * A kept component draws whole (closed) only when at least this share of its surface stands
  * proud of the other model. Below it the component is mostly *flush* with the other model — a
  * shallow skin (the kerf/shave offset over a face) — and only its proud faces draw, so the big
- * sub-tolerance membrane never shows. A genuine knob/slab/protrusion clears this easily; m128's
- * shaved PFC face sits at ~0.19 and is treated as a skin.
+ * sub-tolerance membrane never shows. Kept low so genuine shallow regions still render whole.
  */
-export const KEEP_SOLID_SHARE = 0.5
+export const KEEP_SOLID_SHARE = 0.3
 
 /**
  * A face with a roughly opposite partner within this gap is a paper-thin skin, so it is pruned.
- * Kept deliberately low (below the ~0.6 mm worst-case near-coincident gap): the prune only nicks
- * the razor-thin core and the Laplacian smoother in {@link smoothGeometry} absorbs the rest, so
- * the removal is gentle and never carves into real material.
+ * Set at the clear bar (1 mm): thin skins — including the uniform membranes a Laplacian smoother
+ * can't collapse on its own — are removed, while genuine features at or above the bar survive.
+ * Applied before *and* after the smoother, since smoothing can pull faces back within the gap.
  */
-export const SKIN_MAX_THICKNESS_MM = 0.4
+export const SKIN_MAX_THICKNESS_MM = 1
 
 export interface BooleanDiff {
   /** STEP-minus-manufactured solid (overcut, red), world coordinates (null when empty) */
@@ -77,19 +76,17 @@ export interface BooleanDiff {
 }
 
 /**
- * A kept face is already clearly visible at the 1 mm clear bar (FLOOR) and fully solid half a
- * millimetre past it, so a real detail reads instead of vanishing, while a barely-out fringe
- * still whispers below the big cuts.
+ * A kept face reads at near-full strength right at the clear bar (FLOOR), so the diff is an even,
+ * uniform colour rather than a fade — the region should read as one flat shape.
  */
-export const DIFF_ALPHA_FLOOR = 0.45
+export const DIFF_ALPHA_FLOOR = 0.9
 export const DIFF_ALPHA_FULL_MM = 1.5
 
 /**
- * The interface faces close the solid on the part surface at zero clearance — where the two
- * models converge the boolean leaves a paper-thin sliver. A light ghost tint keeps the volume
- * closed without that coplanar sliver reading as a solid skin.
+ * The interface faces close the solid on the part surface at zero clearance. Kept close to the
+ * floor so the whole diff reads as one even colour.
  */
-export const DIFF_ALPHA_INTERFACE = 0.15
+export const DIFF_ALPHA_INTERFACE = 0.7
 
 /** Maps a per-triangle clearance (mm) to a render alpha. */
 export function diffAlpha(distanceMm: number): number {
@@ -467,15 +464,18 @@ export function pruneThinSkin(
 }
 
 /**
- * Light smoothing pass over a diff solid: welds coincident vertices and runs one gentle Laplacian
- * round, so the skin-pruned result reads as clean surfaces without rounding the real geometry away.
- * Boundary vertices are included (no clamping) — the diff is a display solid, so a slight shrink
- * is harmless and it removes residual spikes.
+ * Thickness-weighted smoothing pass over a diff solid. Welds coincident vertices, estimates each
+ * vertex's local wall thickness (distance to the nearest *non-adjacent*, oppositely-facing face),
+ * and runs Laplacian rounds weighted by thinness: vertices in a thin skin (the kerf/tessellation
+ * membrane) smooth hard and collapse, vertices in real material barely move. This removes the skin
+ * without rounding genuine geometry — a plain Laplacian can't do both.
  */
+const SMOOTH_SKIN_CAP_MM = 3
+
 export function smoothGeometry(
   geometry: BufferGeometry | null,
-  iterations = 1,
-  lambda = 0.01,
+  iterations = 12,
+  lambda = 0.85,
 ): BufferGeometry | null {
   if (!geometry) return null
   const position = geometry.getAttribute('position')
@@ -486,7 +486,7 @@ export function smoothGeometry(
   const triCount = Math.floor((index ? index.count : count) / 3)
   if (triCount === 0) return geometry
 
-  // Weld by position so the Laplacian uses real connectivity, not per-triangle duplicates.
+  // Weld by position so adjacency / thickness use real connectivity, not per-triangle duplicates.
   const map = new Map<string, number>()
   const rep = new Int32Array(count)
   const px: number[] = []
@@ -507,23 +507,134 @@ export function smoothGeometry(
     }
     rep[v] = idx
   }
-  const adjacency: Set<number>[] = Array.from({ length: px.length }, () => new Set<number>())
+  const vertCount = px.length
+
+  const tri = new Int32Array(triCount * 3)
+  const tnx = new Float64Array(triCount)
+  const tny = new Float64Array(triCount)
+  const tnz = new Float64Array(triCount)
+  const tcx = new Float64Array(triCount)
+  const tcy = new Float64Array(triCount)
+  const tcz = new Float64Array(triCount)
+  const adjacency: Set<number>[] = Array.from({ length: vertCount }, () => new Set<number>())
+  const normals = new Float64Array(vertCount * 3)
   for (let t = 0; t < triCount; t++) {
     const a = rep[vertex(t * 3)] ?? 0
     const b = rep[vertex(t * 3 + 1)] ?? 0
     const c = rep[vertex(t * 3 + 2)] ?? 0
+    tri[t * 3] = a
+    tri[t * 3 + 1] = b
+    tri[t * 3 + 2] = c
     adjacency[a]?.add(b)
     adjacency[a]?.add(c)
     adjacency[b]?.add(a)
     adjacency[b]?.add(c)
     adjacency[c]?.add(a)
     adjacency[c]?.add(b)
+    const ax = px[a] ?? 0
+    const ay = py[a] ?? 0
+    const az = pz[a] ?? 0
+    const bx = px[b] ?? 0
+    const by = py[b] ?? 0
+    const bz = pz[b] ?? 0
+    const cx = px[c] ?? 0
+    const cy = py[c] ?? 0
+    const cz = pz[c] ?? 0
+    tcx[t] = (ax + bx + cx) / 3
+    tcy[t] = (ay + by + cy) / 3
+    tcz[t] = (az + bz + cz) / 3
+    let ex = (by - ay) * (cz - az) - (bz - az) * (cy - ay)
+    let ey = (bz - az) * (cx - ax) - (bx - ax) * (cz - az)
+    let ez = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+    const len = Math.hypot(ex, ey, ez)
+    if (len > 0) {
+      ex /= len
+      ey /= len
+      ez /= len
+    }
+    tnx[t] = ex
+    tny[t] = ey
+    tnz[t] = ez
+    for (const w of [a, b, c]) {
+      normals[w * 3] = (normals[w * 3] ?? 0) + ex
+      normals[w * 3 + 1] = (normals[w * 3 + 1] ?? 0) + ey
+      normals[w * 3 + 2] = (normals[w * 3 + 2] ?? 0) + ez
+    }
   }
+
+  // Grid of triangle centroids for the thickness query.
+  const cell = SMOOTH_SKIN_CAP_MM
+  const grid = new Map<string, number[]>()
+  const key = (ix: number, iy: number, iz: number): string => `${ix},${iy},${iz}`
+  for (let t = 0; t < triCount; t++) {
+    const k = key(
+      Math.floor((tcx[t] ?? 0) / cell),
+      Math.floor((tcy[t] ?? 0) / cell),
+      Math.floor((tcz[t] ?? 0) / cell),
+    )
+    const list = grid.get(k)
+    if (list) list.push(t)
+    else grid.set(k, [t])
+  }
+
+  // Per-vertex thinness in 0..1 (1 = a wall within CAP mm → collapses under smoothing).
+  const thin = new Float32Array(vertCount)
+  for (let v = 0; v < vertCount; v++) {
+    const vnx = normals[v * 3] ?? 0
+    const vny = normals[v * 3 + 1] ?? 0
+    const vnz = normals[v * 3 + 2] ?? 0
+    const nlen = Math.hypot(vnx, vny, vnz)
+    if (nlen === 0) continue
+    const vx = px[v] ?? 0
+    const vy = py[v] ?? 0
+    const vz = pz[v] ?? 0
+    const gx = Math.floor(vx / cell)
+    const gy = Math.floor(vy / cell)
+    const gz = Math.floor(vz / cell)
+    let best = SMOOTH_SKIN_CAP_MM
+    for (let ox = -1; ox <= 1; ox++) {
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let oz = -1; oz <= 1; oz++) {
+          const list = grid.get(key(gx + ox, gy + oy, gz + oz))
+          if (!list) continue
+          for (const s of list) {
+            if (tri[s * 3] === v || tri[s * 3 + 1] === v || tri[s * 3 + 2] === v) continue
+            const dot =
+              (vnx / nlen) * (tnx[s] ?? 0) +
+              (vny / nlen) * (tny[s] ?? 0) +
+              (vnz / nlen) * (tnz[s] ?? 0)
+            if (dot > -0.3) continue
+            const d = Math.sqrt(
+              pointTriangleDistanceSquared(
+                vx,
+                vy,
+                vz,
+                px[tri[s * 3] ?? 0] ?? 0,
+                py[tri[s * 3] ?? 0] ?? 0,
+                pz[tri[s * 3] ?? 0] ?? 0,
+                px[tri[s * 3 + 1] ?? 0] ?? 0,
+                py[tri[s * 3 + 1] ?? 0] ?? 0,
+                pz[tri[s * 3 + 1] ?? 0] ?? 0,
+                px[tri[s * 3 + 2] ?? 0] ?? 0,
+                py[tri[s * 3 + 2] ?? 0] ?? 0,
+                pz[tri[s * 3 + 2] ?? 0] ?? 0,
+              ),
+            )
+            if (d < best) best = d
+          }
+        }
+      }
+    }
+    thin[v] = Math.max(0, 1 - best / SMOOTH_SKIN_CAP_MM)
+  }
+
   for (let round = 0; round < iterations; round++) {
     const nx = px.slice()
     const ny = py.slice()
     const nz = pz.slice()
-    for (let v = 0; v < px.length; v++) {
+    for (let v = 0; v < vertCount; v++) {
+      const w = (thin[v] ?? 0) * lambda
+      if (w <= 0) continue
       const neighbours = adjacency[v]
       if (!neighbours || neighbours.size === 0) continue
       let sx = 0
@@ -535,11 +646,11 @@ export function smoothGeometry(
         sz += pz[n] ?? 0
       }
       const k = neighbours.size
-      nx[v] = (px[v] ?? 0) * (1 - lambda) + (sx / k) * lambda
-      ny[v] = (py[v] ?? 0) * (1 - lambda) + (sy / k) * lambda
-      nz[v] = (pz[v] ?? 0) * (1 - lambda) + (sz / k) * lambda
+      nx[v] = (px[v] ?? 0) * (1 - w) + (sx / k) * w
+      ny[v] = (py[v] ?? 0) * (1 - w) + (sy / k) * w
+      nz[v] = (pz[v] ?? 0) * (1 - w) + (sz / k) * w
     }
-    for (let v = 0; v < px.length; v++) {
+    for (let v = 0; v < vertCount; v++) {
       px[v] = nx[v] ?? 0
       py[v] = ny[v] ?? 0
       pz[v] = nz[v] ?? 0
@@ -748,7 +859,10 @@ export function booleanDiff(
   if (raw.over) {
     const filtered = filterDrawableFaces(raw.over, queryPrimary)
     const pruned = pruneThinSkin(filtered.geometry, SKIN_MAX_THICKNESS_MM)
-    overFiltered = smoothGeometry(pruned.geometry)
+    // Smooth, then prune once more: the smoothing can pull faces back within the gap, so a
+    // second pass clears the skin it re-formed.
+    const smoothed = smoothGeometry(pruned.geometry)
+    overFiltered = pruneThinSkin(smoothed, SKIN_MAX_THICKNESS_MM).geometry
     overVolume = filtered.volume
     overDistance = filtered.distances.filter((_, i) => pruned.keep[i] === 1)
     raw.over.dispose()
@@ -756,7 +870,8 @@ export function booleanDiff(
   if (raw.under) {
     const filtered = filterDrawableFaces(raw.under, queryCompare)
     const pruned = pruneThinSkin(filtered.geometry, SKIN_MAX_THICKNESS_MM)
-    underFiltered = smoothGeometry(pruned.geometry)
+    const smoothed = smoothGeometry(pruned.geometry)
+    underFiltered = pruneThinSkin(smoothed, SKIN_MAX_THICKNESS_MM).geometry
     underVolume = filtered.volume
     underDistance = filtered.distances.filter((_, i) => pruned.keep[i] === 1)
     raw.under.dispose()

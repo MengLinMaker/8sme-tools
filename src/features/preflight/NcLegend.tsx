@@ -1,38 +1,39 @@
 import { useTranslation } from 'react-i18next'
+import { ETCH_COLOR, MARKING_COLOR, THICKNESS_COLORS } from '@/lib/parsers/ncProject'
 
-/** Colour key for the projected NC toolpath lines (outer / bevel / inner / holes). */
-export function NcLegend() {
+function hex(color: number): string {
+  return `#${color.toString(16).padStart(6, '0')}`
+}
+
+function Chip({ color, label }: { color: number; label: string }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span
+        className="inline-block size-3 rounded-sm border border-border"
+        style={{ background: hex(color) }}
+      />
+      {label}
+    </span>
+  )
+}
+
+/**
+ * Profile key for the projected NC: cut lines are coloured by wall thickness, and etch / weld
+ * markings are separate profiles.
+ */
+export function NcLegend({ thicknesses = [] }: { thicknesses?: number[] }) {
   const { t } = useTranslation()
   return (
     <>
-      <span className="flex items-center gap-1.5">
-        <span
-          className="inline-block size-3 rounded-sm border border-emerald-400"
-          style={{ background: 'rgba(61, 220, 132, 0.5)' }}
+      {thicknesses.map((thickness, index) => (
+        <Chip
+          key={thickness}
+          color={THICKNESS_COLORS[index % THICKNESS_COLORS.length] ?? 0x9ca3af}
+          label={`${thickness} mm`}
         />
-        {t('viewer.ncOuter')}
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span
-          className="inline-block size-3 rounded-sm border border-fuchsia-400"
-          style={{ background: 'rgba(232, 121, 249, 0.5)' }}
-        />
-        {t('viewer.ncBevel')}
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span
-          className="inline-block size-3 rounded-sm border border-amber-400"
-          style={{ background: 'rgba(245, 158, 11, 0.5)' }}
-        />
-        {t('viewer.ncInner')}
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span
-          className="inline-block size-3 rounded-sm border border-sky-400"
-          style={{ background: 'rgba(56, 189, 248, 0.5)' }}
-        />
-        {t('viewer.ncHoles')}
-      </span>
+      ))}
+      <Chip color={ETCH_COLOR} label={t('viewer.profileEtch')} />
+      <Chip color={MARKING_COLOR} label={t('viewer.profileMarking')} />
     </>
   )
 }

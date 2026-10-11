@@ -13,10 +13,26 @@
  * `normal` for orienting bevel spurs.
  */
 
-import { faceHalf, faceSpanAxis, materialReaches, type NcFaceFrame, placeNcFace } from './ncFaces'
+import {
+  faceHalf,
+  faceNormal,
+  faceSpanAxis,
+  materialReaches,
+  type NcFaceFrame,
+  placeNcFace,
+} from './ncFaces'
 import type { NcFace, NcGeometry } from './ncGeometry'
 
 export type Vec3 = [number, number, number]
+
+/** One colour per distinct cut thickness (indexed by thickness order within a part). */
+export const THICKNESS_COLORS = [
+  0x3ddc84, 0x38bdf8, 0xf59e0b, 0xa78bfa, 0xf87171, 0x22d3ee, 0xfacc15,
+] as const
+
+/** Fixed colours for the non-cut profiles (etch / weld markings). */
+export const ETCH_COLOR = 0xf5f5f5
+export const MARKING_COLOR = 0xfb923c
 
 export interface NcProjection {
   /** The section face frame the NC was matched against (see `resolveNcFaceFrame`). */
@@ -29,16 +45,10 @@ export interface NcProjection {
   normal: (face: NcFace) => Vec3
 }
 
-/** Flat XYZ pair lists (two vertices per segment), ready for a `LineSegments`. */
+/** Cut lines (with their welding-bevel arrows) grouped by the wall thickness they cut. */
 export interface NcLineSets {
-  /** Outer contours with no bevel — the plain, normal-to-surface cuts. */
-  outer: number[]
-  /** Outer contour segments carrying a welding bevel, plus their spurs. */
-  bevel: number[]
-  /** Inner (cut-out) contours. */
-  inner: number[]
-  /** Holes, drawn as rings. */
-  holes: number[]
+  /** One entry per distinct cut thickness (mm); cut lines and bevel arrows share its colour. */
+  cuts: { thickness: number; points: number[] }[]
 }
 
 /** Segments around each hole ring — enough to read as a circle at part scale. */
@@ -47,8 +57,9 @@ const HOLE_STEPS = 24
 /** Default spur length (mm) shown for an angle-only bevel that carries no distance. */
 const DEFAULT_BEVEL_SPUR = 3
 
-/** Bevel arrowhead size (mm) and spacing along the cut line (mm). */
-const ARROW_SIZE = 5
+/** Bevel arrow length (mm, tip distance from the cut line), head size (mm) and spacing (mm). */
+const ARROW_LENGTH = 30
+const ARROW_HEAD = 9
 const ARROW_SPACING = 40
 /** A bevel within this many degrees of the surface normal is a plain (regular) cut — no arrow. */
 const REGULAR_CUT_DEG = 8
@@ -66,14 +77,17 @@ function cross(a: Vec3, b: Vec3): Vec3 {
  * A stemmed arrow. The stem runs from the cut line outward along `dir`; the head sits at the cut
  * line and points back inward (against `dir`) along the same line.
  */
-function arrow(target: number[], at: Vec3, dir: Vec3, spread: Vec3, size: number): void {
-  const stem = size * 2
-  const tail: Vec3 = [at[0] + dir[0] * stem, at[1] + dir[1] * stem, at[2] + dir[2] * stem]
+function arrow(target: number[], at: Vec3, dir: Vec3, spread: Vec3): void {
+  const tail: Vec3 = [
+    at[0] + dir[0] * ARROW_LENGTH,
+    at[1] + dir[1] * ARROW_LENGTH,
+    at[2] + dir[2] * ARROW_LENGTH,
+  ]
   push(target, at, tail)
-  const half = size * 0.5
-  const bx = at[0] + dir[0] * size
-  const by = at[1] + dir[1] * size
-  const bz = at[2] + dir[2] * size
+  const half = ARROW_HEAD * 0.5
+  const bx = at[0] + dir[0] * ARROW_HEAD
+  const by = at[1] + dir[1] * ARROW_HEAD
+  const bz = at[2] + dir[2] * ARROW_HEAD
   push(target, at, [bx + spread[0] * half, by + spread[1] * half, bz + spread[2] * half])
   push(target, at, [bx - spread[0] * half, by - spread[1] * half, bz - spread[2] * half])
 }
@@ -99,13 +113,30 @@ function push(target: number[], a: Vec3, b: Vec3): void {
   target.push(a[0], a[1], a[2], b[0], b[1], b[2])
 }
 
-/** Projects an NC's contours, holes and bevels into the caller's frame. */
+/**
+ * Wall thickness (mm) a face cuts through: the distance from the face plane to the nearest opposite
+ * edge of the section (the plate the cut passes through) — e.g. the flange/ web thickness.
+ */
+export function faceThickness(
+  frame: NcFaceFrame,
+  section: [number, number][],
+  face: NcFace,
+): number {
+  const normal = faceNormal(frame, face)
+  const axis = normal.axis
+  const faceCoord = normal.sign * faceHalf(frame, axis)
+  let min = Number.POSITIVE_INFINITY
+  for (const point of section) {
+    const distance = Math.abs((point[axis] ?? 0) - faceCoord)
+    if (distance > 0.01 && distance < min) min = distance
+  }
+  return Number.isFinite(min) ? min : 0
+}
+
+/** Projects an NC's contours, holes and bevels into the caller's frame, grouped by cut thickness. */
 export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets {
   const { frame, section, toScene, normal } = projection
-  const outer: number[] = []
-  const bevel: number[] = []
-  const inner: number[] = []
-  const holes: number[] = []
+  const byFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
 
   const place = (face: NcFace, x: number, y: number) => {
     const point = placeNcFace(frame, face, x, y)
@@ -120,7 +151,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       const a = place(contour.face, x0, y0)
       const b = place(contour.face, x1, y1)
       if (contour.kind === 'inner') {
-        push(inner, a.world, b.world)
+        push(byFace[contour.face], a.world, b.world)
         continue
       }
       // A cut with no material on its face (edge of stock / one-sided section) removes nothing.
@@ -143,11 +174,9 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       }
       const d0 = bevelDistance(contour.bevels[i])
       const d1 = bevelDistance(contour.bevels[i + 1])
-      if (d0 <= 0 && d1 <= 0) {
-        push(outer, a.world, b.world)
-        continue
-      }
-      push(bevel, a.world, b.world)
+      // The cut line is grouped by its face's thickness; the bevel just adds a direction arrow.
+      push(byFace[contour.face], a.world, b.world)
+      if (d0 <= 0 && d1 <= 0) continue
 
       // The cut face is tilted off the surface normal by the bevel angle; show that tilt with an
       // arrow perpendicular to the cut line (in the plane of the normal), plotted periodically.
@@ -184,7 +213,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
           a.world[1] + (b.world[1] - a.world[1]) * t,
           a.world[2] + (b.world[2] - a.world[2]) * t,
         ]
-        arrow(bevel, at, dir, line, ARROW_SIZE)
+        arrow(byFace[contour.face], at, dir, line)
       }
     }
   }
@@ -202,8 +231,34 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     }
     // Drop a hole that sits entirely where the section has no material on its face.
     if (!anyReached) continue
-    for (let i = 0; i < ring.length - 1; i++) push(holes, ring[i], ring[i + 1])
+    for (let i = 0; i < ring.length - 1; i++) push(byFace[hole.face], ring[i], ring[i + 1])
   }
 
-  return { outer, bevel, inner, holes }
+  // Group the cut lines by the wall thickness of the face they cut (same thickness ⇒ same profile).
+  const groups = new Map<number, number[]>()
+  for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
+    const points = byFace[face]
+    if (points.length === 0) continue
+    const key = Math.round(faceThickness(frame, section, face) * 10) / 10
+    const bucket = groups.get(key)
+    if (bucket) bucket.push(...points)
+    else groups.set(key, points)
+  }
+  const cuts = [...groups.entries()]
+    .map(([thickness, points]) => ({ thickness, points }))
+    .sort((a, b) => a.thickness - b.thickness)
+  return { cuts }
+}
+
+/** Distinct cut thicknesses (mm) present in an NC, sorted ascending — for the viewer legend. */
+export function cutThicknesses(
+  frame: NcFaceFrame,
+  section: [number, number][],
+  nc: NcGeometry,
+): number[] {
+  const faces = new Set<NcFace>()
+  for (const contour of nc.contours) faces.add(contour.face)
+  for (const hole of nc.holes) faces.add(hole.face)
+  const values = [...faces].map((face) => Math.round(faceThickness(frame, section, face) * 10) / 10)
+  return [...new Set(values)].sort((a, b) => a - b)
 }
