@@ -1,3 +1,4 @@
+import { MACHINE } from '@/lib/machine/profile'
 import type { NcFace } from '@/lib/parsers/ncGeometry'
 
 /**
@@ -96,7 +97,7 @@ export function cutPriority(family: ProfileFamily, face: NcFace): number {
 }
 
 /** Largest slug a bottom cut may drop without endangering the head (grams). */
-export const BOTTOM_CUT_MAX_GRAMS = 10
+export const BOTTOM_CUT_MAX_GRAMS = MACHINE.bottomCutMaxGrams
 
 /** Steel density in g/mm³ (7850 kg/m³, per AS/NZS 3679.1). */
 const STEEL_DENSITY_G_PER_MM3 = 7.85e-3

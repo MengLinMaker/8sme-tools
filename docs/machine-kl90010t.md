@@ -93,10 +93,54 @@ single-pass is the unusual part (most peers cap at 12 m), consistent with "12 m 
 
 | Concern | Where |
 |---|---|
+| Machine profile (limits + pure checks) | `src/lib/machine/profile.ts` (`KL90010T` / `MACHINE`) |
 | Max stock length used by the nester | `src/lib/nesting/nest.ts` (tests pass `length: 12000`, the 12 m standard bar) |
 | Thickness-change reach (head can't clear large steps) | `src/lib/audit/manufacturability.ts` (`UNMANUFACTURABLE_DEPTH`) |
 | Section stance / cross-section dims | `src/lib/sections/stock.ts`, `docs/canonical-orientation.md` |
 | Cut-side priority & bottom-cut mass guard | `src/lib/sections/canonical.ts` |
+
+## Machine-profile + checks lib
+
+The machine facts live as **one typed constant** in `src/lib/machine/profile.ts` (`KL90010T`,
+re-exported as `MACHINE`). Checks read their limits from it instead of hard-coding literals, so a
+second machine later is just another object — **no registry, no plugin interface** while there is
+only one machine.
+
+```ts
+export interface MachineProfile {
+  id: string
+  name: string
+  doc: string                                   // docs/machine-kl90010t.md
+  envelope: {
+    maxLengthMm: number                         // 13_500
+    maxRoundMm: number                          // 900
+    maxSquareMm: number                         // 400
+    hBeam: { depthMm: number; flangeMm: number } // 800 × 300
+    maxThicknessMm: number                      // 25 (carbon steel)
+  }
+  bevel: { minDeg: number; maxDeg: number }     // -45 … +45
+  bottomCutMaxGrams: number                     // 10
+  unmachinableDepthMm: number                    // 30
+  defaultStockLengthMm: number                   // 12_000
+}
+export const KL90010T: MachineProfile = { /* … */ }
+export const MACHINE = KL90010T
+```
+
+**Pure checks** (also in `profile.ts`, unit-tested in `profile.test.ts`):
+- `envelopeFits(size)` — length, round, square, H-beam depth/flange, thickness (omitted fields ignored);
+- `bevelAllowed(angleDeg)` — inside `bevel.minDeg…maxDeg`;
+- `stockLengthAllowed(lengthMm)` — within the single-pass length.
+
+**Wired to the profile:**
+- `src/lib/sections/canonical.ts` — `BOTTOM_CUT_MAX_GRAMS = MACHINE.bottomCutMaxGrams`.
+- `src/lib/audit/manufacturability.ts` — `UNMANUFACTURABLE_DEPTH = MACHINE.unmachinableDepthMm`.
+- `src/features/nesting/NestingPage.tsx` — default stock row + `COMMON_LENGTHS` use
+  `MACHINE.defaultStockLengthMm`.
+
+**Still to wire later** (present as literals, not yet reading the profile):
+- `src/lib/audit/cutReach.ts` — `MAX_CUT_THICKNESS_MM = 25`, `MAX_BEVEL_DEG = 45` (WIP file).
+
 
 ## Sources
 

@@ -3,7 +3,9 @@
 Tools for **8 Star Metal Engineering** (Dandenong VIC), used by a **CNC steel tube laser**
 technician. Jobs are nested/imported in **Weihong WiseCAM**; drawings/models come from
 **Tekla**. The machine is the **KL-90010-T** — its range of motion / work envelope is in
-`docs/machine-kl90010t.md`.
+`docs/machine-kl90010t.md`, which also carries the planned **machine-profile + checks lib**
+(the scattered `BOTTOM_CUT_MAX_GRAMS` / `UNMANUFACTURABLE_DEPTH` / stock-length literals should
+eventually read from one `MachineProfile`).
 
 If a change touches nesting or flat-file output, follow these rules. They were each learned
 the hard way — do not re-litigate them.

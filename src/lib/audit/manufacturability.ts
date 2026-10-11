@@ -1,3 +1,4 @@
+import { MACHINE } from '@/lib/machine/profile'
 import { type NcContour, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 
 /**
@@ -22,7 +23,7 @@ const STEP_DY = 10.0
  * The cutting head can only reach ~3 cm (30–40 mm) into a cut. A step deeper than this cannot be
  * reached by sweeping one face: it is not manufacturable as drawn and would crash the head.
  */
-export const UNMANUFACTURABLE_DEPTH = 30.0
+export const UNMANUFACTURABLE_DEPTH = MACHINE.unmachinableDepthMm
 
 export interface ManufacturabilityIssue {
   code: 'CUT_STEP'
