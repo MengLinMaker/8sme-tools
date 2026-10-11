@@ -1202,7 +1202,7 @@ export function PreflightPage() {
             <Stat
               label={t('preflight.stats.totalMass')}
               value={totalMassKg > 0 ? `${totalMassKg.toFixed(1)} kg` : '—'}
-              pending={analyzing}
+              pending={analyzing && drawingChecking}
             />
             <Stat label={t('preflight.stats.profiles')} value={profileGroups.length} />
             <Stat
