@@ -1,7 +1,7 @@
 import type { DrawingMaterial } from '@/lib/parsers/pdfText'
 import type { Finding, PartRecord, Severity } from './types'
 
-export type PartSortKey = 'severity' | 'mark' | 'qty' | 'profile' | 'model'
+export type PartSortKey = 'severity' | 'mark' | 'qty' | 'mass' | 'profile' | 'model'
 
 export interface PartSortContext {
   findings: Finding[]
@@ -40,6 +40,9 @@ function partValue(
     case 'qty':
       // Drawing (ground truth) first, NC only as a fallback.
       return material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
+    case 'mass':
+      // Drawing (ground truth) first, then the part list.
+      return material?.weight ?? part.expected?.weight ?? null
     case 'model': {
       const check = context.modelChecks.get(part.mark)
       return check ? (check.ok ? 1 : 0) : 2

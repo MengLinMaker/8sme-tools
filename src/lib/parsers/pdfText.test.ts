@@ -34,6 +34,8 @@ describe('findMaterialEntries', () => {
       grade: 'C350',
       length: 3966,
       qty: 4,
+      area: 1.48,
+      weight: 66.32,
     })
   })
 

@@ -151,13 +151,21 @@ export interface MaterialEntry {
   grade: string
   length: number
   qty: number
+  /** per-piece surface area (m²) as the Tekla title block reports it */
+  area: number
+  /** per-piece mass (kg) as the Tekla title block reports it */
+  weight: number
 }
 
 /** MARK SECTION GRADE LENGTH Qty AREA WEIGHT row from a Tekla "MATERIAL LIST". */
 const MATERIAL_ROW =
   /(\b[A-Za-z]\w*\b)\s+(RHS\S*|SHS\S*|PFC\S*|TFC\S*|EA\S*|UA\S*|BT\S*|\d+UB\S*|\d+UC\S*|\d+\s*TFB\S*)\s+(C\d+)\s+([\d.]+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)/gi
 
-/** Extracts every material-list row from a drawing's text. */
+/**
+ * Extracts every material-list row from a drawing's text. AREA and WEIGHT are geometric
+ * fingerprints the drawing carries alongside the section — Tekla derives them from the real
+ * solid, so they verify a part's geometry without any view alignment.
+ */
 export function findMaterialEntries(text: string): MaterialEntry[] {
   const compact = text.replace(/\s+/g, ' ')
   const entries: MaterialEntry[] = []
@@ -168,6 +176,8 @@ export function findMaterialEntries(text: string): MaterialEntry[] {
       grade: match[3].toUpperCase(),
       length: Number(match[4]),
       qty: Number(match[5]),
+      area: Number(match[6]),
+      weight: Number(match[7]),
     })
   }
   return entries
@@ -177,6 +187,10 @@ export interface DrawingMaterial {
   qty: number
   length: number
   section: string
+  /** per-piece surface area (m²) from the drawing title block */
+  area: number
+  /** per-piece mass (kg) from the drawing title block */
+  weight: number
 }
 
 /**
@@ -191,5 +205,11 @@ export async function resolveDrawingMaterial(
   if (entries.length === 0) return null
   const needle = mark.trim().toLowerCase()
   const match = entries.find((entry) => entry.mark.toLowerCase() === needle) ?? entries[0]
-  return { qty: match.qty, length: match.length, section: match.section }
+  return {
+    qty: match.qty,
+    length: match.length,
+    section: match.section,
+    area: match.area,
+    weight: match.weight,
+  }
 }

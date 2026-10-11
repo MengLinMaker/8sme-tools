@@ -40,8 +40,10 @@ import type { InputBundle } from '@/lib/readInput'
 import { partSectionForCode, resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
 import { cleanStep } from '@/lib/step/clean'
 import {
+  compareGeometry,
   compareModels,
   compareSize,
+  type GeometryCheck,
   type ModelComparison,
   type SizeCheck,
   type StepMeasure,
@@ -62,10 +64,15 @@ const SEVERITY_ORDER: Record<Severity, number> = { error: 0, warning: 1, info: 2
 /** How many drawings to parse at once. Matches the pdf.js worker pool size. */
 const CONCURRENCY = 6
 
+/** Per-piece mass bands: red above `MASS_RED_KG`, yellow at/above `MASS_YELLOW_KG`, else green. */
+const MASS_RED_KG = 30
+const MASS_YELLOW_KG = 20
+
 const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [
   { labelKey: 'preflight.columns.mark', key: 'mark' },
   { labelKey: 'preflight.columns.status', key: 'severity' },
   { labelKey: 'preflight.columns.qty', key: 'qty' },
+  { labelKey: 'preflight.columns.mass', key: 'mass' },
   { labelKey: 'preflight.columns.profile', key: 'profile' },
   { labelKey: 'preflight.columns.model', key: 'model' },
 ]
@@ -196,6 +203,8 @@ export function PreflightPage() {
   const [manufactureChecks, setManufactureChecks] = useState<Map<string, ModelComparison>>(
     new Map(),
   )
+  /** Per-part STEP geometry cross-checked against the drawing's title-block AREA/WEIGHT. */
+  const [geometryChecks, setGeometryChecks] = useState<Map<string, GeometryCheck>>(new Map())
   /** Per-part laser-cut manufacturability issues (sudden thickness steps). */
   const [cutIssues, setCutIssues] = useState<Map<string, Finding[]>>(new Map())
   /** Per-part light-sabre test results (can a ~35 mm beam cut each surface in one clean pass?). */
@@ -366,6 +375,7 @@ export function PreflightPage() {
     setModelTotal(0)
     setModelChecks(new Map())
     setManufactureChecks(new Map())
+    setGeometryChecks(new Map())
     setCutIssues(new Map())
     setSabreChecks(new Map())
     let cancelled = false
@@ -443,6 +453,9 @@ export function PreflightPage() {
       const checks = new Map<string, SizeCheck>()
       const measures = new Map<string, StepMeasure>()
       const sabre = new Map<string, SabreResult>()
+      // STEP geometry vs the drawing's title-block AREA/WEIGHT (both derived from the real
+      // solid) — a projection-free way to catch geometry that drifted from the drawing.
+      const geometries = new Map<string, GeometryCheck>()
 
       const stepParts = result.parts.filter(
         (part) => (part.step ? bytesByPath.get(part.step.path) : undefined) != null,
@@ -483,6 +496,11 @@ export function PreflightPage() {
               publishInspect(part.mark, { ok: false, error: 'measureFailed' }, inspected.sabre)
             } else {
               measures.set(part.mark, inspected.measure)
+              const drawing = materials.get(part.mark)
+              if (drawing) {
+                geometries.set(part.mark, compareGeometry(inspected.measure, drawing))
+                setGeometryChecks(new Map(geometries))
+              }
               publishInspect(
                 part.mark,
                 compareSize(
@@ -616,6 +634,11 @@ export function PreflightPage() {
           })
           if (cancelled) return
           measure = inspected.measure
+          const drawing = drawingMaterials.get(mark)
+          if (measure && drawing) {
+            const checked = compareGeometry(measure, drawing)
+            setGeometryChecks((prev) => new Map(prev).set(mark, checked))
+          }
           if (needsInspect) {
             const length =
               drawingMaterials.get(mark)?.length ?? part.expected?.length ?? part.nc?.length
@@ -720,6 +743,25 @@ export function PreflightPage() {
           })
         }
       }
+      const geometry = geometryChecks.get(part.mark)
+      if (geometry && !geometry.areaOk) {
+        extra.push({
+          severity: 'warning',
+          code: 'GEOMETRY_AREA_MISMATCH',
+          mark: part.mark,
+          message: `STEP surface area ${geometry.area.toFixed(2)} m² vs drawing ${geometry.expectedArea} m² — geometry may not match the drawing`,
+          params: { step: geometry.area.toFixed(2), drawing: geometry.expectedArea ?? '' },
+        })
+      }
+      if (geometry && !geometry.massOk) {
+        extra.push({
+          severity: 'warning',
+          code: 'GEOMETRY_WEIGHT_MISMATCH',
+          mark: part.mark,
+          message: `STEP mass ${geometry.mass.toFixed(2)} kg vs drawing ${geometry.expectedMass} kg — geometry may not match the drawing`,
+          params: { step: geometry.mass.toFixed(2), drawing: geometry.expectedMass ?? '' },
+        })
+      }
       const cut = cutIssues.get(part.mark)
       if (cut) extra.push(...cut)
       const sabre = sabreChecks.get(part.mark)
@@ -741,7 +783,16 @@ export function PreflightPage() {
           SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
           (a.mark ?? '').localeCompare(b.mark ?? ''),
       )
-  }, [result, drawingMaterials, modelChecks, manufactureChecks, cutIssues, sabreChecks, t])
+  }, [
+    result,
+    drawingMaterials,
+    modelChecks,
+    manufactureChecks,
+    geometryChecks,
+    cutIssues,
+    sabreChecks,
+    t,
+  ])
 
   const counts = useMemo(() => {
     const result = { error: 0, warning: 0, info: 0 }
@@ -775,26 +826,59 @@ export function PreflightPage() {
     return total
   }, [result, drawingMaterials])
 
-  /** Per-profile rollup: pieces and cumulative length, so stock can be planned at a glance. */
+  /** Per-piece mass (kg): drawing weight is ground truth, then part list, then the measured STEP. */
+  const pieceMass = useCallback(
+    (part: PartRecord): number | null =>
+      drawingMaterials.get(part.mark)?.weight ??
+      part.expected?.weight ??
+      geometryChecks.get(part.mark)?.mass ??
+      null,
+    [drawingMaterials, geometryChecks],
+  )
+
+  /** Total mass (kg) across the job — the pickup load (qty × per-piece mass). */
+  const totalMassKg = useMemo(() => {
+    if (!result) return 0
+    let total = 0
+    for (const part of result.parts) {
+      const qty =
+        drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? 0
+      const mass = pieceMass(part)
+      if (mass != null) total += qty * mass
+    }
+    return total
+  }, [result, drawingMaterials, pieceMass])
+
+  /** Per-profile rollup: pieces, cumulative length and mass, so stock/pickup can be planned. */
   const profileGroups = useMemo(() => {
     if (!result) return []
-    const map = new Map<string, { marks: Set<string>; pieces: number; lengthMm: number }>()
+    const map = new Map<
+      string,
+      { marks: Set<string>; pieces: number; lengthMm: number; massKg: number }
+    >()
     for (const part of result.parts) {
       const profile = part.nc?.profile ?? part.expected?.profile ?? '—'
-      const entry = map.get(profile) ?? { marks: new Set<string>(), pieces: 0, lengthMm: 0 }
+      const entry = map.get(profile) ?? {
+        marks: new Set<string>(),
+        pieces: 0,
+        lengthMm: 0,
+        massKg: 0,
+      }
       entry.marks.add(part.mark)
       const qty =
         drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? 0
       const length =
         drawingMaterials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
+      const mass = pieceMass(part)
       entry.pieces += qty
       if (length != null) entry.lengthMm += qty * length
+      if (mass != null) entry.massKg += qty * mass
       map.set(profile, entry)
     }
     return [...map.entries()]
       .map(([profile, entry]) => ({ profile, ...entry, markCount: entry.marks.size }))
       .sort((a, b) => b.lengthMm - a.lengthMm || b.pieces - a.pieces)
-  }, [result, drawingMaterials])
+  }, [result, drawingMaterials, pieceMass])
 
   /** One status pill per distinct finding code, so the parts table carries its own triage. */
   const issuesByMark = useMemo(() => {
@@ -1107,13 +1191,18 @@ export function PreflightPage() {
 
       {result && (
         <>
-          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
             <Stat label={t('preflight.stats.parts')} value={result.summary.parts} />
             <Stat label={t('preflight.stats.totalQty')} value={totalQty} />
             <Stat
               label={t('preflight.stats.totalLength')}
               value={totalLengthMm > 0 ? `${(totalLengthMm / 1000).toFixed(1)} m` : '—'}
               pending={analyzing && drawingChecking}
+            />
+            <Stat
+              label={t('preflight.stats.totalMass')}
+              value={totalMassKg > 0 ? `${totalMassKg.toFixed(1)} kg` : '—'}
+              pending={analyzing}
             />
             <Stat label={t('preflight.stats.profiles')} value={profileGroups.length} />
             <Stat
@@ -1166,6 +1255,9 @@ export function PreflightPage() {
                         <TableHead className="text-right">
                           {t('preflight.profiles.totalLength')}
                         </TableHead>
+                        <TableHead className="text-right">
+                          {t('preflight.profiles.totalMass')}
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1180,6 +1272,15 @@ export function PreflightPage() {
                             ) : (
                               <span className="text-muted-foreground">
                                 {t('preflight.profiles.noLengths')}
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-xs">
+                            {group.massKg > 0 ? (
+                              `${group.massKg.toFixed(1)} kg`
+                            ) : (
+                              <span className="text-muted-foreground">
+                                {t('preflight.profiles.noMass')}
                               </span>
                             )}
                           </TableCell>
@@ -1294,6 +1395,19 @@ export function PreflightPage() {
                       const ncQty = part.nc?.quantity ?? null
                       const qtyMismatch = pdfQty != null && ncQty != null && pdfQty !== ncQty
                       const qtyFallback = pdfQty == null && ncQty != null
+                      const mass =
+                        material?.weight ??
+                        part.expected?.weight ??
+                        geometryChecks.get(part.mark)?.mass ??
+                        null
+                      const massBand: 'red' | 'yellow' | 'green' | null =
+                        mass == null
+                          ? null
+                          : mass > MASS_RED_KG
+                            ? 'red'
+                            : mass >= MASS_YELLOW_KG
+                              ? 'yellow'
+                              : 'green'
                       const pills = issuesByMark.get(part.mark) ?? []
                       return (
                         <TableRow
@@ -1351,6 +1465,23 @@ export function PreflightPage() {
                             {qtyFallback && (
                               <span className="ml-1 text-xs text-muted-foreground">(NC)</span>
                             )}
+                          </TableCell>
+                          <TableCell
+                            className={cn(
+                              'font-mono text-xs',
+                              massBand === 'red' && 'font-semibold text-red-400',
+                              massBand === 'yellow' && 'font-semibold text-amber-400',
+                              massBand === 'green' && 'text-emerald-400',
+                            )}
+                            title={
+                              massBand === 'red'
+                                ? t('preflight.mass.heavy', { kg: MASS_RED_KG })
+                                : massBand === 'yellow'
+                                  ? t('preflight.mass.medium', { kg: MASS_YELLOW_KG })
+                                  : undefined
+                            }
+                          >
+                            {mass != null ? `${mass.toFixed(1)} kg` : '—'}
                           </TableCell>
                           <TableCell className="font-mono text-xs">
                             {part.nc?.profile ?? part.expected?.profile ?? '—'}
@@ -1594,10 +1725,12 @@ function PartSummary({ part, material }: { part: PartRecord; material?: DrawingM
   const profile = part.nc?.profile ?? part.expected?.profile ?? '—'
   const qty = material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
   const length = material?.length ?? part.expected?.length ?? part.nc?.length ?? null
+  const mass = material?.weight ?? part.expected?.weight ?? null
   const stats: [string, string][] = [
     [t('preflight.columns.profile'), profile],
     [t('preflight.columns.qty'), qty != null ? String(qty) : '—'],
     [t('preflight.meta.length'), length != null ? `${length} mm` : '—'],
+    [t('preflight.columns.mass'), mass != null ? `${mass.toFixed(1)} kg` : '—'],
   ]
   return (
     <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">

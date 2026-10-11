@@ -83,6 +83,7 @@ export const en = {
       parts: 'Parts',
       totalQty: 'Total qty',
       totalLength: 'Total length',
+      totalMass: 'Total mass',
       profiles: 'Profiles',
       errors: 'Errors',
       warnings: 'Warnings',
@@ -97,8 +98,10 @@ export const en = {
       marks: 'Marks',
       pieces: 'Pieces',
       totalLength: 'Total length',
+      totalMass: 'Mass',
       singleLength: 'Each',
       noLengths: 'lengths pending drawings…',
+      noMass: 'mass pending drawings…',
     },
     findings: {
       title: 'Findings',
@@ -131,12 +134,17 @@ export const en = {
       mark: 'Mark',
       status: 'Status',
       qty: 'QTY',
+      mass: 'Mass',
       profile: 'Profile',
       model: 'Model size',
     },
     qty: {
       fallbackTitle: 'No drawing qty — showing NC qty',
       mismatchTitle: 'NC qty {{nc}} differs from drawing qty {{pdf}}',
+    },
+    mass: {
+      heavy: 'Over {{kg}} kg — plan a two-person lift or a mechanical aid',
+      medium: 'From {{kg}} kg — consider a lift aid',
     },
     status: {
       ok: 'OK',
@@ -324,6 +332,10 @@ export const en = {
     MISSING_PDF: 'No drawing PDF found for {{mark}}',
     QTY_MISMATCH: 'NC quantity {{nc}} differs from part list quantity {{list}}',
     QTY_MISMATCH_DRAWING: 'NC quantity {{nc}} differs from drawing quantity {{drawing}}',
+    GEOMETRY_AREA_MISMATCH:
+      'STEP surface area {{step}} m² vs drawing {{drawing}} m² — geometry may not match the drawing',
+    GEOMETRY_WEIGHT_MISMATCH:
+      'STEP mass {{step}} kg vs drawing {{drawing}} kg — geometry may not match the drawing',
     PROFILE_MISMATCH: 'NC profile {{nc}} differs from part list {{list}}',
     GRADE_MISMATCH: 'NC grade {{nc}} differs from part list {{list}}',
     LENGTH_DIFFERENCE:
@@ -427,6 +439,7 @@ export const zh = {
       parts: '零件',
       totalQty: '总数量',
       totalLength: '总长度',
+      totalMass: '总重量',
       profiles: '型材种类',
       errors: '错误',
       warnings: '警告',
@@ -441,8 +454,10 @@ export const zh = {
       marks: '标记数',
       pieces: '件数',
       totalLength: '总长度',
+      totalMass: '重量',
       singleLength: '单件',
       noLengths: '等待读取图纸长度…',
+      noMass: '等待读取图纸重量…',
     },
     findings: {
       title: '检查结果',
@@ -475,12 +490,17 @@ export const zh = {
       mark: '标记',
       status: '状态',
       qty: '数量',
+      mass: '重量',
       profile: '型材',
       model: '模型尺寸',
     },
     qty: {
       fallbackTitle: '无图纸数量——显示 NC 数量',
       mismatchTitle: 'NC 数量 {{nc}} 与图纸数量 {{pdf}} 不一致',
+    },
+    mass: {
+      heavy: '超过 {{kg}} kg——请安排两人搬运或使用机械辅助',
+      medium: '达到 {{kg}} kg——建议使用搬运辅助',
     },
     status: {
       ok: '正常',
@@ -664,6 +684,10 @@ export const zh = {
     MISSING_PDF: '未找到 {{mark}} 的图纸 PDF',
     QTY_MISMATCH: 'NC 数量 {{nc}} 与零件清单数量 {{list}} 不一致',
     QTY_MISMATCH_DRAWING: 'NC 数量 {{nc}} 与图纸数量 {{drawing}} 不一致',
+    GEOMETRY_AREA_MISMATCH:
+      'STEP 表面积 {{step}} m² 与图纸 {{drawing}} m² 不一致——几何可能与图纸不符',
+    GEOMETRY_WEIGHT_MISMATCH:
+      'STEP 重量 {{step}} kg 与图纸 {{drawing}} kg 不一致——几何可能与图纸不符',
     PROFILE_MISMATCH: 'NC 型材 {{nc}} 与零件清单 {{list}} 不一致',
     GRADE_MISMATCH: 'NC 材质 {{nc}} 与零件清单 {{list}} 不一致',
     LENGTH_DIFFERENCE:
