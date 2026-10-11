@@ -69,7 +69,7 @@ export function Dialog({ open, onClose, title, children, className, fullscreen }
             </button>
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+        <div className="min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable]">{children}</div>
       </div>
     </div>,
     document.body,

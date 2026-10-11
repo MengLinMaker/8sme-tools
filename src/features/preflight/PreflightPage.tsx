@@ -1374,8 +1374,8 @@ export function PreflightPage() {
         onClose={() => setViewing(null)}
         title={
           viewing ? (
-            <div className="flex items-center gap-3">
-              <span>{t('preflight.viewer.dialogTitle', { mark: viewing.mark })}</span>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <PartSummary part={viewing} material={drawingMaterials.get(viewing.mark)} />
               {viewingIndex >= 0 && (
                 <div className="flex items-center gap-1">
                   <Button
@@ -1412,7 +1412,6 @@ export function PreflightPage() {
       >
         {viewing && (viewing.step || viewing.nc) && (
           <div className="flex h-full min-h-0 flex-col">
-            <PartSummary part={viewing} material={drawingMaterials.get(viewing.mark)} />
             <ViewerWarnings
               findings={viewerFindings}
               step={viewing.step}
@@ -1555,7 +1554,7 @@ function PartSummary({ part, material }: { part: PartRecord; material?: DrawingM
     [t('preflight.meta.length'), length != null ? `${length} mm` : '—'],
   ]
   return (
-    <div className="flex shrink-0 flex-wrap items-baseline gap-x-5 gap-y-1 border-b border-border bg-card px-5 py-2">
+    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
       <span className="text-sm font-semibold">{part.mark}</span>
       {stats.map(([label, value]) => (
         <span key={label} className="flex items-baseline gap-1.5 text-xs">
