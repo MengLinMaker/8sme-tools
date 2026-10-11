@@ -7,6 +7,7 @@ import {
   Raycaster,
   Vector3,
 } from 'three'
+import { MAX_CUT_THICKNESS_MM } from '@/lib/audit/cutReach'
 import { ensureOc } from './occInit'
 
 /**
@@ -34,6 +35,100 @@ export interface SabreFailure {
   area: number
   /** failing triangle corners in STEP native coordinates — paints the red surface patch */
   tri: [[number, number, number], [number, number, number], [number, number, number]]
+  /** where the beam enters the material (on the surface it was fired at) */
+  entry: [number, number, number]
+  /** where the beam exits the far wall — the other end of the material it bores through */
+  exit: [number, number, number]
+}
+
+/**
+ * A connected patch of failing surface, localizing *where* the beam cannot cut. Failing
+ * triangles that share a vertex belong to the same region (mirror flanges, opposite ends and
+ * separate cuts are distinct). The `bores` are the actual entry→exit paths through the
+ * material, so the region is the surface patch *and* the material each beam traverses.
+ */
+export interface SabreRegion {
+  /** area-weighted centre of the failing surface patch (STEP native coordinates) */
+  point: [number, number, number]
+  /** failing triangles making up the region */
+  triangles: number
+  /** total surface area of the failing patch (mm²) */
+  area: number
+  /** deepest material path in the region (mm) */
+  depth: number
+  /** bore segments (entry → exit) traversing the material */
+  bores: [[number, number, number], [number, number, number]][]
+}
+
+/**
+ * Groups failures into connected surface regions (shared-vertex union), so a problem is
+ * reported as *one* localized patch with its material bores rather than N loose triangles.
+ * Regions are returned largest-area first.
+ */
+export function sabreRegions(failures: SabreFailure[]): SabreRegion[] {
+  const parent = failures.map((_, i) => i)
+  const find = (i: number): number => {
+    let root = i
+    while ((parent[root] ?? root) !== root) root = parent[root] ?? root
+    let cur = i
+    while ((parent[cur] ?? cur) !== root) {
+      const next = parent[cur] ?? cur
+      parent[cur] = root
+      cur = next
+    }
+    return root
+  }
+  const union = (a: number, b: number): void => {
+    const ra = find(a)
+    const rb = find(b)
+    if (ra !== rb) parent[ra] = rb
+  }
+  const owner = new Map<string, number>()
+  failures.forEach((failure, i) => {
+    for (const vertex of failure.tri) {
+      const key = vertexKey(vertex)
+      const previous = owner.get(key)
+      if (previous === undefined) owner.set(key, i)
+      else union(previous, i)
+    }
+  })
+
+  const groups = new Map<number, number[]>()
+  failures.forEach((_, i) => {
+    const root = find(i)
+    const list = groups.get(root) ?? []
+    list.push(i)
+    groups.set(root, list)
+  })
+
+  return [...groups.values()]
+    .map((indices) => {
+      let area = 0
+      let depth = 0
+      let x = 0
+      let y = 0
+      let z = 0
+      const bores: [[number, number, number], [number, number, number]][] = []
+      for (const i of indices) {
+        const failure = failures[i]
+        if (!failure) continue
+        area += failure.area
+        depth = Math.max(depth, failure.thickness)
+        x += failure.point[0]
+        y += failure.point[1]
+        z += failure.point[2]
+        bores.push([failure.entry, failure.exit])
+      }
+      const count = indices.length || 1
+      return {
+        point: [x / count, y / count, z / count] as [number, number, number],
+        triangles: indices.length,
+        area,
+        depth,
+        bores,
+      }
+    })
+    .sort((a, b) => b.area - a.area)
 }
 
 export interface SabreResult {
@@ -90,7 +185,8 @@ export interface MeshableShape {
   mesh: (options?: unknown) => { vertices: number[]; triangles: number[] }
 }
 
-const SABRE_LENGTH = 35
+/** The beam's usable length equals the head's max pierce depth (`MAX_CUT_THICKNESS_MM`). */
+const SABRE_LENGTH = MAX_CUT_THICKNESS_MM
 /** Cap on the number of triangle samples probed (largest first). */
 const MAX_SAMPLES = 400
 /**
@@ -234,13 +330,21 @@ export function sabreShape(shape: MeshableShape, length = SABRE_LENGTH): SabreRe
     raycaster.far = 2000
     const hits = raycaster
       .intersectObject(target, false)
-      .map((hit) => hit.distance)
-      .filter((d) => d > 0.01)
-      .sort((a, b) => a - b)
+      .filter((hit) => hit.distance > 0.01)
+      .sort((a, b) => a.distance - b.distance)
     // First hit is the surface entering the material, the next is where the beam exits. The
     // distance between them is the material the beam must travel through.
-    const thickness = hits.length >= 2 ? hits[1] - hits[0] : Number.POSITIVE_INFINITY
+    const entryHit = hits[0]
+    const exitHit = hits[1]
+    const thickness =
+      entryHit && exitHit ? exitHit.distance - entryHit.distance : Number.POSITIVE_INFINITY
     if (thickness > length) {
+      const entry: [number, number, number] = entryHit
+        ? [entryHit.point.x, entryHit.point.y, entryHit.point.z]
+        : [tri.centroid.x, tri.centroid.y, tri.centroid.z]
+      const exit: [number, number, number] = exitHit
+        ? [exitHit.point.x, exitHit.point.y, exitHit.point.z]
+        : entry
       failures.push({
         point: [tri.centroid.x, tri.centroid.y, tri.centroid.z],
         normal: [tri.normal.x, tri.normal.y, tri.normal.z],
@@ -251,6 +355,8 @@ export function sabreShape(shape: MeshableShape, length = SABRE_LENGTH): SabreRe
           [tri.b.x, tri.b.y, tri.b.z],
           [tri.c.x, tri.c.y, tri.c.z],
         ],
+        entry,
+        exit,
       })
     }
   }

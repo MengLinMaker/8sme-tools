@@ -33,7 +33,13 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
-import { faceNormal, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
+import type { CutReachFailure } from '@/lib/audit/cutReach'
+import {
+  faceNormal,
+  type NcFaceFrame,
+  placeNcFace,
+  resolveNcFaceFrame,
+} from '@/lib/parsers/ncFaces'
 import type { NcFace, NcGeometry } from '@/lib/parsers/ncGeometry'
 import {
   type NcLineSets,
@@ -53,11 +59,9 @@ import {
 } from '@/lib/step/booleanDiff'
 import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
-import type { SabreFailure } from '@/lib/step/sabre'
 import { meshForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
-import { NcLegend } from './NcLegend'
-import { attachOrbit, type OrbitBus, requestFocus } from './orbitSync'
+import { attachOrbit, attachWheelPan, type OrbitBus, requestFocus } from './orbitSync'
 import { smoothLines } from './smoothLines'
 
 const GHOST_COLOR = 0x3ddc84
@@ -88,8 +92,6 @@ const FALLBACK_COLOR = 0x9ca3af
 
 /** NC toolpath line width in screen pixels (fat lines, so they read clearly over the model). */
 const NC_LINE_WIDTH = 3
-/** Bevel arrows within this many mm of a light-sabre failure are drawn red (uncuttable cut). */
-const DANGER_RADIUS = 18
 
 /** Builds one fat-line (Line2) object from a flat XYZ pair list, or null when there is nothing. */
 function ncLineObject(
@@ -97,6 +99,7 @@ function ncLineObject(
   color: number,
   resolution: Vector2,
   materials: LineMaterial[],
+  onTop = false,
 ): LineSegments2 | null {
   if (points.length === 0) return null
   const geometry = new LineSegmentsGeometry()
@@ -107,23 +110,27 @@ function ncLineObject(
     opacity: 0.98,
     linewidth: NC_LINE_WIDTH,
     worldUnits: false,
+    // Error markers draw on top of the model (no occlusion): they render in the second pass
+    // (layer 1, after the depth buffer is cleared) and ignore depth.
+    depthTest: !onTop,
   })
   material.resolution.copy(resolution)
   materials.push(material)
-  return new LineSegments2(geometry, material)
+  const line = new LineSegments2(geometry, material)
+  if (onTop) {
+    line.renderOrder = 30
+    line.layers.set(1)
+  }
+  return line
 }
 
-/**
- * Builds the NC line sets as coloured fat lines. Bevel arrows within `DANGER_RADIUS` of a
- * light-sabre failure point are drawn red (an uncuttable cut) and returned separately.
- */
+/** Builds the NC line sets as coloured fat lines (cut lines + hole rings). */
 function addNcLines(
   nc: NcGeometry,
   projection: NcProjection,
   resolution: Vector2,
   materials: LineMaterial[],
-  dangerPoints: Vec3[] = [],
-): { lines: LineSegments2[]; danger: LineSegments2 | null } {
+): LineSegments2[] {
   const sets: NcLineSets = projectNc(nc, projection)
   const lines: LineSegments2[] = []
   const add = (points: number[], color: number): LineSegments2 | null => {
@@ -131,65 +138,10 @@ function addNcLines(
     if (line) lines.push(line)
     return line
   }
-  const cutSegments: number[] = []
   sets.cuts.forEach((cut, index) => {
     add(cut.points, THICKNESS_COLORS[index % THICKNESS_COLORS.length] ?? FALLBACK_COLOR)
-    cutSegments.push(...cut.points)
   })
-  // Flag the specific cut section at each failure: the nearest point on the nearest cut segment
-  // gets a short red mark, so only the guilty span lights up (not the whole cut).
-  let danger: LineSegments2 | null = null
-  if (dangerPoints.length > 0) {
-    const segments = cutSegments
-    const marks: number[] = []
-    for (const dp of dangerPoints) {
-      let best = DANGER_RADIUS
-      let px = 0
-      let py = 0
-      let pz = 0
-      let ux = 1
-      let uy = 0
-      let uz = 0
-      for (let i = 0; i + 5 < segments.length; i += 6) {
-        const ax = segments[i]
-        const ay = segments[i + 1]
-        const az = segments[i + 2]
-        const ex = segments[i + 3] - ax
-        const ey = segments[i + 4] - ay
-        const ez = segments[i + 5] - az
-        const l2 = ex * ex + ey * ey + ez * ez || 1
-        let t = ((dp[0] - ax) * ex + (dp[1] - ay) * ey + (dp[2] - az) * ez) / l2
-        t = Math.max(0, Math.min(1, t))
-        const cx = ax + ex * t
-        const cy = ay + ey * t
-        const cz = az + ez * t
-        const d = Math.hypot(dp[0] - cx, dp[1] - cy, dp[2] - cz)
-        if (d < best) {
-          best = d
-          px = cx
-          py = cy
-          pz = cz
-          const length = Math.sqrt(l2)
-          ux = ex / length
-          uy = ey / length
-          uz = ez / length
-        }
-      }
-      if (best < DANGER_RADIUS) {
-        const half = 5
-        marks.push(
-          px - ux * half,
-          py - uy * half,
-          pz - uz * half,
-          px + ux * half,
-          py + uy * half,
-          pz + uz * half,
-        )
-      }
-    }
-    danger = add(marks, SABRE_CUT_COLOR)
-  }
-  return { lines, danger }
+  return lines
 }
 
 /** Formats a 0–1 fraction as a percentage, keeping a decimal for tiny-but-nonzero shares. */
@@ -346,6 +298,8 @@ interface SceneHandle {
   setFlip: (flip: boolean) => void
   setDiffVisible: (visible: boolean) => void
   setSabreVisible: (visible: boolean) => void
+  /** Show only the span markers whose index is in `indices` (null = all; [] = none). */
+  setVisibleSpans: (indices: number[] | null) => void
   /** Pull every synced viewport toward the geometry behind a finding code (null = whole model). */
   focus: (code: string | null) => void
   diffStats: DiffStats | null
@@ -418,9 +372,10 @@ function mountScene(
   primaryBytes: Uint8Array | null | undefined,
   compareBytes: Uint8Array | null | undefined,
   deferDiff?: boolean,
-  sabre?: SabreFailure[] | null,
+  sabre?: CutReachFailure[] | null,
   nc?: NcGeometry | null,
   ncSection?: [number, number][] | null,
+  faceFrame?: NcFaceFrame | null,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -528,6 +483,8 @@ function mountScene(
   const ncResolution = new Vector2(container.clientWidth || 1, container.clientHeight || 1)
   // Red bevel arrows at uncuttable cuts (light-sabre failures) — toggled as one object.
   const sabreObjects: LineSegments2[] = []
+  /** One span marker per failing sub-cut, indexed like `sabreFailures`, so a finding can zoom in. */
+  const sabreSpanObjects: (LineSegments2 | null)[] = []
   const extents = [size.x, size.y, size.z]
   const nativeLongAxis = extents.indexOf(Math.max(...extents))
   const length = extents[nativeLongAxis]
@@ -558,14 +515,11 @@ function mountScene(
     scene.add(overlay)
     overlays.push(overlay)
 
-    // Project the NC toolpath onto the face each cut lands on, using the shared section face
-    // frame (the same rule the NC→solid rebuild uses). A cut with no material on its face (the
-    // edge of the stock) is dropped. The projection uses the *exact* section (`ncSection`) when
-    // available, so cuts and holes land exactly on the manufactured surface; a hair of offset
-    // keeps them clear of z-fighting.
-    if (nc) {
-      const section = ncSection ?? profile
-      const frame = resolveNcFaceFrame(section, nc)
+    // Cut-reach markers project onto the section frame; the NC toolpath is separate (only when
+    // `nc` is present, so the STEP/overlay panes show markers without the toolpath).
+    const section = ncSection ?? profile
+    const frame = faceFrame ?? (nc ? resolveNcFaceFrame(section, nc) : null)
+    if (frame) {
       const OFF = 0.4
       const toScene = (along: number, cross: [number, number], face: NcFace): Vec3 => {
         const n = faceNormal(frame, face)
@@ -583,27 +537,43 @@ function mountScene(
         const base = n.axis === 0 ? xAxis : yAxis
         return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
       }
-      const dangerPoints: Vec3[] = sabre
-        ? sabre.map((failure) => {
-            const point = new Vector3(failure.point[0], failure.point[1], failure.point[2])
-            point.applyMatrix4(primary.group.matrixWorld)
-            return [point.x, point.y, point.z]
-          })
-        : []
-      const built = addNcLines(
-        nc,
-        { frame, section, toScene, normal },
-        ncResolution,
-        ncMaterials,
-        dangerPoints,
-      )
-      for (const line of built.lines) {
-        scene.add(line)
-        ncObjects.push(line)
+      // The NC toolpath (cut lines, holes) — only on panes that pass `nc`. Issue markers are
+      // drawn separately (toggle-driven), not as toolpath danger marks.
+      if (nc) {
+        for (const line of addNcLines(
+          nc,
+          { frame, section, toScene, normal },
+          ncResolution,
+          ncMaterials,
+        )) {
+          scene.add(line)
+          ncObjects.push(line)
+        }
       }
-      if (built.danger) {
-        scene.add(built.danger)
-        sabreObjects.push(built.danger)
+      // The uncuttable subsection of each failing cut, drawn as a red marker spanning from its
+      // start to its end (both in NC face coords → projected with the shared `toScene`). One
+      // object per failure, so a clicked finding can zoom to its own sub-cut.
+      if (sabre && sabre.length > 0) {
+        for (const failure of sabre) {
+          const a = placeNcFace(frame, failure.face, failure.from[0], failure.from[1]).cross
+          const b = placeNcFace(frame, failure.face, failure.to[0], failure.to[1]).cross
+          const pA = toScene(failure.from[0], a, failure.face)
+          const pB = toScene(failure.to[0], b, failure.face)
+          const mark = ncLineObject(
+            [pA[0], pA[1], pA[2], pB[0], pB[1], pB[2]],
+            SABRE_CUT_COLOR,
+            ncResolution,
+            ncMaterials,
+            true,
+          )
+          if (mark) {
+            scene.add(mark)
+            sabreObjects.push(mark)
+            sabreSpanObjects.push(mark)
+          } else {
+            sabreSpanObjects.push(null)
+          }
+        }
       }
     }
   }
@@ -633,7 +603,7 @@ function mountScene(
         { frame, section: beam.profile, toScene, normal },
         ncResolution,
         ncMaterials,
-      ).lines) {
+      )) {
         scene.add(line)
         ncObjects.push(line)
       }
@@ -868,14 +838,40 @@ function mountScene(
   controls.dampingFactor = 0.08
   // Zoom where the pointer is, not always toward the centre — far handier for inspecting a part.
   controls.zoomToCursor = true
-  controls.target.copy(fitCentre)
+
+  // Snap the orbit pivot onto the beam's longitudinal centre line. Seating places the model's
+  // bbox centre at the origin, so the centre line is the model's long axis through the origin.
+  // Pan may slide along the beam and cursor-zoom may nudge the target, but the pivot can never
+  // leave the line — so orbiting always turns the beam about its own axis instead of swinging it
+  // around an off-axis point. Mirrors the NC beam viewer's pivot confinement.
+  const crossAxes = [0, 1, 2].filter((axis) => axis !== longAxis)
+  const axisCentre = fitCentre.clone()
+  for (const axis of crossAxes) axisCentre.setComponent(axis, 0)
+  const pivotShift = axisCentre.clone().sub(fitCentre)
+  camera.position.add(pivotShift)
+  controls.target.copy(axisCentre)
+  camera.lookAt(controls.target)
+
+  const axisLimit = length / 2
+  const confinePivot = (): void => {
+    const along = Math.max(-axisLimit, Math.min(axisLimit, controls.target.getComponent(longAxis)))
+    const next = new Vector3()
+    next.setComponent(longAxis, along)
+    if (controls.target.equals(next)) return
+    const delta = next.clone().sub(controls.target)
+    controls.target.copy(next)
+    camera.position.add(delta)
+  }
+  controls.addEventListener('change', confinePivot)
+
   const detachOrbit = bus
     ? attachOrbit(bus, camera, controls, {
-        centre: [fitCentre.x, fitCentre.y, fitCentre.z],
+        centre: [axisCentre.x, axisCentre.y, axisCentre.z],
         distance,
         radius: baseHalf,
       })
     : null
+  const detachWheelPan = attachWheelPan(container, controls, camera, longAxis as 0 | 1 | 2)
 
   let raf = 0
   // The diff lives on layer 1 and renders in a second pass after the depth buffer is cleared, so
@@ -922,27 +918,40 @@ function mountScene(
     setSabreVisible(visible: boolean) {
       for (const lines of sabreObjects) lines.visible = visible
     },
+    setVisibleSpans(indices: number[] | null) {
+      const set = indices == null ? null : new Set(indices)
+      for (let i = 0; i < sabreSpanObjects.length; i++) {
+        const object = sabreSpanObjects[i]
+        if (object) object.visible = set == null || set.has(i)
+      }
+    },
     focus(code: string | null) {
       if (!bus) return
       const box = new Box3()
       const cut = code?.startsWith('CUT') ?? false
-      if (cut && sabreObjects.length > 0) {
-        for (const lines of sabreObjects) box.expandByObject(lines)
-      } else if (cut && ncObjects.length > 0) {
-        for (const line of ncObjects) box.expandByObject(line)
-      } else {
-        box.expandByObject(primary.group)
+      if (cut) {
+        // Frame *all* checked sub-cuts (multiple selection → all in view); fall back to every
+        // marker, then the toolpath, if none are checked.
+        for (const object of sabreSpanObjects) {
+          if (object?.visible) box.expandByObject(object)
+        }
+        if (box.isEmpty()) for (const lines of sabreObjects) box.expandByObject(lines)
+        if (box.isEmpty()) for (const line of ncObjects) box.expandByObject(line)
       }
+      if (box.isEmpty()) box.expandByObject(primary.group)
       if (box.isEmpty()) return
       const centre = box.getCenter(new Vector3())
       const size = box.getSize(new Vector3())
-      const radius = Math.max(size.x, size.y, size.z) / 2
+      // A little margin so the framed cut isn't jammed against the viewport edge.
+      const radius = Math.max(Math.hypot(size.x, size.y, size.z) / 2, 1) * 1.4
       requestFocus(bus, { point: [centre.x, centre.y, centre.z], radius })
     },
     dispose() {
       cancelAnimationFrame(raf)
       observer.disconnect()
       detachOrbit?.()
+      detachWheelPan()
+      controls.removeEventListener('change', confinePivot)
       controls.dispose()
       for (const geometry of primary.geometries) {
         geometry.faces.dispose()
@@ -999,18 +1008,19 @@ export interface PartViewerProps {
    * lines across flat faces that read as cuts.
    */
   smoothLines?: boolean
-  /** light-sabre failures — drawn as red cut lines tracing the guilty patch perimeter */
-  sabreFailures?: SabreFailure[] | null
-  /** bevel angle (whole degrees) the NC specifies at the guilty cut, for the legend */
-  sabreBevelAngle?: number | null
+  /** cut-reach failures (a bevel whose bore is past the pierce cap) — drawn at their NC cut */
+  sabreFailures?: CutReachFailure[] | null
   /** NC toolpath geometry to project onto this (manufactured) model */
   nc?: NcGeometry | null
   /** Exact (un-inflated) section outline the NC was matched against, for the projection */
   ncSection?: [number, number][] | null
-  /** Show the NC toolpath colour legend in-pane (off when it lives in the shared header strip) */
-  showNcLegend?: boolean
-  /** Clicked-finding focus: bump `token` to pull every synced viewport to `code`'s geometry. */
-  focus?: { code: string; token: number } | null
+  /** Pre-resolved section face frame, so markers project without needing the NC geometry. */
+  faceFrame?: NcFaceFrame | null
+  /** Clicked-finding focus: bump `token` to pull every viewport to `code`'s geometry (optionally a
+   * specific failing sub-cut, by `index`). */
+  focus?: { code: string; token: number; index?: number } | null
+  /** Which failing sub-cut markers to show, by index (null/undefined = all; [] = none). */
+  visibleSpans?: number[] | null
   /** Controlled overlay toggles (shared toolbar). Omit to keep the per-pane buttons. */
   showStock?: boolean
   onShowStockChange?: (visible: boolean) => void
@@ -1037,8 +1047,9 @@ export default function PartViewer({
   sabreFailures = null,
   nc = null,
   ncSection = null,
-  showNcLegend = true,
+  faceFrame = null,
   focus = null,
+  visibleSpans = null,
   showStock: showStockProp,
   onShowStockChange,
   flipped: flippedProp,
@@ -1122,6 +1133,7 @@ export default function PartViewer({
           sabreFailures,
           nc,
           ncSection,
+          faceFrame,
         )
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handle.setFlip(false)
@@ -1162,6 +1174,7 @@ export default function PartViewer({
     sabreFailures,
     nc,
     ncSection,
+    faceFrame,
     t,
   ])
 
@@ -1186,7 +1199,20 @@ export default function PartViewer({
     handleRef.current?.setSabreVisible(showSabre)
   }, [showSabre])
 
-  // Clicking a finding pans/zooms the synced viewports to its geometry.
+  // Show only the checked failing sub-cuts' markers (null = all, [] = none).
+  useEffect(() => {
+    if (status !== 'ready') return
+    handleRef.current?.setVisibleSpans(showSabre ? visibleSpans : [])
+  }, [visibleSpans, showSabre, status])
+
+  // Pan/zoom to fit the shown sub-cuts whenever the eye toggles change (not just on row click).
+  const visibleKey = visibleSpans ? [...visibleSpans].sort((a, b) => a - b).join(',') : ''
+  useEffect(() => {
+    if (status !== 'ready' || !visibleKey) return
+    handleRef.current?.focus('CUT_DEPTH')
+  }, [visibleKey, status])
+
+  // Clicking a finding pans/zooms the synced viewports to its geometry (all checked sub-cuts).
   const focusToken = focus?.token
   const focusCode = focus?.code ?? null
   useEffect(() => {
@@ -1196,7 +1222,6 @@ export default function PartViewer({
   const hasOverlay = Boolean((stock || beam) && status === 'ready')
   const hasCompare = Boolean(compareBytes && status === 'ready')
   const hasSabre = Boolean(sabreFailures && sabreFailures.length > 0 && status === 'ready')
-  const hasNc = Boolean(nc && status === 'ready')
   const hasDiff = Boolean(hasCompare && diffInfo)
   const diffClean = diffInfo != null && diffInfo.over < 0.001 && diffInfo.under < 0.001
   // Fast probe verdict, shown while the exact boolean still runs.
@@ -1301,20 +1326,6 @@ export default function PartViewer({
               <span className="text-blue-300">{t('viewer.undercut')}</span>
             </>
           )}
-        </div>
-      )}
-      {hasSabre && showSabre && (
-        <div className="absolute bottom-3 right-3 z-10 flex items-center gap-2 rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur">
-          <span
-            className="inline-block size-3 rounded-sm border border-red-400"
-            style={{ background: 'rgba(255, 43, 43, 0.65)' }}
-          />
-          <span className="text-red-300">{t('viewer.sabreCut')}</span>
-        </div>
-      )}
-      {hasNc && showNcLegend && (
-        <div className="absolute left-3 top-12 z-10 flex flex-wrap items-center gap-2 rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur">
-          <NcLegend />
         </div>
       )}
       {status !== 'ready' && (

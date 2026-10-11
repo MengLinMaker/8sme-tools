@@ -12,7 +12,7 @@ import {
   WebGLRenderer,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { attachOrbit, type OrbitBus } from '@/features/preflight/orbitSync'
+import { attachOrbit, attachWheelPan, type OrbitBus } from '@/features/preflight/orbitSync'
 
 /** One nested piece span along the beam, per side. */
 export interface BeamSlot {
@@ -173,6 +173,7 @@ function mountScene(
     centre: [centre.x, centre.y, centre.z],
     distance,
   })
+  const detachWheelPan = attachWheelPan(container, controls, camera, 0)
 
   let raf = 0
   const render = (): void => {
@@ -202,6 +203,7 @@ function mountScene(
     cancelAnimationFrame(raf)
     observer.disconnect()
     detachOrbit()
+    detachWheelPan()
     controls.removeEventListener('change', confinePivot)
     controls.dispose()
     for (const line of lines) line.geometry.dispose()

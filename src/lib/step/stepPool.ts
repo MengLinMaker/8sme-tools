@@ -47,15 +47,11 @@ class StepWorkerPool {
   private readonly queue: Task[] = []
   private nextId = 1
 
-  /** Measure a STEP and run the light-sabre test on it, importing the model only once. */
-  inspect(
-    bytes: Uint8Array,
-    sabreLength?: number,
-    options: { priority?: number } = {},
-  ): Promise<InspectResult> {
+  /** Import a STEP and measure it, importing the model only once. */
+  inspect(bytes: Uint8Array, options: { priority?: number } = {}): Promise<InspectResult> {
     const copy = new Uint8Array(bytes)
     return this.run<InspectResult>(
-      { id: this.nextId++, kind: 'inspect', step: copy, sabreLength },
+      { id: this.nextId++, kind: 'inspect', step: copy },
       [copy.buffer],
       options.priority ?? PRIORITY_BACKGROUND,
     )

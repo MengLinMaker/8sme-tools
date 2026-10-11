@@ -26,8 +26,10 @@ type Pt = [number, number]
 type Axis = 0 | 1
 
 /**
- * How far a single laser cut can reach into the material — 3–4 cm. An enclosed NC surface (a hole)
- * is only ever cut this deep from its own face, never straight through the section.
+ * How far the modelled cut tool over-reaches into the material — 3–4 cm. An enclosed NC surface
+ * (a hole) is only ever cut this deep from its own face, never straight through the section; a
+ * notch is stripped from both faces. Distinct from the analysis pierce cap
+ * (`MAX_CUT_THICKNESS_MM`), which is the head's real single-pass material limit.
  */
 const BEAM_REACH = 35
 

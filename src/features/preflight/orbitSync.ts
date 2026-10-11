@@ -1,4 +1,4 @@
-import type { Camera, OrthographicCamera, PerspectiveCamera } from 'three'
+import { type Camera, type OrthographicCamera, type PerspectiveCamera, Vector3 } from 'three'
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
 /** A camera whose framing can be scaled by a zoom factor (perspective and orthographic). */
@@ -193,4 +193,45 @@ export function attachOrbit(
     bus.presetListeners.delete(applyPreset)
     bus.focusListeners.delete(applyFocus)
   }
+}
+
+/** The grabbed viewport's visible height in scene units, so a wheel notch pans a fixed fraction. */
+function visibleHeight(camera: ZoomableCamera, controls: OrbitControls): number {
+  if ((camera as OrthographicCamera).isOrthographicCamera) {
+    const ortho = camera as OrthographicCamera
+    return Math.abs(ortho.top - ortho.bottom) / ortho.zoom
+  }
+  const perspective = camera as PerspectiveCamera
+  const distance = perspective.position.distanceTo(controls.target)
+  return 2 * Math.tan((perspective.fov * Math.PI) / 360) * distance
+}
+
+/**
+ * Shift + wheel slides the view along one scene axis (the beam's length) instead of zooming, so a
+ * long stock/part can be run past the camera without leaving the pointer parked on it. The plain
+ * wheel keeps zooming. The listener is captured on the canvas's parent so it fires before
+ * OrbitControls' own (bubbling) wheel handler and can suppress that tick's zoom.
+ */
+export function attachWheelPan(
+  container: HTMLElement,
+  controls: OrbitControls,
+  camera: ZoomableCamera,
+  axis: 0 | 1 | 2,
+): () => void {
+  const delta = new Vector3()
+  const onWheel = (event: WheelEvent): void => {
+    if (!event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    // Some browsers report shift+wheel as a horizontal scroll (deltaX), so take the dominant axis.
+    const amount = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX
+    const step = visibleHeight(camera, controls) * 0.15 * Math.sign(amount || 1)
+    delta.set(0, 0, 0)
+    delta.setComponent(axis, step)
+    controls.target.add(delta)
+    camera.position.add(delta)
+    controls.update()
+  }
+  container.addEventListener('wheel', onWheel, { passive: false, capture: true })
+  return () => container.removeEventListener('wheel', onWheel, { capture: true })
 }

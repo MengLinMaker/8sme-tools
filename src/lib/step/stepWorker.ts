@@ -2,7 +2,6 @@ import { type MeasurableShape, measureShape, type StepMeasure } from './measure'
 import { meshStepFile } from './mesh'
 import { ensureOc } from './occInit'
 import { reconstructSolidFromNc } from './reconstructFromNc'
-import { type MeshableShape, type SabreResult, sabreShape } from './sabre'
 import type {
   InspectResult,
   ReconstructResult,
@@ -30,7 +29,7 @@ scope.onmessage = (event) => {
 async function handle(request: StepRequest): Promise<void> {
   try {
     if (request.kind === 'inspect') {
-      const value = await inspect(request.step, request.sabreLength)
+      const value = await inspect(request.step)
       scope.postMessage({ id: request.id, kind: 'inspect', ok: true, value })
     } else if (request.kind === 'mesh') {
       const value = await meshStepFile(request.name, request.step)
@@ -52,27 +51,21 @@ async function handle(request: StepRequest): Promise<void> {
   }
 }
 
-/** Import the STEP once, then measure and light-sabre test the same shape. */
-async function inspect(bytes: Uint8Array, sabreLength?: number): Promise<InspectResult> {
+/** Import the STEP once, then measure it. Cut-reach is a pure profile check, not OCC. */
+async function inspect(bytes: Uint8Array): Promise<InspectResult> {
   await ensureOc()
   const { importSTEP } = await import('replicad')
   const shape = (await importSTEP(
     new Blob([new Uint8Array(bytes)], { type: 'model/step' }),
-  )) as unknown as MeasurableShape & MeshableShape & { delete: () => void }
+  )) as unknown as MeasurableShape & { delete: () => void }
   try {
     let measure: StepMeasure | null = null
-    let sabre: SabreResult | null = null
     try {
       measure = await measureShape(shape)
     } catch {
       measure = null
     }
-    try {
-      sabre = sabreShape(shape, sabreLength)
-    } catch {
-      sabre = null
-    }
-    return { measure, sabre }
+    return { measure }
   } finally {
     shape.delete()
   }

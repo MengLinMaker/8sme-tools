@@ -1,6 +1,6 @@
 import { zipSync } from 'fflate'
 import type { TFunction } from 'i18next'
-import { ChevronDown, ChevronLeft, ChevronRight, Undo2, Wrench } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, Undo2, Wrench } from 'lucide-react'
 import {
   lazy,
   type ReactNode,
@@ -28,6 +28,7 @@ import {
 import { Toggle } from '@/components/ui/toggle'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
+import { assessCutReach, type CutReachFailure, MAX_CUT_THICKNESS_MM } from '@/lib/audit/cutReach'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
@@ -48,10 +49,8 @@ import {
   type SizeCheck,
   type StepMeasure,
 } from '@/lib/step/measure'
-import type { SabreResult } from '@/lib/step/sabre'
-import { locateSabreStations, type SabreStation, specifiedBevelAngle } from '@/lib/step/sabreToNc'
 import { getStepWorkerPool, PRIORITY_FOREGROUND, prebootStepWorkers } from '@/lib/step/stepPool'
-import { clearViewerModels, meshForViewer, reconstructForViewer } from '@/lib/step/viewerModel'
+import { clearViewerModels, reconstructForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
@@ -207,8 +206,8 @@ export function PreflightPage() {
   const [geometryChecks, setGeometryChecks] = useState<Map<string, GeometryCheck>>(new Map())
   /** Per-part laser-cut manufacturability issues (sudden thickness steps). */
   const [cutIssues, setCutIssues] = useState<Map<string, Finding[]>>(new Map())
-  /** Per-part light-sabre test results (can a ~35 mm beam cut each surface in one clean pass?). */
-  const [sabreChecks, setSabreChecks] = useState<Map<string, SabreResult>>(new Map())
+  /** Per-part cut-reach failures (a bevel whose bore exceeds the head's pierce cap). */
+  const [reachChecks, setReachChecks] = useState<Map<string, CutReachFailure[]>>(new Map())
   const [checking, setChecking] = useState(false)
   /** True from when a job is dropped until the whole analysis (drawings + models) finishes. */
   const [analyzing, setAnalyzing] = useState(false)
@@ -286,6 +285,14 @@ export function PreflightPage() {
     if (!viewing?.nc) return null
     return partSectionForCode(viewing.nc.profile, viewing.nc.dimensions ?? [])?.points ?? null
   }, [viewing])
+  // The section face frame, resolved once here so cut markers project on every pane even without
+  // the NC toolpath (only the manufactured pane projects the toolpath itself).
+  const viewingNcFrame = useMemo(() => {
+    if (!viewingNcGeom) return null
+    const section = viewingNcSection ?? (Array.isArray(stock?.points) ? stock.points : null)
+    if (!section) return null
+    return resolveNcFaceFrame(section, viewingNcGeom)
+  }, [viewingNcGeom, viewingNcSection, stock])
   // Cut thicknesses present in this part, for the profile legend (same colours the viewer uses).
   const viewingNcProfiles = useMemo(() => {
     if (!viewingNcGeom) return []
@@ -294,6 +301,11 @@ export function PreflightPage() {
     const frame = resolveNcFaceFrame(section, viewingNcGeom)
     return cutThicknesses(frame, section, viewingNcGeom)
   }, [viewingNcGeom, viewingNcSection, stock])
+  // The NC only carries etch (`SI`) / marking (`PU`/`KO`) data when those blocks are present.
+  const viewingHasMarkings = useMemo(() => {
+    if (!ncBytes) return false
+    return /(?:^|\n)\s*(?:SI|PU|KO)\s*(?:\n|$)/.test(new TextDecoder().decode(ncBytes))
+  }, [ncBytes])
 
   // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
   const [manufactured, setManufactured] = useState<Uint8Array | null>(null)
@@ -337,8 +349,17 @@ export function PreflightPage() {
 
   // One orbit bus per part, shared by the STEP and NC viewports so they rotate together.
   const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
-  // Bumped when a finding is clicked, so the viewers pull in to its geometry.
-  const [findingFocus, setFindingFocus] = useState<{ code: string; token: number } | null>(null)
+  // Bumped when a finding is clicked, so the viewers pull in to its geometry (`index` picks a
+  // specific failing sub-cut of a `CUT_*` finding).
+  const [findingFocus, setFindingFocus] = useState<{
+    code: string
+    token: number
+    index?: number
+  } | null>(null)
+  /** Which issue row is selected in the viewer's issues list (stepped through one at a time). */
+  const [issueIndex, setIssueIndex] = useState(0)
+  /** Issue indices the user has shown (eye on) — their sub-cuts render in the 3D. Default: none. */
+  const [shownIssues, setShownIssues] = useState<Set<number>>(new Set())
   // Shared overlay toggles, applied to every pane from the one toolbar above the 3D.
   const [showStock, setShowStock] = useState(() => readPref('showStock', false))
   useEffect(() => {
@@ -347,10 +368,14 @@ export function PreflightPage() {
   const openPart = useCallback((part: PartRecord) => {
     setOrbitBus(createOrbitBus())
     setFindingFocus(null)
+    setIssueIndex(0)
+    setShownIssues(new Set())
     setViewing(part)
   }, [])
   const focusFinding = useCallback((finding: Finding) => {
-    setFindingFocus((prev) => ({ code: finding.code, token: (prev?.token ?? 0) + 1 }))
+    const raw = finding.params?.index
+    const index = typeof raw === 'number' ? raw : undefined
+    setFindingFocus((prev) => ({ code: finding.code, token: (prev?.token ?? 0) + 1, index }))
   }, [])
 
   // Warm the viewer code-split chunks while the analysis runs, so the first
@@ -377,7 +402,7 @@ export function PreflightPage() {
     setManufactureChecks(new Map())
     setGeometryChecks(new Map())
     setCutIssues(new Map())
-    setSabreChecks(new Map())
+    setReachChecks(new Map())
     let cancelled = false
 
     const pdfParts = result.parts.filter((part) => {
@@ -389,14 +414,33 @@ export function PreflightPage() {
 
     void (async () => {
       // Phase 0: laser-cut manufacturability — sudden thickness changes a single-face sweep
-      // can't reach. Cheap (NC text only, no OCC), so publish it first: bad faces draw red in
-      // the NC view even while drawings + models still run.
+      // can't reach, and profile cut-reach (a bevel whose bore is past the head's pierce cap).
+      // Both are cheap (NC text + the pure section outline, no OCC), so publish first: bad faces
+      // draw red in the NC view even while drawings + models still run.
       const issues = new Map<string, Finding[]>()
+      const reach = new Map<string, CutReachFailure[]>()
+      /** Records that cut-depth couldn't be assessed for a model, so it never passes silently. */
+      const markUnchecked = (mark: string, reason: string, params?: Record<string, string>) => {
+        const list = issues.get(mark) ?? []
+        list.push({
+          severity: 'warning',
+          code: 'CUT_REACH_UNCHECKED',
+          mark,
+          message: `Cut-depth (bevel reach) not assessed: ${reason}`,
+          params: { reason, ...params },
+        })
+        issues.set(mark, list)
+      }
       for (const part of result.parts) {
         const ncPath = part.nc?.path
         const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
-        if (!ncBytes) continue
-        for (const issue of assessManufacturability(new TextDecoder().decode(ncBytes))) {
+        if (!ncBytes) {
+          // Cut-depth is an NC-only test; without an NC there are no cuts to assess.
+          if (part.step) markUnchecked(part.mark, 'no NC file')
+          continue
+        }
+        const ncText = new TextDecoder().decode(ncBytes)
+        for (const issue of assessManufacturability(ncText)) {
           const list = issues.get(part.mark) ?? []
           list.push({
             severity: issue.severity,
@@ -407,9 +451,20 @@ export function PreflightPage() {
           })
           issues.set(part.mark, list)
         }
+        const section = part.nc?.profile
+          ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
+          : null
+        if (!section) {
+          const profile = part.nc?.profile ?? '?'
+          markUnchecked(part.mark, `unrecognised section ${profile}`, { profile })
+          continue
+        }
+        const failures = assessCutReach(ncText, section.points, section.holes ?? [])
+        if (failures.length > 0) reach.set(part.mark, failures)
       }
       if (cancelled) return
       if (issues.size > 0) setCutIssues(new Map(issues))
+      if (reach.size > 0) setReachChecks(new Map(reach))
 
       // Phase 1: drawings, up to CONCURRENCY at a time.
       const materials = new Map<string, DrawingMaterial>()
@@ -452,7 +507,6 @@ export function PreflightPage() {
       const pool = getStepWorkerPool()
       const checks = new Map<string, SizeCheck>()
       const measures = new Map<string, StepMeasure>()
-      const sabre = new Map<string, SabreResult>()
       // STEP geometry vs the drawing's title-block AREA/WEIGHT (both derived from the real
       // solid) — a projection-free way to catch geometry that drifted from the drawing.
       const geometries = new Map<string, GeometryCheck>()
@@ -465,13 +519,9 @@ export function PreflightPage() {
       let inspectedCount = 0
       const bumpInspected = () => setModelDone(++inspectedCount)
       /** Publish one part's inspect result immediately so its issues visualise upfront. */
-      const publishInspect = (mark: string, check: SizeCheck, sabreResult?: SabreResult | null) => {
+      const publishInspect = (mark: string, check: SizeCheck) => {
         checks.set(mark, check)
         setModelChecks(new Map(checks))
-        if (sabreResult) {
-          sabre.set(mark, sabreResult)
-          setSabreChecks(new Map(sabre))
-        }
         bumpInspected()
       }
 
@@ -491,9 +541,9 @@ export function PreflightPage() {
             const inspected = await pool.inspect(bytes)
             if (cancelled) return
             if (length == null || cross.length < 2) {
-              publishInspect(part.mark, { ok: false, error: 'noDims' }, inspected.sabre)
+              publishInspect(part.mark, { ok: false, error: 'noDims' })
             } else if (!inspected.measure) {
-              publishInspect(part.mark, { ok: false, error: 'measureFailed' }, inspected.sabre)
+              publishInspect(part.mark, { ok: false, error: 'measureFailed' })
             } else {
               measures.set(part.mark, inspected.measure)
               const drawing = materials.get(part.mark)
@@ -510,7 +560,6 @@ export function PreflightPage() {
                   inspected.measure.bodies,
                   inspected.measure.extra,
                 ),
-                inspected.sabre,
               )
             }
           } catch {
@@ -594,7 +643,6 @@ export function PreflightPage() {
       if (!cancelled) {
         setManufactureChecks(new Map(manufacture))
         setCutIssues(new Map(issues))
-        setSabreChecks(new Map(sabre))
         setChecking(false)
         setAnalyzing(false)
       }
@@ -629,9 +677,7 @@ export function PreflightPage() {
         const pool = getStepWorkerPool()
         let measure: StepMeasure | null = null
         if (stepBytes && (needsInspect || needsRebuild)) {
-          const inspected = await pool.inspect(stepBytes, undefined, {
-            priority: PRIORITY_FOREGROUND,
-          })
+          const inspected = await pool.inspect(stepBytes, { priority: PRIORITY_FOREGROUND })
           if (cancelled) return
           measure = inspected.measure
           const drawing = drawingMaterials.get(mark)
@@ -650,10 +696,6 @@ export function PreflightPage() {
                   ? { ok: false, error: 'measureFailed' }
                   : compareSize(measure.size, length, cross, measure.bodies, measure.extra)
             setModelChecks((prev) => new Map(prev).set(mark, check))
-            if (inspected.sabre) {
-              const sabreResult = inspected.sabre
-              setSabreChecks((prev) => new Map(prev).set(mark, sabreResult))
-            }
           }
         }
         if (needsRebuild && ncBytes && measure) {
@@ -764,15 +806,23 @@ export function PreflightPage() {
       }
       const cut = cutIssues.get(part.mark)
       if (cut) extra.push(...cut)
-      const sabre = sabreChecks.get(part.mark)
-      if (sabre && !sabre.ok) {
-        const area = Math.round(sabre.failures.reduce((sum, f) => sum + f.area, 0))
-        extra.push({
-          severity: 'error',
-          code: 'CUT_DEPTH',
-          mark: part.mark,
-          message: `Cut can't pass through: the beam bottoms out inside the body on ${sabre.failures.length} surface(s) (~${area} mm² buried) — not manufacturable`,
-          params: { count: sabre.failures.length, area },
+      const reach = reachChecks.get(part.mark)
+      if (reach) {
+        // One finding per failing sub-cut, so each can be zoomed to individually.
+        reach.forEach((failure, index) => {
+          extra.push({
+            severity: 'error',
+            code: 'CUT_DEPTH',
+            mark: part.mark,
+            message: `Cut can't pass through: ${failure.spanMm.toFixed(0)} mm of the cut on face ${failure.face} needs a ${failure.path.toFixed(0)} mm bore (${failure.bevel.toFixed(0)}° bevel), past the head's ${MAX_CUT_THICKNESS_MM} mm pierce — not manufacturable`,
+            params: {
+              index,
+              face: failure.face,
+              span: failure.spanMm.toFixed(0),
+              path: failure.path.toFixed(0),
+              bevel: failure.bevel.toFixed(0),
+            },
+          })
         })
       }
     }
@@ -790,7 +840,7 @@ export function PreflightPage() {
     manufactureChecks,
     geometryChecks,
     cutIssues,
-    sabreChecks,
+    reachChecks,
     t,
   ])
 
@@ -914,50 +964,59 @@ export function PreflightPage() {
     [viewing, allFindings],
   )
 
-  /** Light-sabre failures of the viewed part — the manufactured view draws the cut lines. */
+  // Step through the viewed part's issues one at a time: selecting focuses/zooms that issue (and
+  // its specific sub-cut, if it has one).
+  // The right pane swaps between the drawing and the issues list; default to issues when there
+  // are any, since that's what needs attention.
+  const [rightTab, setRightTab] = useState<'drawing' | 'issues'>('drawing')
+  useEffect(() => {
+    setRightTab(
+      viewing && allFindings.some((finding) => finding.mark === viewing.mark)
+        ? 'issues'
+        : 'drawing',
+    )
+  }, [viewing, allFindings])
+  const selectIssue = useCallback(
+    (index: number) => {
+      const finding = viewerFindings[index]
+      if (!finding) return
+      setIssueIndex(index)
+      // Selecting an issue shows its marker (so the display follows the table selection).
+      setShownIssues((prev) => {
+        if (prev.has(index)) return prev
+        const next = new Set(prev)
+        next.add(index)
+        return next
+      })
+      focusFinding(finding)
+    },
+    [viewerFindings, focusFinding],
+  )
+  /** Indices of the issues whose sub-cuts are shown in the 3D (eye-on in the list). */
+  const visibleSpans = useMemo(
+    () => viewerFindings.map((_, index) => index).filter((index) => shownIssues.has(index)),
+    [viewerFindings, shownIssues],
+  )
+  const toggleIssue = useCallback((index: number) => {
+    setShownIssues((prev) => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }, [])
+  const toggleAllIssues = useCallback(() => {
+    setShownIssues((prev) =>
+      prev.size > 0 ? new Set() : new Set(viewerFindings.map((_, index) => index)),
+    )
+  }, [viewerFindings])
+
+  /** Cut-reach failures of the viewed part — the manufactured view draws the guilty cuts. */
   const viewerSabreFailures = useMemo(() => {
     if (!viewing) return null
-    const failures = sabreChecks.get(viewing.mark)?.failures
+    const failures = reachChecks.get(viewing.mark)
     return failures && failures.length > 0 ? failures : null
-  }, [viewing, sabreChecks])
-
-  /** Guilty cut stations mapped onto the NC length axis — the NC view highlights them red. */
-  const [viewerSabreStations, setViewerSabreStations] = useState<SabreStation[] | null>(null)
-  useEffect(() => {
-    setViewerSabreStations(null)
-    // Failures come from the analysis run on the original STEP — map with those same bytes,
-    // not a user override, so the station matches the guilty surface.
-    if (!viewing || !viewerSabreFailures || !ncBytes || !referenceStepBytes) return
-    let cancelled = false
-    const failures = viewerSabreFailures
-    const ncText = new TextDecoder().decode(ncBytes)
-    void meshForViewer(viewing.step?.path ?? viewing.mark, referenceStepBytes).then(
-      (meshed) => {
-        if (cancelled) return
-        try {
-          const stations = locateSabreStations(meshed.vertices, failures, parseNcGeometry(ncText))
-          if (!cancelled) setViewerSabreStations(stations.length > 0 ? stations : null)
-        } catch {
-          if (!cancelled) setViewerSabreStations(null)
-        }
-      },
-      () => {
-        if (!cancelled) setViewerSabreStations(null)
-      },
-    )
-    return () => {
-      cancelled = true
-    }
-  }, [viewing, viewerSabreFailures, ncBytes, referenceStepBytes])
-
-  /** Bevel angle the NC specifies at the guilty cut (whole degrees), for both viewers. */
-  const viewerSabreBevelAngle = useMemo(() => {
-    if (!ncBytes || !viewerSabreStations) return null
-    return specifiedBevelAngle(
-      parseNcGeometry(new TextDecoder().decode(ncBytes)),
-      viewerSabreStations,
-    )
-  }, [ncBytes, viewerSabreStations])
+  }, [viewing, reachChecks])
 
   // Collapsible sections — long jobs push the tables far down, so profiles
   // and parts collapse like an accordion.
@@ -1561,22 +1620,6 @@ export function PreflightPage() {
       >
         {viewing && (viewing.step || viewing.nc) && (
           <div className="flex h-full min-h-0 flex-col">
-            <ViewerWarnings
-              findings={viewerFindings}
-              step={viewing.step}
-              onFocus={focusFinding}
-              fix={{
-                override: overrideFor(viewing)?.kind,
-                canClean: isCleanable(viewing),
-                canRegenerate: isRegeneratable(viewing),
-                canSimplify: isSimplifiable(viewing),
-                pending: fixingMark === viewing.mark,
-                onClean: () => void cleanPart(viewing),
-                onRegenerate: () => void regeneratePart(viewing),
-                onSimplify: () => void simplifyPart(viewing),
-                onUndo: () => undoOverride(viewing.mark),
-              }}
-            />
             <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
               <div className="flex min-h-0 flex-1 flex-col">
                 {(viewingNcGeom || stock) && (
@@ -1590,12 +1633,15 @@ export function PreflightPage() {
                     </div>
                     {viewingNcGeom && (
                       <div className="flex flex-wrap items-center gap-2">
-                        <NcLegend thicknesses={viewingNcProfiles} />
+                        <NcLegend
+                          thicknesses={viewingNcProfiles}
+                          showMarkings={viewingHasMarkings}
+                        />
                       </div>
                     )}
                   </div>
                 )}
-                <div className="relative min-h-72 w-full flex-1 bg-[#0b0f14]">
+                <div className="relative min-h-0 w-full flex-1 bg-[#0b0f14]">
                   <Suspense
                     fallback={
                       <div className="grid h-full place-items-center text-sm text-muted-foreground">
@@ -1625,11 +1671,13 @@ export function PreflightPage() {
                             bus={orbitBus}
                             highlightStray
                             smoothLines
-                            focus={manufactured ? null : findingFocus}
-                            // The STEP is the ideal, not what gets cut — the marks live on
-                            // the manufactured pane, except as a fallback when it is absent.
-                            sabreFailures={manufacturedShown ? null : viewerSabreFailures}
-                            sabreBevelAngle={manufacturedShown ? null : viewerSabreBevelAngle}
+                            focus={findingFocus}
+                            // Marks project on every pane (via the shared face frame); only
+                            // the manufactured pane also projects the NC toolpath.
+                            sabreFailures={viewerSabreFailures}
+                            ncSection={viewingNcSection}
+                            faceFrame={viewingNcFrame}
+                            visibleSpans={visibleSpans}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
                             hideControls
@@ -1653,10 +1701,10 @@ export function PreflightPage() {
                             // The rebuild is oriented to the STEP frame, so the guilty-cut
                             // marks land on what the laser will actually cut — not the ideal.
                             sabreFailures={viewerSabreFailures}
-                            sabreBevelAngle={viewerSabreBevelAngle}
                             nc={viewingNcGeom}
                             ncSection={viewingNcSection}
-                            showNcLegend={false}
+                            faceFrame={viewingNcFrame}
+                            visibleSpans={visibleSpans}
                             focus={manufactured ? findingFocus : null}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
@@ -1684,6 +1732,11 @@ export function PreflightPage() {
                             compareLabel={t('preflight.viewer.step')}
                             stock={stock}
                             bus={orbitBus}
+                            focus={findingFocus}
+                            sabreFailures={viewerSabreFailures}
+                            ncSection={viewingNcSection}
+                            faceFrame={viewingNcFrame}
+                            visibleSpans={visibleSpans}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
                             hideControls
@@ -1703,14 +1756,57 @@ export function PreflightPage() {
                   </Suspense>
                 </div>
               </div>
-              <div className="h-[clamp(14rem,40vh,32rem)] w-full shrink-0 border-t border-border xl:h-auto xl:min-h-0 xl:w-[70vw] xl:shrink xl:border-l xl:border-t-0">
-                {viewingPdfBytes ? (
-                  <DrawingViewer bytes={viewingPdfBytes} />
-                ) : (
-                  <div className="grid h-full place-items-center px-4 text-center text-sm text-muted-foreground">
-                    {t('preflight.viewer.noDrawing')}
-                  </div>
-                )}
+              <div className="flex h-[60vh] w-full shrink-0 flex-col overflow-hidden border-t border-border xl:h-auto xl:min-h-0 xl:w-[70vw] xl:shrink xl:border-l xl:border-t-0">
+                <div className="relative z-10 flex shrink-0 items-center gap-1 border-b border-border bg-card px-2 py-1">
+                  {(['drawing', 'issues'] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setRightTab(tab)}
+                      className={cn(
+                        'rounded px-2.5 py-1 text-xs font-medium transition-colors',
+                        rightTab === tab
+                          ? 'bg-accent text-accent-foreground'
+                          : 'text-muted-foreground hover:bg-accent/50',
+                      )}
+                    >
+                      {tab === 'drawing'
+                        ? t('preflight.viewer.drawing')
+                        : t('preflight.warnings.issues', { count: viewerFindings.length })}
+                    </button>
+                  ))}
+                </div>
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  {rightTab === 'issues' ? (
+                    <ViewerWarnings
+                      findings={viewerFindings}
+                      step={viewing.step}
+                      activeIndex={issueIndex}
+                      onSelect={selectIssue}
+                      isChecked={(index) => shownIssues.has(index)}
+                      onToggleCheck={toggleIssue}
+                      allShown={shownIssues.size > 0}
+                      onToggleAll={toggleAllIssues}
+                      fix={{
+                        override: overrideFor(viewing)?.kind,
+                        canClean: isCleanable(viewing),
+                        canRegenerate: isRegeneratable(viewing),
+                        canSimplify: isSimplifiable(viewing),
+                        pending: fixingMark === viewing.mark,
+                        onClean: () => void cleanPart(viewing),
+                        onRegenerate: () => void regeneratePart(viewing),
+                        onSimplify: () => void simplifyPart(viewing),
+                        onUndo: () => undoOverride(viewing.mark),
+                      }}
+                    />
+                  ) : viewingPdfBytes ? (
+                    <DrawingViewer bytes={viewingPdfBytes} />
+                  ) : (
+                    <div className="grid h-full place-items-center px-4 text-center text-sm text-muted-foreground">
+                      {t('preflight.viewer.noDrawing')}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -1794,14 +1890,48 @@ function ViewerWarnings({
   findings,
   step,
   fix,
-  onFocus,
+  activeIndex = -1,
+  onSelect,
+  isChecked,
+  onToggleCheck,
+  allShown = true,
+  onToggleAll,
 }: {
   findings: Finding[]
   step?: StepFile
   fix?: ViewerFix
-  onFocus?: (finding: Finding) => void
+  activeIndex?: number
+  onSelect?: (index: number) => void
+  isChecked?: (index: number) => boolean
+  onToggleCheck?: (index: number) => void
+  allShown?: boolean
+  onToggleAll?: () => void
 }) {
   const { t } = useTranslation()
+  const activeRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (activeIndex < 0) return
+    activeRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex])
+  // Sortable issues table: by severity (worst first) or by type (code).
+  const [sort, setSort] = useState<{ key: 'severity' | 'code'; dir: 1 | -1 }>({
+    key: 'severity',
+    dir: 1,
+  })
+  const toggleSort = (key: 'severity' | 'code') =>
+    setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 1 ? -1 : 1 } : { key, dir: 1 }))
+  const rows = findings
+    .map((finding, index) => ({ finding, index }))
+    .sort((a, b) => {
+      if (sort.key === 'code') {
+        const byCode = a.finding.code.localeCompare(b.finding.code)
+        if (byCode !== 0) return byCode * sort.dir
+        return SEVERITY_ORDER[a.finding.severity] - SEVERITY_ORDER[b.finding.severity]
+      }
+      const bySeverity = SEVERITY_ORDER[a.finding.severity] - SEVERITY_ORDER[b.finding.severity]
+      if (bySeverity !== 0) return bySeverity * sort.dir
+      return a.finding.code.localeCompare(b.finding.code)
+    })
   const findingText = (finding: Finding) =>
     t(`findings.${finding.code}`, { ...finding.params, defaultValue: finding.message })
   const invalid = step && !step.valid ? step.problems.join('; ') : null
@@ -1809,65 +1939,147 @@ function ViewerWarnings({
     fix?.override || fix?.canClean || fix?.canRegenerate || fix?.canSimplify,
   )
   if (findings.length === 0 && !invalid && !hasFixRow) return null
+  const errors = findings.filter((finding) => finding.severity === 'error').length
+  const warnings = findings.filter((finding) => finding.severity === 'warning').length
   return (
-    <div className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-card px-4 py-2">
-      {findings.map((finding) => {
-        const resolved = Boolean(
-          fix?.override && resolvedFindings(fix.override).includes(finding.code),
-        )
-        const fixKind = fix && !resolved ? fixForFinding(finding.code) : null
-        const fixable = Boolean(fixKind && fix && viewerFixAvailable(fix, fixKind))
-        const action = fixKind && fix ? viewerFixAction(t, fix, fixKind) : null
-        return (
-          <div
-            key={`${finding.code}-${finding.message}`}
-            className={cn('flex items-center gap-2 text-sm', resolved && 'opacity-50')}
-          >
-            <button
-              type="button"
-              disabled={!onFocus}
-              onClick={onFocus ? () => onFocus(finding) : undefined}
-              title={onFocus ? t('preflight.viewer.focusIssue') : undefined}
-              className={cn(
-                '-mx-1 flex min-w-0 flex-1 items-center gap-2 rounded px-1 text-left',
-                onFocus && 'cursor-pointer hover:bg-accent/50',
-              )}
+    <div className="flex h-full min-h-0 flex-col gap-1.5 bg-card px-4 py-2">
+      {findings.length > 0 && (
+        <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+          {onToggleAll && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 shrink-0 px-2 text-xs normal-case tracking-normal"
+              onClick={onToggleAll}
             >
-              <span
-                className={cn(
-                  'shrink-0 rounded-full border px-2 py-0.5 font-mono text-[11px] font-semibold',
-                  finding.severity === 'error'
-                    ? 'border-destructive/50 bg-destructive/15 text-destructive-foreground'
-                    : finding.severity === 'warning'
-                      ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
-                      : 'border-sky-500/50 bg-sky-500/15 text-sky-300',
-                )}
-              >
-                {finding.code}
+              {allShown ? t('preflight.warnings.hideAll') : t('preflight.warnings.showAll')}
+            </Button>
+          )}
+          <span className="font-semibold">
+            {t('preflight.warnings.issues', { count: findings.length })}
+          </span>
+          <span className="font-normal normal-case tracking-normal">
+            {errors > 0 && (
+              <span className="text-destructive-foreground">
+                {t('preflight.warnings.errorCount', { count: errors })}
               </span>
-              <span className={cn('min-w-0 flex-1', resolved && 'line-through')}>
-                {findingText(finding)}
-              </span>
-            </button>
-            {resolved && (
-              <Badge variant="success" className="shrink-0">
-                {fix?.override ? t(`common.fix.${fix.override}`) : ''}
-              </Badge>
             )}
-            {fixable && action && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="shrink-0"
-                disabled={fix?.pending}
-                onClick={action.run}
-              >
-                {fix?.pending ? action.pendingLabel : action.label}
-              </Button>
-            )}
-          </div>
-        )
-      })}
+            {errors > 0 && warnings > 0 && ' · '}
+            {warnings > 0 && t('preflight.warnings.warningCount', { count: warnings })}
+          </span>
+        </div>
+      )}
+      <div className="min-h-0 flex-1 overflow-auto">
+        <Table>
+          <TableHeader className="sticky top-0 z-10 bg-card">
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-8" />
+              <TableHead className="w-24">
+                <button type="button" className="uppercase" onClick={() => toggleSort('severity')}>
+                  {t('preflight.warnings.colSeverity')}
+                </button>
+              </TableHead>
+              <TableHead className="w-28">
+                <button type="button" className="uppercase" onClick={() => toggleSort('code')}>
+                  {t('preflight.warnings.colType')}
+                </button>
+              </TableHead>
+              <TableHead>{t('preflight.warnings.colIssue')}</TableHead>
+              <TableHead className="w-24" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map(({ finding, index }) => {
+              const resolved = Boolean(
+                fix?.override && resolvedFindings(fix.override).includes(finding.code),
+              )
+              const fixKind = fix && !resolved ? fixForFinding(finding.code) : null
+              const fixable = Boolean(fixKind && fix && viewerFixAvailable(fix, fixKind))
+              const action = fixKind && fix ? viewerFixAction(t, fix, fixKind) : null
+              return (
+                <TableRow
+                  key={`${finding.code}-${finding.params?.index ?? finding.message}`}
+                  className={cn(resolved && 'opacity-50', index === activeIndex && 'bg-accent/60')}
+                >
+                  <TableCell className="py-1">
+                    <button
+                      ref={index === activeIndex ? activeRef : undefined}
+                      type="button"
+                      disabled={!onToggleCheck}
+                      onClick={() => onToggleCheck?.(index)}
+                      title={t('preflight.warnings.toggleIssue')}
+                      aria-pressed={isChecked ? isChecked(index) : false}
+                      className={cn(
+                        'rounded p-0.5 transition-colors',
+                        isChecked?.(index)
+                          ? 'text-primary'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {isChecked?.(index) ? (
+                        <Eye className="size-4" />
+                      ) : (
+                        <EyeOff className="size-4" />
+                      )}
+                    </button>
+                  </TableCell>
+                  <TableCell className="py-1">
+                    <span
+                      className={cn(
+                        'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                        finding.severity === 'error'
+                          ? 'border-destructive/50 bg-destructive/15 text-destructive-foreground'
+                          : finding.severity === 'warning'
+                            ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
+                            : 'border-sky-500/50 bg-sky-500/15 text-sky-300',
+                      )}
+                    >
+                      {finding.severity === 'error'
+                        ? t('preflight.warnings.sevError')
+                        : finding.severity === 'warning'
+                          ? t('preflight.warnings.sevWarning')
+                          : t('preflight.warnings.sevInfo')}
+                    </span>
+                  </TableCell>
+                  <TableCell className="py-1 font-mono text-[11px]">{finding.code}</TableCell>
+                  <TableCell className="py-1">
+                    <button
+                      type="button"
+                      disabled={!onSelect}
+                      onClick={onSelect ? () => onSelect(index) : undefined}
+                      title={onSelect ? t('preflight.viewer.focusIssue') : undefined}
+                      className={cn(
+                        'text-left',
+                        resolved && 'line-through',
+                        onSelect && 'cursor-pointer hover:underline',
+                      )}
+                    >
+                      {findingText(finding)}
+                    </button>
+                  </TableCell>
+                  <TableCell className="py-1 text-right">
+                    {resolved ? (
+                      <Badge variant="success">
+                        {fix?.override ? t(`common.fix.${fix.override}`) : ''}
+                      </Badge>
+                    ) : fixable && action ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7"
+                        disabled={fix?.pending}
+                        onClick={action.run}
+                      >
+                        {fix?.pending ? action.pendingLabel : action.label}
+                      </Button>
+                    ) : null}
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      </div>
       {invalid && (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive-foreground">
           {invalid}

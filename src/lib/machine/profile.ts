@@ -24,6 +24,8 @@ export interface MachineEnvelope {
   hBeam: { depthMm: number; flangeMm: number }
   /** Max material thickness (mm, carbon steel). */
   maxThicknessMm: number
+  /** Assist-gas nozzle aperture (mm) — clears slag, and bounds how close a cut can run to a corner. */
+  nozzleMm: number
 }
 
 export interface MachineBevel {
@@ -73,6 +75,7 @@ export const KL90010T: MachineProfile = {
     maxSquareMm: 400,
     hBeam: { depthMm: 800, flangeMm: 300 },
     maxThicknessMm: 25,
+    nozzleMm: 2,
   },
   bevel: { minDeg: -45, maxDeg: 45 },
   bottomCutMaxGrams: 10,

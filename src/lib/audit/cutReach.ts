@@ -1,5 +1,5 @@
 import { MACHINE } from '@/lib/machine/profile'
-import { faceNormal, placeNcFace, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
+import { faceNormal, faceSpanAxis, placeNcFace, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import {
   type NcContour,
   type NcFace,
@@ -12,12 +12,18 @@ import {
  *
  * The stock is prismatic, so whether a cut is manufacturable depends only on the 2D
  * cross-section, the beam's direction in it, and the bevel. The beam enters each cut at the
- * face's surface point and fires straight in (the face's inward normal); a bevel tilts the
- * beam out of the section plane, which only *shortens* its in-plane reach (`× cosβ`) — it does
- * not bend it in the section. So the test is one 2D ray per cut, no per-part OCC:
+ * face's surface point and fires straight in (the face's inward normal); a bevel tilts the beam
+ * out of the section plane, which only *shortens* its in-plane reach (`× cosβ`) — it does not
+ * bend it in the section. So the test is one 2D ray per cut, no per-part OCC:
  *
  *   path = material the beam bores at that point
- *   clean  ⟺  path / cosβ ≤ MAX_CUT_THICKNESS_MM   (and the beam doesn't reach a further wall)
+ *   clean ⟺ path / cosβ ≤ MAX_CUT_THICKNESS_MM (and no further wall is within that reach)
+ *
+ * Every cut is tested (a near-square pass through a *thick/deep-backed* region is just as
+ * unreachable as a bevel): a PFC end cut across the flange over the web, or an angle across its
+ * other leg, flags; an RHS/SHS cut only ever meets a thin wall, so it clears. Samples that lie in
+ * the grazing band around a section vertex, or off the outline (on a rounded corner), are dropped
+ * — the kerf/nozzle absorbs a feature that close to the cut line (see `CORNER_BAND_MM`).
  *
  * This replaces the old "light sabre" 3D test, which fired perpendicular to the *finished*
  * surface — wrong for a bevel/mitre (its normal is not the beam), so it flagging e.g. a 20°
@@ -40,32 +46,36 @@ const MAX_PROBE_MM = 1000
 const FACE_ALIGN_DOT = 0.5
 
 /**
- * Bevels below this (deg) are unbevelled for our purposes. An unbevelled cut into a face is a
- * straight radial pass through that face's wall — always within the pierce cap for a structural
- * section — so it is taken as cuttable without a test (only a bevel can lengthen the bore).
+ * Corner band (mm): a sample closer than this to a section vertex is skipped, because the local
+ * wall is ill-defined there and any ray grazes — the kerf/spot physically absorbs a feature that
+ * close to the cut line. Derived from the assist-gas nozzle (a real machine dimension): half the
+ * aperture. Distinct from the kerf (the focused slot), which is what `LASER_KERF` models.
  */
-const MIN_BEVEL_DEG = 0.5
+const CORNER_BAND_MM = MACHINE.envelope.nozzleMm / 2
 
 /**
- * Where along an edge to probe, as a fraction. The middle only: the ends of a face's end-cut
- * edge sit in the section's corner regions (e.g. where a channel web meets a flange), where a
- * beam along *this* face's normal is not how the cut is actually made — the corner is shared
- * with the transverse face and is cut by that face's pass. Probing the middle measures the wall
- * the cut genuinely runs through.
+ * Spacing (mm) between samples taken along a cut edge. Fine enough to bound the ends of an
+ * uncuttable subsection to ~1 mm, which is what the red span marker is drawn from.
  */
-const EDGE_SAMPLES = [0.35, 0.5, 0.65]
+const SAMPLE_STEP_MM = 1
 
 export interface CutReachFailure {
   /** `reach`: the beam bottoms out inside the material. `wall`: it would cut a wall behind. */
   reason: 'reach' | 'wall'
   face: NcFace
-  /** where along the member the beam enters (NC X, mm) */
+  /** start of the uncuttable subsection of the cut, in NC face coords `[X, Y]` */
+  from: [number, number]
+  /** end of the uncuttable subsection of the cut, in NC face coords `[X, Y]` */
+  to: [number, number]
+  /** length of the uncuttable subsection along the cut (mm) */
+  spanMm: number
+  /** where along the member the beam enters (NC X) at the representative (worst) sample */
   x: number
-  /** section-frame point the beam enters at (on the face plane) */
+  /** section-frame point the beam enters at (on the face plane), at the worst sample */
   entry: [number, number]
   /** section-frame unit direction the beam travels (the face's inward normal) */
   dir: [number, number]
-  /** section-frame point the beam leaves the material (entry + path·dir) */
+  /** section-frame point the beam leaves the material (entry + path·dir), at the worst sample */
   exit: [number, number]
   /** material path along the beam (mm) — the bore it must make */
   path: number
@@ -176,6 +186,37 @@ function distanceToSegment(p: [number, number], a: [number, number], b: [number,
 }
 
 /**
+ * Distance from `point` to the nearest section vertex (corner). Used to exclude the grazing band
+ * around a junction, where the local wall is ill-defined.
+ */
+export function nearestVertexDistance(points: [number, number][], point: [number, number]): number {
+  let best = Number.POSITIVE_INFINITY
+  for (const v of points) {
+    const d = Math.hypot(point[0] - v[0], point[1] - v[1])
+    if (d < best) best = d
+  }
+  return best
+}
+
+/**
+ * Distance from `point` to the section boundary. A face-plane point belongs to a flat wall only
+ * where the outline actually reaches the face plane; on a rounded corner the outline curves
+ * inside it, so the point sits off the material — the beam there grazes and must not be tested.
+ */
+export function distanceToOutline(points: [number, number][], point: [number, number]): number {
+  let best = Number.POSITIVE_INFINITY
+  for (let i = 0; i < points.length; i++) {
+    const d = distanceToSegment(
+      point,
+      points[i] ?? [0, 0],
+      points[(i + 1) % points.length] ?? [0, 0],
+    )
+    if (d < best) best = d
+  }
+  return best
+}
+
+/**
  * Outward normal of the section boundary at `point` (assumed on the outline) — the nearest
  * edge's normal. Used to tell a point that genuinely sits on a face from one at a junction
  * (e.g. the web corner of a channel, which belongs to a different face).
@@ -219,7 +260,38 @@ function bevelAt(contour: NcContour, index: number): number {
 }
 
 function sameFailure(a: CutReachFailure, b: CutReachFailure): boolean {
-  return a.reason === b.reason && a.face === b.face && Math.abs(a.x - b.x) < 1
+  return (
+    a.reason === b.reason &&
+    a.face === b.face &&
+    Math.hypot(a.from[0] - b.from[0], a.from[1] - b.from[1]) < 1 &&
+    Math.hypot(a.to[0] - b.to[0], a.to[1] - b.to[1]) < 1
+  )
+}
+
+/** One probe along a cut edge: its status and (for a failure) the bore it would need. */
+interface Probe {
+  x: number
+  y: number
+  cross: [number, number]
+  status: 'clean' | 'reach' | 'wall' | 'skip'
+  path: number
+  entry: [number, number]
+  exit: [number, number]
+}
+
+export interface CutReachOptions {
+  /**
+   * Placement tolerance (mm) to probe **across the face** either side of the cut line. The
+   * profile is prismatic, so a cut's in-face position error only moves the ray entry along the
+   * face — the across-face component. Each sample is tested at `0, ±tol` (and the midpoints) and
+   * the **worst** on-material result wins. `0` (default) tests the line exactly.
+   */
+  toleranceMm?: number
+}
+
+/** Failure status ordering: a failure beats a clean cut beats a skipped (off-material) sample. */
+function probeRank(status: Probe['status']): number {
+  return status === 'skip' ? 0 : status === 'clean' ? 1 : 2
 }
 
 /** Runs the profile cut-reach analysis over an NC file's outer (cut) contours. */
@@ -227,8 +299,9 @@ export function assessCutReach(
   ncText: string,
   section: [number, number][],
   holes: [number, number][][] = [],
+  options: CutReachOptions = {},
 ): CutReachFailure[] {
-  return assessCutReachGeometry(parseNcGeometry(ncText), section, holes)
+  return assessCutReachGeometry(parseNcGeometry(ncText), section, holes, options)
 }
 
 /** As {@link assessCutReach} but on already-parsed NC geometry. */
@@ -236,10 +309,13 @@ export function assessCutReachGeometry(
   nc: NcGeometry,
   section: [number, number][],
   holes: [number, number][][] = [],
+  options: CutReachOptions = {},
 ): CutReachFailure[] {
   if (section.length < 3) return []
   const frame = resolveNcFaceFrame(section, nc)
   const failures: CutReachFailure[] = []
+  const tol = options.toleranceMm ?? 0
+  const offsets = tol > 0 ? [-tol, -tol / 2, 0, tol / 2, tol] : [0]
 
   for (const contour of nc.contours) {
     if (contour.kind !== 'outer') continue
@@ -247,16 +323,60 @@ export function assessCutReachGeometry(
     const normal = faceNormal(frame, face)
     const dir = unitComponent(normal.axis, -normal.sign)
     const outward = unitComponent(normal.axis, normal.sign)
+    const span = faceSpanAxis(frame, face)
     const points = contour.points
     const count = points.length
+
+    /** Classify one ray entry point on the face plane. */
+    const classify = (
+      cross: [number, number],
+      x: number,
+      y: number,
+      budget: number,
+      cosBevel: number,
+    ): Probe => {
+      const skip: Probe = { x, y, cross, status: 'skip', path: 0, entry: cross, exit: cross }
+      // Near a section vertex the wall is ill-defined and the ray grazes; the kerf/nozzle
+      // absorbs a feature that close to the cut line.
+      if (nearestVertexDistance(section, cross) < CORNER_BAND_MM) return skip
+      // On a rounded corner the face plane runs outside the material — a radial ray grazes.
+      if (distanceToOutline(section, cross) > 0.3) return skip
+      // Only where the profile boundary actually faces this way (not an adjacent wall).
+      const local = nearestEdgeOutwardNormal(section, cross)
+      if (local[0] * outward[0] + local[1] * outward[1] < FACE_ALIGN_DOT) return skip
+      const spans = materialSpans(section, holes, cross, dir)
+      const first = spans[0]
+      if (!first) return skip
+      if (first[1] > budget + 1e-6) {
+        return {
+          x,
+          y,
+          cross,
+          status: 'reach',
+          path: first[1] / cosBevel,
+          entry: cross,
+          exit: [cross[0] + first[1] * dir[0], cross[1] + first[1] * dir[1]],
+        }
+      }
+      if (spans[1] && (spans[1] as [number, number])[0] < budget - 1e-6) {
+        const second = spans[1] as [number, number]
+        return {
+          x,
+          y,
+          cross,
+          status: 'wall',
+          path: (second[0] - first[1]) / cosBevel,
+          entry: cross,
+          exit: [cross[0] + second[0] * dir[0], cross[1] + second[0] * dir[1]],
+        }
+      }
+      return { x, y, cross, status: 'clean', path: first[1] / cosBevel, entry: cross, exit: cross }
+    }
 
     for (let i = 0; i < count; i++) {
       const a = points[i] ?? [0, 0]
       const b = points[(i + 1) % count] ?? [0, 0]
       const bevel = Math.max(bevelAt(contour, i), bevelAt(contour, (i + 1) % count))
-      // An unbevelled cut is a straight pass through the wall — always reachable in a
-      // structural section; only a bevel can push the bore past the pierce cap.
-      if (bevel < MIN_BEVEL_DEG) continue
       // Skip degenerate (duplicate-point) edges, then keep only transverse cuts (end / mitre /
       // bevel across a face). A long edge running along the member is the section's own
       // silhouette (or a longitudinal split) — its beam belongs to another face, so probing it
@@ -264,51 +384,66 @@ export function assessCutReachGeometry(
       if (Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]) < 1e-9) continue
       if (Math.abs(b[1] - a[1]) < Math.abs(b[0] - a[0])) continue
       const budget = MAX_CUT_THICKNESS_MM * Math.cos((bevel * Math.PI) / 180)
+      const cosBevel = Math.cos((bevel * Math.PI) / 180)
 
-      let worst: CutReachFailure | null = null
-      for (const fraction of EDGE_SAMPLES) {
-        const x = a[0] + (b[0] - a[0]) * fraction
-        const y = a[1] + (b[1] - a[1]) * fraction
-        const cross = placeNcFace(frame, face, x, y).cross
-        // Only where the profile boundary actually faces this way (skip junction vertices
-        // whose beam would run along an adjacent wall instead of into this face).
-        const local = nearestEdgeOutwardNormal(section, cross)
-        if (local[0] * outward[0] + local[1] * outward[1] < FACE_ALIGN_DOT) continue
-
-        const spans = materialSpans(section, holes, cross, dir)
-        const first = spans[0]
-        if (!first) continue
-
-        if (first[1] > budget + 1e-6) {
-          const failure: CutReachFailure = {
-            reason: 'reach',
-            face,
-            x,
-            entry: cross,
-            dir,
-            exit: [cross[0] + first[1] * dir[0], cross[1] + first[1] * dir[1]],
-            path: first[1] / Math.cos((bevel * Math.PI) / 180),
-            bevel,
+      // Dense sample along the edge, then group the failing probes into contiguous runs — each
+      // run is the subsection of the cut that is unreachable.
+      const edgeLen = Math.hypot(b[0] - a[0], b[1] - a[1])
+      const steps = Math.min(400, Math.max(4, Math.round(edgeLen / SAMPLE_STEP_MM)))
+      const probes: Probe[] = []
+      for (let k = 0; k <= steps; k++) {
+        const t = k / steps
+        const x = a[0] + (b[0] - a[0]) * t
+        const y = a[1] + (b[1] - a[1]) * t
+        const base = placeNcFace(frame, face, x, y).cross
+        // Worst on-material result over the across-face tolerance band.
+        let chosen: Probe | null = null
+        for (const off of offsets) {
+          const cross: [number, number] = [base[0], base[1]]
+          cross[span] += off
+          const probe = classify(cross, x, y, budget, cosBevel)
+          if (
+            chosen === null ||
+            probeRank(probe.status) > probeRank(chosen.status) ||
+            (probeRank(probe.status) === probeRank(chosen.status) &&
+              probeRank(probe.status) === 2 &&
+              probe.path > chosen.path)
+          ) {
+            chosen = probe
           }
-          if (!worst || failure.path > worst.path) worst = failure
-        } else if (spans[1] && (spans[1] as [number, number])[0] < budget - 1e-6) {
-          const second = spans[1] as [number, number]
-          const failure: CutReachFailure = {
-            reason: 'wall',
-            face,
-            x,
-            entry: cross,
-            dir,
-            exit: [cross[0] + second[0] * dir[0], cross[1] + second[0] * dir[1]],
-            path: (second[0] - first[1]) / Math.cos((bevel * Math.PI) / 180),
-            bevel,
-          }
-          if (!worst || failure.path > worst.path) worst = failure
         }
+        probes.push(chosen as Probe)
       }
-      if (worst && !failures.some((existing) => sameFailure(existing, worst as CutReachFailure))) {
-        failures.push(worst)
+
+      // Contiguous failing runs → one failure per uncuttable subsection.
+      let run: Probe[] = []
+      const flush = () => {
+        if (run.length === 0) return
+        const worst = run.reduce((p, q) => (q.path > p.path ? q : p))
+        const first = run[0] as Probe
+        const last = run[run.length - 1] as Probe
+        const spanMm = Math.hypot(last.x - first.x, last.y - first.y)
+        const failure: CutReachFailure = {
+          reason: worst.status === 'wall' ? 'wall' : 'reach',
+          face,
+          from: [first.x, first.y],
+          to: [last.x, last.y],
+          spanMm,
+          x: worst.x,
+          entry: worst.entry,
+          dir,
+          exit: worst.exit,
+          path: worst.path,
+          bevel,
+        }
+        if (!failures.some((existing) => sameFailure(existing, failure))) failures.push(failure)
+        run = []
       }
+      for (const probe of probes) {
+        if (probe.status === 'reach' || probe.status === 'wall') run.push(probe)
+        else flush()
+      }
+      flush()
     }
   }
 

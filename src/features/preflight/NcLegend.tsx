@@ -18,10 +18,16 @@ function Chip({ color, label }: { color: number; label: string }) {
 }
 
 /**
- * Profile key for the projected NC: cut lines are coloured by wall thickness, and etch / weld
- * markings are separate profiles.
+ * Profile key for the projected NC: cut lines are coloured by wall thickness, and — only when the
+ * NC actually carries them — the etch / weld markings.
  */
-export function NcLegend({ thicknesses = [] }: { thicknesses?: number[] }) {
+export function NcLegend({
+  thicknesses = [],
+  showMarkings = false,
+}: {
+  thicknesses?: number[]
+  showMarkings?: boolean
+}) {
   const { t } = useTranslation()
   return (
     <>
@@ -32,8 +38,12 @@ export function NcLegend({ thicknesses = [] }: { thicknesses?: number[] }) {
           label={`${thickness} mm`}
         />
       ))}
-      <Chip color={ETCH_COLOR} label={t('viewer.profileEtch')} />
-      <Chip color={MARKING_COLOR} label={t('viewer.profileMarking')} />
+      {showMarkings && (
+        <>
+          <Chip color={ETCH_COLOR} label={t('viewer.profileEtch')} />
+          <Chip color={MARKING_COLOR} label={t('viewer.profileMarking')} />
+        </>
+      )}
     </>
   )
 }

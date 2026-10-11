@@ -25,6 +25,8 @@ function failureAt(x: number): SabreFailure {
       [x + 5, 45, 100],
       [x, 55, 100],
     ],
+    entry: [x, 50, 100],
+    exit: [x, 50, 0],
   }
 }
 

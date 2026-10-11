@@ -71,8 +71,13 @@ describe('cutReach geometry', () => {
     expect(left[1]).toBeCloseTo(0, 6)
   })
 
-  it('takes an unbevelled cut as cuttable without probing', () => {
-    expect(assessCutReach(rectNc(0), SOLID)).toEqual([])
+  it('flags a cut through material deeper than the pierce cap', () => {
+    const failures = assessCutReach(rectNc(0), SOLID)
+    expect(failures.length).toBeGreaterThan(0)
+    for (const failure of failures) {
+      expect(failure.reason).toBe('reach')
+      expect(failure.path).toBeGreaterThan(MAX_CUT_THICKNESS_MM)
+    }
   })
 
   it('flags a bevel whose bore exceeds the pierce cap', () => {
@@ -84,12 +89,12 @@ describe('cutReach geometry', () => {
     }
   })
 
-  it('clears a thin-wall bevel', () => {
+  it('clears a thin-wall cut', () => {
     const section = partSectionForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])
     expect(section).not.toBeNull()
     if (!section) return
     const failures = assessCutReachGeometry(
-      parseNcGeometry(rectNc(20)),
+      parseNcGeometry(rectNc(0)),
       section.points,
       section.holes ?? [],
     )
@@ -110,23 +115,31 @@ describe('cutReach on real parts', () => {
     'Failed tests',
     '11601-02-01 NW30 BOTTOM FRAMES - SHAFTS',
   )
-  const marks: { dir: string; mark: string }[] = [
-    { dir: NW31, mark: 'm106' },
-    { dir: NW31, mark: 'm128' },
-    { dir: NW30, mark: 'm106' },
+  // A PFC end cut runs across the flange over the web (deep-backed → flag); an SHS end cut only
+  // ever meets thin walls, so it clears.
+  const marks: { dir: string; mark: string; expectFlagged: boolean }[] = [
+    { dir: NW31, mark: 'm106', expectFlagged: true },
+    { dir: NW31, mark: 'm128', expectFlagged: true },
+    { dir: NW30, mark: 'm106', expectFlagged: false },
   ]
-  for (const { dir, mark } of marks) {
+  for (const { dir, mark, expectFlagged } of marks) {
     const have = existsSync(join(dir, `${mark}.nc1`))
-    it.skipIf(!have)(`${mark} (${dir.includes('NW31') ? 'NW31' : 'NW30'}) cut is reachable`, () => {
-      const ncText = readFileSync(join(dir, `${mark}.nc1`), 'utf8')
-      const nc = parseNcGeometry(ncText)
-      const header = parseDstv(ncText).header
-      const section = partSectionForCode(header.profile, header.dimensions)
-      expect(section).not.toBeNull()
-      if (!section) return
-      const failures = assessCutReachGeometry(nc, section.points, section.holes ?? [])
-      console.log(`${mark}: ${failures.length} failures`, failures.slice(0, 6))
-      expect(failures).toEqual([])
-    })
+    it.skipIf(!have)(
+      `${mark} (${dir.includes('NW31') ? 'NW31' : 'NW30'}) ${
+        expectFlagged ? 'flags the deep-backed cut' : 'clears the thin-wall cut'
+      }`,
+      () => {
+        const ncText = readFileSync(join(dir, `${mark}.nc1`), 'utf8')
+        const nc = parseNcGeometry(ncText)
+        const header = parseDstv(ncText).header
+        const section = partSectionForCode(header.profile, header.dimensions)
+        expect(section).not.toBeNull()
+        if (!section) return
+        const failures = assessCutReachGeometry(nc, section.points, section.holes ?? [])
+        console.log(`${mark}: ${failures.length} failures`, failures.slice(0, 6))
+        if (expectFlagged) expect(failures.length).toBeGreaterThan(0)
+        else expect(failures).toEqual([])
+      },
+    )
   }
 })

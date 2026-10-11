@@ -1,6 +1,5 @@
 import type { StepMeasure } from './measure'
 import type { MeshedStep } from './mesh'
-import type { SabreResult } from './sabre'
 
 /**
  * Message protocol between the preflight UI and the STEP worker pool.
@@ -13,7 +12,6 @@ import type { SabreResult } from './sabre'
 /** Import a STEP once and run every geometry check that needs it. */
 export interface InspectResult {
   measure: StepMeasure | null
-  sabre: SabreResult | null
 }
 
 /** Rebuild a solid from its DSTV `.nc1`, optionally measuring the result. */
@@ -23,7 +21,7 @@ export interface ReconstructResult {
 }
 
 export type StepRequest =
-  | { id: number; kind: 'inspect'; step: Uint8Array; sabreLength?: number }
+  | { id: number; kind: 'inspect'; step: Uint8Array }
   | {
       id: number
       kind: 'reconstruct'

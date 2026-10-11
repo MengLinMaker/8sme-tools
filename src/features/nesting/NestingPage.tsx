@@ -11,6 +11,7 @@ import { Dialog } from '@/components/ui/dialog'
 import { createOrbitBus } from '@/features/preflight/orbitSync'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { downloadBlob } from '@/lib/download'
+import { MACHINE } from '@/lib/machine/profile'
 import { buildBarNc } from '@/lib/nesting/nc'
 import {
   collectTees,
@@ -41,7 +42,7 @@ import { BeamNcViewer, type BeamSlot } from './BeamNcViewer'
 const PartViewer = lazy(() => import('@/features/preflight/PartViewer'))
 
 const UNLIMITED = Number.POSITIVE_INFINITY
-const COMMON_LENGTHS = [6000, 9000, 12000, 15000, 16500, 18000]
+const COMMON_LENGTHS = [6000, 9000, MACHINE.defaultStockLengthMm, 15000, 16500, 18000]
 
 interface StockRow {
   id: string
@@ -213,7 +214,7 @@ export function NestingPage() {
       }
       const detected = groupTees(tees)
       setGroups(detected)
-      setRows((current) => (current.length > 0 ? current : [newRow(12000)]))
+      setRows((current) => (current.length > 0 ? current : [newRow(MACHINE.defaultStockLengthMm)]))
     },
     [t],
   )

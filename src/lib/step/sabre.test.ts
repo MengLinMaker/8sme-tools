@@ -10,8 +10,11 @@ setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 
 /**
  * The "light sabre" test against real job parts when the fixtures are present. `m128` (PFC, huge
- * shaved end surface) is known not-manufacturable, so it pins the fail behaviour. Skipped
- * otherwise.
+ * shaved end surface) trips the OCC sabre, so it pins *its* failure behaviour. Note the production
+ * analysis no longer uses this 3D test — it flags the shaved end as an 85 mm bore because it fires
+ * perpendicular to the finished face, which is wrong for a bevel. The profile cut-reach check in
+ * `src/lib/audit/cutReach.ts` is the source of truth; this pins the legacy probe only.
+ * Skipped otherwise.
  */
 
 const TOP = join(

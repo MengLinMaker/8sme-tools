@@ -197,6 +197,20 @@ export const en = {
     },
     warnings: {
       cancelFix: 'Undo',
+      issues: 'Issues ({{count}})',
+      errorCount: '{{count}} error(s)',
+      warningCount: '{{count}} warning(s)',
+      showAll: 'Show all',
+      hideAll: 'Hide all',
+      toggleIssue: 'Show this issue in the 3D',
+      colSeverity: 'Severity',
+      colType: 'Type',
+      colIssue: 'Issue',
+      sevError: 'Error',
+      sevWarning: 'Warning',
+      sevInfo: 'Info',
+      prevIssue: 'Previous issue',
+      nextIssue: 'Next issue',
       stepCleaned: 'STEP cleaned — this is what the export ships.',
       stepRegenerated: 'STEP regenerated — this is what the export ships.',
       stepSimplified:
@@ -348,7 +362,8 @@ export const en = {
     CUT_STEP:
       'Not manufacturable: a sudden {{depth}} mm thickness change on face(s) {{faces}} is past the ~30 mm the head can reach — it would damage the machine. Cut at an angle on the radius (a manual judgement), it cannot be swept in one pass',
     CUT_DEPTH:
-      "Cut can't pass through: the beam bottoms out inside the body on {{count}} surface(s) (~{{area}} mm² buried) — not manufacturable",
+      "Cut can't pass through: {{span}} mm of the cut on face {{face}} needs a {{path}} mm bore ({{bevel}}° bevel), past the head's ~25 mm pierce — not manufacturable",
+    CUT_REACH_UNCHECKED: 'Cut-depth (bevel reach) not assessed: {{reason}}',
     MANUFACTURE_MISMATCH: '{{note}} — the model is badly wrong; regenerate the STEP from the NC',
     MANUFACTURE_BORDERLINE:
       "{{note}} — borderline (commonly the section's end radii); check before running",
@@ -699,7 +714,8 @@ export const zh = {
     CUT_STEP:
       '不可制造：{{faces}} 面上 {{depth}} mm 的厚度突变超出了机头约 30 mm 的加工范围——会损坏机器。需在圆弧处斜切（人工判断），无法一次扫切成型',
     CUT_DEPTH:
-      '无法切透：光束在 {{count}} 个表面处终止于工件内部（约 {{area}} mm² 埋入）——无法制造',
+      '无法切透：{{face}} 面上 {{span}} mm 的切缝需要 {{path}} mm 的切割深度（{{bevel}}° 坡口），超过机头约 25 mm 的穿透能力——无法制造',
+    CUT_REACH_UNCHECKED: '未评估切割深度（坡口穿透）：{{reason}}',
     MANUFACTURE_MISMATCH: '{{note}}——模型严重错误；请根据 NC 重建 STEP',
     MANUFACTURE_BORDERLINE: '{{note}}——临界（通常为型材端部圆弧）；运行前请核对',
   },
