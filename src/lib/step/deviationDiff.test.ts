@@ -49,7 +49,12 @@ describe('deviation diff (STEP is nominal)', () => {
 
   it('hides deviations below the tolerance', () => {
     // 9.9³ inside 10³: faces sit 0.05 mm out — below the 0.15 mm default, not drawn.
-    const result = deviationDiff([boxSoup(10, 10, 10)], [boxSoup(9.9, 9.9, 9.9)], IDENTITY, IDENTITY)
+    const result = deviationDiff(
+      [boxSoup(10, 10, 10)],
+      [boxSoup(9.9, 9.9, 9.9)],
+      IDENTITY,
+      IDENTITY,
+    )
     expect(result?.over).toBeNull()
     expect(result?.under).toBeNull()
   })

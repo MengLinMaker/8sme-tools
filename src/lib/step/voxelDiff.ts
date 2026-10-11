@@ -94,15 +94,9 @@ function rasterizeTriangle(
   const gu = P.map((p) => ((p[u] as number) - (o[u] as number)) / g.v)
   const gw = P.map((p) => ((p[w] as number) - (o[w] as number)) / g.v)
   const iu0 = Math.max(0, Math.floor(Math.min(gu[0]!, gu[1]!, gu[2]!) - 1))
-  const iu1 = Math.min(
-    (nAxes[u] as number) - 1,
-    Math.ceil(Math.max(gu[0]!, gu[1]!, gu[2]!) + 1),
-  )
+  const iu1 = Math.min((nAxes[u] as number) - 1, Math.ceil(Math.max(gu[0]!, gu[1]!, gu[2]!) + 1))
   const iw0 = Math.max(0, Math.floor(Math.min(gw[0]!, gw[1]!, gw[2]!) - 1))
-  const iw1 = Math.min(
-    (nAxes[w] as number) - 1,
-    Math.ceil(Math.max(gw[0]!, gw[1]!, gw[2]!) + 1),
-  )
+  const iw1 = Math.min((nAxes[w] as number) - 1, Math.ceil(Math.max(gw[0]!, gw[1]!, gw[2]!) + 1))
   if (iu1 < iu0 || iw1 < iw0) return
   const e0 = (gu[1]! - gu[0]!) * (gw[2]! - gw[0]!) - (gw[1]! - gw[0]!) * (gu[2]! - gu[0]!)
   if (e0 === 0) return
@@ -116,9 +110,9 @@ function rasterizeTriangle(
       if (b0 < 0 || b1 < 0 || b2 < 0) continue
       const worldD =
         (P[0]![d] as number) -
-        (((n[u] as number) * (o[u]! + px * g.v - (P[0]![u] as number)) +
+        ((n[u] as number) * (o[u]! + px * g.v - (P[0]![u] as number)) +
           (n[w] as number) * (o[w]! + py * g.v - (P[0]![w] as number))) /
-          np)
+          np
       const k = Math.floor((worldD - (o[d] as number)) / g.v)
       if (k < 0 || k >= (nAxes[d] as number)) continue
       const idxVals = [0, 0, 0]
@@ -338,4 +332,77 @@ export function voxelDiff(
     underVolume: under.volumes,
     primaryVolume: primaryCells * voxelSize * voxelSize * voxelSize,
   }
+}
+
+interface CachedVoxel {
+  matrixKey: string
+  voxelSize: number
+  overPos: Float32Array | null
+  underPos: Float32Array | null
+  overDistance: number[]
+  underDistance: number[]
+  overVolume: number
+  underVolume: number
+  primaryVolume: number
+}
+
+const voxelCache = new WeakMap<Uint8Array, WeakMap<Uint8Array, CachedVoxel>>()
+
+function geometryFromArray(positions: Float32Array): BufferGeometry {
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new Float32BufferAttribute(positions.slice(), 3))
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  return geometry
+}
+
+/**
+ * Memoised {@link voxelDiff} for the viewer: same inputs (same STEP byte objects, same seating,
+ * same voxel size) rebuild the blocky shells from cached positions instead of re-voxelising.
+ */
+export function cachedVoxelDiff(
+  primaryParts: DiffSoup[],
+  compareParts: DiffSoup[],
+  primaryMatrix: Matrix4,
+  compareMatrix: Matrix4,
+  primaryBytes: Uint8Array,
+  compareBytes: Uint8Array,
+  voxelSize = VOXEL_SIZE_MM,
+): BooleanDiff | null {
+  const matrixKey = `${primaryMatrix.elements.join(',')}|${compareMatrix.elements.join(',')}`
+  const hit = voxelCache.get(primaryBytes)?.get(compareBytes)
+  if (hit && hit.matrixKey === matrixKey && hit.voxelSize === voxelSize) {
+    return {
+      over: hit.overPos ? geometryFromArray(hit.overPos) : null,
+      under: hit.underPos ? geometryFromArray(hit.underPos) : null,
+      overDistance: [...hit.overDistance],
+      underDistance: [...hit.underDistance],
+      overVolume: hit.overVolume,
+      underVolume: hit.underVolume,
+      primaryVolume: hit.primaryVolume,
+    }
+  }
+  const result = voxelDiff(primaryParts, compareParts, primaryMatrix, compareMatrix, voxelSize)
+  if (!result) return null
+  const positions = (geometry: BufferGeometry | null) => {
+    const array = geometry?.getAttribute('position')?.array as Float32Array | undefined
+    return array ? (array.slice() as Float32Array) : null
+  }
+  let byPrimary = voxelCache.get(primaryBytes)
+  if (!byPrimary) {
+    byPrimary = new WeakMap()
+    voxelCache.set(primaryBytes, byPrimary)
+  }
+  byPrimary.set(compareBytes, {
+    matrixKey,
+    voxelSize,
+    overPos: positions(result.over),
+    underPos: positions(result.under),
+    overDistance: [...result.overDistance],
+    underDistance: [...result.underDistance],
+    overVolume: result.overVolume,
+    underVolume: result.underVolume,
+    primaryVolume: result.primaryVolume,
+  })
+  return result
 }

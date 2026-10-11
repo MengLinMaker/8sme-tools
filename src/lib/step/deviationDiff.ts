@@ -308,8 +308,7 @@ function signedVolume({ vertices, triangles }: DiffSoup): number {
     const cx = vertices[c] as number
     const cy = vertices[c + 1] as number
     const cz = vertices[c + 2] as number
-    volume +=
-      (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)) / 6
+    volume += (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)) / 6
   }
   return volume
 }
@@ -487,13 +486,7 @@ export function cachedDeviationDiff(
       primaryVolume: hit.primaryVolume,
     }
   }
-  const result = deviationDiff(
-    primaryParts,
-    compareParts,
-    primaryMatrix,
-    compareMatrix,
-    tolerance,
-  )
+  const result = deviationDiff(primaryParts, compareParts, primaryMatrix, compareMatrix, tolerance)
   if (!result) return null
   const positions = (geometry: BufferGeometry | null) => {
     const array = geometry?.getAttribute('position')?.array as Float32Array | undefined

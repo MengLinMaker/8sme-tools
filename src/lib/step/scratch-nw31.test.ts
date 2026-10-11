@@ -5,15 +5,19 @@ import { Matrix4 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { booleanDiff, type DiffSoup } from './booleanDiff'
-import { createMeshQuery, diffFraction, pointTriangleDistanceSquared } from './diffHighlight'
-import { voxelDiff } from './voxelDiff'
 import { DEVIATION_TOLERANCE_MM, deviationDiff } from './deviationDiff'
+import { createMeshQuery, diffFraction, pointTriangleDistanceSquared } from './diffHighlight'
+import { manifoldBooleanDiff } from './manifoldDiff'
+import { ensureManifold, setManifoldWasmUrl } from './manifoldInit'
 import { meshStepFile } from './mesh'
+import { occFuzzyDiff } from './occDiff'
 import { setOcWasmUrl } from './occInit'
 import { reconstructSolidFromNc } from './reconstructFromNc'
+import { voxelDiff } from './voxelDiff'
 
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
+setManifoldWasmUrl(require.resolve('manifold-3d/manifold.wasm'))
 
 const DIR = join(
   process.env.USERPROFILE ?? '',
@@ -51,7 +55,9 @@ function bbox({ vertices }: DiffSoup): string {
     }
   }
   const f = (n: number) => n.toFixed(0)
-  const size = [mn[0]! - mx[0]!, mn[1]! - mx[1]!, mn[2]! - mx[2]!].map((d) => Math.abs(d).toFixed(0))
+  const size = [mn[0]! - mx[0]!, mn[1]! - mx[1]!, mn[2]! - mx[2]!].map((d) =>
+    Math.abs(d).toFixed(0),
+  )
   return `size=[${size.join(',')}] min=[${mn.map(f).join(',')}]`
 }
 
@@ -128,9 +134,60 @@ function vertexStats(made: DiffSoup, target: DiffSoup): string {
     dists.push(Math.sqrt(best))
   }
   dists.sort((a, b) => a - b)
-  const at = (p: number) => (dists[Math.min(dists.length - 1, Math.floor(p * dists.length))] ?? 0).toFixed(2)
+  const at = (p: number) =>
+    (dists[Math.min(dists.length - 1, Math.floor(p * dists.length))] ?? 0).toFixed(2)
   const over = dists.filter((d) => d > 1).length / dists.length
   return `median=${at(0.5)} p95=${at(0.95)} max=${at(0.999)} >1mm=${(over * 100).toFixed(0)}%`
+}
+
+/** Where the made model sits >tol from the ideal: ends / inner void / outer wall. */
+function farRegions(made: DiffSoup, target: DiffSoup, tol: number): string {
+  const triCount = Math.floor(target.triangles.length / 3)
+  let mnx = Infinity
+  let mxx = -Infinity
+  for (let v = 0; v + 2 < made.vertices.length; v += 3)
+    mnx = Math.min(mnx, made.vertices[v] as number)
+  for (let v = 0; v + 2 < made.vertices.length; v += 3)
+    mxx = Math.max(mxx, made.vertices[v] as number)
+  const len = mxx - mnx
+  let ends = 0
+  let inner = 0
+  let outer = 0
+  let n = 0
+  const margin = 60
+  for (let v = 0; v < Math.floor(made.vertices.length / 3); v++) {
+    const px = made.vertices[v * 3] as number
+    const py = made.vertices[v * 3 + 1] as number
+    const pz = made.vertices[v * 3 + 2] as number
+    let best = Number.POSITIVE_INFINITY
+    for (let s = 0; s < triCount; s++) {
+      const a = (target.triangles[s * 3] ?? 0) * 3
+      const b = (target.triangles[s * 3 + 1] ?? 0) * 3
+      const c = (target.triangles[s * 3 + 2] ?? 0) * 3
+      const dd = pointTriangleDistanceSquared(
+        px,
+        py,
+        pz,
+        target.vertices[a] as number,
+        target.vertices[a + 1] as number,
+        target.vertices[a + 2] as number,
+        target.vertices[b] as number,
+        target.vertices[b + 1] as number,
+        target.vertices[b + 2] as number,
+        target.vertices[c] as number,
+        target.vertices[c + 1] as number,
+        target.vertices[c + 2] as number,
+      )
+      if (dd < best) best = dd
+    }
+    if (Math.sqrt(best) <= tol) continue
+    n++
+    const r = Math.max(Math.abs(py), Math.abs(pz))
+    if (px - mnx < margin || mxx - px < margin) ends++
+    else if (r < 45) inner++
+    else outer++
+  }
+  return `far>${tol}: n=${n} ends=${ends} inner(void)=${inner} outer=${outer} len=${len.toFixed(0)}`
 }
 
 function vol({ vertices, triangles }: DiffSoup): number {
@@ -185,20 +242,45 @@ describe('NW31 issue parts', () => {
           const s = qm.flagFar(stepSoup.vertices, stepSoup.triangles)
           farLine.push(`${tol}mm:made ${(diffFraction(m) * 100).toFixed(0)}%/step ${(diffFraction(s) * 100).toFixed(0)}%`)
         }
+        // Same, but a triangle is flagged only when the MAJORITY of a spread of samples is far —
+        // the fix for one stray corner painting a whole coarse face.
+        const sampleLine: string[] = []
+        for (const tol of [0.5, 1, 2]) {
+          const q = createMeshQuery(stepSoup.vertices, stepSoup.triangles, tol)
+          const m = q.flagFarBySamples(madeSoup.vertices, madeSoup.triangles)
+          const qm = createMeshQuery(madeSoup.vertices, madeSoup.triangles, tol)
+          const s = qm.flagFarBySamples(stepSoup.vertices, stepSoup.triangles)
+          sampleLine.push(`${tol}mm:made ${(diffFraction(m) * 100).toFixed(0)}%/step ${(diffFraction(s) * 100).toFixed(0)}%`)
+        }
 
         const a = booleanDiff(soups(made), soups(step), I, I)
         const d = deviationDiff(soups(made), soups(step), I, I, DEVIATION_TOLERANCE_MM)
+        const d1 = deviationDiff(soups(made), soups(step), I, I, 1)
+        const d1tris =
+          (d1?.over ? Math.floor(d1.over.getAttribute('position').count / 3) : 0) +
+          (d1?.under ? Math.floor(d1.under.getAttribute('position').count / 3) : 0)
         const t0 = Date.now()
         const vd = voxelDiff(soups(made), soups(step), I, I, 0.5)
         const ms = Date.now() - t0
         const vTris = (g: { getAttribute: (n: string) => { count: number } } | null | undefined) =>
           g ? Math.floor(g.getAttribute('position').count / 3) : 0
-        const dFlagged = d
-          ? Math.floor((d.overDistance.length + d.underDistance.length) * 1)
-          : 0
-        const aTris = a
-          ? [a.over, a.under].filter(Boolean).length
-          : 0
+        const top = await ensureManifold()
+        const mf = manifoldBooleanDiff(top, soups(made), soups(step), I, I)
+        const occLine: string[] = []
+        for (const f of [0.1, 0.3, 0.5, 1]) {
+          const o = await occFuzzyDiff(
+            new TextEncoder().encode(built.step),
+            stepBytes,
+            I,
+            I,
+            f,
+          )
+          occLine.push(
+            `${f}:over=${o ? o.overVolume.toFixed(0) : '-'}/under=${o ? o.underVolume.toFixed(0) : '-'}/t${o ? (Math.floor((o.over?.getAttribute('position').count ?? 0) / 3) + Math.floor((o.under?.getAttribute('position').count ?? 0) / 3)) : 0}`,
+          )
+        }
+        const dFlagged = d ? Math.floor((d.overDistance.length + d.underDistance.length) * 1) : 0
+        const aTris = a ? [a.over, a.under].filter(Boolean).length : 0
 
         console.log(
           [
@@ -206,11 +288,16 @@ describe('NW31 issue parts', () => {
             `  made bbox ${bbox(madeSoup)} vol ${vol(madeSoup).toFixed(0)}`,
             `  step bbox ${bbox(stepSoup)} vol ${vol(stepSoup).toFixed(0)}`,
             `  far ${farLine.join(' | ')}`,
+            `  samples ${sampleLine.join(' | ')}`,
             `  brute1mm: made ${(bruteFar(madeSoup, stepSoup, 1) * 100).toFixed(0)}% step ${(bruteFar(stepSoup, madeSoup, 1) * 100).toFixed(0)}%`,
             `  made verts→step: ${vertexStats(madeSoup, stepSoup)}`,
+            `  regions ${farRegions(madeSoup, stepSoup, 2)}`,
             `  A boolean:  over=${a ? a.overVolume.toFixed(0) : '-'} under=${a ? a.underVolume.toFixed(0) : '-'} overTris=${a?.over ? Math.floor(a.over.getAttribute('position').count / 3) : 0} underTris=${a?.under ? Math.floor(a.under.getAttribute('position').count / 3) : 0} (${aTris} sides)`,
             `  D deviation: over=${d ? d.overVolume.toFixed(0) : '-'} under=${d ? d.underVolume.toFixed(0) : '-'} flaggedTris=${dFlagged}/${madeTris} (${((dFlagged / madeTris) * 100).toFixed(0)}%) primary=${d ? d.primaryVolume.toFixed(0) : '-'}`,
+            `  D1 margin1mm: over=${d1 ? d1.overVolume.toFixed(0) : '-'} under=${d1 ? d1.underVolume.toFixed(0) : '-'} flaggedTris=${d1tris}/${madeTris} (${((d1tris / madeTris) * 100).toFixed(0)}%)`,
             `  V voxel0.5:  over=${vd ? vd.overVolume.toFixed(0) : '-'} under=${vd ? vd.underVolume.toFixed(0) : '-'} primary=${vd ? vd.primaryVolume.toFixed(0) : '-'} geomTris=${vTris(vd?.over) + vTris(vd?.under)} (${ms}ms)`,
+            `  M manifold:  over=${mf ? mf.overVolume.toFixed(0) : '-'} under=${mf ? mf.underVolume.toFixed(0) : '-'} primary=${mf ? mf.primaryVolume.toFixed(0) : '-'} geomTris=${vTris(mf?.over) + vTris(mf?.under)}`,
+            `  OCC ${occLine.join(' | ')}`,
           ].join('\n'),
         )
         expect(true).toBe(true)

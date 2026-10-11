@@ -220,6 +220,11 @@ parts (m12's +15 % is the broken reconstruction).
 surface instead of blocky shells) → **GPU/WebGPU compute** voxelisation (kills the time/memory) →
 LOD. On a 4 m shaft, 0.5 mm dense is inherently ~0.3 G cells, so CPU-dense will not ship.
 
+**Wired, then superseded:** `PartViewer.runDiff` briefly called `cachedVoxelDiff`/`voxelDiff`
+(0.5 mm). It was replaced by the fastest method (§12) — 0.5 mm dense is far too heavy for the viewer.
+`voxelDiff.ts` stays as the ground-truth cross-check; `deviationDiff.ts` (inflated volume, §9) stays
+as a module. Both are off the critical path.
+
 ## 11. Open questions
 
 - Voxel as the production diff, and at what resolution (0.5 mm is accurate but 5–16 s / M-tris)?
@@ -227,3 +232,69 @@ LOD. On a 4 m shaft, 0.5 mm dense is inherently ~0.3 G cells, so CPU-dense will 
 - GPU (WebGPU compute) voxelisation — the only way to keep 0.5 mm on 4 m parts.
 - m12's reconstruction/orientation (overlap 0.32) must be fixed regardless.
 - Default tolerance and colour scale per part family (`resolveDiffTolerance` today).
+
+## 12. Method comparison
+
+Wired next (`manifoldDiff.ts` gained async `manifoldDiff`/`cachedManifoldDiff`; `PartViewer.runDiff`
+now `async` and calls them). Same inputs, all four methods:
+
+| part | three-bvh-csg | deviation | voxel 0.5 mm | **manifold** | manifold tris |
+|---|---|---|---|---|---|
+| m148 | 23.7k / 9.4k | 0 / 235k | 37.4k / 76.8k | **31.9k / 36.0k** | 3.3k |
+| m116 | 0 / 4.0k | 0 / 274k | 2.6k / 5.9k | **1.5k / 4.8k** | 4.0k |
+| m12 | 1.105M / 1.108M | 299k / 669k | 903k / 784k | **1.105M / 1.108M** | 3.5k |
+| m122 | 81k / 106k | 2.9M / 7.6M | 108k / 126k | **100k / 114k** | 2.5k |
+
+Manifold is exact-predicate (robust on the near-coincident surfaces), its volumes agree with the
+voxel and boolean, and it yields a **compact** watertight solid — **2.5–4k triangles** vs the voxel's
+2–3 M blocky ones, in well under a second. `primaryVolume` is the true solid volume. So:
+
+- **Shipped: the fastest diff — the grid surface-distance probe at a fixed 1 mm margin.**
+  `PartViewer.runDiff` (sync) runs `computeDiffMasks` through `diffHighlight`'s grid query (the same
+  query the presence probe uses — no boolean, no kernel), with `DIFF_MARGIN_MM = 1`. Manufactured
+  faces beyond the margin render blue (undercut); ideal faces red (overcut). The margin absorbs the
+  ~0.05 mm reconstruction offset and tessellation noise, so sub-margin surfaces never read as a skin.
+  It is the fastest of every method tried and needs no new dependency (the in-repo query is the
+  BVH-equivalent).
+- Runner-up: Manifold is exact and compact (2.5–4k tris) but its thin near-coincident shells cover
+  the whole part → "huge surface artifacts"; a boolean is the wrong tool for this *presentation*.
+  `booleanDiff` (three-bvh-csg), `deviationDiff` (inflated volume, §9) and `voxelDiff` (ground-truth
+  cross-check, slow) remain modules, off the critical path.
+- The "strange line artifacts" were `EdgesGeometry` outlining every voxel cube in the blocky shell —
+  the edge pass is off for the solid shells.
+
+## 13. Margin effect (and why some parts stay large)
+
+`deviationDiff` at a 1 mm margin (mean per triangle), flagged triangles / total:
+
+| part | @0.15 mm | **@1 mm** | where the >2 mm verts are |
+|---|---|---|---|
+| m148 | 97/416 | **30/416 (7%)** | 100% ends |
+| m116 | 158/820 | **106/820 (13%)** | void 36 + outer 36 |
+| m12 | 308/820 | **220/820 (27%)** | ends 72 + void 60 + outer 60 |
+| m122 | 237/384 | **162/384 (42%)** | 100% ends (240 verts, up to 11.8 mm) |
+
+The margin collapses m148/m116 to the real features. m122/m12 stay large because their manufactured
+models genuinely differ by 1–2 mm over much of the surface **plus** the ends — no margin below ~2 mm
+hides that, and above it the real features vanish. The root cause remains §8: `reconstructFromNc`'s
+end/mitre path (m148/m122 are clean, isolated cases) and the PFC section/mid-span (m116/m12). Fix
+those and the diff — at any margin — snaps clean.
+
+## 14. OCC fuzzy boolean — tried live, rejected
+
+`occDiff.ts` (`occFuzzyDiff`) was built and wired live: import both STEPs, seat them by the viewer
+matrices (`BRepBuilderAPI_Transform` + `gp_Trsf`), `BRepAlgoAPI_Cut` both ways with `SetFuzzyValue`,
+mesh the results. Sweeping m122:
+
+| fuzzy (mm) | over mm³ | under mm³ |
+|---|---|---|
+| 0.1 | 80,072 | 49,439 |
+| 0.3 | 54,554 | 98,491 |
+| **0.5** | 54,554 | **11,821,002** |
+| **1.0** | **12,205,258** | 19,103 |
+
+Above ~0.4 mm the kernel misclassifies — under/over comes back ≈ the whole ideal volume (12.2 M >
+the 11.78 M ideal), i.e. garbage. Only 0.1–0.3 mm is sane, and there it reproduces the plain
+boolean's thin-shell skins. **So the fuzzy tolerance cannot act as the "extra margin"**: it is a
+robustness floor (≤ ~0.3 mm), not a feature-size threshold. Live value set to 0.3; the surface
+probe (§12/§13) remains the better-looking option.

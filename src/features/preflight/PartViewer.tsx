@@ -51,17 +51,9 @@ import {
 } from '@/lib/parsers/ncProject'
 import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
-import {
-  type DiffPresence,
-  diffAlpha,
-  probeDiffPresence,
-} from '@/lib/step/booleanDiff'
-import {
-  cachedDeviationDiff,
-  DEVIATION_TOLERANCE_MM,
-  deviationDiff,
-} from '@/lib/step/deviationDiff'
-import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step/diffHighlight'
+import { type DiffPresence, probeDiffPresence } from '@/lib/step/booleanDiff'
+import { closeDiffMask, computeDiffMasks, diffFraction } from '@/lib/step/diffHighlight'
+import { OCC_FUZZY_MM, occFuzzyDiff } from '@/lib/step/occDiff'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { meshForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
@@ -78,10 +70,16 @@ const STRAY_COLOR = 0xf97316
 const SABRE_CUT_COLOR = 0xff2b2b
 /** Overcut vs the STEP ideal (NC took too much — scrap, cannot fix). */
 const OVERCUT_COLOR = 0xef4444
-const OVERCUT_RGB: [number, number, number] = [0xef / 255, 0x44 / 255, 0x44 / 255]
 /** Undercut vs the STEP ideal (leftover — can still be cut). */
 const UNDERCUT_COLOR = 0x3b82f6
-const UNDERCUT_RGB: [number, number, number] = [0x3b / 255, 0x82 / 255, 0xf6 / 255]
+/**
+ * Diff margin (mm): the closest-point difference ignores anything within this, so the ~0.05 mm
+ * reconstruction offset and tessellation noise never read as a skin — only real features (end
+ * mitres, copes) light up. `DIFF_EXTRA_MARGIN_MM` is added on top to swallow the borderline 1–2 mm
+ * reconstruction wobble. See docs/architecture.md.
+ */
+const DIFF_MARGIN_MM = 1
+const DIFF_EXTRA_MARGIN_MM = 1
 /**
  * Dihedral bar for the diff-solid outlines — higher than the model edges so only genuine corners
  * draw. The diff is a smooth shell, so its tessellated curves would otherwise clutter it.
@@ -199,26 +197,6 @@ function percent(value: number): string {
  * non-indexed with one triangle per three vertices, and `distances` aligned
  * with it (as `filterDrawableFaces` returns).
  */
-function paintDiffAlpha(
-  geometry: BufferGeometry,
-  distances: number[],
-  rgb: [number, number, number],
-): void {
-  const triCount = Math.floor((geometry.getAttribute('position')?.count ?? 0) / 3)
-  const colors = new Float32Array(Math.max(triCount, 0) * 12)
-  for (let t = 0; t < triCount; t++) {
-    const alpha = diffAlpha(distances[t] ?? 0)
-    for (let k = 0; k < 3; k++) {
-      const o = (t * 3 + k) * 4
-      colors[o] = rgb[0]
-      colors[o + 1] = rgb[1]
-      colors[o + 2] = rgb[2]
-      colors[o + 3] = alpha
-    }
-  }
-  geometry.setAttribute('color', new Float32BufferAttribute(colors, 4))
-}
-
 /** An extruded section outline drawn as a translucent overlay. */
 export interface BeamOutline {
   profile: [number, number][]
@@ -350,7 +328,7 @@ interface SceneHandle {
   focus: (code: string | null, index?: number) => void
   diffStats: DiffStats | null
   diffPresence: DiffPresence | null
-  runDiff: () => DiffStats | null
+  runDiff: () => Promise<DiffStats | null>
 }
 
 /** Share of each boolean direction vs the STEP ideal, for the overlay legend. */
@@ -689,15 +667,14 @@ function mountScene(
   const fitSize = fit.getSize(new Vector3())
   const fitCentre = fit.getCenter(new Vector3())
 
-  // Signed-distance deviation overlays, with the STEP treated as nominal. Both groups are already
-  // seated in the same frame, so the deviation runs in world coordinates: red = overcut (the
-  // manufactured surface sits inside the ideal — scrap), blue = undercut (outside the ideal —
-  // leftover that can still be cut). Measuring distances rather than intersecting surfaces keeps
-  // near-coincident models stable (see docs/architecture.md). When the deviation path can't run
-  // (over budget), fall back to red surface-distance flagging.
+  // Closest-point margin diff, with the STEP treated as nominal. Both groups are already seated in
+  // the same frame, so the difference runs in world coordinates: red = overcut (the ideal surface the
+  // manufactured model lacks — scrap), blue = undercut (manufactured outside the ideal — leftover).
+  // A face counts only when it clears `DIFF_MARGIN_MM`, so sub-mm noise never reads as a skin (see
+  // docs/architecture.md). This is the same grid query the fast presence probe uses — no boolean.
   //
-  // The multi-second measurement is deferred: the component paints the models plus a fast
-  // presence verdict first, then runs the full deviation after paint.
+  // The overlay is painted after the models plus a fast presence verdict so the first frame is
+  // instant.
   const diffMeshes: Mesh[] = []
   const diffEdgeLines: LineSegments[] = []
   let diffStats: DiffStats | null = null
@@ -731,42 +708,31 @@ function mountScene(
     diffEdgeLines.push(lines)
     materials.push(material)
   }
-  const runDiff = (): DiffStats | null => {
+  const runDiff = async (): Promise<DiffStats | null> => {
     if (!compareStep || !compareGroup || diffStats) return diffStats
-    const diagonal = Math.hypot(fitSize.x, fitSize.y, fitSize.z)
-    const tolerance = resolveDiffTolerance(diagonal)
+    // OCC B-rep boolean with a fuzzy margin: the kernel merges faces within `OCC_FUZZY_MM`, so the
+    // near-coincident reconstruction offset is absorbed and only the real gap survives — as a solid.
+    // Both models are seated by their viewer matrices first.
     const diff =
       primaryBytes && compareBytes
-        ? cachedDeviationDiff(
-            soups(step),
-            soups(compareStep),
-            primary.group.matrixWorld,
-            compareGroup.matrixWorld,
+        ? await occFuzzyDiff(
             primaryBytes,
             compareBytes,
-          )
-        : deviationDiff(
-            soups(step),
-            soups(compareStep),
             primary.group.matrixWorld,
             compareGroup.matrixWorld,
+            OCC_FUZZY_MM,
           )
+        : null
     if (diff) {
-      // Signed-distance deviation patches on the manufactured surface: red = overcut (made short
-      // vs the ideal), blue = undercut (leftover). Opaque/unlit, and a small polygon offset lifts
-      // them just clear of the base surface they sit on, so they win the depth test without
-      // z-fighting. No boolean ⇒ no slivers or skins to smooth away (see docs/architecture.md).
       const overcutMaterial = new MeshBasicMaterial({
-        color: 0xffffff,
-        vertexColors: true,
+        color: OVERCUT_COLOR,
         side: DoubleSide,
         polygonOffset: true,
         polygonOffsetFactor: -1,
         polygonOffsetUnits: -1,
       })
       const undercutMaterial = new MeshBasicMaterial({
-        color: 0xffffff,
-        vertexColors: true,
+        color: UNDERCUT_COLOR,
         side: DoubleSide,
         polygonOffset: true,
         polygonOffsetFactor: -1,
@@ -774,29 +740,28 @@ function mountScene(
       })
       materials.push(overcutMaterial, undercutMaterial)
       if (diff.over) {
-        paintDiffAlpha(diff.over, diff.overDistance, OVERCUT_RGB)
         const mesh = new Mesh(diff.over, overcutMaterial)
         mesh.layers.set(1)
         scene.add(mesh)
         diffMeshes.push(mesh)
-        addDiffEdges(diff.over, OVERCUT_COLOR, scene)
       }
       if (diff.under) {
-        paintDiffAlpha(diff.under, diff.underDistance, UNDERCUT_RGB)
         const mesh = new Mesh(diff.under, undercutMaterial)
         mesh.layers.set(1)
         scene.add(mesh)
         diffMeshes.push(mesh)
-        addDiffEdges(diff.under, UNDERCUT_COLOR, scene)
       }
       const volume = diff.primaryVolume > 0 ? diff.primaryVolume : 1
       diffStats = {
         over: diff.overVolume / volume,
         under: diff.underVolume / volume,
-        tolerance: DEVIATION_TOLERANCE_MM,
+        tolerance: OCC_FUZZY_MM,
         approximate: false,
       }
     } else {
+      // Fallback: surface-distance flagging through the grid query (diffHighlight) — the same query
+      // the presence probe uses, no boolean. Manufactured faces beyond the margin are leftover
+      // (blue); ideal faces beyond it are material the NC removed (red).
       const primaryWorld = transformVertices(primary.raw, primary.group.matrixWorld)
       const compareWorld = transformVertices(compareStep.vertices, compareGroup.matrixWorld)
       const primaryTris = concatTriangles(step)
@@ -806,48 +771,61 @@ function mountScene(
         primaryTris.triangles,
         compareWorld,
         compareTris.triangles,
-        tolerance,
+        DIFF_MARGIN_MM + DIFF_EXTRA_MARGIN_MM,
+        // Majority-of-samples, not "any vertex": a single stray corner on a coarse face must not
+        // paint the whole face (the "skin" artifact).
+        'samples',
       )
-      const diffMaterial = new MeshBasicMaterial({
+      // Close the masks over the topology: fill pinholes, drop specks, so the region reads as one patch.
+      const aClosed = closeDiffMask(primaryWorld, primaryTris.triangles, aDiff, 2)
+      const bClosed = closeDiffMask(compareWorld, compareTris.triangles, bDiff, 2)
+      const undercutMaterial = new MeshBasicMaterial({
+        color: UNDERCUT_COLOR,
+        side: DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      })
+      const overcutMaterial = new MeshBasicMaterial({
         color: OVERCUT_COLOR,
         side: DoubleSide,
         polygonOffset: true,
         polygonOffsetFactor: -1,
         polygonOffsetUnits: -1,
       })
-      materials.push(diffMaterial)
+      materials.push(undercutMaterial, overcutMaterial)
       step.bodies.forEach((body, index) => {
         const geometry = buildDiffGeometry(
           body.mesh.faces.vertices,
           body.mesh.faces.triangles,
-          aDiff,
+          aClosed,
           primaryTris.offsets[index],
         )
         if (!geometry) return
-        const mesh = new Mesh(geometry, diffMaterial)
+        const mesh = new Mesh(geometry, undercutMaterial)
         mesh.layers.set(1)
         primary.group.add(mesh)
         diffMeshes.push(mesh)
-        addDiffEdges(geometry, OVERCUT_COLOR, primary.group)
+        addDiffEdges(geometry, UNDERCUT_COLOR, primary.group)
       })
       compareStep.bodies.forEach((body, index) => {
         const geometry = buildDiffGeometry(
           body.mesh.faces.vertices,
           body.mesh.faces.triangles,
-          bDiff,
+          bClosed,
           compareTris.offsets[index],
         )
         if (!geometry) return
-        const mesh = new Mesh(geometry, diffMaterial)
+        const mesh = new Mesh(geometry, overcutMaterial)
         mesh.layers.set(1)
         compareGroup.add(mesh)
         diffMeshes.push(mesh)
         addDiffEdges(geometry, OVERCUT_COLOR, compareGroup)
       })
       diffStats = {
-        over: diffFraction(aDiff),
-        under: diffFraction(bDiff),
-        tolerance,
+        over: diffFraction(bClosed),
+        under: diffFraction(aClosed),
+        tolerance: DIFF_MARGIN_MM + DIFF_EXTRA_MARGIN_MM,
         approximate: true,
       }
     }
@@ -866,7 +844,7 @@ function mountScene(
       compareGroup.matrixWorld,
     )
   }
-  if (!deferDiff) runDiff()
+  if (!deferDiff) void runDiff()
 
   // An uncuttable cut (light-sabre failure) is shown as a red error arrow on its bevel — built in
   // `addNcLines` and collected into `sabreObjects` — not as a red surface patch.
@@ -1305,7 +1283,7 @@ export default function PartViewer({
         // boolean blocks the main thread.
         await new Promise((resolve) => requestAnimationFrame(resolve))
         if (disposed) return
-        const stats = handle.runDiff()
+        const stats = await handle.runDiff()
         if (disposed) return
         handle.setDiffVisible(showDiffRef.current && !flippedRef.current)
         setDiffInfo(stats)
