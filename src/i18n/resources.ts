@@ -129,6 +129,9 @@ export const en = {
       readingDrawings: 'reading drawings… {{done}}/{{total}}',
       measuringModels: 'measuring STEP models… {{done}}/{{total}}',
       rebuildingModels: 'rebuilding from NC… {{done}}/{{total}}',
+      searchPlaceholder: 'Search mark…',
+      searchClear: 'Clear search',
+      searchEmpty: 'No marks match “{{query}}”.',
     },
     columns: {
       mark: 'Mark',
@@ -507,6 +510,9 @@ export const zh = {
       readingDrawings: '正在读取图纸… {{done}}/{{total}}',
       measuringModels: '正在测量 STEP 模型… {{done}}/{{total}}',
       rebuildingModels: '正在从 NC 重建模型… {{done}}/{{total}}',
+      searchPlaceholder: '搜索标记…',
+      searchClear: '清除搜索',
+      searchEmpty: '没有匹配“{{query}}”的标记。',
     },
     columns: {
       mark: '标记',

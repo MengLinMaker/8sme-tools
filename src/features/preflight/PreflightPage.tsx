@@ -7,8 +7,10 @@ import {
   ChevronUp,
   Eye,
   EyeOff,
+  Search,
   Undo2,
   Wrench,
+  X,
 } from 'lucide-react'
 import {
   lazy,
@@ -266,6 +268,7 @@ export function PreflightPage() {
     setBundle(input)
     setViewing(null)
     setStepOverrides(new Map())
+    setMarkQuery('')
     setAnalyzing(true)
     clearViewerModels()
     setResult(auditEntries(input.sourceName, input.entries))
@@ -1126,6 +1129,8 @@ export function PreflightPage() {
   const toggleSort = useCallback((key: PartSortKey) => {
     setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 1 ? -1 : 1 } : { key, dir: 1 }))
   }, [])
+  /** Free-text filter on the part mark, so a long job can be narrowed to the piece at hand. */
+  const [markQuery, setMarkQuery] = useState('')
   const sortedParts = useMemo(
     () =>
       result
@@ -1137,11 +1142,17 @@ export function PreflightPage() {
         : [],
     [result, sort, allFindings, drawingMaterials, modelChecks],
   )
+  /** The sorted parts narrowed by the mark search (case-insensitive substring). */
+  const visibleParts = useMemo(() => {
+    const query = markQuery.trim().toLowerCase()
+    if (!query) return sortedParts
+    return sortedParts.filter((part) => part.mark.toLowerCase().includes(query))
+  }, [sortedParts, markQuery])
 
   /** The parts in table order that have something to show in the viewer — the next/prev ring. */
   const viewableParts = useMemo(
-    () => sortedParts.filter((part) => part.step || part.nc),
-    [sortedParts],
+    () => visibleParts.filter((part) => part.step || part.nc),
+    [visibleParts],
   )
   const viewingIndex = useMemo(
     () => (viewing ? viewableParts.findIndex((part) => part.mark === viewing.mark) : -1),
@@ -1477,7 +1488,11 @@ export function PreflightPage() {
                 <CardTitle className="flex flex-wrap items-center gap-2">
                   {t('preflight.parts.title')}
                   <span className="text-sm font-normal text-muted-foreground">
-                    ({sortedParts.length})
+                    ({visibleParts.length}
+                    {markQuery.trim() && sortedParts.length !== visibleParts.length
+                      ? `/${sortedParts.length}`
+                      : ''}
+                    )
                   </span>
                   {drawingChecking && (
                     <span className="text-xs font-normal text-muted-foreground">
@@ -1503,6 +1518,31 @@ export function PreflightPage() {
                 </CardTitle>
               </button>
               <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search
+                    className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                    aria-hidden
+                  />
+                  <input
+                    type="text"
+                    value={markQuery}
+                    onChange={(event) => setMarkQuery(event.target.value)}
+                    placeholder={t('preflight.parts.searchPlaceholder')}
+                    aria-label={t('preflight.parts.searchPlaceholder')}
+                    className="h-8 w-44 rounded-md border border-border bg-background pl-7 pr-7 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                  {markQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setMarkQuery('')}
+                      aria-label={t('preflight.parts.searchClear')}
+                      title={t('preflight.parts.searchClear')}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  )}
+                </div>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1546,7 +1586,17 @@ export function PreflightPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card">
-                    {sortedParts.map((part) => {
+                    {visibleParts.length === 0 && (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell
+                          colSpan={PART_COLUMNS.length}
+                          className="text-center text-sm text-muted-foreground"
+                        >
+                          {t('preflight.parts.searchEmpty', { query: markQuery.trim() })}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {visibleParts.map((part) => {
                       const material = drawingMaterials.get(part.mark)
                       const pdfQty = material?.qty ?? part.expected?.qty ?? null
                       const ncQty = part.nc?.quantity ?? null
