@@ -31,13 +31,6 @@ const MIN_ZOOM = 0.2
 const MAX_ZOOM = 8
 const ZOOM_STEP = 1.25
 
-/**
- * The pane is sized to the drawing's own aspect ratio (so the page fills it
- * edge-to-edge instead of being letterboxed), but never taller than this.
- */
-const MAX_PANE_HEIGHT = '50vh'
-const DEFAULT_PANE_HEIGHT = 'clamp(14rem, 40vh, 32rem)'
-
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
 interface PageSize {
@@ -58,9 +51,6 @@ export function DrawingViewer({ bytes }: { bytes: Uint8Array }) {
   const [fit, setFit] = useState(true)
   const zoomRef = useRef(zoom)
   zoomRef.current = zoom
-
-  // The page's aspect ratio drives the pane's own height so it is never letterboxed.
-  const aspect = sizes.length > 0 ? sizes[0].width / sizes[0].height : null
 
   // Load the document, then measure each page at scale 1 so "fit" can be computed.
   useEffect(() => {
@@ -214,14 +204,7 @@ export function DrawingViewer({ bytes }: { bytes: Uint8Array }) {
   }
 
   return (
-    <div
-      className="relative w-full bg-[#15181c]"
-      style={
-        aspect != null
-          ? { aspectRatio: String(aspect), maxHeight: MAX_PANE_HEIGHT }
-          : { height: DEFAULT_PANE_HEIGHT }
-      }
-    >
+    <div className="relative h-full w-full bg-[#15181c]">
       <div
         ref={scrollRef}
         className="absolute inset-0 cursor-grab overflow-hidden active:cursor-grabbing"

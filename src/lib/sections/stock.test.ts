@@ -59,12 +59,12 @@ describe('stockOutlineForCode', () => {
     expect(outer.width).toBeGreaterThanOrEqual(100)
     expect(outer.height).toBeGreaterThanOrEqual(150)
     const inner = bbox(rhs?.holes?.[0] ?? [])
-    expect(inner.width).toBeLessThan(100 - 2 * 9) // void clear of the 9 mm wall
-    expect(inner.height).toBeLessThan(150 - 2 * 9)
+    expect(inner.width).toBeLessThanOrEqual(100 - 2 * 9) // void clear of the 9 mm wall
+    expect(inner.height).toBeLessThanOrEqual(150 - 2 * 9)
 
     const shs = stockOutlineForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])
     expect(shs?.holes).toHaveLength(1)
-    expect(bbox(shs?.holes?.[0] ?? []).width).toBeLessThan(100 - 2 * 6)
+    expect(bbox(shs?.holes?.[0] ?? []).width).toBeLessThanOrEqual(100 - 2 * 6)
   })
 
   it('makes CHS hollow', () => {
@@ -132,15 +132,13 @@ describe('stockOutlineForCode', () => {
     expect(stockOutlineForCode('EA75*75*6', [75, 75, 6, 6, 8])?.mass).toBeCloseTo(6.8, 0)
   })
 
-  it('offsets every stock face by the same clearance (not a uniform scale)', () => {
-    // The old scale-based inflate squeezed the short axis: PFC100*50 grew 3 mm in depth but
-    // only 1.5 mm across the flange, so the ghost looked like the wrong section.
+  it('draws the stock at the exact section size (no clearance offset)', () => {
     const pfc = bbox(stockOutlineForCode('100PFC', [100, 50, 6.7, 4.2, 8])?.points ?? [])
-    expect(pfc.width - 50).toBeCloseTo(3, 1)
-    expect(pfc.height - 100).toBeCloseTo(3, 1)
+    expect(pfc.width).toBeCloseTo(50, 1)
+    expect(pfc.height).toBeCloseTo(100, 1)
 
     const ua = bbox(stockOutlineForCode('UA100*75*6', [])?.points ?? [])
-    expect(ua.width - 100).toBeCloseTo(3, 1)
-    expect(ua.height - 75).toBeCloseTo(3, 1)
+    expect(ua.width).toBeCloseTo(100, 1)
+    expect(ua.height).toBeCloseTo(75, 1)
   })
 })

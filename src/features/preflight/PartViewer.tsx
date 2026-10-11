@@ -43,10 +43,14 @@ import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step
 import type { MeshedStep } from '@/lib/step/mesh'
 import { type SabreFailure, sabreBoundary } from '@/lib/step/sabre'
 import { meshForViewer } from '@/lib/step/viewerModel'
-import { attachOrbit, type OrbitBus } from './orbitSync'
+import { cn } from '@/lib/utils'
+import { NcLegend } from './NcLegend'
+import { attachOrbit, type OrbitBus, requestFocus } from './orbitSync'
 import { smoothLines } from './smoothLines'
 
 const GHOST_COLOR = 0x3ddc84
+/** Stock outline: neutral grey so it reads as raw material distinct from the part. */
+const STOCK_COLOR = 0x9ca3af
 const COMPARE_COLOR = 0xf59e0b
 const STRAY_COLOR = 0xf97316
 /** Light-sabre cut lines: perimeter of the patch the beam cannot cut. */
@@ -56,7 +60,7 @@ const OVERCUT_COLOR = 0xef4444
 const OVERCUT_RGB: [number, number, number] = [0xef / 255, 0x44 / 255, 0x44 / 255]
 /** Undercut vs the STEP ideal (leftover — can still be cut). */
 const UNDERCUT_RGB: [number, number, number] = [0x3b / 255, 0x82 / 255, 0xf6 / 255]
-const FACE_MATERIAL = { color: 0xaebfd0, metalness: 0.55, roughness: 0.45 }
+const FACE_MATERIAL = { color: 0x9aa3ad, metalness: 0.15, roughness: 0.75 }
 /** Roll about the length axis for each `detectOrientation` result (world YZ → profile-local). */
 const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]
 
@@ -196,6 +200,7 @@ function extrudeOverlay(
   xAxis: Vector3,
   yAxis: Vector3,
   dim?: boolean,
+  color = GHOST_COLOR,
 ): Group {
   const shape = new Shape()
   shape.moveTo(profile[0][0], profile[0][1])
@@ -220,7 +225,7 @@ function extrudeOverlay(
     new Mesh(
       geometry,
       new MeshStandardMaterial({
-        color: GHOST_COLOR,
+        color,
         transparent: true,
         opacity: dim ? 0.08 : 0.16,
         depthWrite: false,
@@ -232,7 +237,7 @@ function extrudeOverlay(
     new LineSegments(
       new EdgesGeometry(geometry, 15),
       new LineBasicMaterial({
-        color: GHOST_COLOR,
+        color,
         transparent: true,
         opacity: dim ? 0.3 : 0.6,
       }),
@@ -247,6 +252,8 @@ interface SceneHandle {
   setFlip: (flip: boolean) => void
   setDiffVisible: (visible: boolean) => void
   setSabreVisible: (visible: boolean) => void
+  /** Pull every synced viewport toward the geometry behind a finding code (null = whole model). */
+  focus: (code: string | null) => void
   diffStats: DiffStats | null
   diffPresence: DiffPresence | null
   runDiff: () => DiffStats | null
@@ -453,6 +460,7 @@ function mountScene(
       xAxis,
       yAxis,
       isOverlay,
+      STOCK_COLOR,
     )
     scene.add(overlay)
     overlays.push(overlay)
@@ -460,8 +468,8 @@ function mountScene(
     // Project the NC toolpath onto the face each cut lands on, using the shared section face
     // frame (the same rule the NC→solid rebuild uses). A cut with no material on its face (the
     // edge of the stock) is dropped. The projection uses the *exact* section (`ncSection`) when
-    // available, not the inflated ghost, so cuts and holes land exactly on the manufactured
-    // surface; a hair of offset keeps them clear of z-fighting.
+    // available, so cuts and holes land exactly on the manufactured surface; a hair of offset
+    // keeps them clear of z-fighting.
     if (nc) {
       const section = ncSection ?? profile
       const frame = resolveNcFaceFrame(section, nc)
@@ -766,6 +774,7 @@ function mountScene(
     ? attachOrbit(bus, camera, controls, {
         centre: [fitCentre.x, fitCentre.y, fitCentre.z],
         distance,
+        radius: baseHalf,
       })
     : null
 
@@ -802,6 +811,23 @@ function mountScene(
     },
     setSabreVisible(visible: boolean) {
       for (const lines of sabreObjects) lines.visible = visible
+    },
+    focus(code: string | null) {
+      if (!bus) return
+      const box = new Box3()
+      const cut = code?.startsWith('CUT') ?? false
+      if (cut && sabreObjects.length > 0) {
+        for (const lines of sabreObjects) box.expandByObject(lines)
+      } else if (cut && ncObjects.length > 0) {
+        for (const line of ncObjects) box.expandByObject(line)
+      } else {
+        box.expandByObject(primary.group)
+      }
+      if (box.isEmpty()) return
+      const centre = box.getCenter(new Vector3())
+      const size = box.getSize(new Vector3())
+      const radius = Math.max(size.x, size.y, size.z) / 2
+      requestFocus(bus, { point: [centre.x, centre.y, centre.z], radius })
     },
     dispose() {
       cancelAnimationFrame(raf)
@@ -869,6 +895,21 @@ export interface PartViewerProps {
   nc?: NcGeometry | null
   /** Exact (un-inflated) section outline the NC was matched against, for the projection */
   ncSection?: [number, number][] | null
+  /** Show the NC toolpath colour legend in-pane (off when it lives in the shared header strip) */
+  showNcLegend?: boolean
+  /** Clicked-finding focus: bump `token` to pull every synced viewport to `code`'s geometry. */
+  focus?: { code: string; token: number } | null
+  /** Controlled overlay toggles (shared toolbar). Omit to keep the per-pane buttons. */
+  showStock?: boolean
+  onShowStockChange?: (visible: boolean) => void
+  flipped?: boolean
+  onFlippedChange?: (flipped: boolean) => void
+  showDiff?: boolean
+  onShowDiffChange?: (visible: boolean) => void
+  showSabre?: boolean
+  onShowSabreChange?: (visible: boolean) => void
+  /** Hide the in-pane control buttons (the shared toolbar drives the toggles instead). */
+  hideControls?: boolean
 }
 
 export default function PartViewer({
@@ -885,6 +926,17 @@ export default function PartViewer({
   sabreBevelAngle = null,
   nc = null,
   ncSection = null,
+  showNcLegend = true,
+  focus = null,
+  showStock: showStockProp,
+  onShowStockChange,
+  flipped: flippedProp,
+  onFlippedChange,
+  showDiff: showDiffProp,
+  onShowDiffChange,
+  showSabre: showSabreProp,
+  onShowSabreChange,
+  hideControls = false,
 }: PartViewerProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -893,14 +945,28 @@ export default function PartViewer({
   const showDiffRef = useRef(true)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
-  const [showStock, setShowStock] = useState(true)
-  const [flipped, setFlipped] = useState(false)
+  const [stockState, setStockState] = useState(true)
+  const [flipState, setFlipState] = useState(false)
   const [hasStray, setHasStray] = useState(false)
-  const [showDiff, setShowDiff] = useState(true)
+  const [diffState, setDiffState] = useState(true)
   const [diffInfo, setDiffInfo] = useState<DiffStats | null>(null)
   const [diffPresence, setDiffPresence] = useState<DiffPresence | null>(null)
-  const [showSabre, setShowSabre] = useState(true)
+  const [sabreState, setSabreState] = useState(true)
   const flippedRef = useRef(false)
+  // The four overlay toggles can be driven by a shared toolbar (controlled props) or fall back to
+  // local state when the viewer is used standalone (e.g. the nesting viewer).
+  const showStock = showStockProp ?? stockState
+  const flipped = flippedProp ?? flipState
+  const showDiff = showDiffProp ?? diffState
+  const showSabre = showSabreProp ?? sabreState
+  const toggleStock = () =>
+    onShowStockChange ? onShowStockChange(!showStock) : setStockState((value) => !value)
+  const toggleFlip = () =>
+    onFlippedChange ? onFlippedChange(!flipped) : setFlipState((value) => !value)
+  const toggleDiff = () =>
+    onShowDiffChange ? onShowDiffChange(!showDiff) : setDiffState((value) => !value)
+  const toggleSabre = () =>
+    onShowSabreChange ? onShowSabreChange(!showSabre) : setSabreState((value) => !value)
 
   useEffect(() => {
     if (!bytes) {
@@ -912,7 +978,7 @@ export default function PartViewer({
     let handle: SceneHandle | null = null
     setStatus('loading')
     setMessage(null)
-    setFlipped(false)
+    setFlipState(false)
     flippedRef.current = false
     setHasStray(false)
     setDiffInfo(null)
@@ -1008,6 +1074,14 @@ export default function PartViewer({
   useEffect(() => {
     handleRef.current?.setSabreVisible(showSabre)
   }, [showSabre])
+
+  // Clicking a finding pans/zooms the synced viewports to its geometry.
+  const focusToken = focus?.token
+  const focusCode = focus?.code ?? null
+  useEffect(() => {
+    if (focusToken === undefined) return
+    handleRef.current?.focus(focusCode)
+  }, [focusToken, focusCode])
   const hasOverlay = Boolean((stock || beam) && status === 'ready')
   const hasCompare = Boolean(compareBytes && status === 'ready')
   const hasSabre = Boolean(sabreFailures && sabreFailures.length > 0 && status === 'ready')
@@ -1020,11 +1094,11 @@ export default function PartViewer({
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full touch-none" />
-      <div className="absolute left-3 top-3 flex gap-1">
+      <div className={cn('absolute left-3 top-3 flex gap-1', hideControls && 'hidden')}>
         {hasOverlay && (
           <button
             type="button"
-            onClick={() => setShowStock((value) => !value)}
+            onClick={toggleStock}
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
             {showStock ? t('viewer.hideStock') : t('viewer.showStock')}
@@ -1033,7 +1107,7 @@ export default function PartViewer({
         {hasCompare && (
           <button
             type="button"
-            onClick={() => setFlipped((value) => !value)}
+            onClick={toggleFlip}
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
             {t('viewer.flip', { label: compareLabel })}
@@ -1042,7 +1116,7 @@ export default function PartViewer({
         {hasDiff && (
           <button
             type="button"
-            onClick={() => setShowDiff((value) => !value)}
+            onClick={toggleDiff}
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
             {showDiff ? t('viewer.hideDiff') : t('viewer.showDiff')}
@@ -1051,22 +1125,22 @@ export default function PartViewer({
         {hasSabre && (
           <button
             type="button"
-            onClick={() => setShowSabre((value) => !value)}
+            onClick={toggleSabre}
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
             {showSabre ? t('viewer.hideSabre') : t('viewer.showSabre')}
           </button>
         )}
-        {hasStray && (
-          <span className="flex items-center gap-2 rounded-md border border-orange-500/50 bg-card/80 px-2.5 py-1 text-xs font-medium text-orange-300 backdrop-blur">
-            <span
-              className="inline-block size-3 rounded-sm border border-orange-400"
-              style={{ background: 'rgba(249, 115, 22, 0.5)' }}
-            />
-            {t('viewer.strayBody')}
-          </span>
-        )}
       </div>
+      {hasStray && (
+        <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-md border border-orange-500/50 bg-card/80 px-2.5 py-1 text-xs font-medium text-orange-300 backdrop-blur">
+          <span
+            className="inline-block size-3 rounded-sm border border-orange-400"
+            style={{ background: 'rgba(249, 115, 22, 0.5)' }}
+          />
+          {t('viewer.strayBody')}
+        </div>
+      )}
       {diffFound && !flipped && (
         <div className="absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-md border border-amber-500/50 bg-card/80 px-2.5 py-1 text-xs font-medium text-amber-300 backdrop-blur">
           <span
@@ -1138,36 +1212,9 @@ export default function PartViewer({
           )}
         </div>
       )}
-      {hasNc && (
+      {hasNc && showNcLegend && (
         <div className="absolute left-3 top-12 z-10 flex flex-wrap items-center gap-2 rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur">
-          <span className="flex items-center gap-1.5">
-            <span
-              className="inline-block size-3 rounded-sm border border-emerald-400"
-              style={{ background: 'rgba(61, 220, 132, 0.5)' }}
-            />
-            {t('viewer.ncOuter')}
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span
-              className="inline-block size-3 rounded-sm border border-fuchsia-400"
-              style={{ background: 'rgba(232, 121, 249, 0.5)' }}
-            />
-            {t('viewer.ncBevel')}
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span
-              className="inline-block size-3 rounded-sm border border-amber-400"
-              style={{ background: 'rgba(245, 158, 11, 0.5)' }}
-            />
-            {t('viewer.ncInner')}
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span
-              className="inline-block size-3 rounded-sm border border-sky-400"
-              style={{ background: 'rgba(56, 189, 248, 0.5)' }}
-            />
-            {t('viewer.ncHoles')}
-          </span>
+          <NcLegend />
         </div>
       )}
       {status !== 'ready' && (

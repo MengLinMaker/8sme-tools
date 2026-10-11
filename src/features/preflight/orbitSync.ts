@@ -17,19 +17,33 @@ export type ViewPreset = 'iso' | 'front' | 'top' | 'side'
 /** An arbitrary view direction (from the target toward the camera), one of the 26 cube faces. */
 export type ViewDirection = [number, number, number]
 
+/** A point in the scene frame to pull the camera toward (clicking a finding jumps here). */
+export type FocusPoint = [number, number, number]
+
+/** A focus target: the point plus its radius, so each viewport can zoom to fill the area. */
+export interface FocusRequest {
+  point: FocusPoint
+  /** Half-size (scene units) of the geometry to frame; 0 = don't zoom. */
+  radius: number
+}
+
 /** A viewport's fitted frame, used to place preset cameras. */
 export interface OrbitFrame {
   centre: [number, number, number]
   distance: number
+  /** Half-size (scene units) of the fitted model at zoom 1, for framing focus points. */
+  radius?: number
 }
 
 export interface OrbitBus {
   orbit: OrbitState | null
   preset: ViewPreset | null
   direction: ViewDirection | null
+  focus: FocusRequest | null
   listeners: Set<(orbit: OrbitState) => void>
   presetListeners: Set<(preset: ViewPreset) => void>
   directionListeners: Set<(dir: ViewDirection) => void>
+  focusListeners: Set<(request: FocusRequest) => void>
 }
 
 export function createOrbitBus(): OrbitBus {
@@ -37,9 +51,11 @@ export function createOrbitBus(): OrbitBus {
     orbit: null,
     preset: null,
     direction: null,
+    focus: null,
     listeners: new Set(),
     presetListeners: new Set(),
     directionListeners: new Set(),
+    focusListeners: new Set(),
   }
 }
 
@@ -63,6 +79,12 @@ export function requestOrbit(bus: OrbitBus, orbit: OrbitState): void {
   bus.preset = null
   bus.direction = null
   for (const listener of bus.listeners) listener(orbit)
+}
+
+/** Broadcasts a focus request: every synced viewport centres on — and zooms to — the point. */
+export function requestFocus(bus: OrbitBus, request: FocusRequest): void {
+  bus.focus = request
+  for (const listener of bus.focusListeners) listener(request)
 }
 
 const EPSILON = 0.001
@@ -144,12 +166,47 @@ export function attachOrbit(
 
   const applyPreset = (preset: ViewPreset): void => applyDirection(PRESET_DIRECTION[preset])
 
+  /** Centre on a scene point, keeping the current viewing direction, and zoom to frame it. */
+  const applyFocus = (request: FocusRequest): void => {
+    const { point, radius } = request
+    let dir: ViewDirection = [1, 1, 1]
+    const current = bus.orbit
+    if (current) {
+      const dx = current.position[0] - current.target[0]
+      const dy = current.position[1] - current.target[1]
+      const dz = current.position[2] - current.target[2]
+      const length = Math.hypot(dx, dy, dz) || 1
+      dir = [dx / length, dy / length, dz / length]
+    } else {
+      const length = Math.hypot(dir[0], dir[1], dir[2])
+      dir = [dir[0] / length, dir[1] / length, dir[2] / length]
+    }
+    const distance = frame.distance * 0.5
+    // Ortho framing is the zoom factor; zoom in so the area's radius fills the fitted view.
+    const base = frame.radius
+    const zoom = base && radius > 0 ? Math.min(Math.max(base / radius, 1), 20) : 1
+    const orbit: OrbitState = {
+      position: [
+        point[0] + dir[0] * distance,
+        point[1] + dir[1] * distance,
+        point[2] + dir[2] * distance,
+      ],
+      target: point,
+      zoom,
+    }
+    apply(orbit)
+    bus.orbit = orbit
+    for (const listener of bus.listeners) if (listener !== apply) listener(orbit)
+  }
+
   controls.enableDamping = false
   controls.addEventListener('change', onChange)
   bus.listeners.add(apply)
   bus.presetListeners.add(applyPreset)
   bus.directionListeners.add(applyDirection)
-  if (bus.orbit) apply(bus.orbit)
+  bus.focusListeners.add(applyFocus)
+  if (bus.focus) applyFocus(bus.focus)
+  else if (bus.orbit) apply(bus.orbit)
   else if (bus.direction) applyDirection(bus.direction)
   else if (bus.preset) applyPreset(bus.preset)
 
@@ -158,5 +215,6 @@ export function attachOrbit(
     bus.listeners.delete(apply)
     bus.presetListeners.delete(applyPreset)
     bus.directionListeners.delete(applyDirection)
+    bus.focusListeners.delete(applyFocus)
   }
 }

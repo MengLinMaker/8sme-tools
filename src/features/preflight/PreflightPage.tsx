@@ -25,6 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Toggle } from '@/components/ui/toggle'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
@@ -49,6 +50,7 @@ import { getStepWorkerPool, PRIORITY_FOREGROUND, prebootStepWorkers } from '@/li
 import { clearViewerModels, meshForViewer, reconstructForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { DrawingViewer } from './DrawingViewer'
+import { NcLegend } from './NcLegend'
 import { createOrbitBus } from './orbitSync'
 import { ViewCube } from './ViewCube'
 
@@ -67,21 +69,30 @@ const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [
   { labelKey: 'preflight.columns.model', key: 'model' },
 ]
 
-/** How the 3D area shows the manufactured (NC) model against the STEP model. */
-type ViewMode = 'step' | 'manufactured' | 'split' | 'overlay'
-
-const VIEW_MODES: { id: ViewMode; labelKey: string }[] = [
-  { id: 'manufactured', labelKey: 'preflight.viewer.manufactured' },
-  { id: 'step', labelKey: 'preflight.viewer.step' },
-  { id: 'split', labelKey: 'preflight.viewer.sideBySide' },
-  { id: 'overlay', labelKey: 'preflight.viewer.overlay' },
-]
-
 const SEVERITY_VARIANT = {
   error: 'destructive',
   warning: 'warning',
   info: 'info',
 } as const
+
+const PREF_PREFIX = '8sme.preflight.'
+/** Reads a persisted viewer toggle, falling back to `fallback` when unset or unavailable. */
+function readPref(key: string, fallback: boolean): boolean {
+  try {
+    const stored = localStorage.getItem(PREF_PREFIX + key)
+    return stored === null ? fallback : stored === '1'
+  } catch {
+    return fallback
+  }
+}
+/** Persists a viewer toggle, ignoring storage failures (private mode, quota). */
+function writePref(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(PREF_PREFIX + key, value ? '1' : '0')
+  } catch {
+    // ignored
+  }
+}
 
 /**
  * A per-part STEP fix the user applied: cleaned (stray bodies dropped), regenerated from the
@@ -267,7 +278,6 @@ export function PreflightPage() {
   }, [viewing])
 
   // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
-  const [viewMode, setViewMode] = useState<ViewMode>('split')
   const [manufactured, setManufactured] = useState<Uint8Array | null>(null)
   const [mfgStatus, setMfgStatus] = useState<'idle' | 'pending' | 'failed'>('idle')
   useEffect(() => {
@@ -296,34 +306,33 @@ export function PreflightPage() {
     }
   }, [ncBytes, referenceStepBytes])
 
-  const hasManufactured = Boolean(manufactured)
   const hasStep = Boolean(stepBytes)
-  // The split layout renders straight away — the manufactured pane shows a placeholder
-  // until the NC rebuild lands — instead of collapsing to a single STEP view and
-  // remounting both viewers when it arrives.
-  const mfgFailed = mfgStatus === 'failed'
-  const effectiveMode: ViewMode =
-    !ncBytes || mfgFailed
-      ? 'step'
-      : viewMode === 'split' && hasManufactured && !hasStep
-        ? 'manufactured'
-        : viewMode
-  // Both panes stay mounted across mode switches (hidden with CSS, never unmounted),
-  // so toggling views reuses the live three.js scenes instead of rebuilding them.
-  const mfgPaneActive =
-    effectiveMode === 'split' || effectiveMode === 'manufactured' || effectiveMode === 'overlay'
-  const stepPaneActive = effectiveMode === 'step' || effectiveMode === 'split'
-  const showMfgPane =
-    mfgPaneActive && (hasManufactured || (ncBytes != null && mfgStatus === 'pending'))
-  const showStepPane = stepPaneActive && hasStep
-  const twoPane = showMfgPane && showStepPane
+  // The manufactured model counts as ready while it is rebuilding too (a placeholder shows), so
+  // the panes don't remount when the NC rebuild lands.
+  const mfgReady = Boolean(manufactured) || (ncBytes != null && mfgStatus === 'pending')
+  // Every pane that has data is shown. Panes stay mounted (hidden with CSS, never unmounted) so
+  // the live three.js scenes are reused rather than rebuilt.
+  const stepShown = hasStep
+  const manufacturedShown = mfgReady
+  const overlayShown = mfgReady && hasStep
+  const paneCount = Number(stepShown) + Number(manufacturedShown) + Number(overlayShown)
 
   // One orbit bus per part, shared by the STEP and NC viewports so they rotate together.
   const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
+  // Bumped when a finding is clicked, so the viewers pull in to its geometry.
+  const [findingFocus, setFindingFocus] = useState<{ code: string; token: number } | null>(null)
+  // Shared overlay toggles, applied to every pane from the one toolbar above the 3D.
+  const [showStock, setShowStock] = useState(() => readPref('showStock', false))
+  useEffect(() => {
+    writePref('showStock', showStock)
+  }, [showStock])
   const openPart = useCallback((part: PartRecord) => {
-    setViewMode('split')
     setOrbitBus(createOrbitBus())
+    setFindingFocus(null)
     setViewing(part)
+  }, [])
+  const focusFinding = useCallback((finding: Finding) => {
+    setFindingFocus((prev) => ({ code: finding.code, token: (prev?.token ?? 0) + 1 }))
   }, [])
 
   // Warm the viewer code-split chunks while the analysis runs, so the first
@@ -709,9 +718,9 @@ export function PreflightPage() {
         const area = Math.round(sabre.failures.reduce((sum, f) => sum + f.area, 0))
         extra.push({
           severity: 'error',
-          code: 'CUT_SABRE',
+          code: 'CUT_DEPTH',
           mark: part.mark,
-          message: `Light-sabre test failed: a straight ~35 mm beam ends inside the body on ${sabre.failures.length} surface(s) (~${area} mm²) — not manufacturable`,
+          message: `Cut can't pass through: the beam bottoms out inside the body on ${sabre.failures.length} surface(s) (~${area} mm² buried) — not manufacturable`,
           params: { count: sabre.failures.length, area },
         })
       }
@@ -1415,6 +1424,7 @@ export function PreflightPage() {
             <ViewerWarnings
               findings={viewerFindings}
               step={viewing.step}
+              onFocus={focusFinding}
               fix={{
                 override: overrideFor(viewing)?.kind,
                 canClean: isCleanable(viewing),
@@ -1427,110 +1437,141 @@ export function PreflightPage() {
                 onUndo: () => undoOverride(viewing.mark),
               }}
             />
-            <div className="flex min-h-0 flex-1 flex-col">
-              <div className="relative min-h-72 w-full flex-1 bg-[#0b0f14]">
-                <Suspense
-                  fallback={
-                    <div className="grid h-full place-items-center text-sm text-muted-foreground">
-                      {t('preflight.viewer.loading')}
-                    </div>
-                  }
-                >
-                  <div className={cn('grid h-full', twoPane ? 'grid-cols-2' : 'grid-cols-1')}>
-                    <div className={cn('relative h-full', showMfgPane ? '' : 'hidden')}>
-                      {manufactured ? (
-                        <PartViewer
-                          name={`${viewing.mark} · manufactured`}
-                          bytes={manufactured}
-                          compareBytes={effectiveMode === 'overlay' ? (stepBytes ?? null) : null}
-                          compareLabel={t('preflight.viewer.step')}
-                          stock={stock}
-                          bus={orbitBus}
-                          // The rebuild is oriented to the STEP frame, so the guilty-cut
-                          // marks land on what the laser will actually cut — not the ideal.
-                          sabreFailures={viewerSabreFailures}
-                          sabreBevelAngle={viewerSabreBevelAngle}
-                          nc={viewingNcGeom}
-                          ncSection={viewingNcSection}
-                          smoothLines
-                        />
-                      ) : (
-                        <div className="grid h-full place-items-center px-6 text-center">
-                          <p className="max-w-sm text-sm text-muted-foreground">
-                            {t('preflight.viewer.buildingManufactured')}
-                          </p>
-                        </div>
-                      )}
-                      {twoPane && (
-                        <PaneTag tone="manufactured">
-                          {t('preflight.viewer.manufacturedNc')}
-                        </PaneTag>
+            <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
+              <div className="flex min-h-0 flex-1 flex-col">
+                {(viewingNcGeom || stock) && (
+                  <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-1.5 text-xs font-medium text-muted-foreground">
+                    <div className="flex items-center gap-1.5">
+                      {stock && (
+                        <Toggle pressed={showStock} onPressedChange={setShowStock}>
+                          {t('viewer.stock')}
+                        </Toggle>
                       )}
                     </div>
-                    <div
-                      className={cn(
-                        'relative h-full',
-                        showStepPane ? '' : 'hidden',
-                        twoPane ? 'border-l border-border' : '',
-                      )}
-                    >
-                      {stepBytes ? (
-                        <PartViewer
-                          name={viewing.step?.path ?? t('preflight.viewer.stepPath')}
-                          bytes={stepBytes}
-                          stock={stock}
-                          bus={orbitBus}
-                          highlightStray
-                          // The STEP is the ideal, not what gets cut — the marks live on
-                          // the manufactured pane, except as a fallback when it is absent.
-                          sabreFailures={showMfgPane ? null : viewerSabreFailures}
-                          sabreBevelAngle={showMfgPane ? null : viewerSabreBevelAngle}
-                        />
-                      ) : null}
-                      {twoPane && <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>}
-                      <ViewCube bus={orbitBus} className="absolute right-3 top-3 z-10 h-28 w-28" />
-                    </div>
-                    {!showMfgPane && !showStepPane && (
-                      <div className="grid h-full place-items-center px-6 text-center">
-                        <p className="max-w-sm text-sm text-muted-foreground">
-                          {t('viewer.noModel')}
-                        </p>
+                    {viewingNcGeom && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <NcLegend />
                       </div>
                     )}
                   </div>
-                </Suspense>
-                {hasManufactured && (
-                  <div className="absolute bottom-3 left-3 z-10 flex gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur">
-                    {VIEW_MODES.map((mode) => {
-                      const disabled =
-                        (mode.id === 'step' && !hasStep) ||
-                        (mode.id === 'split' && !hasStep) ||
-                        (mode.id === 'overlay' && !hasStep)
-                      return (
-                        <button
-                          key={mode.id}
-                          type="button"
-                          disabled={disabled}
-                          onClick={() => setViewMode(mode.id)}
-                          className={cn(
-                            'rounded px-2 py-0.5 text-xs font-medium transition-colors disabled:opacity-30',
-                            effectiveMode === mode.id
-                              ? 'bg-accent text-accent-foreground'
-                              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                          )}
-                        >
-                          {t(mode.labelKey)}
-                        </button>
-                      )
-                    })}
-                  </div>
                 )}
+                <div className="relative min-h-72 w-full flex-1 bg-[#0b0f14]">
+                  <Suspense
+                    fallback={
+                      <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                        {t('preflight.viewer.loading')}
+                      </div>
+                    }
+                  >
+                    <div
+                      className={cn(
+                        'grid h-full auto-rows-fr gap-px bg-border xl:grid-cols-1',
+                        paneCount >= 3
+                          ? 'grid-cols-3'
+                          : paneCount === 2
+                            ? 'grid-cols-2'
+                            : 'grid-cols-1',
+                      )}
+                    >
+                      {/* 1. STEP — the ideal model. */}
+                      <div
+                        className={cn('relative h-full bg-[#0b0f14]', stepShown ? '' : 'hidden')}
+                      >
+                        {stepBytes ? (
+                          <PartViewer
+                            name={viewing.step?.path ?? t('preflight.viewer.stepPath')}
+                            bytes={stepBytes}
+                            stock={stock}
+                            bus={orbitBus}
+                            highlightStray
+                            smoothLines
+                            focus={manufactured ? null : findingFocus}
+                            // The STEP is the ideal, not what gets cut — the marks live on
+                            // the manufactured pane, except as a fallback when it is absent.
+                            sabreFailures={manufacturedShown ? null : viewerSabreFailures}
+                            sabreBevelAngle={manufacturedShown ? null : viewerSabreBevelAngle}
+                            showStock={showStock}
+                            onShowStockChange={setShowStock}
+                            hideControls
+                          />
+                        ) : null}
+                        {paneCount > 1 && <PaneTag>{t('preflight.viewer.step')}</PaneTag>}
+                      </div>
+                      {/* 2. Manufactured — the stock with the NC applied, toolpath projected. */}
+                      <div
+                        className={cn(
+                          'relative h-full bg-[#0b0f14]',
+                          manufacturedShown ? '' : 'hidden',
+                        )}
+                      >
+                        {manufactured ? (
+                          <PartViewer
+                            name={`${viewing.mark} · manufactured`}
+                            bytes={manufactured}
+                            stock={stock}
+                            bus={orbitBus}
+                            // The rebuild is oriented to the STEP frame, so the guilty-cut
+                            // marks land on what the laser will actually cut — not the ideal.
+                            sabreFailures={viewerSabreFailures}
+                            sabreBevelAngle={viewerSabreBevelAngle}
+                            nc={viewingNcGeom}
+                            ncSection={viewingNcSection}
+                            showNcLegend={false}
+                            focus={manufactured ? findingFocus : null}
+                            showStock={showStock}
+                            onShowStockChange={setShowStock}
+                            hideControls
+                            smoothLines
+                          />
+                        ) : (
+                          <div className="grid h-full place-items-center px-6 text-center">
+                            <p className="max-w-sm text-sm text-muted-foreground">
+                              {t('preflight.viewer.buildingManufactured')}
+                            </p>
+                          </div>
+                        )}
+                        {paneCount > 1 && <PaneTag>{t('preflight.viewer.manufacturedNc')}</PaneTag>}
+                      </div>
+                      {/* 3. Overlay — manufactured vs the STEP ideal (red overcut / blue undercut). */}
+                      <div
+                        className={cn('relative h-full bg-[#0b0f14]', overlayShown ? '' : 'hidden')}
+                      >
+                        {manufactured && stepBytes ? (
+                          <PartViewer
+                            name={`${viewing.mark} · overlay`}
+                            bytes={manufactured}
+                            compareBytes={stepBytes}
+                            compareLabel={t('preflight.viewer.step')}
+                            stock={stock}
+                            bus={orbitBus}
+                            nc={viewingNcGeom}
+                            ncSection={viewingNcSection}
+                            showNcLegend={false}
+                            showStock={showStock}
+                            onShowStockChange={setShowStock}
+                            hideControls
+                            smoothLines
+                          />
+                        ) : null}
+                        {paneCount > 1 && <PaneTag>{t('viewer.diff')}</PaneTag>}
+                      </div>
+                      {paneCount === 0 && (
+                        <div className="grid h-full place-items-center px-6 text-center">
+                          <p className="max-w-sm text-sm text-muted-foreground">
+                            {t('viewer.noModel')}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </Suspense>
+                  <ViewCube bus={orbitBus} className="absolute right-3 top-3 z-10 h-28 w-28" />
+                </div>
               </div>
-              <div className="w-full shrink-0 border-t border-border">
+              <div className="h-[clamp(14rem,40vh,32rem)] w-full shrink-0 border-t border-border xl:h-auto xl:min-h-0 xl:w-[70vw] xl:shrink xl:border-l xl:border-t-0">
                 {viewingPdfBytes ? (
                   <DrawingViewer bytes={viewingPdfBytes} />
                 ) : (
-                  <div className="grid h-[clamp(14rem,40vh,32rem)] place-items-center text-sm text-muted-foreground">
+                  <div className="grid h-full place-items-center px-4 text-center text-sm text-muted-foreground">
                     {t('preflight.viewer.noDrawing')}
                   </div>
                 )}
@@ -1615,10 +1656,12 @@ function ViewerWarnings({
   findings,
   step,
   fix,
+  onFocus,
 }: {
   findings: Finding[]
   step?: StepFile
   fix?: ViewerFix
+  onFocus?: (finding: Finding) => void
 }) {
   const { t } = useTranslation()
   const findingText = (finding: Finding) =>
@@ -1629,7 +1672,7 @@ function ViewerWarnings({
   )
   if (findings.length === 0 && !invalid && !hasFixRow) return null
   return (
-    <div className="flex shrink-0 flex-col gap-2 border-b border-border bg-card px-5 py-3">
+    <div className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-card px-4 py-2">
       {findings.map((finding) => {
         const resolved = Boolean(
           fix?.override && resolvedFindings(fix.override).includes(finding.code),
@@ -1640,17 +1683,36 @@ function ViewerWarnings({
         return (
           <div
             key={`${finding.code}-${finding.message}`}
-            className={cn('flex items-start gap-2 text-sm', resolved && 'opacity-50')}
+            className={cn('flex items-center gap-2 text-sm', resolved && 'opacity-50')}
           >
-            <Badge variant={SEVERITY_VARIANT[finding.severity]}>
-              {t(`common.severity.${finding.severity}`)}
-            </Badge>
-            <div className="flex min-w-0 flex-col">
-              <span className="font-mono text-xs text-muted-foreground">{finding.code}</span>
-              <span className={cn(resolved && 'line-through')}>{findingText(finding)}</span>
-            </div>
+            <button
+              type="button"
+              disabled={!onFocus}
+              onClick={onFocus ? () => onFocus(finding) : undefined}
+              title={onFocus ? t('preflight.viewer.focusIssue') : undefined}
+              className={cn(
+                '-mx-1 flex min-w-0 flex-1 items-center gap-2 rounded px-1 text-left',
+                onFocus && 'cursor-pointer hover:bg-accent/50',
+              )}
+            >
+              <span
+                className={cn(
+                  'shrink-0 rounded-full border px-2 py-0.5 font-mono text-[11px] font-semibold',
+                  finding.severity === 'error'
+                    ? 'border-destructive/50 bg-destructive/15 text-destructive-foreground'
+                    : finding.severity === 'warning'
+                      ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
+                      : 'border-sky-500/50 bg-sky-500/15 text-sky-300',
+                )}
+              >
+                {finding.code}
+              </span>
+              <span className={cn('min-w-0 flex-1', resolved && 'line-through')}>
+                {findingText(finding)}
+              </span>
+            </button>
             {resolved && (
-              <Badge variant="success" className="ml-auto shrink-0 align-middle">
+              <Badge variant="success" className="shrink-0">
                 {fix?.override ? t(`common.fix.${fix.override}`) : ''}
               </Badge>
             )}
@@ -1658,7 +1720,7 @@ function ViewerWarnings({
               <Button
                 variant="outline"
                 size="sm"
-                className="ml-auto shrink-0"
+                className="shrink-0"
                 disabled={fix?.pending}
                 onClick={action.run}
               >
@@ -1746,18 +1808,9 @@ function Stat({
   )
 }
 
-function PaneTag({ children, tone }: { children: ReactNode; tone?: 'manufactured' | 'step' }) {
+function PaneTag({ children }: { children: ReactNode }) {
   return (
-    <span
-      className={cn(
-        'pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 whitespace-nowrap rounded-full border px-3 py-0.5 text-xs font-semibold backdrop-blur',
-        tone === 'manufactured'
-          ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
-          : tone === 'step'
-            ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
-            : 'border-border bg-card/85 text-foreground',
-      )}
-    >
+    <span className="pointer-events-none absolute left-2 top-2 z-10 whitespace-nowrap rounded border border-border bg-card/80 px-2 py-0.5 text-[11px] font-medium text-muted-foreground backdrop-blur">
       {children}
     </span>
   )

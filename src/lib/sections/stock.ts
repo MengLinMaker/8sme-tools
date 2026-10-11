@@ -51,8 +51,8 @@ const PREFIXES: [RegExp, Family][] = [
   [/^(?:UB|WB|WC)/, 'ub'],
 ]
 
-/** Outward inflation (mm) so the part visibly sits inside the stock. */
-const INFLATE = 1.5
+/** Outward inflation (mm) for the stock ghost. 0 = exact size (flush with the part). */
+const INFLATE = 0
 
 function numbers(code: string): number[] {
   return (code.match(/\d+(?:\.\d+)?/g) ?? []).map(Number)
@@ -509,8 +509,7 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
   }
 
   if (!points || points.length < 3) return null
-  // Solid sections are inflated uniformly; hollow ones are already sized so the
-  // outer wall clears the part and the void stays inside it.
+  // The stock ghost is drawn at the section's exact size (INFLATE = 0) so it reads to scale.
   return {
     points: hollow ? points : inflate(points, INFLATE),
     holes: holes.length > 0 ? holes : undefined,
