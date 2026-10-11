@@ -7,6 +7,7 @@ import { Matrix4 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { booleanDiff, type DiffSoup } from './booleanDiff'
 import { createMeshQuery, diffFraction } from './diffHighlight'
+import { deviationDiff } from './deviationDiff'
 import { meshStepFile } from './mesh'
 import { setOcWasmUrl } from './occInit'
 import { reconstructSolidFromNc } from './reconstructFromNc'
@@ -78,8 +79,7 @@ function signedVolume({ vertices, triangles }: Soup): number {
     const cx = vertices[c] ?? 0
     const cy = vertices[c + 1] ?? 0
     const cz = vertices[c + 2] ?? 0
-    v +=
-      (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)) / 6
+    v += (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)) / 6
   }
   return Math.abs(v)
 }
@@ -292,8 +292,8 @@ function render(parts: Part[], W: number, H: number, dir: Vec3, up: Vec3, region
   }
 
   // World bbox centre.
-  let mn: Vec3 = [Infinity, Infinity, Infinity]
-  let mx: Vec3 = [-Infinity, -Infinity, -Infinity]
+  const mn: Vec3 = [Infinity, Infinity, Infinity]
+  const mx: Vec3 = [-Infinity, -Infinity, -Infinity]
   for (const p of parts) {
     for (let i = 0; i + 2 < p.vertices.length; i += 3) {
       for (let k = 0; k < 3; k++) {
@@ -306,7 +306,11 @@ function render(parts: Part[], W: number, H: number, dir: Vec3, up: Vec3, region
   const f = norm(dir)
   const r = norm(cross(f, up))
   const u = cross(r, f)
-  const L = norm([-f[0] + u[0] * 0.55 + r[0] * 0.3, -f[1] + u[1] * 0.55 + r[1] * 0.3, -f[2] + u[2] * 0.55 + r[2] * 0.3])
+  const L = norm([
+    -f[0] + u[0] * 0.55 + r[0] * 0.3,
+    -f[1] + u[1] * 0.55 + r[1] * 0.3,
+    -f[2] + u[2] * 0.55 + r[2] * 0.3,
+  ])
 
   const [rmn, rmx] = region ?? [mn, mx]
   let sxMin = Infinity
@@ -314,11 +318,7 @@ function render(parts: Part[], W: number, H: number, dir: Vec3, up: Vec3, region
   let syMin = Infinity
   let syMax = -Infinity
   for (let i = 0; i < 8; i++) {
-    const p: Vec3 = [
-      i & 1 ? rmx[0] : rmn[0],
-      i & 2 ? rmx[1] : rmn[1],
-      i & 4 ? rmx[2] : rmn[2],
-    ]
+    const p: Vec3 = [i & 1 ? rmx[0] : rmn[0], i & 2 ? rmx[1] : rmn[1], i & 4 ? rmx[2] : rmn[2]]
     const d = sub(p, c)
     const sx = dot(d, r)
     const sy = dot(d, u)
@@ -330,7 +330,10 @@ function render(parts: Part[], W: number, H: number, dir: Vec3, up: Vec3, region
   const sxMid = (sxMin + sxMax) / 2
   const syMid = (syMin + syMax) / 2
   const pad = 10 * ss
-  const scale = Math.min((SW - pad * 2) / (sxMax - sxMin || 1), (SH - pad * 2) / (syMax - syMin || 1))
+  const scale = Math.min(
+    (SW - pad * 2) / (sxMax - sxMin || 1),
+    (SH - pad * 2) / (syMax - syMin || 1),
+  )
   const toScreen = (d: Vec3): [number, number, number] => {
     const sx = dot(d, r)
     const sy = dot(d, u)
@@ -368,9 +371,21 @@ function render(parts: Part[], W: number, H: number, dir: Vec3, up: Vec3, region
       const area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0)
       if (Math.abs(area) < 1e-9) continue
       // World normal for shading.
-      const pa: Vec3 = [part.vertices[i0 * 3] as number, part.vertices[i0 * 3 + 1] as number, part.vertices[i0 * 3 + 2] as number]
-      const pb: Vec3 = [part.vertices[i1 * 3] as number, part.vertices[i1 * 3 + 1] as number, part.vertices[i1 * 3 + 2] as number]
-      const pc: Vec3 = [part.vertices[i2 * 3] as number, part.vertices[i2 * 3 + 1] as number, part.vertices[i2 * 3 + 2] as number]
+      const pa: Vec3 = [
+        part.vertices[i0 * 3] as number,
+        part.vertices[i0 * 3 + 1] as number,
+        part.vertices[i0 * 3 + 2] as number,
+      ]
+      const pb: Vec3 = [
+        part.vertices[i1 * 3] as number,
+        part.vertices[i1 * 3 + 1] as number,
+        part.vertices[i1 * 3 + 2] as number,
+      ]
+      const pc: Vec3 = [
+        part.vertices[i2 * 3] as number,
+        part.vertices[i2 * 3 + 1] as number,
+        part.vertices[i2 * 3 + 2] as number,
+      ]
       const nrm = norm(cross(sub(pb, pa), sub(pc, pa)))
       const inten = 0.32 + 0.68 * Math.abs(dot(nrm, L))
       const cr = Math.round(Math.min(255, tc[0] * inten))
@@ -569,7 +584,9 @@ describe('m148 diff comparison', () => {
           name: 'A_current',
           over: bd ? geoToSoup(bd.over) : null,
           under: bd ? geoToSoup(bd.under) : null,
-          note: bd ? `overVol=${bd.overVolume.toFixed(1)} underVol=${bd.underVolume.toFixed(1)}` : 'null',
+          note: bd
+            ? `overVol=${bd.overVolume.toFixed(1)} underVol=${bd.underVolume.toFixed(1)}`
+            : 'null',
         })
       } catch (e) {
         variants.push({ name: 'A_current', over: null, under: null, note: `ERROR ${String(e)}` })
@@ -604,9 +621,7 @@ describe('m148 diff comparison', () => {
           const i1 = madeSoup.triangles[t * 3 + 1] as number
           const i2 = madeSoup.triangles[t * 3 + 2] as number
           const dm =
-            (orient *
-              ((dev[i0] as number) + (dev[i1] as number) + (dev[i2] as number))) /
-            3
+            (orient * ((dev[i0] as number) + (dev[i1] as number) + (dev[i2] as number))) / 3
           triColors.push(devColor(dm))
           const ax = madeSoup.vertices[i0 * 3] as number
           const ay = madeSoup.vertices[i0 * 3 + 1] as number
@@ -623,9 +638,7 @@ describe('m148 diff comparison', () => {
           const vx = cx - ax
           const vy = cy - ay
           const vz = cz - az
-          const area =
-            0.5 *
-            Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
+          const area = 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
           if (dm < 0) {
             overVol += area * -dm
             if (-dm >= 0.5) overVol05 += area * -dm
@@ -646,8 +659,8 @@ describe('m148 diff comparison', () => {
       }
 
       const basebbox = (() => {
-        let mn: Vec3 = [Infinity, Infinity, Infinity]
-        let mx: Vec3 = [-Infinity, -Infinity, -Infinity]
+        const mn: Vec3 = [Infinity, Infinity, Infinity]
+        const mx: Vec3 = [-Infinity, -Infinity, -Infinity]
         for (let i = 0; i + 2 < madeSoup.vertices.length; i += 3) {
           for (let k = 0; k < 3; k++) {
             mn[k] = Math.min(mn[k], madeSoup.vertices[i + k] as number)
@@ -686,10 +699,16 @@ describe('m148 diff comparison', () => {
         lines.push(
           `${v.name}: overTris=${v.over ? Math.floor(v.over.triangles.length / 3) : 0} underTris=${v.under ? Math.floor(v.under.triangles.length / 3) : 0} ${v.note}`,
         )
-        lines.push(`    over bbox ${v.over ? bbox(v.over) : '-'}  under bbox ${v.under ? bbox(v.under) : '-'}`)
+        lines.push(
+          `    over bbox ${v.over ? bbox(v.over) : '-'}  under bbox ${v.under ? bbox(v.under) : '-'}`,
+        )
       }
       lines.push(`made bbox ${bbox(madeSoup)}`)
       lines.push(`step bbox ${bbox(stepSoup)}`)
+      const prod = deviationDiff(soups(madeMeshed), soups(stepMeshed), new Matrix4(), new Matrix4())
+      lines.push(
+        `production deviationDiff: over=${prod?.overVolume.toFixed(0)} under=${prod?.underVolume.toFixed(0)} primary=${prod?.primaryVolume.toFixed(0)}`,
+      )
       for (const tol of [0.02, 0.05, 0.1, 0.2, 0.5, 1]) {
         const q = createMeshQuery(stepSoup.vertices, stepSoup.triangles, tol)
         const madeMask = q.flagFar(madeSoup.vertices, madeSoup.triangles)

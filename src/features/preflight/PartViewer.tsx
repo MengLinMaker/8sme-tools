@@ -52,12 +52,15 @@ import {
 import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
 import {
-  booleanDiff,
-  cachedBooleanDiff,
   type DiffPresence,
   diffAlpha,
   probeDiffPresence,
 } from '@/lib/step/booleanDiff'
+import {
+  cachedDeviationDiff,
+  DEVIATION_TOLERANCE_MM,
+  deviationDiff,
+} from '@/lib/step/deviationDiff'
 import { computeDiffMasks, diffFraction, resolveDiffTolerance } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { meshForViewer } from '@/lib/step/viewerModel'
@@ -686,16 +689,15 @@ function mountScene(
   const fitSize = fit.getSize(new Vector3())
   const fitCentre = fit.getCenter(new Vector3())
 
-  // Boolean difference overlays, with the STEP treated as ideal. Both groups are
-  // already seated in the same frame, so the booleans run in world coordinates:
-  // red = STEP-minus-manufactured (overcut — scrap, cannot fix), blue =
-  // manufactured-minus-STEP (undercut — leftover that can still be cut).
-  // Coincident surfaces cancel, leaving only the volumetric leftovers. When the
-  // CSG kernel can't run (over budget or failing input), fall back to red
-  // surface-distance flagging.
+  // Signed-distance deviation overlays, with the STEP treated as nominal. Both groups are already
+  // seated in the same frame, so the deviation runs in world coordinates: red = overcut (the
+  // manufactured surface sits inside the ideal — scrap), blue = undercut (outside the ideal —
+  // leftover that can still be cut). Measuring distances rather than intersecting surfaces keeps
+  // near-coincident models stable (see docs/architecture.md). When the deviation path can't run
+  // (over budget), fall back to red surface-distance flagging.
   //
-  // The multi-second boolean is deferred: the component paints the models plus
-  // a fast presence verdict first, then runs the exact solids after paint.
+  // The multi-second measurement is deferred: the component paints the models plus a fast
+  // presence verdict first, then runs the full deviation after paint.
   const diffMeshes: Mesh[] = []
   const diffEdgeLines: LineSegments[] = []
   let diffStats: DiffStats | null = null
@@ -733,9 +735,9 @@ function mountScene(
     if (!compareStep || !compareGroup || diffStats) return diffStats
     const diagonal = Math.hypot(fitSize.x, fitSize.y, fitSize.z)
     const tolerance = resolveDiffTolerance(diagonal)
-    const boolean =
+    const diff =
       primaryBytes && compareBytes
-        ? cachedBooleanDiff(
+        ? cachedDeviationDiff(
             soups(step),
             soups(compareStep),
             primary.group.matrixWorld,
@@ -743,17 +745,17 @@ function mountScene(
             primaryBytes,
             compareBytes,
           )
-        : booleanDiff(
+        : deviationDiff(
             soups(step),
             soups(compareStep),
             primary.group.matrixWorld,
             compareGroup.matrixWorld,
           )
-    if (boolean) {
-      // The diff is a real solid: opaque, unlit (basic) so the boolean/tessellation jank a lit
-      // surface would expose stays hidden, and depth-tested so its own far side is properly
-      // occluded. A small polygon offset lifts it just clear of the base surface it sits on
-      // (they're coincident), so it wins the depth test without z-fighting.
+    if (diff) {
+      // Signed-distance deviation patches on the manufactured surface: red = overcut (made short
+      // vs the ideal), blue = undercut (leftover). Opaque/unlit, and a small polygon offset lifts
+      // them just clear of the base surface they sit on, so they win the depth test without
+      // z-fighting. No boolean ⇒ no slivers or skins to smooth away (see docs/architecture.md).
       const overcutMaterial = new MeshBasicMaterial({
         color: 0xffffff,
         vertexColors: true,
@@ -771,27 +773,27 @@ function mountScene(
         polygonOffsetUnits: -1,
       })
       materials.push(overcutMaterial, undercutMaterial)
-      if (boolean.over) {
-        paintDiffAlpha(boolean.over, boolean.overDistance, OVERCUT_RGB)
-        const mesh = new Mesh(boolean.over, overcutMaterial)
+      if (diff.over) {
+        paintDiffAlpha(diff.over, diff.overDistance, OVERCUT_RGB)
+        const mesh = new Mesh(diff.over, overcutMaterial)
         mesh.layers.set(1)
         scene.add(mesh)
         diffMeshes.push(mesh)
-        addDiffEdges(boolean.over, OVERCUT_COLOR, scene)
+        addDiffEdges(diff.over, OVERCUT_COLOR, scene)
       }
-      if (boolean.under) {
-        paintDiffAlpha(boolean.under, boolean.underDistance, UNDERCUT_RGB)
-        const mesh = new Mesh(boolean.under, undercutMaterial)
+      if (diff.under) {
+        paintDiffAlpha(diff.under, diff.underDistance, UNDERCUT_RGB)
+        const mesh = new Mesh(diff.under, undercutMaterial)
         mesh.layers.set(1)
         scene.add(mesh)
         diffMeshes.push(mesh)
-        addDiffEdges(boolean.under, UNDERCUT_COLOR, scene)
+        addDiffEdges(diff.under, UNDERCUT_COLOR, scene)
       }
-      const volume = boolean.primaryVolume > 0 ? boolean.primaryVolume : 1
+      const volume = diff.primaryVolume > 0 ? diff.primaryVolume : 1
       diffStats = {
-        over: boolean.overVolume / volume,
-        under: boolean.underVolume / volume,
-        tolerance,
+        over: diff.overVolume / volume,
+        under: diff.underVolume / volume,
+        tolerance: DEVIATION_TOLERANCE_MM,
         approximate: false,
       }
     } else {

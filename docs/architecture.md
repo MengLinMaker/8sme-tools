@@ -92,7 +92,7 @@ localized worse region at one end (nothing sits between 0.5 and 1.0 mm).
 | B | OCC B-rep `cut()` (no glue/fuzzy) | 10,147 | 39,179 | captures the shell, blotchy |
 | — | `commonFace` glue only | 1.68e6 | 0 | **rejected** — no-op returning the whole ideal |
 | — | glue + fuzzy 0.1 | 5.74e6 | — | **rejected** — garbage spikes |
-| E | signed-distance **deviation map** | 3,790 | 327,471 | **prototype** — smooth, robust, undercut visible |
+| E | signed-distance **deviation map** | 3,790 | 327,471 | **adopted** → `deviationDiff.ts` (harness sums *all* deviations, no threshold) |
 
 The root cause is now explicit: **the pipeline's `KEEP_CLEAR_MM = SKIN_MAX_THICKNESS_MM = 1 mm` bar
 is coarser than the genuine 0.05–0.5 mm mismatch**, and `three-bvh-csg` mishandles the
@@ -124,8 +124,12 @@ Two distinct, well-established answers:
 
 ## 6. Decision
 
-**Adopt signed-distance deviation analysis as the diff** (prototype in `scratch-m148.test.ts`,
-panel E):
+**Adopt signed-distance deviation analysis as the diff — adopted and wired.** Implemented in
+`src/lib/step/deviationDiff.ts` (`deviationDiff` / `cachedDeviationDiff`), unit-tested in
+`deviationDiff.test.ts`, and called by `PartViewer.runDiff` in place of the `three-bvh-csg` boolean.
+The red surface-flagging fallback remains for over-budget inputs. `booleanDiff.ts` stays as the
+solid-boolean reference (and the source of the shared `BooleanDiff` shape); it is no longer on the
+viewer's critical path.
 
 - Rigid align (already done — `orientToReference` / seating).
 - Per made vertex: nearest point on the ideal mesh + **signed** distance (pseudo-normal now;
@@ -145,15 +149,20 @@ semantics (+dev = leftover/undercut, −dev = overcut).
 
 ## 7. Did it live up to promise?
 
-**Yes, for the reported problem** — panel E cleanly and smoothly surfaces the undercut (327k mm³;
-148k mm³ of it ≥0.5 mm) that A reduced to a 9k mm³ speck, with no slivers and no prune/smooth
-hacks. **Not yet production-ready:**
+**Yes, for the reported problem** — the deviation map cleanly and smoothly surfaces the undercut that
+the old pipeline reduced to a speck, with no slivers and no prune/smooth hacks. Production numbers
+on m148: `over 0 mm³`, `under ≈235k mm³` (tolerance-gated at 0.15 mm; the scratch panel E summed
+*all* deviations with no threshold, hence its larger 327k). That `over = 0` is the point: m148 has
+**no** significant overcut — the model is uniformly a hair large, and the real defect is undercut,
+which the `KEEP_CLEAR_MM = 1` filter used to erase. **Still to harden:**
 
-- It is a **surface map**, not a solid volume; the legend volume is an integral, not a boolean.
-- Closest-point is **brute-force O(made×ideal)**; needs a spatial index (BVH) before it ships.
-- Sign is pseudo-normal; upgrade to generalized winding number for defects.
-- Colour scale / tolerance is a UX choice (`devColor` scale was 0.6 mm → too faint; 0.25 mm reads).
-- Not wired into `booleanDiff`/`PartViewer`; no cache, budget, or fallback yet.
+- The closest-point index is a uniform grid with a bounded ring search (fine for the sub-mm,
+  near-coincident case); a BVH would be the general fix.
+- Sign is pseudo-normal (robust for watertight inputs); generalized winding number is the upgrade.
+- Volume is a tolerance-gated **surface integral** (`Σ areaₜ · devₜ`), not a boolean volume — exact
+  for thin shells, drifting for large offsets and convex corners.
+- Tolerance (0.15 mm) and colour scale are fixed defaults; they need operator tuning per family.
+- Not yet exercised on the full NW30/NW31 job set.
 
 ## 8. Upstream root cause (fix here too)
 
@@ -166,11 +175,55 @@ The reconstruction is the source of the sub-mm offset, independent of the diff a
 Removing both brings made within <0.05 mm of ideal, after which any method — deviation map *or*
 OCC boolean — gives a clean, small diff.
 
-## 9. Open questions
+## 9. Follow-up: m116 / m12 / m122 and the deviation **volume** correction
 
-- Deviation map vs true solid volume in the viewer, or both?
-- Ship a BVH closest-point + generalized winding number, or reuse OCC
-  `BRepExtrema_DistShapeShape` for distance?
+The operator reported m116, m12, m122 still failing (large "skins", wrong volume). Diagnosis
+(`scratch-nw31.test.ts`):
+
+- **Calibration was not the problem.** A brute-force per-vertex min-distance equals the grid query
+  on every part — the readings are real, not a query bug.
+- **Volumes:** made vs ideal bbox is identical and volume matches to ~0.1 % on all four parts, so
+  the models agree; the deviations are **localized**. Per-vertex median deviation is ~0 (m148 0.06,
+  m116 0.00, m12 0.00, m122 0.08 mm) while p95 is 3–24 mm — i.e. a few features off by mm.
+- **The "large skin" is presentation granularity.** m122 has only 384 triangles, so one stray
+  vertex flags a whole 3966 mm face. The deviation map paints whole triangles.
+- **The deviation *volume* is inflated 30–60×.** m122: deviation says over 2.9M / under 7.6M mm³,
+  but the boolean says 81k / 106k. The pseudo-normal per-vertex distance reads the Euclidean gap to
+  the nearest surface point — large at edges/gaps even when the material difference is tiny — so
+  `Σ areaₜ·devₜ` overcounts. **Do not trust the deviation volume.**
+- **m12 is a reconstruction failure** (OCC volume overlap **0.315** — no orientation aligns it);
+  the boolean and voxel agree at ~0.8–1.1M mm³ each way. No diff algorithm fixes that.
+
+## 10. Voxel diff — the current best
+
+`src/lib/step/voxelDiff.ts` (+ `voxelDiff.test.ts`): rasterise each mesh's triangles into wall
+cells, per-column scanline parity fill, diff occupancy, emit the boundary shell. Independent of the
+input tessellation, bounded output, exact volume on the grid. Validated at **0.5 mm**
+(`scratch-nw31.test.ts`):
+
+| part | section | over mm³ | under mm³ | primary (true) | geom tris | time |
+|---|---|---|---|---|---|---|
+| m148 | SHS100×6 | 37,365 | 76,794 | 8.41M (8.37M) | 2.1M | 16 s |
+| m116 | PFC100×50 | 2,633 | 5,906 | 3.00M (3.06M) | 0.3M | 5 s |
+| m12 | PFC100×50 | 903,315 | 784,342 | 3.43M (2.97M) | 8M† | 12 s |
+| m122 | SHS100×9 | 107,592 | 125,619 | 11.80M (11.77M) | 3.1M | 15 s |
+
+† hit the 4M-triangle emit cap.
+
+**Verdict:** the voxel volumes are the trustworthy ones — they agree with the OCC boolean (m122:
+108k/126k vs 81k/106k), fix the boolean's under-reporting on m148 (voxel under 77k vs 9k) **and**
+the deviation's 30–60× inflation. `primaryVolume` tracks the true volume to 0.2–0.5 % on the clean
+parts (m12's +15 % is the broken reconstruction).
+
+**Costs at 0.5 mm** (the blocker for wiring): ~0.12–0.33 G cells (≈0.3–1 GB per mesh), 5–16 s, and
+2–8 M **blocky** triangles to render. Production needs, in order: **marching cubes** (compact
+surface instead of blocky shells) → **GPU/WebGPU compute** voxelisation (kills the time/memory) →
+LOD. On a 4 m shaft, 0.5 mm dense is inherently ~0.3 G cells, so CPU-dense will not ship.
+
+## 11. Open questions
+
+- Voxel as the production diff, and at what resolution (0.5 mm is accurate but 5–16 s / M-tris)?
+- Marching cubes + decimation before wiring, or ship blocky at a coarser grid for speed?
+- GPU (WebGPU compute) voxelisation — the only way to keep 0.5 mm on 4 m parts.
+- m12's reconstruction/orientation (overlap 0.32) must be fixed regardless.
 - Default tolerance and colour scale per part family (`resolveDiffTolerance` today).
-- Should the ~0.05 mm global offset be subtracted (it is reconstruction noise) so only the real
-  end-cut deviations light up? If so, the "made within 0.05 mm of ideal" threshold is the knob.
