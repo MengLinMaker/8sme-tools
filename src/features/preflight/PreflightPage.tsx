@@ -52,7 +52,6 @@ import { cn } from '@/lib/utils'
 import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
 import { createOrbitBus } from './orbitSync'
-import { ViewCube } from './ViewCube'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 
@@ -1544,9 +1543,6 @@ export function PreflightPage() {
                             compareLabel={t('preflight.viewer.step')}
                             stock={stock}
                             bus={orbitBus}
-                            nc={viewingNcGeom}
-                            ncSection={viewingNcSection}
-                            showNcLegend={false}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
                             hideControls
@@ -1564,7 +1560,6 @@ export function PreflightPage() {
                       )}
                     </div>
                   </Suspense>
-                  <ViewCube bus={orbitBus} className="absolute right-3 top-3 z-10 h-28 w-28" />
                 </div>
               </div>
               <div className="h-[clamp(14rem,40vh,32rem)] w-full shrink-0 border-t border-border xl:h-auto xl:min-h-0 xl:w-[70vw] xl:shrink xl:border-l xl:border-t-0">

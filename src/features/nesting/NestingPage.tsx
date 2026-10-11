@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
 import { createOrbitBus } from '@/features/preflight/orbitSync'
-import { ViewCube } from '@/features/preflight/ViewCube'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { downloadBlob } from '@/lib/download'
 import { buildBarNc } from '@/lib/nesting/nc'
@@ -848,7 +847,9 @@ export function NestingPage() {
                           // uncut-stock outline, showing what the split + kerfs removed.
                           beam={viewing.beam}
                           bus={orbitBus}
-                          nc={beamNc}
+                          // The toolpath projection belongs to the manufactured view only — the
+                          // overlay compares NC build vs STEP, so it must stay free of NC lines.
+                          nc={effectiveMode === 'overlay' ? null : beamNc}
                           smoothLines
                         />
                       ) : (
@@ -881,7 +882,6 @@ export function NestingPage() {
                         bus={orbitBus}
                       />
                       {twoPane && <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>}
-                      <ViewCube bus={orbitBus} className="absolute right-3 top-3 z-10 h-28 w-28" />
                     </div>
                     {!showMfgPane && !showStepPane && (
                       <div className="grid h-full place-items-center px-6 text-center">

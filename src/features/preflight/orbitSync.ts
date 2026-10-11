@@ -38,11 +38,9 @@ export interface OrbitFrame {
 export interface OrbitBus {
   orbit: OrbitState | null
   preset: ViewPreset | null
-  direction: ViewDirection | null
   focus: FocusRequest | null
   listeners: Set<(orbit: OrbitState) => void>
   presetListeners: Set<(preset: ViewPreset) => void>
-  directionListeners: Set<(dir: ViewDirection) => void>
   focusListeners: Set<(request: FocusRequest) => void>
 }
 
@@ -50,11 +48,9 @@ export function createOrbitBus(): OrbitBus {
   return {
     orbit: null,
     preset: null,
-    direction: null,
     focus: null,
     listeners: new Set(),
     presetListeners: new Set(),
-    directionListeners: new Set(),
     focusListeners: new Set(),
   }
 }
@@ -62,23 +58,7 @@ export function createOrbitBus(): OrbitBus {
 /** Broadcasts a named view angle to every locked viewport (and remembers it for late mounts). */
 export function requestView(bus: OrbitBus, preset: ViewPreset): void {
   bus.preset = preset
-  bus.direction = null
   for (const listener of bus.presetListeners) listener(preset)
-}
-
-/** Broadcasts an arbitrary view direction (view-cube faces/edges/corners). */
-export function requestDirection(bus: OrbitBus, direction: ViewDirection): void {
-  bus.direction = direction
-  bus.preset = null
-  for (const listener of bus.directionListeners) listener(direction)
-}
-
-/** Broadcasts a full camera orbit (view-cube dragging), preserving distance and zoom. */
-export function requestOrbit(bus: OrbitBus, orbit: OrbitState): void {
-  bus.orbit = orbit
-  bus.preset = null
-  bus.direction = null
-  for (const listener of bus.listeners) listener(orbit)
 }
 
 /** Broadcasts a focus request: every synced viewport centres on — and zooms to — the point. */
@@ -143,7 +123,6 @@ export function attachOrbit(
     }
     bus.orbit = orbit
     bus.preset = null
-    bus.direction = null
     for (const listener of bus.listeners) if (listener !== apply) listener(orbit)
   }
 
@@ -203,18 +182,15 @@ export function attachOrbit(
   controls.addEventListener('change', onChange)
   bus.listeners.add(apply)
   bus.presetListeners.add(applyPreset)
-  bus.directionListeners.add(applyDirection)
   bus.focusListeners.add(applyFocus)
   if (bus.focus) applyFocus(bus.focus)
   else if (bus.orbit) apply(bus.orbit)
-  else if (bus.direction) applyDirection(bus.direction)
   else if (bus.preset) applyPreset(bus.preset)
 
   return () => {
     controls.removeEventListener('change', onChange)
     bus.listeners.delete(apply)
     bus.presetListeners.delete(applyPreset)
-    bus.directionListeners.delete(applyDirection)
     bus.focusListeners.delete(applyFocus)
   }
 }
