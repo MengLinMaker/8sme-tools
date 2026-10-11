@@ -59,7 +59,11 @@ function seatMatrix(vertices: number[], profile: [number, number][] | undefined)
       )
       .multiply(toX)
   }
-  return new Matrix4().compose(centre.clone().applyQuaternion(seat).negate(), seat, new Vector3(1, 1, 1))
+  return new Matrix4().compose(
+    centre.clone().applyQuaternion(seat).negate(),
+    seat,
+    new Vector3(1, 1, 1),
+  )
 }
 
 const FIXTURES = [

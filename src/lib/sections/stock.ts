@@ -12,6 +12,24 @@ import { getUc, getUcByDepth } from './uc'
  * callout. Sections follow Australian short-forms as they appear on the drawings
  * (and identically in the NC header / part list): `EA75*75*6`, `UA100*75*6`,
  * `RHS150*100*9.0`, `SHS100*100*6.0`, `PFC100*50`, `BT100*15`, `200UB29.8`.
+ *
+ * # Canonical orientation (see `docs/canonical-orientation.md`)
+ *
+ * Every stock beam is cut in one **canonical machine stance**; the section frame is
+ * `+x = right, +y = up` and the length runs along the member axis. Target stances:
+ *
+ *  - UB / UC / TFB (`I`)   → `H`  web vertical, flanges horizontal  → **implemented**
+ *  - PFC / TFC (`U`, `C`)  → `n`  web on top, both flanges down     → *pending*
+ *  - RHS / SHS (`M`)       → longer cross-section side horizontal   → *pending*
+ *  - angle EA / UA (`L`)   → `L`  longer leg horizontal, open up-right → **implemented**
+ *  - T (`T`)               → flange down, web up                    → **implemented**
+ *
+ * DSTV faces (`v` front/web, `o` top, `u` bottom, `h` behind) are **profile-relative**, not
+ * machine-relative; once seated, a face's machine role is its outward normal (`+y` top,
+ * `−y` bottom, `±x` side). Machine-readable form of these rules: `./canonical.ts`. The PFC
+ * `n` and RHS long-side-horizontal builders are not drawn yet — this header records the
+ * intent so the geometry can be changed deliberately (it currently draws the DSTV-reference
+ * C and a tall RHS).
  */
 
 export interface StockOutline {

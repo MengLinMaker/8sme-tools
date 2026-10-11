@@ -28,6 +28,25 @@ the hard way — do not re-litigate them.
   catalogue (`AS/NZS 3679.1`). E.g. `BT100*15` = `[134, 103, 9.6, 6.3, 8.9]` → **200UB29.8**.
 - The parent UB has **multiple mass variants per nominal depth** — match the exact one.
 
+## Canonical orientation (stock & pieces)
+
+Full spec: **`docs/canonical-orientation.md`**. Every stock beam is cut in one canonical stance;
+the profile builders in `src/lib/sections/stock.ts` draw it, and `src/lib/sections/canonical.ts`
+maps DSTV faces to machine roles + enforces the cut-side rules.
+
+- **Stances:** UB/UC/TFB = **`H`** (web vertical, flanges horizontal). PFC/TFC = **`n`** (web on
+  top, both flanges pointing down). RHS/SHS = **longer cross-section side horizontal**. Angle =
+  **`L`** (longer leg horizontal, opening up-right). T = **flange down, web up**. These may be a
+  rotation of Tekla's DSTV export stance — seat real parts into ours, don't match Tekla's.
+- **DSTV faces are profile-relative**, not machine-relative: `v` front/web, `o` top, `u` bottom,
+  `h` behind. In our stance the machine role is the face's outward normal (`+y` top, `−y` bottom,
+  `±x` side). E.g. UB → `o`=top, `u`=bottom, `v`/`h`=sides; PFC (`n`) → `o`/`u`=sides (the
+  flanges), `h`=top (web), `v`=bottom.
+- **Cut-side priority: side first (most controllable), then top, bottom last.**
+- **Bottom cuts** eject a slug that can hit the head: only cut the bottom when the removed piece
+  is **< 10 g** (`BOTTOM_CUT_MAX_GRAMS`). `holeRemovedMassGrams(d, t)` / `bottomCutAllowed(g)`
+  implement it.
+
 ## The two halves are INDEPENDENT
 
 - A stock UB yields **two T bars**, and the **two sides are nested and cut independently**.
