@@ -51,7 +51,8 @@ import { smoothLines } from './smoothLines'
 const GHOST_COLOR = 0x3ddc84
 /** Stock outline: neutral grey so it reads as raw material distinct from the part. */
 const STOCK_COLOR = 0x9ca3af
-const COMPARE_COLOR = 0xf59e0b
+/** Compare (STEP) shell: neutral cool grey, so it reads as reference without tinting the base. */
+const COMPARE_COLOR = 0x8a94a6
 const STRAY_COLOR = 0xf97316
 /** Light-sabre cut lines: perimeter of the patch the beam cannot cut. */
 const SABRE_CUT_COLOR = 0xff2b2b
@@ -398,23 +399,21 @@ function mountScene(
   })
   const materials: Material[] = [faceMaterial, strayMaterial, lineMaterial]
 
-  // Overlay mode (a second model is present): both base shells go translucent so
-  // the solid red/blue diffs read through them from any angle. Opaque renders
-  // first, so the diffs draw before the shells blend over them. Single-model
-  // views keep their solid faces. Shells stay dim on purpose — the diffs are
-  // the subject here, and dimmer bases raise their contrast (opaque edge lines
-  // keep carrying the shape).
+  // Overlay mode (a second model is present): the base keeps the grey but goes only slightly
+  // translucent (no depth write) so the red/blue diffs show through, while still reading as the
+  // same grey base as the other panes. The compare (STEP) shell is more see-through still.
   const isOverlay = Boolean(compareStep && compareStep.bodies.length > 0)
   if (isOverlay) {
     faceMaterial.transparent = true
-    faceMaterial.opacity = 0.35
+    faceMaterial.opacity = 0.8
     faceMaterial.depthWrite = false
     compareMaterial.opacity = 0.3
   }
 
-  // When the NC toolpath is projected onto the model, its lines replace the manufactured
-  // model's own tessellated edges — same cuts, drawn once, so there is no double line clutter.
-  const primary = buildGroup(step, faceMaterial, !nc, highlightStray ? strayMaterial : null)
+  // Always draw the model's angle-filtered edges (`smoothModelLines`) so sharp corners read on
+  // every pane, including the manufactured NC rebuild — the projected toolpath adds to them
+  // rather than standing in for them.
+  const primary = buildGroup(step, faceMaterial, true, highlightStray ? strayMaterial : null)
   const size = bboxOfVertices(primary.raw).getSize(new Vector3())
   scene.add(primary.group)
 
