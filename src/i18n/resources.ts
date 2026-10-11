@@ -175,6 +175,10 @@ export const en = {
       zoomOut: 'Zoom out',
       fitWidth: 'Fit width',
       focusIssue: 'Focus in 3D',
+      location: 'Location',
+      locationHint:
+        'Position (mm) of the orbit centre along the member — the reticle in the 3D. Type a number and press Enter to jump there',
+      locationDirection: 'Positive direction along the member',
       drawingError: 'Could not display drawing.',
       ncMissingFile: 'No NC file matched mark {{mark}} in this job',
       ncMissingBytes: 'NC for {{mark}} could not be read from this job',
@@ -364,6 +368,8 @@ export const en = {
       'Not manufacturable: a sudden {{depth}} mm thickness change on face(s) {{faces}} is past the ~30 mm the head can reach — it would damage the machine. Cut at an angle on the radius (a manual judgement), it cannot be swept in one pass',
     CUT_DEPTH:
       "Cut can't pass through: {{span}} mm of the cut on face {{face}} needs a {{path}} mm bore ({{bevel}}° bevel), past the head's ~25 mm pierce — not manufacturable",
+    CUT_CORNER:
+      "Cut lands on a corner: with the head's ±{{tol}} mm placement error, {{span}} mm of the cut on face {{face}} can fall on the section's corner radius — the beam meets the curve at a bevel with no flat escape for the slag — not manufacturable",
     CUT_REACH_UNCHECKED: 'Cut-depth (bevel reach) not assessed: {{reason}}',
     MANUFACTURE_MISMATCH: '{{note}} — the model is badly wrong; regenerate the STEP from the NC',
     MANUFACTURE_BORDERLINE:
@@ -547,6 +553,10 @@ export const zh = {
       zoomOut: '缩小',
       fitWidth: '适应宽度',
       focusIssue: '在 3D 中定位',
+      location: '位置',
+      locationHint:
+        '旋转中心沿构件方向的位置（mm）——即 3D 中的十字准星。输入数字并按回车跳转到该处',
+      locationDirection: '沿构件的正方向',
       drawingError: '无法显示图纸。',
       ncMissingFile: '本任务中未找到标记 {{mark}} 的 NC 文件',
       ncMissingBytes: '无法从本任务读取 {{mark}} 的 NC',
@@ -716,6 +726,8 @@ export const zh = {
       '不可制造：{{faces}} 面上 {{depth}} mm 的厚度突变超出了机头约 30 mm 的加工范围——会损坏机器。需在圆弧处斜切（人工判断），无法一次扫切成型',
     CUT_DEPTH:
       '无法切透：{{face}} 面上 {{span}} mm 的切缝需要 {{path}} mm 的切割深度（{{bevel}}° 坡口），超过机头约 25 mm 的穿透能力——无法制造',
+    CUT_CORNER:
+      '切缝落在圆角上：受机头 ±{{tol}} mm 定位误差影响，{{face}} 面上 {{span}} mm 的切缝可能落到型材圆角上——激光束斜切曲面且无平面排渣通道——无法制造',
     CUT_REACH_UNCHECKED: '未评估切割深度（坡口穿透）：{{reason}}',
     MANUFACTURE_MISMATCH: '{{note}}——模型严重错误；请根据 NC 重建 STEP',
     MANUFACTURE_BORDERLINE: '{{note}}——临界（通常为型材端部圆弧）；运行前请核对',

@@ -16,11 +16,15 @@ export interface DialogProps {
 export function Dialog({ open, onClose, title, children, className, fullscreen }: DialogProps) {
   const { t } = useTranslation()
   const panelRef = useRef<HTMLDivElement>(null)
+  // Keep onClose in a ref: the effect below must depend only on `open`, otherwise a fresh inline
+  // onClose each render re-runs it and yanks focus out of any field the user is typing in.
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
 
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') onCloseRef.current()
     }
     document.addEventListener('keydown', onKeyDown)
     const previousOverflow = document.body.style.overflow
@@ -30,7 +34,7 @@ export function Dialog({ open, onClose, title, children, className, fullscreen }
       document.removeEventListener('keydown', onKeyDown)
       document.body.style.overflow = previousOverflow
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 

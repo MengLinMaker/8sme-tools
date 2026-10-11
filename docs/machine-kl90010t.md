@@ -121,6 +121,7 @@ export interface MachineProfile {
   bevel: { minDeg: number; maxDeg: number }     // -45 … +45
   bottomCutMaxGrams: number                     // 10
   unmachinableDepthMm: number                    // 30
+  placementToleranceMm: number                   // 1 (± lateral cut placement)
   defaultStockLengthMm: number                   // 12_000
 }
 export const KL90010T: MachineProfile = { /* … */ }
@@ -135,11 +136,18 @@ export const MACHINE = KL90010T
 **Wired to the profile:**
 - `src/lib/sections/canonical.ts` — `BOTTOM_CUT_MAX_GRAMS = MACHINE.bottomCutMaxGrams`.
 - `src/lib/audit/manufacturability.ts` — `UNMANUFACTURABLE_DEPTH = MACHINE.unmachinableDepthMm`.
+- `src/lib/audit/cutReach.ts` — `MAX_CUT_THICKNESS_MM = MACHINE.envelope.maxThicknessMm`,
+  `MAX_BEVEL_DEG` from `MACHINE.bevel`; the `corner` placement check runs at
+  `MACHINE.placementToleranceMm` (supplied by the preflight caller).
 - `src/features/nesting/NestingPage.tsx` — default stock row + `COMMON_LENGTHS` use
   `MACHINE.defaultStockLengthMm`.
 
-**Still to wire later** (present as literals, not yet reading the profile):
-- `src/lib/audit/cutReach.ts` — `MAX_CUT_THICKNESS_MM = 25`, `MAX_BEVEL_DEG = 45` (WIP file).
+**The `corner` check.** A cut can't reliably be placed on a flat face within the machine's
+`placementToleranceMm` if a perpendicular shift of that cut lands it on the section's corner
+radius — there the beam meets the curved surface at a bevel and the flat has no escape path for
+the slag. `cutReach.ts` flags this as `reason: 'corner'` (the `CUT_CORNER` finding); a cut already
+crossing the fillet on the line (a plain transverse end cut) is exempt, so only cuts whose shift
+*creates* the corner condition are reported.
 
 
 ## Sources

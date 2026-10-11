@@ -172,6 +172,8 @@ function mountScene(
   const detachOrbit = attachOrbit(bus, camera, controls, {
     centre: [centre.x, centre.y, centre.z],
     distance,
+    axis: 0,
+    length: stockLength,
   })
   const detachWheelPan = attachWheelPan(container, controls, camera, 0)
 

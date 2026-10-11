@@ -142,4 +142,28 @@ describe('cutReach on real parts', () => {
       },
     )
   }
+
+  // m166 is an SHS100*100*6.0 shaft whose cut runs near the tube's 15 mm corner radius. On the
+  // line it clears (thin wall, far opposite wall), but the machine's ±1 mm placement error —
+  // perpendicular to the cut — can carry the nominally-flat cut onto the corner radius, where the
+  // beam hits the curve at a bevel with no flat escape for the slag. That is the `corner` failure.
+  it.skipIf(!existsSync(join(NW31, 'm166.nc1')))(
+    'm166 (NW31) flags the cut carried onto the corner radius by ±1 mm placement error',
+    () => {
+      const ncText = readFileSync(join(NW31, 'm166.nc1'), 'utf8')
+      const nc = parseNcGeometry(ncText)
+      const header = parseDstv(ncText).header
+      const section = partSectionForCode(header.profile, header.dimensions)
+      expect(section).not.toBeNull()
+      if (!section) return
+      expect(
+        assessCutReachGeometry(nc, section.points, section.holes ?? [], { toleranceMm: 0 }),
+      ).toEqual([])
+      const failures = assessCutReachGeometry(nc, section.points, section.holes ?? [], {
+        toleranceMm: 1,
+      })
+      expect(failures.length).toBeGreaterThan(0)
+      expect(failures.every((f) => f.reason === 'corner')).toBe(true)
+    },
+  )
 })

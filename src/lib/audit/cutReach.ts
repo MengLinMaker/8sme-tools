@@ -60,8 +60,12 @@ const CORNER_BAND_MM = MACHINE.envelope.nozzleMm / 2
 const SAMPLE_STEP_MM = 1
 
 export interface CutReachFailure {
-  /** `reach`: the beam bottoms out inside the material. `wall`: it would cut a wall behind. */
-  reason: 'reach' | 'wall'
+  /**
+   * `reach`: the beam bottoms out inside the material. `wall`: it would cut a wall behind.
+   * `corner`: the cut is nominally on the flat face but a ±tolerance shift carries it onto the
+   * section's corner radius, where the beam meets the curved surface at a bevel with no flat escape.
+   */
+  reason: 'reach' | 'wall' | 'corner'
   face: NcFace
   /** start of the uncuttable subsection of the cut, in NC face coords `[X, Y]` */
   from: [number, number]
@@ -273,7 +277,7 @@ interface Probe {
   x: number
   y: number
   cross: [number, number]
-  status: 'clean' | 'reach' | 'wall' | 'skip'
+  status: 'clean' | 'reach' | 'wall' | 'corner' | 'skip'
   path: number
   entry: [number, number]
   exit: [number, number]
@@ -281,15 +285,16 @@ interface Probe {
 
 export interface CutReachOptions {
   /**
-   * Placement tolerance (mm) to probe **across the face** either side of the cut line. The
-   * profile is prismatic, so a cut's in-face position error only moves the ray entry along the
-   * face — the across-face component. Each sample is tested at `0, ±tol` (and the midpoints) and
-   * the **worst** on-material result wins. `0` (default) tests the line exactly.
+   * Placement tolerance (mm) applied **perpendicular to the cut direction**, in the face plane.
+   * Only the across-face component moves the ray entry in the section (it is prismatic along the
+   * member). Each sample is tested at `0, ±tol` (and the midpoints); a cut that is nominally on
+   * the flat face but whose shifted copy lands on the corner radius is a **corner** failure.
+   * Defaults to `0` (the line exactly); production passes `MACHINE.placementToleranceMm`.
    */
   toleranceMm?: number
 }
 
-/** Failure status ordering: a failure beats a clean cut beats a skipped (off-material) sample. */
+/** Failure status ordering: a failure beats a clean cut beats an off-material / curve sample. */
 function probeRank(status: Probe['status']): number {
   return status === 'skip' ? 0 : status === 'clean' ? 1 : 2
 }
@@ -339,8 +344,10 @@ export function assessCutReachGeometry(
       // Near a section vertex the wall is ill-defined and the ray grazes; the kerf/nozzle
       // absorbs a feature that close to the cut line.
       if (nearestVertexDistance(section, cross) < CORNER_BAND_MM) return skip
-      // On a rounded corner the face plane runs outside the material — a radial ray grazes.
-      if (distanceToOutline(section, cross) > 0.3) return skip
+      // On a rounded corner the face plane runs outside the material — the entry is on the curve.
+      if (distanceToOutline(section, cross) > 0.3) {
+        return { x, y, cross, status: 'corner', path: 0, entry: cross, exit: cross }
+      }
       // Only where the profile boundary actually faces this way (not an adjacent wall).
       const local = nearestEdgeOutwardNormal(section, cross)
       if (local[0] * outward[0] + local[1] * outward[1] < FACE_ALIGN_DOT) return skip
@@ -389,6 +396,11 @@ export function assessCutReachGeometry(
       // Dense sample along the edge, then group the failing probes into contiguous runs — each
       // run is the subsection of the cut that is unreachable.
       const edgeLen = Math.hypot(b[0] - a[0], b[1] - a[1])
+      // Placement error is perpendicular to the cut direction, in the face plane. Only its
+      // across-face component moves the ray entry in the section — the component along the
+      // member does not, because the section is prismatic. A transverse end cut (Δx≈0) therefore
+      // barely shifts; a longitudinal cut (Δy≈0) gets the full shift.
+      const perpWeight = edgeLen > 0 ? Math.abs(b[0] - a[0]) / edgeLen : 0
       const steps = Math.min(400, Math.max(4, Math.round(edgeLen / SAMPLE_STEP_MM)))
       const probes: Probe[] = []
       for (let k = 0; k <= steps; k++) {
@@ -396,23 +408,31 @@ export function assessCutReachGeometry(
         const x = a[0] + (b[0] - a[0]) * t
         const y = a[1] + (b[1] - a[1]) * t
         const base = placeNcFace(frame, face, x, y).cross
-        // Worst on-material result over the across-face tolerance band.
-        let chosen: Probe | null = null
+        const baseProbe = classify(base, x, y, budget, cosBevel)
+        // A cut already on the curve at the nominal position is a legitimate fillet crossing
+        // (e.g. a transverse end cut); it is not a tolerance failure, so it is exempt.
+        const baseOnCurve = baseProbe.status === 'corner'
+        let chosen: Probe = baseOnCurve ? { ...baseProbe, status: 'skip' } : baseProbe
         for (const off of offsets) {
+          if (off === 0) continue
           const cross: [number, number] = [base[0], base[1]]
-          cross[span] += off
+          cross[span] += off * perpWeight
           const probe = classify(cross, x, y, budget, cosBevel)
+          // Off the flat face: a failure only when the nominal cut was on the flat — i.e. when the
+          // tolerance itself carried the cut onto the corner radius.
+          const status: Probe['status'] =
+            probe.status === 'corner' ? (baseOnCurve ? 'skip' : 'corner') : probe.status
+          const candidate: Probe = { ...probe, status }
           if (
-            chosen === null ||
-            probeRank(probe.status) > probeRank(chosen.status) ||
-            (probeRank(probe.status) === probeRank(chosen.status) &&
-              probeRank(probe.status) === 2 &&
-              probe.path > chosen.path)
+            probeRank(status) > probeRank(chosen.status) ||
+            (probeRank(status) === 2 &&
+              probeRank(chosen.status) === 2 &&
+              candidate.path > chosen.path)
           ) {
-            chosen = probe
+            chosen = candidate
           }
         }
-        probes.push(chosen as Probe)
+        probes.push(chosen)
       }
 
       // Contiguous failing runs → one failure per uncuttable subsection.
@@ -424,7 +444,7 @@ export function assessCutReachGeometry(
         const last = run[run.length - 1] as Probe
         const spanMm = Math.hypot(last.x - first.x, last.y - first.y)
         const failure: CutReachFailure = {
-          reason: worst.status === 'wall' ? 'wall' : 'reach',
+          reason: worst.status === 'wall' ? 'wall' : worst.status === 'corner' ? 'corner' : 'reach',
           face,
           from: [first.x, first.y],
           to: [last.x, last.y],
@@ -440,8 +460,9 @@ export function assessCutReachGeometry(
         run = []
       }
       for (const probe of probes) {
-        if (probe.status === 'reach' || probe.status === 'wall') run.push(probe)
-        else flush()
+        if (probe.status === 'reach' || probe.status === 'wall' || probe.status === 'corner') {
+          run.push(probe)
+        } else flush()
       }
       flush()
     }

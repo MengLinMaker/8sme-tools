@@ -339,7 +339,7 @@ interface SceneHandle {
   /** Glow the sub-cut marker at `index` and dim the rest (null clears the hover highlight). */
   highlight: (index: number | null) => void
   /** Pull every synced viewport toward the geometry behind a finding code (null = whole model). */
-  focus: (code: string | null) => void
+  focus: (code: string | null, index?: number) => void
   diffStats: DiffStats | null
   diffPresence: DiffPresence | null
   runDiff: () => DiffStats | null
@@ -414,6 +414,8 @@ function mountScene(
   nc?: NcGeometry | null,
   ncSection?: [number, number][] | null,
   faceFrame?: NcFaceFrame | null,
+  onLocationChange?: (locationMm: number) => void,
+  onAxisAngleChange?: (degrees: number) => void,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -523,6 +525,8 @@ function mountScene(
   const sabreObjects: LineSegments2[] = []
   /** One span marker per failing sub-cut, indexed like `sabreFailures`, so a finding can zoom in. */
   const sabreSpanObjects: (LineSegments2 | null)[] = []
+  /** View direction (scene) to look onto each failing cut's face from, indexed like the markers. */
+  const sabreDirections: Vec3[] = []
   /** Glow halo behind each span marker, shown only while its issue row is hovered. */
   const sabreHaloObjects: (LineSegments2 | null)[] = []
   /** Span markers currently shown by the eye toggles (index → visible), before hover overrides. */
@@ -601,6 +605,10 @@ function mountScene(
       // object per failure, so a clicked finding can zoom to its own sub-cut.
       if (sabre && sabre.length > 0) {
         for (const failure of sabre) {
+          // Look at the cut from its own face, tilted off-axis so the camera never looks straight
+          // down (which would make the up-vector ambiguous).
+          const faceDir = normal(failure.face)
+          sabreDirections.push([faceDir[0] + 0.45, faceDir[1] + 0.45, faceDir[2] + 0.45])
           const a = placeNcFace(frame, failure.face, failure.from[0], failure.from[1]).cross
           const b = placeNcFace(frame, failure.face, failure.to[0], failure.to[1]).cross
           const pA = toScene(failure.from[0], a, failure.face)
@@ -916,15 +924,51 @@ function mountScene(
         centre: [axisCentre.x, axisCentre.y, axisCentre.z],
         distance,
         radius: baseHalf,
+        axis: longAxis as 0 | 1 | 2,
+        length,
       })
     : null
   const detachWheelPan = attachWheelPan(container, controls, camera, longAxis as 0 | 1 | 2)
+
+  // Report the pivot's location along the member for the toolbar readout. The pivot is snapped to
+  // the model's centre line, so along `longAxis` it runs from one end (-length/2) to the other
+  // (+length/2); shift to a 0…length location. Fire only on noticeable change (the pivot only
+  // moves when panning / focus-zooming, not when orbiting).
+  let lastLocation = Number.NaN
+  const reportLocation = (): void => {
+    if (!onLocationChange) return
+    const location = controls.target.getComponent(longAxis) + length / 2
+    if (!Number.isFinite(location) || Math.abs(location - lastLocation) < 0.5) return
+    lastLocation = location
+    onLocationChange(location)
+  }
+  controls.addEventListener('change', reportLocation)
+  reportLocation()
 
   let raf = 0
   // The diff lives on layer 1 and renders in a second pass after the depth buffer is cleared, so
   // it always sits on top of the base (never hidden by it) yet still self-occludes and shows its
   // own far side hidden — a solid floating over the part.
   renderer.autoClear = false
+  // Report the on-screen angle of the member's positive axis (project a unit step of `longAxis`),
+  // so the toolbar can show a direction arrow next to the location readout.
+  const axisOrigin = new Vector3()
+  const axisTip = new Vector3()
+  let lastAxisAngle = Number.NaN
+  const updateAxisAngle = (): void => {
+    if (!onAxisAngleChange) return
+    axisOrigin.copy(controls.target).project(camera)
+    axisTip.copy(controls.target)
+    axisTip.setComponent(longAxis, axisTip.getComponent(longAxis) + 1)
+    axisTip.project(camera)
+    const dx = axisTip.x - axisOrigin.x
+    const dy = axisTip.y - axisOrigin.y
+    if (dx * dx + dy * dy < 1e-8) return
+    const degrees = (Math.atan2(-dy, dx) * 180) / Math.PI
+    if (Math.abs(degrees - lastAxisAngle) < 0.5) return
+    lastAxisAngle = degrees
+    onAxisAngleChange(degrees)
+  }
   const render = () => {
     controls.update()
     renderer.clear()
@@ -933,6 +977,7 @@ function mountScene(
     renderer.clearDepth()
     camera.layers.set(1)
     renderer.render(scene, camera)
+    updateAxisAngle()
     raf = requestAnimationFrame(render)
   }
   render()
@@ -994,15 +1039,21 @@ function mountScene(
       hoverSpan = index
       refreshSpanAppearance()
     },
-    focus(code: string | null) {
+    focus(code: string | null, index?: number) {
       if (!bus) return
       const box = new Box3()
       const cut = code?.startsWith('CUT') ?? false
+      let direction: Vec3 | undefined
       if (cut) {
-        // Frame *all* checked sub-cuts (multiple selection → all in view); fall back to every
-        // marker, then the toolpath, if none are checked.
-        for (const object of sabreSpanObjects) {
-          if (object?.visible) box.expandByObject(object)
+        // A specific sub-cut (clicked from the issues list) rotates onto and frames just that one;
+        // otherwise frame *all* checked sub-cuts, then every marker, then the toolpath.
+        if (index != null && sabreSpanObjects[index]) {
+          box.expandByObject(sabreSpanObjects[index])
+          direction = sabreDirections[index]
+        } else {
+          for (const object of sabreSpanObjects) {
+            if (object?.visible) box.expandByObject(object)
+          }
         }
         if (box.isEmpty()) for (const lines of sabreObjects) box.expandByObject(lines)
         if (box.isEmpty()) for (const line of ncObjects) box.expandByObject(line)
@@ -1013,7 +1064,7 @@ function mountScene(
       const size = box.getSize(new Vector3())
       // A little margin so the framed cut isn't jammed against the viewport edge.
       const radius = Math.max(Math.hypot(size.x, size.y, size.z) / 2, 1) * 1.4
-      requestFocus(bus, { point: [centre.x, centre.y, centre.z], radius })
+      requestFocus(bus, { point: [centre.x, centre.y, centre.z], radius, direction })
     },
     dispose() {
       cancelAnimationFrame(raf)
@@ -1021,6 +1072,7 @@ function mountScene(
       detachOrbit?.()
       detachWheelPan()
       controls.removeEventListener('change', confinePivot)
+      controls.removeEventListener('change', reportLocation)
       controls.dispose()
       for (const geometry of primary.geometries) {
         geometry.faces.dispose()
@@ -1098,6 +1150,10 @@ export interface PartViewerProps {
   visibleSpans?: number[] | null
   /** Hovered finding's sub-cut index: glow that marker and dim the others (null = no highlight). */
   highlight?: number | null
+  /** Live location (mm, from one end) of the orbit pivot along the member, for the "where am I". */
+  onLocationChange?: (locationMm: number) => void
+  /** On-screen angle (deg, clockwise from +x) of the member's positive axis, for the compass arrow. */
+  onAxisAngleChange?: (degrees: number) => void
   /** Controlled overlay toggles (shared toolbar). Omit to keep the per-pane buttons. */
   showStock?: boolean
   onShowStockChange?: (visible: boolean) => void
@@ -1128,6 +1184,8 @@ export default function PartViewer({
   focus = null,
   visibleSpans = null,
   highlight = null,
+  onLocationChange,
+  onAxisAngleChange,
   showStock: showStockProp,
   onShowStockChange,
   flipped: flippedProp,
@@ -1141,6 +1199,11 @@ export default function PartViewer({
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<SceneHandle | null>(null)
+  // Keep the location / axis-angle callbacks in refs so fresh closures never restart the scene.
+  const onLocationRef = useRef(onLocationChange)
+  onLocationRef.current = onLocationChange
+  const onAxisAngleRef = useRef(onAxisAngleChange)
+  onAxisAngleRef.current = onAxisAngleChange
   const showStockRef = useRef(true)
   const showDiffRef = useRef(true)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -1212,6 +1275,8 @@ export default function PartViewer({
           nc,
           ncSection,
           faceFrame,
+          (mm) => onLocationRef.current?.(mm),
+          (degrees) => onAxisAngleRef.current?.(degrees),
         )
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handle.setFlip(false)
@@ -1289,20 +1354,14 @@ export default function PartViewer({
     handleRef.current?.highlight(highlight)
   }, [highlight, status])
 
-  // Pan/zoom to fit the shown sub-cuts whenever the eye toggles change (not just on row click).
-  const visibleKey = visibleSpans ? [...visibleSpans].sort((a, b) => a - b).join(',') : ''
-  useEffect(() => {
-    if (status !== 'ready' || !visibleKey) return
-    handleRef.current?.focus('CUT_DEPTH')
-  }, [visibleKey, status])
-
-  // Clicking a finding pans/zooms the synced viewports to its geometry (all checked sub-cuts).
+  // Clicking a finding pans/zooms/rotates the synced viewports to its geometry.
   const focusToken = focus?.token
   const focusCode = focus?.code ?? null
+  const focusIndex = focus?.index
   useEffect(() => {
     if (focusToken === undefined) return
-    handleRef.current?.focus(focusCode)
-  }, [focusToken, focusCode])
+    handleRef.current?.focus(focusCode, focusIndex)
+  }, [focusToken, focusCode, focusIndex])
   const hasOverlay = Boolean((stock || beam) && status === 'ready')
   const hasCompare = Boolean(compareBytes && status === 'ready')
   const hasSabre = Boolean(sabreFailures && sabreFailures.length > 0 && status === 'ready')
@@ -1314,6 +1373,19 @@ export default function PartViewer({
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full touch-none" />
+      {/* Reticle marking the orbit pivot. It sits at the viewport centre because the camera always
+          looks at the pivot (so panning slides the part past a fixed centre). */}
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 22 22"
+        className="pointer-events-none absolute left-1/2 top-1/2 z-10 size-[22px] -translate-x-1/2 -translate-y-1/2 text-white/40 drop-shadow-[0_0_2px_rgba(0,0,0,0.85)]"
+      >
+        <line x1="11" y1="1" x2="11" y2="7.5" stroke="currentColor" strokeWidth="1.5" />
+        <line x1="11" y1="14.5" x2="11" y2="21" stroke="currentColor" strokeWidth="1.5" />
+        <line x1="1" y1="11" x2="7.5" y2="11" stroke="currentColor" strokeWidth="1.5" />
+        <line x1="14.5" y1="11" x2="21" y2="11" stroke="currentColor" strokeWidth="1.5" />
+        <circle cx="11" cy="11" r="1" fill="currentColor" />
+      </svg>
       <div className={cn('absolute left-3 top-3 flex gap-1', hideControls && 'hidden')}>
         {hasOverlay && (
           <button

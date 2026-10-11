@@ -46,6 +46,13 @@ export interface MachineProfile {
   bottomCutMaxGrams: number
   /** Deepest thickness step the head can reach sweeping one face (mm). */
   unmachinableDepthMm: number
+  /**
+   * Cut-placement accuracy (mm, ±): how far the head may sit off the programmed cut line,
+   * perpendicular to the cut. A cut that is nominally on a flat face but lands on the section's
+   * corner radius within this band is a bevel with no flat escape for the slag (see
+   * `cutReach.ts`).
+   */
+  placementToleranceMm: number
   /** Raw/stock bar length assumed when none is chosen (mm). */
   defaultStockLengthMm: number
 }
@@ -80,6 +87,7 @@ export const KL90010T: MachineProfile = {
   bevel: { minDeg: -45, maxDeg: 45 },
   bottomCutMaxGrams: 10,
   unmachinableDepthMm: 30,
+  placementToleranceMm: 1,
   defaultStockLengthMm: 12_000,
 }
 

@@ -42,6 +42,7 @@ import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
 import { downloadBlob, downloadText } from '@/lib/download'
+import { MACHINE } from '@/lib/machine/profile'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { cutThicknesses } from '@/lib/parsers/ncProject'
@@ -63,11 +64,17 @@ import { clearViewerModels, reconstructForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
-import { createOrbitBus } from './orbitSync'
+import { createOrbitBus, requestLocation } from './orbitSync'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 
 const SEVERITY_ORDER: Record<Severity, number> = { error: 0, warning: 1, info: 2 }
+
+/** Location along the member (mm) a finding sits at, or null when it has none. */
+function findingLocationOf(finding: Finding): number | null {
+  const raw = finding.params?.x
+  return typeof raw === 'number' ? raw : null
+}
 
 /** How many drawings to parse at once. Matches the pdf.js worker pool size. */
 const CONCURRENCY = 6
@@ -197,7 +204,7 @@ function formatModelComparison(t: TFunction, comparison: ModelComparison): strin
 }
 
 export function PreflightPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const findingText = useCallback(
     (finding: Finding) =>
       t(`findings.${finding.code}`, { ...finding.params, defaultValue: finding.message }),
@@ -358,19 +365,24 @@ export function PreflightPage() {
 
   // One orbit bus per part, shared by the STEP and NC viewports so they rotate together.
   const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
-  // Bumped when a finding is clicked, so the viewers pull in to its geometry (`index` picks a
-  // specific failing sub-cut of a `CUT_*` finding).
+  // Bumped when an issue is opened, so the viewers pan/zoom/rotate onto its geometry (`index`
+  // picks the specific failing sub-cut of a `CUT_*` finding).
   const [findingFocus, setFindingFocus] = useState<{
     code: string
     token: number
     index?: number
   } | null>(null)
-  /** Which issue row is selected in the viewer's issues list (stepped through one at a time). */
-  const [issueIndex, setIssueIndex] = useState(0)
   /** Issue row currently hovered in the list, so its 3D marker can glow (null = none). */
   const [hoverIssueIndex, setHoverIssueIndex] = useState<number | null>(null)
-  /** Issue indices the user has shown (eye on) — their sub-cuts render in the 3D. Default: none. */
+  /** Issue indices the user has shown — their sub-cuts render in the 3D. Default: none. */
   const [shownIssues, setShownIssues] = useState<Set<number>>(new Set())
+  /** Live location (mm) of the orbit pivot along the viewed member, shown in the legend bar. */
+  const [locationMm, setLocationMm] = useState<number | null>(null)
+  /** Editable copy of the location readout: the user can type an mm to jump the view there. */
+  const [locationInput, setLocationInput] = useState('')
+  const [locationEditing, setLocationEditing] = useState(false)
+  /** On-screen angle (deg) of the member's positive axis, for the direction arrow by the field. */
+  const [locationAxis, setLocationAxis] = useState(0)
   // Shared overlay toggles, applied to every pane from the one toolbar above the 3D.
   const [showStock, setShowStock] = useState(() => readPref('showStock', false))
   useEffect(() => {
@@ -379,9 +391,12 @@ export function PreflightPage() {
   const openPart = useCallback((part: PartRecord) => {
     setOrbitBus(createOrbitBus())
     setFindingFocus(null)
-    setIssueIndex(0)
     setHoverIssueIndex(null)
     setShownIssues(new Set())
+    setLocationMm(null)
+    setLocationInput('')
+    setLocationEditing(false)
+    setLocationAxis(0)
     setViewing(part)
   }, [])
   const focusFinding = useCallback((finding: Finding) => {
@@ -389,6 +404,19 @@ export function PreflightPage() {
     const index = typeof raw === 'number' ? raw : undefined
     setFindingFocus((prev) => ({ code: finding.code, token: (prev?.token ?? 0) + 1, index }))
   }, [])
+  // Format the live pivot location for display (rounded to whole mm, grouped per locale).
+  const formatLocation = useCallback(
+    (mm: number) =>
+      new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 0 }).format(Math.round(mm)),
+    [i18n.language],
+  )
+
+  // Commit a typed location: slide every synced pane to that mm along the member.
+  const commitLocation = useCallback(() => {
+    setLocationEditing(false)
+    const value = Number.parseFloat(locationInput)
+    if (Number.isFinite(value)) requestLocation(orbitBus, value)
+  }, [locationInput, orbitBus])
 
   // Warm the viewer code-split chunks while the analysis runs, so the first
   // "view" click doesn't pay the download on top of the model build.
@@ -471,7 +499,9 @@ export function PreflightPage() {
           markUnchecked(part.mark, `unrecognised section ${profile}`, { profile })
           continue
         }
-        const failures = assessCutReach(ncText, section.points, section.holes ?? [])
+        const failures = assessCutReach(ncText, section.points, section.holes ?? [], {
+          toleranceMm: MACHINE.placementToleranceMm,
+        })
         if (failures.length > 0) reach.set(part.mark, failures)
       }
       if (cancelled) return
@@ -822,31 +852,55 @@ export function PreflightPage() {
       if (reach) {
         // One finding per failing sub-cut, so each can be zoomed to individually.
         reach.forEach((failure, index) => {
-          extra.push({
-            severity: 'error',
-            code: 'CUT_DEPTH',
-            mark: part.mark,
-            message: `Cut can't pass through: ${failure.spanMm.toFixed(0)} mm of the cut on face ${failure.face} needs a ${failure.path.toFixed(0)} mm bore (${failure.bevel.toFixed(0)}° bevel), past the head's ${MAX_CUT_THICKNESS_MM} mm pierce — not manufacturable`,
-            params: {
-              index,
-              face: failure.face,
-              // Station along the member (mid of the sub-cut) — used to group issues by location.
-              x: Math.round((failure.from[0] + failure.to[0]) / 2),
-              span: failure.spanMm.toFixed(0),
-              path: failure.path.toFixed(0),
-              bevel: failure.bevel.toFixed(0),
-            },
-          })
+          const location = {
+            index,
+            face: failure.face,
+            // Location along the member (mid of the sub-cut) — used to group issues by location.
+            x: Math.round((failure.from[0] + failure.to[0]) / 2),
+            span: failure.spanMm.toFixed(0),
+          }
+          if (failure.reason === 'corner') {
+            const tol = MACHINE.placementToleranceMm
+            extra.push({
+              severity: 'error',
+              code: 'CUT_CORNER',
+              mark: part.mark,
+              message: `Cut lands on a corner: with the head's ±${tol} mm placement error, ${failure.spanMm.toFixed(0)} mm of the cut on face ${failure.face} can fall on the section's corner radius — the beam meets the curve at a bevel with no flat escape for the slag — not manufacturable`,
+              params: { ...location, tol: String(tol) },
+            })
+          } else {
+            extra.push({
+              severity: 'error',
+              code: 'CUT_DEPTH',
+              mark: part.mark,
+              message: `Cut can't pass through: ${failure.spanMm.toFixed(0)} mm of the cut on face ${failure.face} needs a ${failure.path.toFixed(0)} mm bore (${failure.bevel.toFixed(0)}° bevel), past the head's ${MAX_CUT_THICKNESS_MM} mm pierce — not manufacturable`,
+              params: {
+                ...location,
+                path: failure.path.toFixed(0),
+                bevel: failure.bevel.toFixed(0),
+              },
+            })
+          }
         })
       }
     }
     return [...result.findings, ...extra]
       .filter((finding) => finding.severity !== 'info')
-      .sort(
-        (a, b) =>
+      .sort((a, b) => {
+        // Location first (walking the member), located findings before ones with no location, then
+        // severity then mark — so the viewer's step-through and pill order follow the beam too.
+        const xa = findingLocationOf(a)
+        const xb = findingLocationOf(b)
+        if (xa != null || xb != null) {
+          if (xa == null) return 1
+          if (xb == null) return -1
+          if (xa !== xb) return xa - xb
+        }
+        return (
           SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
-          (a.mark ?? '').localeCompare(b.mark ?? ''),
-      )
+          (a.mark ?? '').localeCompare(b.mark ?? '')
+        )
+      })
   }, [
     result,
     drawingMaterials,
@@ -978,8 +1032,6 @@ export function PreflightPage() {
     [viewing, allFindings],
   )
 
-  // Step through the viewed part's issues one at a time: selecting focuses/zooms that issue (and
-  // its specific sub-cut, if it has one).
   // The right pane swaps between the drawing and the issues list; default to issues when there
   // are any, since that's what needs attention.
   const [rightTab, setRightTab] = useState<'drawing' | 'issues'>('drawing')
@@ -990,23 +1042,7 @@ export function PreflightPage() {
         : 'drawing',
     )
   }, [viewing, allFindings])
-  const selectIssue = useCallback(
-    (index: number) => {
-      const finding = viewerFindings[index]
-      if (!finding) return
-      setIssueIndex(index)
-      // Selecting an issue shows its marker (so the display follows the table selection).
-      setShownIssues((prev) => {
-        if (prev.has(index)) return prev
-        const next = new Set(prev)
-        next.add(index)
-        return next
-      })
-      focusFinding(finding)
-    },
-    [viewerFindings, focusFinding],
-  )
-  /** Indices of the issues whose sub-cuts are shown in the 3D (eye-on in the list). */
+  /** Indices of the issues whose sub-cuts are shown in the 3D (row toggled on). */
   const visibleSpans = useMemo(
     () => viewerFindings.map((_, index) => index).filter((index) => shownIssues.has(index)),
     [viewerFindings, shownIssues],
@@ -1030,6 +1066,18 @@ export function PreflightPage() {
       prev.size > 0 ? new Set() : new Set(viewerFindings.map((_, index) => index)),
     )
   }, [viewerFindings])
+  /** Row click: toggle the issue's marker, and when turning it on, pan/zoom/rotate onto it. */
+  const activateIssue = useCallback(
+    (index: number) => {
+      const finding = viewerFindings[index]
+      const turningOn = !shownIssues.has(index)
+      toggleIssue(index)
+      // Only issues that sit somewhere on the member move the view; others (CUT_STEP, audit
+      // findings) just toggle their marker so they never yank the camera.
+      if (turningOn && finding && findingLocationOf(finding) != null) focusFinding(finding)
+    },
+    [viewerFindings, shownIssues, toggleIssue, focusFinding],
+  )
 
   /** Cut-reach failures of the viewed part — the manufactured view draws the guilty cuts. */
   const viewerSabreFailures = useMemo(() => {
@@ -1642,25 +1690,86 @@ export function PreflightPage() {
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
               <div className="flex min-h-0 flex-1 flex-col">
-                {(viewingNcGeom || stock) && (
-                  <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-1.5 text-xs font-medium text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-1.5 text-xs font-medium text-muted-foreground">
+                  {stock && (
                     <div className="flex items-center gap-1.5">
-                      {stock && (
-                        <Toggle pressed={showStock} onPressedChange={setShowStock}>
-                          {t('viewer.stock')}
-                        </Toggle>
-                      )}
+                      <Toggle pressed={showStock} onPressedChange={setShowStock}>
+                        {t('viewer.stock')}
+                      </Toggle>
                     </div>
-                    {viewingNcGeom && (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <NcLegend
-                          thicknesses={viewingNcProfiles}
-                          showMarkings={viewingHasMarkings}
-                        />
-                      </div>
-                    )}
+                  )}
+                  {viewingNcGeom && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <NcLegend thicknesses={viewingNcProfiles} showMarkings={viewingHasMarkings} />
+                    </div>
+                  )}
+                  {/* Live location of the orbit pivot along the member (the reticle's position);
+                      type an mm and press Enter to jump the view there. The arrow points along the
+                      member's positive (increasing mm) direction as seen in the 3D. */}
+                  <div
+                    className="ml-auto flex items-center gap-2 tabular-nums"
+                    title={t('preflight.viewer.locationHint')}
+                  >
+                    <span className="uppercase tracking-wide">
+                      {t('preflight.viewer.location')}
+                    </span>
+                    <div className="flex items-stretch overflow-hidden rounded border border-border bg-background focus-within:border-primary">
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={
+                          locationEditing
+                            ? locationInput
+                            : locationMm == null
+                              ? ''
+                              : formatLocation(locationMm)
+                        }
+                        onChange={(event) =>
+                          setLocationInput(event.target.value.replace(/[^\d.-]/g, ''))
+                        }
+                        onFocus={(event) => {
+                          const field = event.currentTarget
+                          setLocationInput(locationMm == null ? '' : String(Math.round(locationMm)))
+                          setLocationEditing(true)
+                          requestAnimationFrame(() => field.select())
+                        }}
+                        onBlur={commitLocation}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') event.currentTarget.blur()
+                        }}
+                        placeholder="—"
+                        aria-label={t('preflight.viewer.location')}
+                        className="w-20 bg-transparent px-1.5 py-0.5 text-right text-xs text-foreground outline-none"
+                      />
+                      <span className="border-l border-border px-1.5 py-0.5 text-muted-foreground">
+                        mm
+                      </span>
+                    </div>
+                    <span
+                      className="inline-flex items-center"
+                      title={t('preflight.viewer.locationDirection')}
+                    >
+                      <svg
+                        aria-hidden="true"
+                        viewBox="0 0 24 24"
+                        className="size-4 text-foreground"
+                      >
+                        <g transform={`rotate(${locationAxis} 12 12)`}>
+                          <line
+                            x1="3"
+                            y1="12"
+                            x2="17"
+                            y2="12"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                          />
+                          <path d="M20.5 12 L13.5 8.2 L13.5 15.8 Z" fill="currentColor" />
+                        </g>
+                      </svg>
+                    </span>
                   </div>
-                )}
+                </div>
                 <div className="relative min-h-0 w-full flex-1 bg-[#0b0f14]">
                   <Suspense
                     fallback={
@@ -1701,6 +1810,8 @@ export function PreflightPage() {
                             highlight={highlightSpan}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
+                            onLocationChange={setLocationMm}
+                            onAxisAngleChange={setLocationAxis}
                             hideControls
                           />
                         ) : null}
@@ -1730,6 +1841,8 @@ export function PreflightPage() {
                             focus={manufactured ? findingFocus : null}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
+                            onLocationChange={stepBytes ? undefined : setLocationMm}
+                            onAxisAngleChange={stepBytes ? undefined : setLocationAxis}
                             hideControls
                             smoothLines
                           />
@@ -1804,11 +1917,9 @@ export function PreflightPage() {
                     <ViewerWarnings
                       findings={viewerFindings}
                       step={viewing.step}
-                      activeIndex={issueIndex}
-                      onSelect={selectIssue}
                       onHover={setHoverIssueIndex}
                       isChecked={(index) => shownIssues.has(index)}
-                      onToggleCheck={toggleIssue}
+                      onToggleCheck={activateIssue}
                       allShown={shownIssues.size > 0}
                       onToggleAll={toggleAllIssues}
                       fix={{
@@ -1914,8 +2025,6 @@ function ViewerWarnings({
   findings,
   step,
   fix,
-  activeIndex = -1,
-  onSelect,
   onHover,
   isChecked,
   onToggleCheck,
@@ -1925,8 +2034,6 @@ function ViewerWarnings({
   findings: Finding[]
   step?: StepFile
   fix?: ViewerFix
-  activeIndex?: number
-  onSelect?: (index: number) => void
   onHover?: (index: number | null) => void
   isChecked?: (index: number) => boolean
   onToggleCheck?: (index: number) => void
@@ -1934,23 +2041,16 @@ function ViewerWarnings({
   onToggleAll?: () => void
 }) {
   const { t } = useTranslation()
-  const activeRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
-    if (activeIndex < 0) return
-    activeRef.current?.scrollIntoView({ block: 'nearest' })
-  }, [activeIndex])
-  // Sortable issues table: by severity (worst first) or by type (code).
+  // Sortable issues table: defaults to location along the member (grouped by where you'd walk
+  // the beam), and can be re-sorted by severity (worst first) or by type (code).
   const [sort, setSort] = useState<{ key: 'severity' | 'code' | 'location'; dir: 1 | -1 }>({
-    key: 'severity',
+    key: 'location',
     dir: 1,
   })
   const toggleSort = (key: 'severity' | 'code' | 'location') =>
     setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 1 ? -1 : 1 } : { key, dir: 1 }))
-  /** Station along the member (mm) a finding sits at, or null when it has no location. */
-  const locationOf = (finding: Finding): number | null => {
-    const raw = finding.params?.x
-    return typeof raw === 'number' ? raw : null
-  }
+  /** Location along the member (mm) a finding sits at, or null when it has none. */
+  const locationOf = findingLocationOf
   const rows = findings
     .map((finding, index) => ({ finding, index }))
     .sort((a, b) => {
@@ -2048,23 +2148,24 @@ function ViewerWarnings({
               return (
                 <TableRow
                   key={`${finding.code}-${finding.params?.index ?? finding.message}`}
-                  className={cn(resolved && 'opacity-50', index === activeIndex && 'bg-accent/60')}
+                  tabIndex={0}
+                  onClick={onToggleCheck ? () => onToggleCheck(index) : undefined}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      onToggleCheck?.(index)
+                    }
+                  }}
+                  className="cursor-pointer outline-none focus-visible:bg-accent/60"
                   onMouseEnter={onHover ? () => onHover(index) : undefined}
                   onMouseLeave={onHover ? () => onHover(null) : undefined}
                 >
                   <TableCell className="py-1">
-                    <button
-                      ref={index === activeIndex ? activeRef : undefined}
-                      type="button"
-                      disabled={!onToggleCheck}
-                      onClick={() => onToggleCheck?.(index)}
+                    <span
                       title={t('preflight.warnings.toggleIssue')}
-                      aria-pressed={isChecked ? isChecked(index) : false}
                       className={cn(
-                        'rounded p-0.5 transition-colors',
-                        isChecked?.(index)
-                          ? 'text-primary'
-                          : 'text-muted-foreground hover:text-foreground',
+                        'inline-flex rounded p-0.5',
+                        isChecked?.(index) ? 'text-primary' : 'text-muted-foreground',
                       )}
                     >
                       {isChecked?.(index) ? (
@@ -2072,7 +2173,7 @@ function ViewerWarnings({
                       ) : (
                         <EyeOff className="size-4" />
                       )}
-                    </button>
+                    </span>
                   </TableCell>
                   <TableCell className="py-1">
                     <span
@@ -2096,20 +2197,10 @@ function ViewerWarnings({
                   <TableCell className="py-1 font-mono text-[11px] text-muted-foreground">
                     {locationOf(finding) != null ? `${locationOf(finding)} mm` : '—'}
                   </TableCell>
-                  <TableCell className="py-1">
-                    <button
-                      type="button"
-                      disabled={!onSelect}
-                      onClick={onSelect ? () => onSelect(index) : undefined}
-                      title={onSelect ? t('preflight.viewer.focusIssue') : undefined}
-                      className={cn(
-                        'text-left',
-                        resolved && 'line-through',
-                        onSelect && 'cursor-pointer hover:underline',
-                      )}
-                    >
-                      {findingText(finding)}
-                    </button>
+                  <TableCell
+                    className={cn('py-1', resolved && 'line-through', resolved && 'opacity-50')}
+                  >
+                    {findingText(finding)}
                   </TableCell>
                   <TableCell className="py-1 text-right">
                     {resolved ? (
@@ -2122,7 +2213,11 @@ function ViewerWarnings({
                         size="sm"
                         className="h-7"
                         disabled={fix?.pending}
-                        onClick={action.run}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          action.run()
+                        }}
+                        onKeyDown={(event) => event.stopPropagation()}
                       >
                         {fix?.pending ? action.pendingLabel : action.label}
                       </Button>
