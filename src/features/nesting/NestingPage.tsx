@@ -12,7 +12,7 @@ import { createOrbitBus } from '@/features/preflight/orbitSync'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { downloadBlob } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
-import { buildBarNc } from '@/lib/nesting/nc'
+import { buildBarNc, buildStitchedBeamNc, stitchBeamGeometry } from '@/lib/nesting/nc'
 import {
   collectTees,
   groupTees,
@@ -36,6 +36,7 @@ import {
   type StepBody,
   ubOutline,
 } from '@/lib/step/occ'
+import { reconstructForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { BeamNcViewer, type BeamSlot } from './BeamNcViewer'
 
@@ -54,7 +55,7 @@ interface ViewFile {
   name: string
   /** Nested STEP: the finished T pieces packed as separate solids (the STEP ideal). */
   bytes: Uint8Array
-  /** Manufactured NC: the whole stock beam with the split + kerf cuts + real features carved. */
+  /** Manufactured NC: the whole stock UB rebuilt from the stitched real-part toolpaths. */
   manufactured: Uint8Array | null
   /** Generated Weihong .nc1 text for this beam. */
   ncText: string | null
@@ -342,32 +343,33 @@ export function NestingPage() {
     }
   }
 
+  /**
+   * Manufactured model = the whole stock UB rebuilt from the **stitched NC**: every nested piece's
+   * real toolpaths placed at its slot (both T bars over the same X range), reconstructed through the
+   * same preflight pipeline (`reconstructForViewer`). Oriented to the nested STEP so split/overlay
+   * compare aligns. The boolean cut-beam builder is reserved for the download.
+   */
   const layoutManufacturedStep = async (
     result: NestResult,
-    layout: { ubBar: UbBar; quantity: number },
-    index: number,
+    file: ViewFile,
   ): Promise<Uint8Array | null> => {
     const ub = getUb(result.parentUb)
     if (!ub) return null
-    const left = layout.ubBar.teeBars[0].units.map(pieceFor)
-    const right = layout.ubBar.teeBars[1].units.map(pieceFor)
-    const base = `${result.parentUb}-x${layout.quantity}-${layout.ubBar.stockLength}-bar${String(index + 1).padStart(2, '0')}`
+    const grade = result.parts[0]?.grade
+    const stitched = buildStitchedBeamNc({
+      section: ub,
+      name: file.name.replace(/\.step$/, ''),
+      stockLength: file.stockLength,
+      items: file.ncItems,
+      grade,
+    })
+    if (!stitched) return null
     try {
-      return strToU8(
-        await buildCutBeamStep({
-          section: ub,
-          name: base,
-          stockLength: layout.ubBar.stockLength,
-          left,
-          right,
-          kerf: result.kerf,
-        }),
-      )
+      return await reconstructForViewer(stitched, { reference: file.bytes })
     } catch (error) {
-      // Surfaced in the dialog placeholder; logged for diagnosis (orientation skips inside the
-      // carve don't throw, so anything landing here is a genuine OCC/build failure).
+      // Best-effort: a null/failed rebuild falls back to the STEP view.
       // eslint-disable-next-line no-console
-      console.warn('[nesting] cut-beam build failed:', error)
+      console.warn('[nesting] stitched-NC reconstruction failed:', error)
       return null
     }
   }
@@ -394,11 +396,11 @@ export function NestingPage() {
       if (!file) setViewBusy(false)
     }
     if (!file) return
-    // The cut-beam boolean carve is the slow part — build it after the nested STEP is already
-    // on screen, then patch it into the open dialog so the manufactured pane fills in.
+    // The NC→solid rebuild is the slow part — run it after the nested STEP is already on screen,
+    // then patch it into the open dialog so the manufactured pane fills in.
     const expectedName = file.name
     try {
-      const manufactured = await layoutManufacturedStep(result, layout, index)
+      const manufactured = await layoutManufacturedStep(result, file)
       if (manufactured) {
         setViewing((current) =>
           current && current.name === expectedName ? { ...current, manufactured } : current,
@@ -555,25 +557,13 @@ export function NestingPage() {
   const showStepPane = Boolean(viewing) && stepPaneActive && hasStep
   const twoPane = showMfgPane && showStepPane
   const ncCuts = viewing?.ncText ? parseBeamNcCuts(viewing.ncText) : []
-  // Every nested piece's NC, shifted to its slot along the beam, so the manufactured cut-beam
-  // view can project each piece's toolpath onto the part the laser actually cuts.
-  const beamNc = useMemo<NcGeometry | null>(() => {
-    if (!viewing) return null
-    const contours: NcGeometry['contours'] = []
-    const holes: NcGeometry['holes'] = []
-    const notches: NcGeometry['notches'] = []
-    for (const item of viewing.ncItems) {
-      for (const contour of item.geometry.contours) {
-        contours.push({
-          ...contour,
-          points: contour.points.map(([x, y]) => [x + item.start, y] as [number, number]),
-        })
-      }
-      for (const hole of item.geometry.holes) holes.push({ ...hole, x: hole.x + item.start })
-      for (const notch of item.geometry.notches) notches.push({ ...notch, x: notch.x + item.start })
-    }
-    return contours.length > 0 || holes.length > 0 ? { contours, holes, notches } : null
-  }, [viewing])
+  // Every nested piece's NC, shifted to its slot along the beam, so the manufactured beam view can
+  // project each piece's toolpath onto the part the laser actually cuts (and it is the same stitch
+  // the manufactured solid is rebuilt from).
+  const beamNc = useMemo<NcGeometry | null>(
+    () => (viewing ? stitchBeamGeometry(viewing.ncItems) : null),
+    [viewing],
+  )
 
   return (
     <div className="flex flex-col gap-6">

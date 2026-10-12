@@ -280,21 +280,28 @@ hides that, and above it the real features vanish. The root cause remains §8: `
 end/mitre path (m148/m122 are clean, isolated cases) and the PFC section/mid-span (m116/m12). Fix
 those and the diff — at any margin — snaps clean.
 
-## 14. OCC fuzzy boolean — tried live, rejected
+## 14. OCC fuzzy boolean — stabilised
 
-`occDiff.ts` (`occFuzzyDiff`) was built and wired live: import both STEPs, seat them by the viewer
-matrices (`BRepBuilderAPI_Transform` + `gp_Trsf`), `BRepAlgoAPI_Cut` both ways with `SetFuzzyValue`,
-mesh the results. Sweeping m122:
+`occDiff.ts` (`occFuzzyDiff`): import both STEPs, seat them by the viewer matrices
+(`BRepBuilderAPI_Transform` + `gp_Trsf`), `BRepAlgoAPI_Cut` both ways, mesh the results. Wired into
+`PartViewer.runDiff` (async, probe as fallback).
 
-| fuzzy (mm) | over mm³ | under mm³ |
-|---|---|---|
-| 0.1 | 80,072 | 49,439 |
-| 0.3 | 54,554 | 98,491 |
-| **0.5** | 54,554 | **11,821,002** |
-| **1.0** | **12,205,258** | 19,103 |
+**The instability was a real bug, not the kernel:** `BRepAlgoAPI_Cut` **mutates its arguments by
+default**, so reusing `made`/`ideal` across the second cut (and the fuzzy retries) corrupted them
+and the result went non-deterministic (over/under ≈ the whole operand). Fix:
+`op.SetNonDestructive(true)`. After that the same inputs give the same sane result every time.
 
-Above ~0.4 mm the kernel misclassifies — under/over comes back ≈ the whole ideal volume (12.2 M >
-the 11.78 M ideal), i.e. garbage. Only 0.1–0.3 mm is sane, and there it reproduces the plain
-boolean's thin-shell skins. **So the fuzzy tolerance cannot act as the "extra margin"**: it is a
-robustness floor (≤ ~0.3 mm), not a feature-size threshold. Live value set to 0.3; the surface
-probe (§12/§13) remains the better-looking option.
+The fuzzy value is still non-monotonic, so `occFuzzyDiff` scans a candidate set largest-first and
+takes the first whose volumes validate (`over < ideal · 0.99`, `under < manufactured · 0.99` — a
+failed cut returns ≈ the whole operand). Results after both fixes:
+
+| part | auto fuzzy | over mm³ | under mm³ | tris |
+|---|---|---|---|---|
+| m148 | 1.0 | 17,028 | 27,768 | 428 |
+| m116 | 1.0 | 0 | 4,028 | 360 |
+| m12 | 0.5 | 1,105,671 | 2,036,537 | 1,472 |
+| m122 | 0.5 | 54,554 | 98,476 | 1,040 |
+
+All sane and compact (hundreds–1.5k tris), and m122 agrees with the boolean/voxel (~100k). `m12`
+stays large — its broken reconstruction (§9). So this is the "good when it works" result made
+reliable: the kernel uses the largest fuzzy it can handle and falls back to the probe otherwise.

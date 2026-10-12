@@ -16,14 +16,19 @@ import { ensureOc } from './occInit'
  */
 
 /**
- * Faces closer than this (mm) are treated as coincident by the boolean.
- *
- * Keep small: sweeping m122, the cut is sane at 0.1–0.3 mm but produces garbage above ~0.4 mm
- * (under/over ≈ the whole ideal) because the fuzzy value exceeds what the near-coincident topology
- * can absorb. So this is a robustness floor, not a "margin" — it does not erase the ~1 mm
- * reconstruction wobble.
+ * Requested coincident-face tolerance (mm). Kept large for the cleanest result; {@link occFuzzyDiff}
+ * halves it automatically until the kernel returns a plausible solid (too large a value makes it
+ * merge the whole near-coincident pair and return ≈ the entire operand — the instability).
  */
-export const OCC_FUZZY_MM = 0.3
+export const OCC_FUZZY_MM = 1
+/** Smallest fuzzy tried before giving up (the caller then falls back to surface flagging). */
+const MIN_FUZZY_MM = 0.03
+/**
+ * Candidate fuzzy values, largest first. The kernel's result is **non-monotonic** in the fuzzy value
+ * (e.g. on m122, 0.3 and 0.1 mm are sane but 0.25/0.125/0.0625 return ≈ the whole operand), so a
+ * plain halving miss the workable values — scan a spread and take the largest that validates.
+ */
+const OCC_FUZZY_STEPS = [1, 0.5, 0.3, 0.2, 0.1, 0.05, MIN_FUZZY_MM]
 
 interface OcShape {
   wrapped: unknown
@@ -114,27 +119,54 @@ export async function occFuzzyDiff(
     const made = move(primary, primaryMatrix)
     const ideal = move(compare, compareMatrix)
 
-    const cut = (a: unknown, b: unknown): unknown => {
+    const primarySoup = await shapeToSoup(made)
+    const idealSoup = await shapeToSoup(ideal)
+    const madeVolume = signedVolume(primarySoup)
+    const idealVolume = signedVolume(idealSoup)
+
+    const cut = (a: unknown, b: unknown, f: number): unknown => {
       const op = new oc.BRepAlgoAPI_Cut(a, b)
-      op.SetFuzzyValue(fuzzy)
+      // Crucial: without this the boolean mutates its arguments in place, so reusing `made`/`ideal`
+      // across the two cuts (and the fuzzy retries) corrupts them and the results go non-deterministic.
+      op.SetNonDestructive(true)
+      op.SetFuzzyValue(f)
       op.Build()
       if (!op.IsDone()) throw new Error('occ cut failed')
       return op.Shape()
     }
 
-    const overSoup = await shapeToSoup(cut(ideal, made))
-    const underSoup = await shapeToSoup(cut(made, ideal))
-    const primarySoup = await shapeToSoup(made)
-
-    return {
-      over: geometryFromSoup(overSoup),
-      under: geometryFromSoup(underSoup),
-      overDistance: new Array<number>(Math.floor(overSoup.triangles.length / 3)).fill(fuzzy),
-      underDistance: new Array<number>(Math.floor(underSoup.triangles.length / 3)).fill(fuzzy),
-      overVolume: signedVolume(overSoup),
-      underVolume: signedVolume(underSoup),
-      primaryVolume: signedVolume(primarySoup),
+    // Auto-tune: scan candidate fuzzy values largest-first until both cuts return plausible volumes.
+    // A cut that returns ≈ the whole operand (over ≥ ideal, under ≥ manufactured) is the kernel
+    // merging everything — retry. The first plausible value wins, so the largest workable margin.
+    for (const f of OCC_FUZZY_STEPS) {
+      if (f > fuzzy) continue
+      try {
+        const overSoup = await shapeToSoup(cut(ideal, made, f))
+        const underSoup = await shapeToSoup(cut(made, ideal, f))
+        const overVolume = signedVolume(overSoup)
+        const underVolume = signedVolume(underSoup)
+        const sane =
+          Number.isFinite(overVolume) &&
+          Number.isFinite(underVolume) &&
+          // A failed cut returns ≈ the whole operand ("over" ≈ ideal, "under" ≈ manufactured);
+          // a real difference is strictly smaller than the model it is taken from.
+          overVolume < idealVolume * 0.99 &&
+          underVolume < madeVolume * 0.99
+        if (!sane) continue
+        return {
+          over: geometryFromSoup(overSoup),
+          under: geometryFromSoup(underSoup),
+          overDistance: new Array<number>(Math.floor(overSoup.triangles.length / 3)).fill(f),
+          underDistance: new Array<number>(Math.floor(underSoup.triangles.length / 3)).fill(f),
+          overVolume,
+          underVolume,
+          primaryVolume: madeVolume,
+        }
+      } catch {
+        // Try a smaller fuzzy.
+      }
     }
+    return null
   } catch {
     return null
   }

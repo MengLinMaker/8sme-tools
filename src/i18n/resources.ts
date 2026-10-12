@@ -276,8 +276,8 @@ export const en = {
       '{{count}} separate bodies — joins are disabled for now, so the parts are written unconnected.',
     loadingViewer: 'Loading viewer…',
     viewer: {
-      buildingManufactured: 'Building the manufactured (cut-beam) model…',
-      manufacturedFailed: 'Manufactured model failed to build — STEP view only.',
+      buildingManufactured: 'Building the manufactured model from the stitched NC…',
+      manufacturedFailed: 'Manufactured model failed to rebuild — STEP view only.',
       previewTab: 'Preview',
       ncTab: 'NC',
       cutsTab: 'Cuts',
@@ -301,7 +301,7 @@ export const en = {
       ncLegendLeft: 'Left cuts',
       ncLegendRight: 'Right cuts',
       diffHint:
-        'Overlay diff: red = overcut vs nested STEP (scrap), blue = undercut (leftover). The cut-beam is the whole stock UB with the split + kerf cuts; the STEP is the finished pieces.',
+        'Overlay diff: red = overcut vs nested STEP (scrap), blue = undercut (leftover). The manufactured model is the whole stock UB rebuilt from the stitched real-part NC; the STEP is the finished pieces.',
     },
   },
   viewer: {
@@ -638,8 +638,8 @@ export const zh = {
     bodiesNote: '{{count}} 个独立实体——目前暂不合并，因此各零件未连接写入。',
     loadingViewer: '正在加载查看器…',
     viewer: {
-      buildingManufactured: '正在构建制造件（剖切钢梁）模型…',
-      manufacturedFailed: '制造件模型构建失败——仅显示 STEP 视图。',
+      buildingManufactured: '正在由拼接 NC 构建制造件模型…',
+      manufacturedFailed: '制造件模型重建失败——仅显示 STEP 视图。',
       previewTab: '预览',
       ncTab: 'NC',
       cutsTab: '切割',
@@ -663,7 +663,7 @@ export const zh = {
       ncLegendLeft: '左侧切割',
       ncLegendRight: '右侧切割',
       diffHint:
-        '叠加差异：红色 = 相对嵌套 STEP 切割过度（废料），蓝色 = 切割不足（余料）。剖切钢梁是带纵剖 + 切口的整根原材 UB；STEP 为成品零件。',
+        '叠加差异：红色 = 相对嵌套 STEP 切割过度（废料），蓝色 = 切割不足（余料）。制造件模型由拼接的真实零件 NC 重建的整根原材 UB；STEP 为成品零件。',
     },
   },
   viewer: {

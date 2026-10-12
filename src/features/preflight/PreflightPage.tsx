@@ -343,6 +343,9 @@ export function PreflightPage() {
     if (!ncBytes) return false
     return /(?:^|\n)\s*(?:SI|PU|KO)\s*(?:\n|$)/.test(new TextDecoder().decode(ncBytes))
   }, [ncBytes])
+  // The viewed member's total length (mm), reported by the 3D viewer, so the direction arrow can
+  // carry a marker showing where along the body the orbit pivot currently sits.
+  const [viewingLength, setViewingLength] = useState<number | null>(null)
 
   // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
   const [manufactured, setManufactured] = useState<Uint8Array | null>(null)
@@ -418,6 +421,7 @@ export function PreflightPage() {
     setLocationInput('')
     setLocationEditing(false)
     setLocationAxis(0)
+    setViewingLength(null)
     setViewing(part)
   }, [])
   const focusFinding = useCallback((finding: Finding) => {
@@ -438,6 +442,13 @@ export function PreflightPage() {
     const value = Number.parseFloat(locationInput)
     if (Number.isFinite(value)) requestLocation(orbitBus, value)
   }, [locationInput, orbitBus])
+
+  // The viewer reports the orbit pivot's mm along the member and the member's total length, so the
+  // direction arrow can show where along the body we are looking.
+  const handleLocation = useCallback((mm: number, lengthMm: number) => {
+    setLocationMm(mm)
+    setViewingLength(lengthMm)
+  }, [])
 
   // Warm the viewer code-split chunks while the analysis runs, so the first
   // "view" click doesn't pay the download on top of the model build.
@@ -1845,6 +1856,22 @@ export function PreflightPage() {
                             strokeLinecap="round"
                           />
                           <path d="M20.5 12 L13.5 8.2 L13.5 15.8 Z" fill="currentColor" />
+                          {locationMm != null && (
+                            <circle
+                              cx={
+                                3 +
+                                (viewingLength != null && viewingLength > 0
+                                  ? Math.min(1, Math.max(0, locationMm / viewingLength))
+                                  : 0) *
+                                  10.5
+                              }
+                              cy="12"
+                              r="3"
+                              fill="#ef4444"
+                              stroke="#0b0f14"
+                              strokeWidth="1"
+                            />
+                          )}
                         </g>
                       </svg>
                     </span>
@@ -1890,7 +1917,7 @@ export function PreflightPage() {
                             highlight={highlightSpan}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
-                            onLocationChange={setLocationMm}
+                            onLocationChange={handleLocation}
                             onAxisAngleChange={setLocationAxis}
                             hideControls
                           />
@@ -1921,7 +1948,7 @@ export function PreflightPage() {
                             focus={manufactured ? findingFocus : null}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
-                            onLocationChange={stepBytes ? undefined : setLocationMm}
+                            onLocationChange={stepBytes ? undefined : handleLocation}
                             onAxisAngleChange={stepBytes ? undefined : setLocationAxis}
                             hideControls
                             smoothLines

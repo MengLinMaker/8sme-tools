@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { stockOutlineForCode } from './stock'
+import { partSectionForCode, stockOutlineForCode } from './stock'
 
 function bbox(points: [number, number][]) {
   let minX = Infinity
@@ -75,6 +75,36 @@ describe('stockOutlineForCode', () => {
     const { width, height } = bbox(stockOutlineForCode('UA100*75*6', [])?.points ?? [])
     expect(width).toBeGreaterThanOrEqual(100)
     expect(height).toBeGreaterThanOrEqual(75)
+  })
+
+  it('rounds the inner corner of each angle toe, leaving the outer corners sharp', () => {
+    // EA75*75*6: root R1 = 8, toe R2 = 5 (OneSteel 7th Ed, which points R2 at the INNER corner
+    // of each toe). Outer corners (legA, 0) and (0, legB) stay sharp; the inner corners
+    // (legA, t) and (t, legB) are cut away by the toe radius.
+    const t = 6
+    const points = stockOutlineForCode('EA75*75*6', [75, 75, 6, 6, 8])?.points ?? []
+    const maxX = Math.max(...points.map((p) => p[0]))
+    const minX = Math.min(...points.map((p) => p[0]))
+    const maxY = Math.max(...points.map((p) => p[1]))
+    const minY = Math.min(...points.map((p) => p[1]))
+    const near = (x: number, y: number, px: number, py: number) =>
+      Math.abs(x - px) < 0.5 && Math.abs(y - py) < 0.5
+    expect(points.some(([x, y]) => near(x, y, maxX, minY))).toBe(true)
+    expect(points.some(([x, y]) => near(x, y, minX, maxY))).toBe(true)
+    expect(points.some(([x, y]) => near(x, y, maxX, minY + t))).toBe(false)
+    expect(points.some(([x, y]) => near(x, y, minX + t, maxY))).toBe(false)
+  })
+
+  it('models the toe radius on parts too, and falls back when the size is non-standard', () => {
+    const part = partSectionForCode('EA75*75*6', [75, 75, 6, 6, 8])
+    expect(part?.points.length ?? 0).toBeGreaterThan(8)
+
+    // EA70*70*6 is not in the AUS catalogue — still builds, from the NC dims, root radius only.
+    const { width, height } = bbox(
+      stockOutlineForCode('EA70*70*6', [70, 70, 6, 6, 8])?.points ?? [],
+    )
+    expect(width).toBeGreaterThanOrEqual(70)
+    expect(height).toBeGreaterThanOrEqual(70)
   })
 
   it('handles a numeric-prefix channel designation', () => {

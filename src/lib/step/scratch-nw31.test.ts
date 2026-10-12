@@ -270,13 +270,7 @@ describe('NW31 issue parts', () => {
           g ? Math.floor(g.getAttribute('position').count / 3) : 0
         const top = await ensureManifold()
         const mf = manifoldBooleanDiff(top, soups(made), soups(step), I, I)
-        const occLine: string[] = []
-        for (const f of [0.1, 0.3, 0.5, 1]) {
-          const o = await occFuzzyDiff(new TextEncoder().encode(built.step), stepBytes, I, I, f)
-          occLine.push(
-            `${f}:over=${o ? o.overVolume.toFixed(0) : '-'}/under=${o ? o.underVolume.toFixed(0) : '-'}/t${o ? Math.floor((o.over?.getAttribute('position').count ?? 0) / 3) + Math.floor((o.under?.getAttribute('position').count ?? 0) / 3) : 0}`,
-          )
-        }
+        const occ = await occFuzzyDiff(new TextEncoder().encode(built.step), stepBytes, I, I)
         const dFlagged = d ? Math.floor((d.overDistance.length + d.underDistance.length) * 1) : 0
         const aTris = a ? [a.over, a.under].filter(Boolean).length : 0
 
@@ -295,7 +289,7 @@ describe('NW31 issue parts', () => {
             `  D1 margin1mm: over=${d1 ? d1.overVolume.toFixed(0) : '-'} under=${d1 ? d1.underVolume.toFixed(0) : '-'} flaggedTris=${d1tris}/${madeTris} (${((d1tris / madeTris) * 100).toFixed(0)}%)`,
             `  V voxel0.5:  over=${vd ? vd.overVolume.toFixed(0) : '-'} under=${vd ? vd.underVolume.toFixed(0) : '-'} primary=${vd ? vd.primaryVolume.toFixed(0) : '-'} geomTris=${vTris(vd?.over) + vTris(vd?.under)} (${ms}ms)`,
             `  M manifold:  over=${mf ? mf.overVolume.toFixed(0) : '-'} under=${mf ? mf.underVolume.toFixed(0) : '-'} primary=${mf ? mf.primaryVolume.toFixed(0) : '-'} geomTris=${vTris(mf?.over) + vTris(mf?.under)}`,
-            `  OCC ${occLine.join(' | ')}`,
+            `  OCC auto: over=${occ ? occ.overVolume.toFixed(0) : '-'} under=${occ ? occ.underVolume.toFixed(0) : '-'} primary=${occ ? occ.primaryVolume.toFixed(0) : '-'} tris=${vTris(occ?.over) + vTris(occ?.under)}`,
           ].join('\n'),
         )
         expect(true).toBe(true)

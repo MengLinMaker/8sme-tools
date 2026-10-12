@@ -1,9 +1,10 @@
 import type { PartRecord } from '@/lib/audit/types'
 import { extractDrawingText, findSectionCode } from '@/lib/parsers/pdfText'
+import { getAngle } from './angle'
 import { inferTee } from './infer'
 import { getPfcByDepth } from './pfc'
 import { getTfbByDepth } from './tfb'
-import type { RolledSection } from './types'
+import type { RolledAngle, RolledSection } from './types'
 import { getUb } from './ub'
 import { getUc, getUcByDepth } from './uc'
 
@@ -166,30 +167,52 @@ function rectangle(width: number, height: number): [number, number][] {
   ]
 }
 
-function angleL(legA: number, legB: number, thickness: number, radius = 0): [number, number][] {
-  const t = thickness
-  const r = Math.max(0, Math.min(radius, legA - t, legB - t))
-  if (r <= 0) {
-    return centre([
-      [0, 0],
-      [legA, 0],
-      [legA, t],
-      [t, t],
-      [t, legB],
-      [0, legB],
-    ])
+/** Drops consecutive duplicate vertices (within `eps`) — a zero-length edge makes replicad throw. */
+function dedupe(points: [number, number][], eps = 1e-6): [number, number][] {
+  const out: [number, number][] = []
+  for (const point of points) {
+    const last = out[out.length - 1]
+    if (last && Math.abs(last[0] - point[0]) < eps && Math.abs(last[1] - point[1]) < eps) continue
+    out.push(point)
   }
-  // Root fillet at the inner corner (t, t): arc from (t + r, t) to (t, t + r). The arc's own
-  // first point *is* (t + r, t), so it must not be repeated as an explicit vertex (a zero-length
-  // edge makes replicad throw when the outline is drawn).
-  return centre([
+  return out
+}
+
+/**
+ * Equal/unequal angle outline (x = long leg A, y = short leg B), open corner up-right.
+ *
+ * An angle is round on **both** corners: the concave **root fillet** `rootRadius` at the inner
+ * corner `(t, t)`, and the convex **toe radius** `toeRadius` on the free end of each leg. The
+ * toe radius rounds the **inner** corner of the toe — the corner on the same side as the root
+ * (the OneSteel 7th Ed figure points R2 there) — while the two **outer** toe corners stay
+ * sharp. Either radius may be 0 to keep that corner sharp. The toe arcs' own first points must
+ * not be repeated as explicit vertices, so the list is de-duplicated.
+ */
+function angleL(
+  legA: number,
+  legB: number,
+  thickness: number,
+  rootRadius = 0,
+  toeRadius = 0,
+): [number, number][] {
+  const t = thickness
+  const r = Math.max(0, Math.min(rootRadius, legA - t, legB - t))
+  const rt = Math.max(0, Math.min(toeRadius, t, legA - t, legB - t))
+  const points: [number, number][] = [
     [0, 0],
-    [legA, 0],
-    [legA, t],
-    ...arcPoints(t + r, t + r, r, -Math.PI / 2, -Math.PI),
-    [t, legB],
-    [0, legB],
-  ])
+    [legA, 0], // outer corner of the horizontal toe stays sharp
+  ]
+  // Horizontal leg: round the inner corner of the toe (end face → inner face y = t).
+  if (rt > 0) points.push(...arcPoints(legA - rt, t - rt, rt, 0, Math.PI / 2))
+  else points.push([legA, t])
+  // Inner corner (t, t): root fillet, or a sharp corner.
+  if (r > 0) points.push(...arcPoints(t + r, t + r, r, -Math.PI / 2, -Math.PI))
+  else points.push([t, t])
+  // Vertical leg: round the inner corner of the toe (inner face x = t → end face).
+  if (rt > 0) points.push(...arcPoints(t - rt, legB - rt, rt, 0, Math.PI / 2))
+  else points.push([t, legB])
+  points.push([0, legB]) // outer corner of the vertical toe stays sharp
+  return centre(dedupe(points))
 }
 
 /**
@@ -412,6 +435,33 @@ function detectFamily(clean: string): Family | null {
   return PREFIXES.find(([pattern]) => pattern.test(clean))?.[1] ?? null
 }
 
+/**
+ * Resolves an EA/UA angle to its catalogue entry (real rolled thickness + root **and toe**
+ * radii) from the callout legs/thickness, or from the NC header dims when the code is short.
+ * Returns null when the code is not an angle or no catalogue size matches within tolerance.
+ */
+function catalogueAngle(clean: string, dims: number[]): RolledAngle | null {
+  const family = detectFamily(clean)
+  if (family !== 'angle-equal' && family !== 'angle-unequal') return null
+  const kind = family === 'angle-equal' ? 'EA' : 'UA'
+  const n = numbers(clean)
+  let a: number
+  let b: number
+  let thickness: number
+  if (n.length >= 3) {
+    a = n[0]
+    b = n[1]
+    thickness = n[2]
+  } else if (dims.length >= 3) {
+    a = dims[0]
+    b = dims[1] || dims[0]
+    thickness = dims[2]
+  } else {
+    return null
+  }
+  return getAngle(kind, a, b, thickness) ?? null
+}
+
 /** Builds the stock outline for a section code, using NC dimensions where the code is short. */
 export function stockOutlineForCode(code: string, dims: number[]): StockOutline | null {
   const clean = code.trim().replace(/\s+/g, '').toUpperCase()
@@ -444,11 +494,20 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
       break
     }
     case 'angle-equal':
-      if (n.length >= 3) points = angleL(n[0], n[0], n[2], dims[4] ?? 0)
+    case 'angle-unequal': {
+      const angle = catalogueAngle(clean, dims)
+      if (angle) {
+        points = angleL(angle.a, angle.b, angle.t, angle.r1, angle.r2)
+        break
+      }
+      // Not in the catalogue: fall back to the callout / NC dims, root radius only.
+      const legA = n[0] ?? dims[0]
+      const legB = family === 'angle-equal' ? legA : (n[1] ?? dims[1] ?? legA)
+      const thickness = n[2] ?? dims[2]
+      if (legA > 0 && legB > 0 && thickness > 0)
+        points = angleL(legA, legB, thickness, dims[4] ?? 0)
       break
-    case 'angle-unequal':
-      if (n.length >= 3) points = angleL(n[0], n[1], n[2], dims[4] ?? 0)
-      break
+    }
     case 'rhs':
     case 'shs': {
       const height = n[0]
@@ -567,14 +626,18 @@ export function partSectionForCode(
       return null
     }
     case 'angle-equal':
-      if (n.length >= 3) return { points: angleL(n[0], n[0], n[2], dims[4] ?? 0) }
-      if (dims.length >= 3)
-        return { points: angleL(dims[0], dims[1] || dims[0], dims[2], dims[4] ?? 0) }
-      return null
-    case 'angle-unequal':
-      if (n.length >= 3) return { points: angleL(n[0], n[1], n[2], dims[4] ?? 0) }
-      if (dims.length >= 3) return { points: angleL(dims[0], dims[1], dims[2], dims[4] ?? 0) }
-      return null
+    case 'angle-unequal': {
+      // Prefer the NC header dims for the real leg sizes/thickness, but take the root **and
+      // toe** radii from the catalogue — the NC does not carry the toe radius.
+      const angle = catalogueAngle(clean, dims)
+      const legA = n[0] ?? dims[0]
+      const legB = family === 'angle-equal' ? legA : (n[1] ?? dims[1] ?? legA)
+      const thickness = n[2] ?? dims[2] ?? angle?.t
+      if (!(legA > 0 && legB > 0 && thickness > 0)) return null
+      return {
+        points: angleL(legA, legB, thickness, dims[4] ?? angle?.r1 ?? 0, angle?.r2 ?? 0),
+      }
+    }
     case 'rhs':
     case 'shs': {
       const height = n[0]
@@ -645,16 +708,22 @@ function polygonArea(points: [number, number][]): number {
 }
 
 /**
- * Nominal mass per metre (kg/m). Tabulated families (UB/UC/PFC/TFB) use the published unit
- * mass; families whose size + thickness fully define the profile (RHS/SHS/CHS hollows and
- * EA/UA angles) are integrated from their exact cross-section at 7850 kg/m³ — so the value
- * is right whenever the NC carries the corner radius.
+ * Nominal mass per metre (kg/m). Tabulated families (UB/UC/PFC/TFB and the EA/UA angle
+ * catalogue) use the published unit mass; families whose size + thickness fully define the
+ * profile (RHS/SHS/CHS hollows, and any angle not in the catalogue) are integrated from their
+ * exact cross-section at 7850 kg/m³ — so the value is right whenever the NC carries the corner
+ * radius.
  */
 export function sectionMassPerMetre(code: string, dims: number[]): number | null {
   const clean = code.trim().replace(/\s+/g, '').toUpperCase()
   const family = detectFamily(clean)
   if (!family) return null
   const n = numbers(clean)
+
+  if (family === 'angle-equal' || family === 'angle-unequal') {
+    const angle = catalogueAngle(clean, dims)
+    if (angle) return angle.mass
+  }
 
   switch (family) {
     case 'ub':

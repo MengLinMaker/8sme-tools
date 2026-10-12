@@ -400,7 +400,7 @@ function mountScene(
   nc?: NcGeometry | null,
   ncSection?: [number, number][] | null,
   faceFrame?: NcFaceFrame | null,
-  onLocationChange?: (locationMm: number) => void,
+  onLocationChange?: (locationMm: number, lengthMm: number) => void,
   onAxisAngleChange?: (degrees: number) => void,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
@@ -934,7 +934,7 @@ function mountScene(
     const location = controls.target.getComponent(longAxis) + length / 2
     if (!Number.isFinite(location) || Math.abs(location - lastLocation) < 0.5) return
     lastLocation = location
-    onLocationChange(location)
+    onLocationChange(location, length)
   }
   controls.addEventListener('change', reportLocation)
   reportLocation()
@@ -1144,8 +1144,9 @@ export interface PartViewerProps {
   visibleSpans?: number[] | null
   /** Hovered finding's sub-cut index: glow that marker and dim the others (null = no highlight). */
   highlight?: number | null
-  /** Live location (mm, from one end) of the orbit pivot along the member, for the "where am I". */
-  onLocationChange?: (locationMm: number) => void
+  /** Live location (mm, from one end) of the orbit pivot along the member, and the member's total
+   *  length (mm), for the "where am I". */
+  onLocationChange?: (locationMm: number, lengthMm: number) => void
   /** On-screen angle (deg, clockwise from +x) of the member's positive axis, for the compass arrow. */
   onAxisAngleChange?: (degrees: number) => void
   /** Controlled overlay toggles (shared toolbar). Omit to keep the per-pane buttons. */
@@ -1269,7 +1270,7 @@ export default function PartViewer({
           nc,
           ncSection,
           faceFrame,
-          (mm) => onLocationRef.current?.(mm),
+          (mm, mmLength) => onLocationRef.current?.(mm, mmLength),
           (degrees) => onAxisAngleRef.current?.(degrees),
         )
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
