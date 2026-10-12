@@ -1642,11 +1642,7 @@ export function PreflightPage() {
                 >
                   {t('preflight.findings.exportParts')}
                 </Button>
-                <Button
-                  size="sm"
-                  onClick={exportSelected}
-                  disabled={selectedMarks.size === 0}
-                >
+                <Button size="sm" onClick={exportSelected} disabled={selectedMarks.size === 0}>
                   {t('preflight.findings.exportSelected', { count: selectedMarks.size })}
                 </Button>
                 {stepOverrides.size > 0 && (
