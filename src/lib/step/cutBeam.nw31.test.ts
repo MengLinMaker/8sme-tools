@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw31Top, OUTPUT_DIR } from '@test/fixtures'
 import { measureVolume } from 'replicad'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
@@ -19,13 +20,7 @@ setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
  * the fixtures are absent.
  */
 
-const BASE = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-03-01 (NW31 Top frames) Shaft part drawings',
-  'Shaft part drawings',
-)
+const BASE = nw31Top()
 const ncPath = (m: string) => join(BASE, 'NC files', `${m}.nc1`)
 const stpPath = (m: string) => join(BASE, 'STP files', `${m}.stp`)
 
@@ -139,7 +134,8 @@ describe.skipIf(!HAVE)('NW31 tee validation', () => {
     expect(step).toContain('AUTOMOTIVE_DESIGN')
     const bodies = (step.match(/MANIFOLD_SOLID_BREP/g) ?? []).length
     expect(bodies).toBeGreaterThan(0)
-    const out = join(process.env.TEMP ?? '.', 'nw31-cutbeam.step')
+    mkdirSync(OUTPUT_DIR, { recursive: true })
+    const out = join(OUTPUT_DIR, 'nw31-cutbeam.step')
     writeFileSync(out, step)
     // eslint-disable-next-line no-console
     console.log(`nw31 whole-beam bodies=${bodies} -> ${out}`)

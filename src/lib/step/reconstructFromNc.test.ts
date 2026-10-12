@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw31Top, OUTPUT_DIR } from '@test/fixtures'
 import {
   BufferGeometry,
   Float32BufferAttribute,
@@ -24,13 +25,7 @@ setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
  * real NW31 Top job when the fixtures happen to be on this machine. Skipped otherwise.
  */
 
-const BASE = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-03-01 (NW31 Top frames) Shaft part drawings',
-  'Shaft part drawings',
-)
+const BASE = nw31Top()
 const ncPath = (m: string) => join(BASE, 'NC files', `${m}.nc1`)
 const stpPath = (m: string) => join(BASE, 'STP files', `${m}.stp`)
 
@@ -115,7 +110,8 @@ describe.skipIf(!HAVE)('reconstruct parts from NC (experimental)', () => {
       // a real T part, not the 0.07 mm sheet the STEP held
       expect(Math.min(...built.size)).toBeGreaterThan(50)
       expect(Math.max(...built.size)).toBeGreaterThan(1500)
-      writeFileSync(join(process.env.TEMP ?? '.', `nc-${mark}.stp`), step)
+      mkdirSync(OUTPUT_DIR, { recursive: true })
+      writeFileSync(join(OUTPUT_DIR, `nc-${mark}.stp`), step)
     }
   }, 300000)
 

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { cleanStep } from './clean'
 import { setOcWasmUrl } from './occInit'
@@ -8,14 +9,7 @@ import { setOcWasmUrl } from './occInit'
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 
-const STP = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-03-01 (NW31 Top frames) Shaft part drawings',
-  'Shaft part drawings',
-  'STP files',
-)
+const STP = nw31Top('STP files')
 const HAVE = existsSync(join(STP, 'm118.stp'))
 
 async function size(bytes: Uint8Array): Promise<number[]> {

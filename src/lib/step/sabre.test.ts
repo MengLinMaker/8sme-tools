@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw31Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { ensureOc, setOcWasmUrl } from './occInit'
 import { sabreTest } from './sabre'
@@ -17,20 +18,8 @@ setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
  * Skipped otherwise.
  */
 
-const TOP = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-03-01 (NW31 Top frames) Shaft part drawings',
-  'Shaft part drawings',
-  'STP files',
-)
-const BOT = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
-)
+const TOP = nw31Top('STP files')
+const BOT = nw31Bottom()
 const HAVE = existsSync(join(TOP, 'm117.stp')) && existsSync(join(BOT, 'm128.stp'))
 
 describe.skipIf(!HAVE)('light sabre test', () => {

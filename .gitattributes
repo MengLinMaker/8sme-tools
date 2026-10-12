@@ -1,0 +1,3 @@
+# Real job fixtures (DSTV NC + Tekla STEP) are binary — never diff, merge, or normalise them.
+test/fixtures/**/*.nc1 binary
+test/fixtures/**/*.stp binary

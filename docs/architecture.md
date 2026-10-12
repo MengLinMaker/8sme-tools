@@ -55,9 +55,9 @@ algorithm"), none removes the cause.
 
 ## 4. m148 investigation (this session)
 
-Fixture: `~/Downloads/Failed tests/11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts/m148.{nc1,stp}`.
+Fixture: `test/fixtures/nw31-bottom/m148.{nc1,stp}` (see `test/fixtures/README.md`).
 Harness: `src/lib/step/scratch-m148.test.ts` (renders panels with a small software rasterizer to
-`%LOCALAPPDATA%\Temp\opencode\m148\{side,iso,end}.png` + `results.txt`). Reproduce:
+`test/.out/m148/{side,iso,end}.png` + `results.txt`). Reproduce:
 `pnpm vitest run src/lib/step/scratch-m148.test.ts`.
 
 ### 4.1 What the ideal actually is

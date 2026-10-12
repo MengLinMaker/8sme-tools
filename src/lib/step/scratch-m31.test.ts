@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { measureStep } from './measure'
 import { setOcWasmUrl } from './occInit'
@@ -9,16 +10,12 @@ import { reconstructStepFromNc } from './reconstructFromNc'
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 
-const NW31 = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-03-01 (NW31 Top frames) Shaft part drawings',
-  'Shaft part drawings',
-)
+const NW31 = nw31Top()
+const HAVE =
+  existsSync(join(NW31, 'NC files', 'm31.nc1')) && existsSync(join(NW31, 'STP files', 'm31.stp'))
 
 /** Scratch: m31 shape numbers. */
-describe('m31 shape check', () => {
+describe.skipIf(!HAVE)('m31 shape check', () => {
   it('reports bodies/size/volume vs STEP', async () => {
     for (const mark of ['m31', 'm41']) {
       const nc = readFileSync(join(NW31, 'NC files', `${mark}.nc1`), 'utf8')

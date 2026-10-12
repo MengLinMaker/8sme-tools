@@ -1,33 +1,21 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { nw30Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { partSectionForCode } from '@/lib/sections/stock'
 
-const NW31 = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-03-01 (NW31 Top frames) Shaft part drawings',
-  'Shaft part drawings',
-)
+const NW31 = nw31Top()
+const HAVE = existsSync(join(NW31, 'NC files', 'm31.nc1'))
 
 type Axis = 0 | 1
 
 /** Scratch: replicate the pipeline's axis assignment + trim ranges for m31/m41. */
-describe('axis assignment probe', () => {
+describe.skipIf(!HAVE)('axis assignment probe', () => {
   it('prints per-axis faces, loop ranges, bands, rect', () => {
     for (const mark of ['m31', 'm41', 'm71', 'm143']) {
-      const dir =
-        mark === 'm71'
-          ? join(
-              process.env.USERPROFILE ?? '',
-              'Downloads',
-              'Failed tests',
-              '11601-02-01 NW30 BOTTOM FRAMES - SHAFTS',
-            )
-          : join(NW31, 'NC files')
+      const dir = mark === 'm71' ? nw30Bottom() : join(NW31, 'NC files')
       const nc = readFileSync(join(dir, `${mark}.nc1`), 'utf8')
       const header = parseDstv(nc).header
       const geo = parseNcGeometry(nc)

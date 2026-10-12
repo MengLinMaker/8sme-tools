@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { setOcWasmUrl } from './occInit'
@@ -8,13 +9,8 @@ import { setOcWasmUrl } from './occInit'
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 
-const NW31 = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-03-01 (NW31 Top frames) Shaft part drawings',
-  'Shaft part drawings',
-)
+const NW31 = nw31Top()
+const HAVE = existsSync(join(NW31, 'NC files', 'm31.nc1'))
 
 type Pt = [number, number]
 
@@ -30,7 +26,7 @@ function dedupe(pts: Pt[]): Pt[] {
 }
 
 /** Scratch: is the band fuse lossy for m31's axis-0 inputs? Compares prism volumes. */
-describe('fuse probe', () => {
+describe.skipIf(!HAVE)('fuse probe', () => {
   it('measures fused vs separate prism volumes', async () => {
     await setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
     const { ensureOc } = await import('./occInit')

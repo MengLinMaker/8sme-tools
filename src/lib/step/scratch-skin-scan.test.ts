@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw31Bottom } from '@test/fixtures'
 import { Matrix4 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { booleanDiff, type DiffSoup, pruneThinSkin } from './booleanDiff'
@@ -11,15 +12,11 @@ import { reconstructStepFromNc } from './reconstructFromNc'
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 
-const NW31 = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
-)
+const NW31 = nw31Bottom()
+const HAVE = existsSync(NW31) && readdirSync(NW31).some((f) => /^m\d+\.nc1$/.test(f))
 
 /** Scratch: scan a job and report parts whose diff still has a thin (<gap) skin after the pipeline. */
-describe('skin scan (NW31)', () => {
+describe.skipIf(!HAVE)('skin scan (NW31)', () => {
   it('reports remaining skin per part', async () => {
     const marks = readdirSync(NW31)
       .filter((f) => /^m\d+\.nc1$/.test(f))

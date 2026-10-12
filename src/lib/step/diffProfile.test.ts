@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw30Bottom } from '@test/fixtures'
 import { BoxGeometry, Matrix4, Quaternion, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
@@ -63,12 +64,7 @@ describe('diff presence probe (no fixtures needed)', () => {
   })
 })
 
-const DIR = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11601-02-01 NW30 BOTTOM FRAMES - SHAFTS',
-)
+const DIR = nw30Bottom()
 const HAVE_M87 = existsSync(join(DIR, 'm87.nc1')) && existsSync(join(DIR, 'm87.stp'))
 
 const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]

@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw31Top } from '@test/fixtures'
 import { describe, it } from 'vitest'
 import { setOcWasmUrl } from './occInit'
 import { reconstructStepFromNc } from './reconstructFromNc'
@@ -8,11 +9,12 @@ import { reconstructStepFromNc } from './reconstructFromNc'
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 
-const NC_DIR = process.env.OC_NC ?? ''
-const STP_DIR = process.env.OC_STP ?? ''
+const NC_DIR = process.env.OC_NC ?? nw31Top('NC files')
+const STP_DIR = process.env.OC_STP ?? nw31Top('STP files')
 const MARK = process.env.OC_MARK ?? 'm31'
+const HAVE = existsSync(join(NC_DIR, `${MARK}.nc1`)) && existsSync(join(STP_DIR, `${MARK}.stp`))
 
-describe('pfc orient repro', () => {
+describe.skipIf(!HAVE)('pfc orient repro', () => {
   it('one mark', async () => {
     const { importSTEP, measureVolume, measureShapeVolumeProperties } = await import('replicad')
     const reference = new Uint8Array(readFileSync(join(STP_DIR, `${MARK}.stp`)))

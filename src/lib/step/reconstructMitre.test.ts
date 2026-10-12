@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw31Bottom } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { meshStepFile } from './mesh'
 import { setOcWasmUrl } from './occInit'
@@ -16,12 +17,7 @@ setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
  * the mitre into a full-height vertical end wall: an impossible cut with a wedge of extra material
  * past the sloped face. The band must only fire on a genuine gap.
  */
-const DIR = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
-)
+const DIR = nw31Bottom()
 const HAVE = existsSync(join(DIR, 'm128.nc1')) && existsSync(join(DIR, 'm128.stp'))
 
 /** Total area (mm²) of triangles lying flat in the max-X plane — a full end wall vs a mitre tip. */

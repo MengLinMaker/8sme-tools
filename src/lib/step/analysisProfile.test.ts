@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw30Bottom } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { type MeasurableShape, measureShape } from '@/lib/step/measure'
 import { meshStepFile } from '@/lib/step/mesh'
@@ -11,12 +12,7 @@ import { type MeshableShape, sabreShape } from '@/lib/step/sabre'
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 
-const DIR = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11601-02-01 NW30 BOTTOM FRAMES - SHAFTS',
-)
+const DIR = nw30Bottom()
 const MARKS = ['m105', 'm106', 'm107', 'm108', 'a2']
 const HAVE = MARKS.every(
   (m) => existsSync(join(DIR, `${m}.nc1`)) && existsSync(join(DIR, `${m}.stp`)),

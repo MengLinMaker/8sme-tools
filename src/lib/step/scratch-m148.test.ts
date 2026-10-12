@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { deflateSync } from 'node:zlib'
+import { nw31Bottom, OUTPUT_DIR } from '@test/fixtures'
 import type { BufferGeometry } from 'three'
 import { Matrix4 } from 'three'
 import { describe, expect, it } from 'vitest'
@@ -15,13 +16,8 @@ import { reconstructSolidFromNc } from './reconstructFromNc'
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 
-const DIR = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
-)
-const OUT = join(process.env.LOCALAPPDATA ?? '', 'Temp', 'opencode', 'm148')
+const DIR = nw31Bottom()
+const OUT = join(OUTPUT_DIR, 'm148')
 
 interface Soup {
   vertices: number[]

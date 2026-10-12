@@ -4,6 +4,9 @@ dist-ssr
 dev-dist
 *.local
 
+# Test scratch output (renders, emitted STEP/NC); fixtures are committed, output is not
+test/.out/
+
 # Editor
 .vscode/*
 !.vscode/extensions.json

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw30Bottom, nw31Bottom } from '@test/fixtures'
 import { Matrix4, Quaternion, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
@@ -30,25 +31,12 @@ import { reconstructStepFromNc } from './reconstructFromNc'
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 
-const NW31 = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
-)
+const NW31 = nw31Bottom()
 const FIXTURES = [
   { mark: 'm15', dir: NW31 },
   { mark: 'm16', dir: NW31 },
   { mark: 'm128', dir: NW31 },
-  {
-    mark: 'm87',
-    dir: join(
-      process.env.USERPROFILE ?? '',
-      'Downloads',
-      'Failed tests',
-      '11601-02-01 NW30 BOTTOM FRAMES - SHAFTS',
-    ),
-  },
+  { mark: 'm87', dir: nw30Bottom() },
 ]
 
 const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]

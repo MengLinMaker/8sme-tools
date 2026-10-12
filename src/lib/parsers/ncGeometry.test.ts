@@ -1,16 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { nw31Bottom } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseNcGeometry } from './ncGeometry'
 
 /** A real shaft whose o/u ends carry DSTV notch lines (`w`). */
-const M147 = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
-  'm147.nc1',
-)
+const M147 = nw31Bottom('m147.nc1')
 
 // Real geometry from the NW31 m170.nc1 (a part whose STEP is wrong).
 const M170 = `ST

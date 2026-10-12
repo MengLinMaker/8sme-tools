@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { nw30Bottom, nw31Bottom } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
@@ -103,18 +104,8 @@ describe('cutReach geometry', () => {
 })
 
 describe('cutReach on real parts', () => {
-  const NW31 = join(
-    process.env.USERPROFILE ?? '',
-    'Downloads',
-    'Failed tests',
-    '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
-  )
-  const NW30 = join(
-    process.env.USERPROFILE ?? '',
-    'Downloads',
-    'Failed tests',
-    '11601-02-01 NW30 BOTTOM FRAMES - SHAFTS',
-  )
+  const NW31 = nw31Bottom()
+  const NW30 = nw30Bottom()
   // A PFC end cut runs across the flange over the web (deep-backed → flag); an SHS end cut only
   // ever meets thin walls, so it clears.
   const marks: { dir: string; mark: string; expectFlagged: boolean }[] = [

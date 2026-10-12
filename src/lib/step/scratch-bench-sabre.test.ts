@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw31Bottom } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { assessCutReachGeometry } from '@/lib/audit/cutReach'
 import { parseDstv } from '@/lib/parsers/dstv'
@@ -13,12 +14,7 @@ import { type MeshableShape, sabreShape } from './sabre'
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 
-const DIR = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
-)
+const DIR = nw31Bottom()
 
 function marks(limit: number): string[] {
   return readdirSync(DIR)
@@ -28,7 +24,9 @@ function marks(limit: number): string[] {
     .slice(0, limit)
 }
 
-describe('sabre cost benchmark', () => {
+const HAVE = existsSync(DIR) && marks(1).length > 0
+
+describe.skipIf(!HAVE)('sabre cost benchmark', () => {
   it('times import / measure / sabre / cutReach per part', async () => {
     const { ensureOc } = await import('./occInit')
     await ensureOc()

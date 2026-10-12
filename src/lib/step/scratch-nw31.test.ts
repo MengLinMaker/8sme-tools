@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { nw31Bottom } from '@test/fixtures'
 import { Matrix4 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
@@ -19,12 +20,7 @@ const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 setManifoldWasmUrl(require.resolve('manifold-3d/manifold.wasm'))
 
-const DIR = join(
-  process.env.USERPROFILE ?? '',
-  'Downloads',
-  'Failed tests',
-  '11602-02-01 NW31 BOTTOM & MIDDLE FRAMES - Shafts',
-)
+const DIR = nw31Bottom()
 
 type Meshed = Awaited<ReturnType<typeof meshStepFile>>
 
