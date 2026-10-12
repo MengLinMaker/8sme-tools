@@ -116,13 +116,15 @@ function seatMatrix(vertices: number[], profile: [number, number][] | undefined)
 }
 
 /**
- * Bottleneck profile for the overlay diff on a real part (m87: PFC with notch
- * diffs on both sides). Times each pipeline stage so slow steps show up by
- * name. Order-of-magnitude asserts only — tri counts and volumes drift with
- * tessellation settings, but presence and rough volumes must hold.
+ * Bottleneck profile for the overlay diff on a real part (m87: NW30 PFC). Its `o` face carries
+ * slotted holes, which the reconstruction used to cut as plain circles — a spurious ~44 % undercut
+ * that the deviation/boolean stack reported as "notch diffs on both sides" (red ~1.3k, blue ~4k
+ * mm³). With DSTV slots parsed (`0.00l …`) the manufactured solid now matches the STEP, so this
+ * profiles each pipeline stage **and** guards that a clean part reads as clean. Order-of-magnitude
+ * asserts only — tri counts drift with tessellation settings.
  */
 describe.skipIf(!HAVE_M87)('overlay diff profile (m87)', () => {
-  it('times every stage and finds both diffs', async () => {
+  it('reconstructs m87 cleanly (slots, not holes) and times every stage', async () => {
     await ensureOc()
     const ncText = readFileSync(join(DIR, 'm87.nc1'), 'utf8')
     const stepBytes = new Uint8Array(readFileSync(join(DIR, 'm87.stp')))
@@ -152,10 +154,10 @@ describe.skipIf(!HAVE_M87)('overlay diff profile (m87)', () => {
     start = performance.now()
     const presence = probeDiffPresence(soups(mfg), soups(stp), mfgMatrix, stpMatrix)
     const probeMs = performance.now() - start
-    console.log(
-      `[debug m87] presence=${presence?.found} over=${presence?.overShare} under=${presence?.underShare}`,
-    )
-    expect(presence?.found).toBe(true)
+    // The slot fix makes m87's manufactured solid agree with the STEP: no overcut/undercut.
+    expect(presence?.found).toBe(false)
+    expect(presence?.overShare ?? 1).toBeLessThan(0.02)
+    expect(presence?.underShare ?? 1).toBeLessThan(0.02)
 
     // Split the probe open: index builds vs queries.
     const mfgSoup = toWorldSoup(soups(mfg), mfgMatrix)
@@ -177,12 +179,11 @@ describe.skipIf(!HAVE_M87)('overlay diff profile (m87)', () => {
     start = performance.now()
     const full = booleanDiff(soups(mfg), soups(stp), mfgMatrix, stpMatrix)
     const fullMs = performance.now() - start
-    expect(full?.over).not.toBeNull()
-    expect(full?.under).not.toBeNull()
-    // Loose order-of-magnitude guards for m87's known notch diffs (red ~2.7k,
-    // blue ~4k mm³ as measured): presence and rough scale must hold.
-    expect(full?.overVolume ?? 0).toBeGreaterThan(1000)
-    expect(full?.underVolume ?? 0).toBeGreaterThan(2000)
+    // Clean part: the boolean finds no over/under solid at all.
+    expect(full?.over).toBeNull()
+    expect(full?.under).toBeNull()
+    expect(full?.overVolume ?? 0).toBeLessThan(200)
+    expect(full?.underVolume ?? 0).toBeLessThan(200)
 
     const rows: [string, string][] = [
       ['reconstruct (OCC booleans)', `${(reconstructMs / 1000).toFixed(1)}s`],
