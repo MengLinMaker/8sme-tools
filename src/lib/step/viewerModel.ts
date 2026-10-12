@@ -51,10 +51,12 @@ function referenceKey(reference: Uint8Array | undefined): number {
 /**
  * Rebuild a part's STEP from its NC for the viewer (optionally oriented to a reference STEP),
  * reusing the result for repeated opens / view-mode switches of the same `(NC, reference)`.
+ * `priority` defaults to foreground (the user is looking at it now); neighbours prefetch at a
+ * lower one so they never delay the open part.
  */
 export function reconstructForViewer(
   ncText: string,
-  options: { reference?: Uint8Array; simplify?: boolean } = {},
+  options: { reference?: Uint8Array; simplify?: boolean; priority?: number } = {},
 ): Promise<Uint8Array | null> {
   const key = `${options.simplify ? 1 : 0}:${referenceKey(options.reference)}:${ncText}`
   const hit = reconstructCache.get(key)
@@ -68,7 +70,7 @@ export function reconstructForViewer(
     .reconstruct(ncText, {
       reference: options.reference,
       simplify: options.simplify,
-      priority: PRIORITY_FOREGROUND,
+      priority: options.priority ?? PRIORITY_FOREGROUND,
     })
     .then((result) => (result.step ? new TextEncoder().encode(result.step) : null))
     .catch((error) => {

@@ -28,6 +28,11 @@ interface Task {
 const PRIORITY_WARM = -10
 /** Bulk background analysis across the whole job. */
 const PRIORITY_BACKGROUND = 0
+/**
+ * The marks either side of the one being viewed — cheap to guess (navigation is ±1) and worth
+ * building ahead of background analysis, but never ahead of the part the user is actually on.
+ */
+export const PRIORITY_NEIGHBOR = 5
 /** Something the user is looking at right now — jumps ahead of the background queue. */
 export const PRIORITY_FOREGROUND = 10
 

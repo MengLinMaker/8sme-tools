@@ -61,7 +61,12 @@ import {
   type SizeCheck,
   type StepMeasure,
 } from '@/lib/step/measure'
-import { getStepWorkerPool, PRIORITY_FOREGROUND, prebootStepWorkers } from '@/lib/step/stepPool'
+import {
+  getStepWorkerPool,
+  PRIORITY_FOREGROUND,
+  PRIORITY_NEIGHBOR,
+  prebootStepWorkers,
+} from '@/lib/step/stepPool'
 import { clearViewerModels, reconstructForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { flattenZipEntries } from '@/lib/zip'
@@ -1248,6 +1253,25 @@ export function PreflightPage() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [viewing, gotoOffset])
+
+  // Build the manufactured model for the mark either side of the one being viewed, ahead of time:
+  // navigation is ±1 (arrow keys / prev-next), so a neighbour is the next likely open. Queued at a
+  // priority below the on-demand build but above background analysis, so it never delays the part
+  // the user is actually waiting on. Best-effort — a failed/aborted prefetch just rebuilds on open.
+  useEffect(() => {
+    if (!viewing || viewingIndex < 0) return
+    for (const delta of [1, -1]) {
+      const neighbour = viewableParts[viewingIndex + delta]
+      const ncPath = neighbour?.nc?.path
+      const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
+      if (!ncBytes) continue
+      const reference = neighbour.step ? bytesByPath.get(neighbour.step.path) : undefined
+      void reconstructForViewer(new TextDecoder().decode(ncBytes), {
+        reference,
+        priority: PRIORITY_NEIGHBOR,
+      }).catch(() => {})
+    }
+  }, [viewing, viewingIndex, viewableParts, bytesByPath])
 
   /** The override a part carries, if any (cleaned or regenerated). */
   const overrideFor = useCallback(
