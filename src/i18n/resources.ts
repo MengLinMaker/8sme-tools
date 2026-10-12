@@ -110,6 +110,8 @@ export const en = {
       exportFindings: 'Export findings',
       exportParts: 'Export parts',
       exportFixed: 'Export fixed ({{count}})',
+      exportSelected: 'Export selected ({{count}})',
+      nothingSelected: 'No exportable files for the selected parts.',
     },
     filters: {
       all: 'All',
@@ -132,6 +134,7 @@ export const en = {
       searchPlaceholder: 'Search mark…',
       searchClear: 'Clear search',
       searchEmpty: 'No marks match “{{query}}”.',
+      selectAll: 'Select all parts',
     },
     columns: {
       mark: 'Mark',
@@ -491,6 +494,8 @@ export const zh = {
       exportFindings: '导出结果',
       exportParts: '导出零件',
       exportFixed: '导出已修复 ({{count}})',
+      exportSelected: '导出所选 ({{count}})',
+      nothingSelected: '所选零件没有可导出的文件。',
     },
     filters: {
       all: '全部',
@@ -513,6 +518,7 @@ export const zh = {
       searchPlaceholder: '搜索标记…',
       searchClear: '清除搜索',
       searchEmpty: '没有匹配“{{query}}”的标记。',
+      selectAll: '全选零件',
     },
     columns: {
       mark: '标记',

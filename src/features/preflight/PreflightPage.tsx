@@ -234,6 +234,9 @@ export function PreflightPage() {
   const [bundle, setBundle] = useState<InputBundle | null>(null)
   const [viewing, setViewing] = useState<PartRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** Marks ticked in the parts table for the selective PDF/STEP/NC export. */
+  const [selectedMarks, setSelectedMarks] = useState<Set<string>>(new Set())
+  const selectAnchor = useRef<string | null>(null)
   const [modelChecks, setModelChecks] = useState<Map<string, SizeCheck>>(new Map())
   const [manufactureChecks, setManufactureChecks] = useState<Map<string, ModelComparison>>(
     new Map(),
@@ -268,6 +271,8 @@ export function PreflightPage() {
     setBundle(input)
     setViewing(null)
     setStepOverrides(new Map())
+    setSelectedMarks(new Set())
+    selectAnchor.current = null
     setMarkQuery('')
     setAnalyzing(true)
     clearViewerModels()
@@ -1160,6 +1165,45 @@ export function PreflightPage() {
     return sortedParts.filter((part) => part.mark.toLowerCase().includes(query))
   }, [sortedParts, markQuery])
 
+  /** Toggle one mark; shift extends the selection from the last anchor over the visible order. */
+  const toggleMark = useCallback(
+    (mark: string, shift: boolean) => {
+      const order = visibleParts.map((part) => part.mark)
+      setSelectedMarks((prev) => {
+        const next = new Set(prev)
+        if (shift && selectAnchor.current != null) {
+          const from = order.indexOf(selectAnchor.current)
+          const to = order.indexOf(mark)
+          if (from >= 0 && to >= 0) {
+            const [lo, hi] = from <= to ? [from, to] : [to, from]
+            for (let i = lo; i <= hi; i++) next.add(order[i])
+            return next
+          }
+        }
+        if (next.has(mark)) next.delete(mark)
+        else next.add(mark)
+        return next
+      })
+      if (!shift) selectAnchor.current = mark
+    },
+    [visibleParts],
+  )
+
+  const allVisibleSelected =
+    visibleParts.length > 0 && visibleParts.every((part) => selectedMarks.has(part.mark))
+
+  const toggleAllVisible = useCallback(() => {
+    setSelectedMarks((prev) => {
+      const next = new Set(prev)
+      const everySelected = visibleParts.every((part) => prev.has(part.mark))
+      for (const part of visibleParts) {
+        if (everySelected) next.delete(part.mark)
+        else next.add(part.mark)
+      }
+      return next
+    })
+  }, [visibleParts])
+
   /** The parts in table order that have something to show in the viewer — the next/prev ring. */
   const viewableParts = useMemo(
     () => visibleParts.filter((part) => part.step || part.nc),
@@ -1340,6 +1384,31 @@ export function PreflightPage() {
       new Blob([zipSync(out)], { type: 'application/zip' }),
     )
   }, [result, bundle, stepOverrides])
+
+  /** Exports the ticked parts' PDF drawing + STEP + NC together in one zip (STEP overrides applied). */
+  const exportSelected = useCallback(() => {
+    if (!result || !bundle || selectedMarks.size === 0) return
+    const out: Record<string, Uint8Array> = {}
+    for (const part of result.parts) {
+      if (!selectedMarks.has(part.mark)) continue
+      for (const path of [part.pdf?.path, part.nc?.path, part.step?.path]) {
+        if (!path || path in out) continue
+        const bytes = bytesByPath.get(path)
+        if (bytes) out[path] = bytes
+      }
+      const override = stepOverrides.get(part.mark)
+      if (override && part.step) out[part.step.path] = override.bytes
+    }
+    if (Object.keys(out).length === 0) {
+      setError(t('preflight.findings.nothingSelected'))
+      return
+    }
+    const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
+    downloadBlob(
+      `selected-${safeName || 'job'}.zip`,
+      new Blob([zipSync(out)], { type: 'application/zip' }),
+    )
+  }, [result, bundle, selectedMarks, bytesByPath, stepOverrides, t])
 
   return (
     <div className="flex flex-col gap-6">
@@ -1573,6 +1642,13 @@ export function PreflightPage() {
                 >
                   {t('preflight.findings.exportParts')}
                 </Button>
+                <Button
+                  size="sm"
+                  onClick={exportSelected}
+                  disabled={selectedMarks.size === 0}
+                >
+                  {t('preflight.findings.exportSelected', { count: selectedMarks.size })}
+                </Button>
                 {stepOverrides.size > 0 && (
                   <Button variant="outline" size="sm" onClick={exportFixed}>
                     {t('preflight.findings.exportFixed', { count: stepOverrides.size })}
@@ -1583,8 +1659,16 @@ export function PreflightPage() {
             {partsOpen && (
               <CardContent>
                 <Table containerClassName="max-h-[70vh] overflow-auto">
-                  <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:border-b [&_th]:border-border [&_th]:bg-card [&_th:first-child]:left-0 [&_th:first-child]:z-30">
+                  <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:border-b [&_th]:border-border [&_th]:bg-card [&_th:first-child]:left-0 [&_th:first-child]:z-30 [&_th:nth-child(2)]:left-8 [&_th:nth-child(2)]:z-30">
                     <TableRow className="hover:bg-transparent">
+                      <TableHead className="w-8">
+                        <input
+                          type="checkbox"
+                          checked={allVisibleSelected}
+                          onChange={toggleAllVisible}
+                          aria-label={t('preflight.parts.selectAll')}
+                        />
+                      </TableHead>
                       {PART_COLUMNS.map((column) => (
                         <SortHead
                           key={column.key}
@@ -1596,11 +1680,11 @@ export function PreflightPage() {
                       ))}
                     </TableRow>
                   </TableHeader>
-                  <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card">
+                  <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card [&_td:nth-child(2)]:sticky [&_td:nth-child(2)]:left-8 [&_td:nth-child(2)]:z-10 [&_td:nth-child(2)]:bg-card">
                     {visibleParts.length === 0 && (
                       <TableRow className="hover:bg-transparent">
                         <TableCell
-                          colSpan={PART_COLUMNS.length}
+                          colSpan={PART_COLUMNS.length + 1}
                           className="text-center text-sm text-muted-foreground"
                         >
                           {t('preflight.parts.searchEmpty', { query: markQuery.trim() })}
@@ -1640,6 +1724,18 @@ export function PreflightPage() {
                           }}
                           className="cursor-pointer outline-none focus-visible:bg-accent/60"
                         >
+                          <TableCell className="w-8 p-0 text-center">
+                            <input
+                              type="checkbox"
+                              checked={selectedMarks.has(part.mark)}
+                              readOnly
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                toggleMark(part.mark, event.shiftKey)
+                              }}
+                              aria-label={part.mark}
+                            />
+                          </TableCell>
                           <TableCell className="font-mono text-xs">{part.mark}</TableCell>
                           <TableCell>
                             {pills.length === 0 ? (
