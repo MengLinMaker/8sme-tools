@@ -64,6 +64,7 @@ import {
 import { getStepWorkerPool, PRIORITY_FOREGROUND, prebootStepWorkers } from '@/lib/step/stepPool'
 import { clearViewerModels, reconstructForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
+import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
 import { createOrbitBus, requestLocation } from './orbitSync'
@@ -1369,44 +1370,49 @@ export function PreflightPage() {
     [bytesByPath, setOverride],
   )
 
-  /** Exports the job with every STEP the user fixed (cleaned/regenerated) substituted in. */
+  /**
+   * Exports the job with every STEP the user fixed (cleaned/regenerated) substituted in.
+   * The archive is flattened to basenames so the operator gets a folderless drop into WiseCAM.
+   */
   const exportFixed = useCallback(() => {
     if (!result || !bundle || stepOverrides.size === 0) return
-    const out: Record<string, Uint8Array> = {}
-    for (const entry of bundle.entries) out[entry.path] = entry.bytes
+    const files = new Map<string, Uint8Array>()
+    for (const entry of bundle.entries) files.set(entry.path, entry.bytes)
     for (const [mark, override] of stepOverrides) {
       const path = result.parts.find((part) => part.mark === mark)?.step?.path
-      if (path) out[path] = override.bytes
+      if (path) files.set(path, override.bytes)
     }
     const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
     downloadBlob(
       `fixed-${safeName || 'job'}.zip`,
-      new Blob([zipSync(out)], { type: 'application/zip' }),
+      new Blob([zipSync(flattenZipEntries(files))], { type: 'application/zip' }),
     )
   }, [result, bundle, stepOverrides])
 
-  /** Exports the ticked parts' PDF drawing + STEP + NC together in one zip (STEP overrides applied). */
+  /**
+   * Exports the ticked parts' PDF drawing + STEP + NC together in one flattened zip
+   * (STEP overrides applied).
+   */
   const exportSelected = useCallback(() => {
     if (!result || !bundle || selectedMarks.size === 0) return
-    const out: Record<string, Uint8Array> = {}
+    const files = new Map<string, Uint8Array>()
     for (const part of result.parts) {
       if (!selectedMarks.has(part.mark)) continue
       for (const path of [part.pdf?.path, part.nc?.path, part.step?.path]) {
-        if (!path || path in out) continue
-        const bytes = bytesByPath.get(path)
-        if (bytes) out[path] = bytes
+        if (!path) continue
+        const override = part.step?.path === path ? stepOverrides.get(part.mark) : undefined
+        const bytes = override?.bytes ?? bytesByPath.get(path)
+        if (bytes) files.set(path, bytes)
       }
-      const override = stepOverrides.get(part.mark)
-      if (override && part.step) out[part.step.path] = override.bytes
     }
-    if (Object.keys(out).length === 0) {
+    if (files.size === 0) {
       setError(t('preflight.findings.nothingSelected'))
       return
     }
     const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
     downloadBlob(
       `selected-${safeName || 'job'}.zip`,
-      new Blob([zipSync(out)], { type: 'application/zip' }),
+      new Blob([zipSync(flattenZipEntries(files))], { type: 'application/zip' }),
     )
   }, [result, bundle, selectedMarks, bytesByPath, stepOverrides, t])
 
@@ -1720,17 +1726,28 @@ export function PreflightPage() {
                           }}
                           className="cursor-pointer outline-none focus-visible:bg-accent/60"
                         >
-                          <TableCell className="w-8 p-0 text-center">
-                            <input
-                              type="checkbox"
-                              checked={selectedMarks.has(part.mark)}
-                              readOnly
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                toggleMark(part.mark, event.shiftKey)
-                              }}
-                              aria-label={part.mark}
-                            />
+                          <TableCell className="w-8 p-0">
+                            <label
+                              className="flex cursor-pointer items-center justify-center py-2"
+                              onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedMarks.has(part.mark)}
+                                readOnly
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  toggleMark(part.mark, event.shiftKey)
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === ' ' || event.key === 'Enter') {
+                                    event.stopPropagation()
+                                  }
+                                }}
+                                aria-label={part.mark}
+                              />
+                            </label>
                           </TableCell>
                           <TableCell className="font-mono text-xs">{part.mark}</TableCell>
                           <TableCell>

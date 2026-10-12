@@ -24,3 +24,30 @@ export function readZip(bytes: Uint8Array): ZipEntry[] {
   }
   return entries
 }
+
+/**
+ * Re-keys source-path → bytes into a zip object whose keys are basenames only, so the archive
+ * has no folders (WiseCAM-friendly). Two different sources that share a filename get
+ * `name (2).ext`, `name (3).ext`, … ; the same bytes under the same name are kept once.
+ */
+export function flattenZipEntries(
+  entries: Iterable<readonly [string, Uint8Array]>,
+): Record<string, Uint8Array> {
+  const out: Record<string, Uint8Array> = {}
+  for (const [path, bytes] of entries) {
+    const base = path.split('/').pop() ?? path
+    if (!base) continue
+    if (!(base in out)) {
+      out[base] = bytes
+      continue
+    }
+    if (out[base] === bytes) continue
+    const dot = base.lastIndexOf('.')
+    const stem = dot > 0 ? base.slice(0, dot) : base
+    const ext = dot > 0 ? base.slice(dot) : ''
+    let n = 2
+    while (`${stem} (${n})${ext}` in out) n += 1
+    out[`${stem} (${n})${ext}`] = bytes
+  }
+  return out
+}
