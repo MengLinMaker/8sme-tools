@@ -152,6 +152,9 @@ describe.skipIf(!HAVE_M87)('overlay diff profile (m87)', () => {
     start = performance.now()
     const presence = probeDiffPresence(soups(mfg), soups(stp), mfgMatrix, stpMatrix)
     const probeMs = performance.now() - start
+    console.log(
+      `[debug m87] presence=${presence?.found} over=${presence?.overShare} under=${presence?.underShare}`,
+    )
     expect(presence?.found).toBe(true)
 
     // Split the probe open: index builds vs queries.

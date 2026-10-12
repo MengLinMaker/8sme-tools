@@ -53,6 +53,15 @@ function numbersFrom(tokens: string[]): number[] {
   return out
 }
 
+export const dstvSlotSchema = z.object({
+  /** offset (mm) from the hole's start point to the far end centre */
+  dx: z.number(),
+  dy: z.number(),
+  /** slot direction as DSTV reports it (deg); advisory */
+  angle: z.number(),
+})
+export type DstvSlot = z.infer<typeof dstvSlotSchema>
+
 export const dstvHoleSchema = z.object({
   face: faceSchema,
   /** X along the member from the start end (mm) */
@@ -61,6 +70,13 @@ export const dstvHoleSchema = z.object({
   y: z.number(),
   /** diameter (mm); 0 = pop mark */
   diameter: z.number(),
+  /**
+   * Fabrication letter after the diameter: `l` = slotted/oblong, `g` = thread, `m` = mark,
+   * `s` = counterbore; `null` = plain full hole.
+   */
+  type: z.string().nullable().default(null),
+  /** Set for a slotted (`l`) hole: obround from `(x, y)` to `(x + dx, y + dy)`. */
+  slot: dstvSlotSchema.nullable().default(null),
   /** remaining fields (slot length/width, depth, …) */
   extra: z.array(z.number()).default([]),
 })
@@ -194,12 +210,18 @@ function parseHoles(lines: string[]): DstvHole[] {
     if (!face) continue
     const nums = numbersFrom(rest)
     if (nums.length < 3) continue
+    // `rest[3]` is the `ttt.tt` field carrying the fabrication letter (`l` = slot, `g` = thread,
+    // `m` = mark, `s` = counterbore); a slotted hole then appends width, height and angle.
+    const type = rest[3]?.match(/([a-z])$/i)?.[1]?.toLowerCase() ?? null
+    const slot = type === 'l' ? { dx: nums[4] ?? 0, dy: nums[5] ?? 0, angle: nums[6] ?? 0 } : null
     holes.push(
       dstvHoleSchema.parse({
         face,
         x: nums[0],
         y: nums[1],
         diameter: nums[2],
+        type,
+        slot,
         extra: nums.slice(3),
       }),
     )

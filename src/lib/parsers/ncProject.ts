@@ -21,7 +21,7 @@ import {
   type NcFaceFrame,
   placeNcFace,
 } from './ncFaces'
-import type { NcFace, NcGeometry } from './ncGeometry'
+import type { NcFace, NcGeometry, NcHole } from './ncGeometry'
 
 export type Vec3 = [number, number, number]
 
@@ -53,6 +53,38 @@ export interface NcLineSets {
 
 /** Segments around each hole ring — enough to read as a circle at part scale. */
 const HOLE_STEPS = 24
+
+/**
+ * The face-space outline of a hole as a closed polyline (last point repeats the first): a circle,
+ * or — for a DSTV slotted (`l`) hole — an **obround** (stadium) whose end centres are the hole's
+ * start point `(x, y)` and its far end `(x + dx, y + dy)`, each of radius `diameter / 2`.
+ */
+export function holeOutline(hole: NcHole, steps = HOLE_STEPS): [number, number][] {
+  const r = hole.diameter / 2
+  const slot = hole.slot
+  const points: [number, number][] = []
+  if (slot && (slot.dx !== 0 || slot.dy !== 0)) {
+    const base = Math.atan2(slot.dy, slot.dx)
+    const half = Math.max(2, Math.round(steps / 2))
+    // Far end's semicircle, sweeping through the slot direction (base ± 90°), then the near
+    // end's, back to the start — together they trace the full stadium.
+    for (let i = 0; i <= half; i++) {
+      const a = base - Math.PI / 2 + (i / half) * Math.PI
+      points.push([hole.x + slot.dx + Math.cos(a) * r, hole.y + slot.dy + Math.sin(a) * r])
+    }
+    for (let i = 0; i <= half; i++) {
+      const a = base + Math.PI / 2 + (i / half) * Math.PI
+      points.push([hole.x + Math.cos(a) * r, hole.y + Math.sin(a) * r])
+    }
+    points.push([points[0][0], points[0][1]])
+    return points
+  }
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * Math.PI * 2
+    points.push([hole.x + Math.cos(a) * r, hole.y + Math.sin(a) * r])
+  }
+  return points
+}
 
 /** Samples taken along a cut segment when testing whether any of it has material (see `reached`). */
 const REACH_SAMPLES = 8
@@ -245,15 +277,15 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
   for (const hole of nc.holes) {
     const r = hole.diameter / 2
     if (!(r > 0)) continue
+    const outline = holeOutline(hole)
     const ring: Vec3[] = []
     let anyReached = false
-    for (let i = 0; i <= HOLE_STEPS; i++) {
-      const angle = (i / HOLE_STEPS) * Math.PI * 2
-      const placed = place(hole.face, hole.x + Math.cos(angle) * r, hole.y + Math.sin(angle) * r)
+    for (const [hx, hy] of outline) {
+      const placed = place(hole.face, hx, hy)
       if (materialReaches(frame, section, hole.face, placed.point.cross)) anyReached = true
       ring.push(placed.world)
     }
-    // Drop a hole that sits entirely where the section has no material on its face.
+    // Drop a hole/slot that sits entirely where the section has no material on its face.
     if (!anyReached) continue
     for (let i = 0; i < ring.length - 1; i++) push(byFace[hole.face], ring[i], ring[i + 1])
   }

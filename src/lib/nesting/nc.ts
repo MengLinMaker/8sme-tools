@@ -144,7 +144,14 @@ export function buildStitchedBeamNc(input: {
   if (geometry.holes.length > 0) {
     lines.push('BO')
     for (const hole of geometry.holes) {
-      lines.push(`  ${hole.face} ${mm(hole.x)} ${mm(hole.y)} ${mm(hole.diameter)}`)
+      const slot = hole.slot
+      if (slot && (slot.dx !== 0 || slot.dy !== 0)) {
+        lines.push(
+          `  ${hole.face} ${mm(hole.x)} ${mm(hole.y)} ${mm(hole.diameter)} 0.00l ${mm(slot.dx)} ${mm(slot.dy)} ${mm(slot.angle)}`,
+        )
+      } else {
+        lines.push(`  ${hole.face} ${mm(hole.x)} ${mm(hole.y)} ${mm(hole.diameter)}`)
+      }
     }
   }
   lines.push('EN')

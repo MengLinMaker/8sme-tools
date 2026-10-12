@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { type NcFaceFrame, resolveNcFaceFrame } from './ncFaces'
 import type { NcGeometry } from './ncGeometry'
-import { projectNc } from './ncProject'
+import { holeOutline, projectNc } from './ncProject'
 
 describe('resolveNcFaceFrame', () => {
   it('matches each face pair to the section axis its contour spans', () => {
@@ -127,5 +127,31 @@ describe('projectNc', () => {
     }
     const out = projectNc(nc, { frame, section: oneSided, toScene, normal })
     expect(out.cuts).toHaveLength(0)
+  })
+})
+
+describe('holeOutline', () => {
+  it('outlines a plain hole as a circle of radius diameter/2', () => {
+    const ring = holeOutline({ face: 'o', x: 10, y: 5, diameter: 10 })
+    for (const [x, y] of ring) expect(Math.hypot(x - 10, y - 5)).toBeCloseTo(5, 9)
+  })
+
+  it('outlines a slotted (`l`) hole as an obround between its two end centres', () => {
+    // Start centre (0, 0), far centre (0, 20) → a 10 mm-wide obround spanning y = −5…25.
+    const ring = holeOutline({
+      face: 'o',
+      x: 0,
+      y: 0,
+      diameter: 10,
+      slot: { dx: 0, dy: 20, angle: 0 },
+    })
+    const xs = ring.map(([x]) => x)
+    const ys = ring.map(([, y]) => y)
+    expect(Math.min(...xs)).toBeCloseTo(-5, 6)
+    expect(Math.max(...xs)).toBeCloseTo(5, 6)
+    expect(Math.min(...ys)).toBeCloseTo(-5, 6)
+    expect(Math.max(...ys)).toBeCloseTo(25, 6)
+    // A circle of the same diameter would top out at y = 5; the slot must reach 25.
+    expect(Math.max(...ys)).toBeGreaterThan(20)
   })
 })

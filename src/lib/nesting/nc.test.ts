@@ -78,4 +78,28 @@ describe('buildStitchedBeamNc', () => {
       buildStitchedBeamNc({ section: UB, name: 'beam', stockLength: 12000, items: [] }),
     ).toBeNull()
   })
+
+  it('re-emits a slotted (`l`) hole as a slot, not a plain circle', () => {
+    const items = [
+      {
+        start: 0,
+        geometry: {
+          contours: [],
+          holes: [
+            {
+              face: 'o' as const,
+              x: 267.8,
+              y: 25,
+              diameter: 10,
+              slot: { dx: 0, dy: 10, angle: 0 },
+            },
+          ],
+          notches: [],
+        },
+      },
+    ]
+    const text = buildStitchedBeamNc({ section: UB, name: 'beam', stockLength: 12000, items })
+    expect(text).toContain('  o 267.80 25.00 10.00 0.00l 0.00 10.00 0.00')
+    expect(parseNcGeometry(text ?? '').holes[0]?.slot).toEqual({ dx: 0, dy: 10, angle: 0 })
+  })
 })

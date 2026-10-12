@@ -310,7 +310,7 @@ export async function reconstructSolidFromNc(
   if (!section || section.points.length < 3) return null
 
   await ensureOc()
-  const { draw, drawCircle } = await import('replicad')
+  const { draw, drawCircle, drawRoundedRectangle } = await import('replicad')
   const poly = (pts: Pt[], radii?: number[]) => {
     let pen = draw(pts[0])
     for (let i = 1; i < pts.length; i++) {
@@ -341,7 +341,7 @@ export async function reconstructSolidFromNc(
   const outer = geo.contours.filter((c) => c.kind === 'outer')
   const maxX = Math.max(
     ...geo.contours.flatMap((c) => c.points.map((p) => p[0])),
-    ...geo.holes.map((h) => h.x + h.diameter),
+    ...geo.holes.map((h) => Math.max(h.x, h.x + (h.slot?.dx ?? 0)) + h.diameter),
   )
   const faceAxis = (face: string): Axis => faceSpanAxis(frame, face as NcFace)
   const halfOf = (axis: Axis): number => faceHalf(frame, axis)
@@ -522,20 +522,28 @@ export async function reconstructSolidFromNc(
       if (otherReached) sign = sign > 0 ? -1 : 1
     }
     const outside = faceOut + 2
+    // A plain hole is a circle; a DSTV slotted (`l`) hole is an obround (stadium) — a rounded
+    // rectangle whose corner radius is the hole radius, so its ends are true semicircles — laid
+    // from the start point `(x, y)` to the far end `(x + dx, y + dy)` in the face plane.
+    const crossDrawing = (): ReturnType<typeof drawCircle> => {
+      const slot = h.slot
+      if (slot && (slot.dx !== 0 || slot.dy !== 0)) {
+        const length = Math.hypot(slot.dx, slot.dy)
+        const angle = (Math.atan2(slot.dy, slot.dx) * 180) / Math.PI
+        return drawRoundedRectangle(length + h.diameter, h.diameter, h.diameter / 2)
+          .rotate(angle)
+          .translate(h.x + slot.dx / 2, h.y + slot.dy / 2 - half)
+      }
+      return drawCircle(h.diameter / 2).translate(h.x, h.y - half)
+    }
     if (axis === 0) {
       // Drill along the 3D Z axis (perpendicular to the `v`/`h` faces).
-      const cyl = drawCircle(h.diameter / 2)
-        .translate(h.x, h.y - half)
-        .sketchOnPlane('XY')
-        .extrude(BEAM_REACH)
+      const cyl = crossDrawing().sketchOnPlane('XY').extrude(BEAM_REACH)
       const shift = sign > 0 ? outside - BEAM_REACH : -outside
       solid = solid.cut(cyl.translate(0, 0, shift) as unknown as SolidOps)
     } else {
       // Drill along the 3D Y axis (`o`/`u`); `sketchOnPlane('XZ')` extrudes towards −Y.
-      const cyl = drawCircle(h.diameter / 2)
-        .translate(h.x, h.y - half)
-        .sketchOnPlane('XZ')
-        .extrude(BEAM_REACH)
+      const cyl = crossDrawing().sketchOnPlane('XZ').extrude(BEAM_REACH)
       const shift = sign > 0 ? outside : BEAM_REACH - outside
       solid = solid.cut(cyl.translate(0, shift, 0) as unknown as SolidOps)
     }

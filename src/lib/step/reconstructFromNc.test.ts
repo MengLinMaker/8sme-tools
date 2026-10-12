@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
-import { nw31Top, OUTPUT_DIR } from '@test/fixtures'
+import { nw30Bottom, nw31Top, OUTPUT_DIR } from '@test/fixtures'
 import {
   BufferGeometry,
   Float32BufferAttribute,
@@ -144,5 +144,26 @@ describe.skipIf(!HAVE)('reconstruct parts from NC (experimental)', () => {
       const hits = raycaster.intersectObjects(meshes, false).length
       expect(hits, `vØ${hole.diameter} at x=${hole.x} y=${hole.y} drilled`).toBe(0)
     }
+  }, 300000)
+})
+
+const M71 = nw30Bottom('m71.nc1')
+
+describe.skipIf(!existsSync(M71))('reconstruct slotted holes (NW30)', () => {
+  it('removes the slot material a plain circle would leave (m71)', async () => {
+    // m71's `o` face carries four Ø10 slots (`0.00l 0.00 10.00 0.00`). Rebuilding the same NC
+    // with the slot type stripped leaves four plain Ø10 circles, so the difference in built
+    // volume is exactly the slot material: 4 × (10 mm × 10 mm extension) × ~6.7 mm flange.
+    const ncText = readFileSync(M71, 'utf8')
+    const withSlots = await reconstructStepFromNc(ncText)
+    const circles = ncText.replace(/(\b0\.00l)\s+[\d.-]+\s+[\d.-]+\s+[\d.-]+/g, '')
+    expect(circles).not.toBe(ncText)
+    const withCircles = await reconstructStepFromNc(circles)
+    expect(withSlots).toBeTruthy()
+    expect(withCircles).toBeTruthy()
+    if (!withSlots || !withCircles) return
+    const slotted = await measure(withSlots)
+    const round = await measure(withCircles)
+    expect(round.vol - slotted.vol).toBeGreaterThan(500)
   }, 300000)
 })

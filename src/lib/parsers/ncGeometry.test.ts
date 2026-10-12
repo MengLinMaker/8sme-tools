@@ -50,6 +50,28 @@ describe('parseNcGeometry', () => {
     expect(parseNcGeometry('ST\n  CO-7255\nEN').contours).toEqual([])
   })
 
+  it('keeps a slotted (`l`) hole as an obround, not a plain circle', () => {
+    // Real NW30 m71 BO lines: the `o` holes are Ø10 slots (`l`, 10 mm end-to-end); the `u` holes
+    // are plain Ø14 drills. The slot's start point is `(267.80, 25.00)`, the far end `+10` in Y.
+    const text = `ST
+  m71
+BO
+  o     267.80u     25.00      10.00      0.00l      0.00     10.00      0.00
+  u     267.80u     29.99      14.00
+EN`
+    const geometry = parseNcGeometry(text)
+    expect(geometry.holes).toHaveLength(2)
+    expect(geometry.holes[0]).toMatchObject({
+      face: 'o',
+      x: 267.8,
+      y: 25,
+      diameter: 10,
+      slot: { dx: 0, dy: 10, angle: 0 },
+    })
+    expect(geometry.holes[1]).toMatchObject({ face: 'u', diameter: 14 })
+    expect(geometry.holes[1]?.slot).toBeUndefined()
+  })
+
   it('separates DSTV notch lines (t/w) from contour vertices', () => {
     // A notched corner adds an extra AK line — the corner coords carrying `w` — that must not be
     // mistaken for a (duplicate) contour vertex.

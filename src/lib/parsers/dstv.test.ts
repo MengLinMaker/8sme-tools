@@ -76,4 +76,34 @@ describe('parseDstv', () => {
     expect(file.blocks).toContain('AK')
     expect(file.blocks).toContain('BO')
   })
+
+  it('reads a slotted (`l`) hole with its slot vector', () => {
+    // Real NW30 m71 BO block: the `o` face carries Ø10 slots (`l`), the `u` face plain Ø14 drills.
+    const text = `ST
+  CO-7255
+  m71
+  9
+  C300
+  1
+  PFC100*50
+  U
+  2101.01
+  100.00
+  50.00
+  6.70
+  4.20
+  8.00
+BO
+  o     267.80u     25.00      10.00      0.00l      0.00     10.00      0.00
+  u     267.80u     29.99      14.00
+EN`
+    const file = parseDstv(text)
+    expect(file.holes[0]).toMatchObject({
+      face: 'o',
+      diameter: 10,
+      type: 'l',
+      slot: { dx: 0, dy: 10, angle: 0 },
+    })
+    expect(file.holes[1]).toMatchObject({ face: 'u', diameter: 14, type: null, slot: null })
+  })
 })

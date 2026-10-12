@@ -23,11 +23,28 @@ export interface NcContour {
   refs?: (string | null)[]
 }
 
+/**
+ * A DSTV slotted hole (`BO` line with fabrication letter `l`). The cut is an **obround**
+ * (stadium): two end semicircles of radius `diameter / 2`, centred at the hole's start point
+ * `(x, y)` and at `(x + dx, y + dy)`. `dx`/`dy` are the DSTV "width/height" fields (the offset to
+ * the far end centre), not a bounding box; the start point is an end centre, not the slot centre.
+ */
+export interface NcSlot {
+  /** Offset (mm) from the start point `(x, y)` to the far end centre. */
+  dx: number
+  /** Offset (mm) from the start point `(x, y)` to the far end centre. */
+  dy: number
+  /** Slot direction as DSTV reports it (deg); advisory — `dx`/`dy` already give the direction. */
+  angle: number
+}
+
 export interface NcHole {
   face: NcFace
   x: number
   y: number
   diameter: number
+  /** Set when the `BO` line is a slotted (`l`) hole; plain drilled holes leave it undefined. */
+  slot?: NcSlot
 }
 
 /**
@@ -138,7 +155,22 @@ export function parseNcGeometry(text: string): NcGeometry {
 
     if (block === 'BO') {
       const diameter = num(tokens[index + 2])
-      holes.push({ face, x, y, diameter: Number.isFinite(diameter) ? diameter : 0 })
+      const hole: NcHole = { face, x, y, diameter: Number.isFinite(diameter) ? diameter : 0 }
+      // The field after the diameter is `ttt.tt` carrying a fabrication letter: `l` = slotted/
+      // oblong hole, `g` = thread, `m` = mark, `s` = counterbore; a blank = full (plain) hole.
+      // Only `l` appends the slot's width, height and angle.
+      const type = tokens[index + 3]?.match(/([a-z])$/i)?.[1]?.toLowerCase()
+      if (type === 'l') {
+        const dx = num(tokens[index + 4])
+        const dy = num(tokens[index + 5])
+        const angle = num(tokens[index + 6])
+        hole.slot = {
+          dx: Number.isFinite(dx) ? dx : 0,
+          dy: Number.isFinite(dy) ? dy : 0,
+          angle: Number.isFinite(angle) ? angle : 0,
+        }
+      }
+      holes.push(hole)
       continue
     }
     // A notched corner adds an extra `AK` line — the corner coords carrying `t`/`w` — that is not
