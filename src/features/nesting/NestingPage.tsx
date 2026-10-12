@@ -873,6 +873,7 @@ export function NestingPage() {
                         stock={null}
                         beam={viewing.beam}
                         bus={orbitBus}
+                        smoothLines
                       />
                       {twoPane && <PaneTag tone="step">{t('preflight.viewer.step')}</PaneTag>}
                     </div>
