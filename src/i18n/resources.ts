@@ -52,7 +52,7 @@ export const en = {
       preflight: {
         title: 'WiseCAM Preflight',
         description:
-          'Drop a job .zip and validate NC, STEP and PDF files: openability, quantities, and cross-checks against the part list.',
+          'Drop a job .zip / .rar and validate NC, STEP and PDF files: openability, quantities, and cross-checks against the part list.',
       },
       nesting: {
         title: 'T Nesting',
@@ -68,15 +68,15 @@ export const en = {
   dropzone: {
     aria: 'Project input drop zone',
     reading: 'Reading…',
-    title: 'Drop a project .zip or folder',
-    chooseZip: 'Choose .zip',
+    title: 'Drop a project .zip / .rar or folder',
+    chooseZip: 'Choose .zip / .rar',
     chooseFolder: 'Choose folder',
     noFiles: 'No readable NC / STEP / PDF / part-list files found.',
   },
   preflight: {
     title: 'WiseCAM Preflight',
     subtitle:
-      'Drop a job .zip (NC + STEP + PDF, optionally a part list .xlsx). Everything is checked locally in your browser — nothing is uploaded.',
+      'Drop a job .zip / .rar (NC + STEP + PDF, optionally a part list .xlsx). Everything is checked locally in your browser — nothing is uploaded.',
     analyzing: 'Analyzing…',
     source: 'Job',
     stats: {
@@ -436,7 +436,7 @@ export const zh = {
       preflight: {
         title: 'WiseCAM 预检',
         description:
-          '拖入作业 .zip，校验 NC、STEP 与 PDF 文件：可打开性、数量，并与零件清单交叉核对。',
+          '拖入作业 .zip / .rar，校验 NC、STEP 与 PDF 文件：可打开性、数量，并与零件清单交叉核对。',
       },
       nesting: {
         title: 'T 型套料',
@@ -452,15 +452,15 @@ export const zh = {
   dropzone: {
     aria: '项目输入拖放区',
     reading: '读取中…',
-    title: '拖入项目 .zip 或文件夹',
-    chooseZip: '选择 .zip',
+    title: '拖入项目 .zip / .rar 或文件夹',
+    chooseZip: '选择 .zip / .rar',
     chooseFolder: '选择文件夹',
     noFiles: '未找到可读取的 NC / STEP / PDF / 零件清单文件。',
   },
   preflight: {
     title: 'WiseCAM 预检',
     subtitle:
-      '拖入作业 .zip（NC + STEP + PDF，可选零件清单 .xlsx）。全部在浏览器本地检查——不会上传任何数据。',
+      '拖入作业 .zip / .rar（NC + STEP + PDF，可选零件清单 .xlsx）。全部在浏览器本地检查——不会上传任何数据。',
     analyzing: '正在分析…',
     source: '作业',
     stats: {

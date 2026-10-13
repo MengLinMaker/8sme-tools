@@ -29,6 +29,7 @@
     "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "^1.53.0",
     "manifold-3d": "^3.5.4",
+    "node-unrar-js": "^2.0.2",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

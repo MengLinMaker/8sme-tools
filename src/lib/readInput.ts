@@ -1,3 +1,4 @@
+import { isRar, readRar } from './rar'
 import { isZip, readZip, type ZipEntry } from './zip'
 
 export interface InputBundle {
@@ -76,6 +77,7 @@ async function bundleFromDropped(dropped: DroppedFile[]): Promise<InputBundle> {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer())
       if (isZip(bytes)) entries.push(...readZip(bytes))
+      else if (isRar(bytes)) entries.push(...(await readRar(bytes)))
       else entries.push({ path, bytes })
     } catch {
       // Skip anything unreadable (e.g. a directory handle that slipped through).

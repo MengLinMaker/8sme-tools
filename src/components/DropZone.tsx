@@ -71,7 +71,7 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
       <input
         ref={inputRef}
         type="file"
-        accept=".zip"
+        accept=".zip,.rar"
         hidden
         onChange={(event) => {
           void ingest(() => readFiles(Array.from(event.target.files ?? [])))
