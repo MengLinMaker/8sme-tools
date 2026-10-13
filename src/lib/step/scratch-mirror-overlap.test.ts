@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
-import { Matrix4, Quaternion, Vector3 } from 'three'
 import { nw30Bottom, nw31Bottom, nw31Top } from '@test/fixtures'
+import { Matrix4, Quaternion, Vector3 } from 'three'
 import { describe, it } from 'vitest'
 import { ensureOc, setOcWasmUrl } from './occInit'
 import { reconstructStepFromNc } from './reconstructFromNc'
@@ -53,7 +53,9 @@ describe('scratch: mirrored vs proper overlap for a PFC', () => {
       return {
         centre: mn.map((v, k) => (v + mx[k]) / 2),
         size: mn.map((v, k) => mx[k] - v),
-        long: (mn.map((v, k) => mx[k] - v) as number[]).indexOf(Math.max(...mn.map((v, k) => mx[k] - v))),
+        long: (mn.map((v, k) => mx[k] - v) as number[]).indexOf(
+          Math.max(...mn.map((v, k) => mx[k] - v)),
+        ),
       }
     }
     for (const [label, ncPath, stpPath] of PARTS) {
@@ -82,7 +84,10 @@ describe('scratch: mirrored vs proper overlap for a PFC', () => {
           const section = new Matrix4()
           if (angle) section.makeRotationX((angle * Math.PI) / 180)
           if (mirrored) section.multiply(new Matrix4().makeScale(1, -1, 1))
-          const cand = new Matrix4().multiplyMatrices(toRef, new Matrix4().multiplyMatrices(section, pre))
+          const cand = new Matrix4().multiplyMatrices(
+            toRef,
+            new Matrix4().multiplyMatrices(section, pre),
+          )
           const v = common(ref.wrapped, move(sub, cand), 0.1)
           if (mirrored) bestMirror = Math.max(bestMirror, v)
           else bestProper = Math.max(bestProper, v)
