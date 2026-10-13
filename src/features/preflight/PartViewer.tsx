@@ -18,6 +18,7 @@ import {
   type Material,
   Matrix4,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   type Object3D,
   OrthographicCamera,
@@ -93,6 +94,12 @@ const FALLBACK_COLOR = 0x9ca3af
 
 /** NC toolpath line width in screen pixels (fat lines, so they read clearly over the model). */
 const NC_LINE_WIDTH = 3
+/**
+ * Opacity of the translucent bevel-area fins. Low enough that overlapping bevels near one another
+ * stay readable through each other, high enough that a lone fin still reads. (A fin is drawn
+ * double-sided, so its two faces stack — the on-screen density is higher than this value.)
+ */
+const BEVEL_AREA_OPACITY = 0.34
 /** Glow used when an issue row is hovered: a wide additive halo behind the marker + a fatter core. */
 const SABRE_HALO_WIDTH = 16
 const SABRE_HALO_OPACITY = 0.32
@@ -165,24 +172,60 @@ function ncHaloObject(
   return line
 }
 
-/** Builds the NC line sets as coloured fat lines (cut lines + hole rings). */
+/** How welding bevels are drawn: the classic stemmed arrows, or translucent swept area fins. */
+export type BevelStyle = 'arrow' | 'area'
+
+/** The three objects `addNcLines` produces for a projected NC. */
+interface NcProjectedObjects {
+  /** Plain cut lines + hole rings (always drawn). */
+  cutLines: LineSegments2[]
+  /** Stemmed welding-bevel arrows. */
+  bevelArrows: LineSegments2[]
+  /** Translucent welding-bevel area fins. */
+  bevelAreas: Mesh[]
+}
+
+/** Builds the NC line sets as coloured fat lines (cut lines + hole rings + bevel indications). */
 function addNcLines(
   nc: NcGeometry,
   projection: NcProjection,
   resolution: Vector2,
   materials: LineMaterial[],
-): LineSegments2[] {
+): NcProjectedObjects {
   const sets: NcLineSets = projectNc(nc, projection)
-  const lines: LineSegments2[] = []
-  const add = (points: number[], color: number): LineSegments2 | null => {
+  const cutLines: LineSegments2[] = []
+  const bevelArrows: LineSegments2[] = []
+  const bevelAreas: Mesh[] = []
+  const colorAt = (index: number): number =>
+    THICKNESS_COLORS[index % THICKNESS_COLORS.length] ?? FALLBACK_COLOR
+  const lineInto = (target: LineSegments2[], points: number[], color: number): void => {
     const line = ncLineObject(points, color, resolution, materials)
-    if (line) lines.push(line)
-    return line
+    if (line) target.push(line)
   }
   sets.cuts.forEach((cut, index) => {
-    add(cut.points, THICKNESS_COLORS[index % THICKNESS_COLORS.length] ?? FALLBACK_COLOR)
+    lineInto(cutLines, cut.points, colorAt(index))
   })
-  return lines
+  sets.bevelArrows.forEach((bevel, index) => {
+    lineInto(bevelArrows, bevel.points, colorAt(index))
+  })
+  sets.bevelAreas.forEach((bevel, index) => {
+    if (bevel.triangles.length === 0) return
+    const geometry = new BufferGeometry()
+    geometry.setAttribute('position', new Float32BufferAttribute(bevel.triangles, 3))
+    const area = new Mesh(
+      geometry,
+      new MeshBasicMaterial({
+        color: colorAt(index),
+        transparent: true,
+        opacity: BEVEL_AREA_OPACITY,
+        side: DoubleSide,
+        // No depth write so overlapping fins and the model behind them both show through.
+        depthWrite: false,
+      }),
+    )
+    bevelAreas.push(area)
+  })
+  return { cutLines, bevelArrows, bevelAreas }
 }
 
 /** Formats a 0–1 fraction as a percentage, keeping a decimal for tiny-but-nonzero shares. */
@@ -319,6 +362,8 @@ interface SceneHandle {
   setFlip: (flip: boolean) => void
   setDiffVisible: (visible: boolean) => void
   setSabreVisible: (visible: boolean) => void
+  /** Switch the welding-bevel indication between stemmed arrows and translucent area fins. */
+  setBevelStyle: (style: BevelStyle) => void
   /** Show only the span markers whose index is in `indices` (null = all; [] = none). */
   setVisibleSpans: (indices: number[] | null) => void
   /** Glow the sub-cut marker at `index` and dim the rest (null clears the hover highlight). */
@@ -409,6 +454,7 @@ function mountScene(
   nc?: NcGeometry | null,
   ncSection?: [number, number][] | null,
   faceFrame?: NcFaceFrame | null,
+  bevelStyle: BevelStyle = 'arrow',
   onLocationChange?: (locationMm: number, lengthMm: number) => void,
   onAxisAngleChange?: (degrees: number) => void,
 ): SceneHandle {
@@ -526,6 +572,14 @@ function mountScene(
   // same seated frame as the model so they land on the surfaces the laser actually cut.
   const ncObjects: LineSegments2[] = []
   const ncMaterials: LineMaterial[] = []
+  /** Welding-bevel indications, split by style so the toggle just flips visibility. */
+  const ncArrowObjects: LineSegments2[] = []
+  const ncAreaObjects: Mesh[] = []
+  let bevelStyleState: BevelStyle = bevelStyle
+  const applyBevelStyle = (): void => {
+    for (const object of ncArrowObjects) object.visible = bevelStyleState === 'arrow'
+    for (const object of ncAreaObjects) object.visible = bevelStyleState === 'area'
+  }
   const ncResolution = new Vector2(container.clientWidth || 1, container.clientHeight || 1)
   // Red bevel arrows at uncuttable cuts (light-sabre failures) — toggled as one object.
   const sabreObjects: LineSegments2[] = []
@@ -616,14 +670,23 @@ function mountScene(
       // The NC toolpath (cut lines, holes) — only on panes that pass `nc`. Issue markers are
       // drawn separately (toggle-driven), not as toolpath danger marks.
       if (nc) {
-        for (const line of addNcLines(
+        const projected = addNcLines(
           nc,
           { frame, section, toScene, normal },
           ncResolution,
           ncMaterials,
-        )) {
+        )
+        for (const line of projected.cutLines) {
           scene.add(line)
           ncObjects.push(line)
+        }
+        for (const line of projected.bevelArrows) {
+          scene.add(line)
+          ncArrowObjects.push(line)
+        }
+        for (const area of projected.bevelAreas) {
+          scene.add(area)
+          ncAreaObjects.push(area)
         }
       }
       // The guilty cut drawn as a red marker, projected with the shared `toScene`. A marker may
@@ -707,14 +770,23 @@ function mountScene(
         const n = faceNormal(frame, face, beam.profile)
         return n.axis === 0 ? [n.sign, 0, 0] : [0, n.sign, 0]
       }
-      for (const line of addNcLines(
+      const projected = addNcLines(
         nc,
         { frame, section: beam.profile, toScene, normal },
         ncResolution,
         ncMaterials,
-      )) {
+      )
+      for (const line of projected.cutLines) {
         scene.add(line)
         ncObjects.push(line)
+      }
+      for (const line of projected.bevelArrows) {
+        scene.add(line)
+        ncArrowObjects.push(line)
+      }
+      for (const area of projected.bevelAreas) {
+        scene.add(area)
+        ncAreaObjects.push(area)
       }
     }
   }
@@ -1092,6 +1164,8 @@ function mountScene(
     }
   }
 
+  applyBevelStyle()
+
   return {
     overlays,
     diffStats,
@@ -1109,6 +1183,10 @@ function mountScene(
     setSabreVisible(visible: boolean) {
       sabreVisible = visible
       refreshSpanAppearance()
+    },
+    setBevelStyle(style: BevelStyle) {
+      bevelStyleState = style
+      applyBevelStyle()
     },
     setVisibleSpans(indices: number[] | null) {
       const set = indices == null ? null : new Set(indices)
@@ -1170,6 +1248,14 @@ function mountScene(
       for (const line of ncObjects) {
         line.geometry.dispose()
         ;(line.material as LineMaterial).dispose()
+      }
+      for (const line of ncArrowObjects) {
+        line.geometry.dispose()
+        ;(line.material as LineMaterial).dispose()
+      }
+      for (const area of ncAreaObjects) {
+        area.geometry.dispose()
+        ;(area.material as MeshBasicMaterial).dispose()
       }
       for (const lines of sabreObjects) {
         scene.remove(lines)
@@ -1245,6 +1331,9 @@ export interface PartViewerProps {
   onShowDiffChange?: (visible: boolean) => void
   showSabre?: boolean
   onShowSabreChange?: (visible: boolean) => void
+  /** How welding bevels are drawn (stemmed arrows or translucent area fins). Omit to use local state. */
+  bevelStyle?: BevelStyle
+  onBevelStyleChange?: (style: BevelStyle) => void
   /** Hide the in-pane control buttons (the shared toolbar drives the toggles instead). */
   hideControls?: boolean
 }
@@ -1276,6 +1365,8 @@ export default function PartViewer({
   onShowDiffChange,
   showSabre: showSabreProp,
   onShowSabreChange,
+  bevelStyle: bevelStyleProp,
+  onBevelStyleChange,
   hideControls = false,
 }: PartViewerProps) {
   const { t } = useTranslation()
@@ -1288,6 +1379,7 @@ export default function PartViewer({
   onAxisAngleRef.current = onAxisAngleChange
   const showStockRef = useRef(true)
   const showDiffRef = useRef(true)
+  const bevelStyleRef = useRef<BevelStyle>('area')
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
   const [stockState, setStockState] = useState(true)
@@ -1297,6 +1389,7 @@ export default function PartViewer({
   const [diffInfo, setDiffInfo] = useState<DiffStats | null>(null)
   const [diffPresence, setDiffPresence] = useState<DiffPresence | null>(null)
   const [sabreState, setSabreState] = useState(true)
+  const [bevelStyleState, setBevelStyleState] = useState<BevelStyle>('area')
   const flippedRef = useRef(false)
   // The four overlay toggles can be driven by a shared toolbar (controlled props) or fall back to
   // local state when the viewer is used standalone (e.g. the nesting viewer).
@@ -1304,6 +1397,8 @@ export default function PartViewer({
   const flipped = flippedProp ?? flipState
   const showDiff = showDiffProp ?? diffState
   const showSabre = showSabreProp ?? sabreState
+  const bevelStyle = bevelStyleProp ?? bevelStyleState
+  bevelStyleRef.current = bevelStyle
   const toggleStock = () =>
     onShowStockChange ? onShowStockChange(!showStock) : setStockState((value) => !value)
   const toggleFlip = () =>
@@ -1312,6 +1407,10 @@ export default function PartViewer({
     onShowDiffChange ? onShowDiffChange(!showDiff) : setDiffState((value) => !value)
   const toggleSabre = () =>
     onShowSabreChange ? onShowSabreChange(!showSabre) : setSabreState((value) => !value)
+  const toggleBevelStyle = () =>
+    onBevelStyleChange
+      ? onBevelStyleChange(bevelStyle === 'area' ? 'arrow' : 'area')
+      : setBevelStyleState((value) => (value === 'area' ? 'arrow' : 'area'))
 
   useEffect(() => {
     if (!bytes) {
@@ -1357,6 +1456,7 @@ export default function PartViewer({
           nc,
           ncSection,
           faceFrame,
+          bevelStyleRef.current,
           (mm, mmLength) => onLocationRef.current?.(mm, mmLength),
           (degrees) => onAxisAngleRef.current?.(degrees),
         )
@@ -1424,6 +1524,10 @@ export default function PartViewer({
     handleRef.current?.setSabreVisible(showSabre)
   }, [showSabre])
 
+  useEffect(() => {
+    handleRef.current?.setBevelStyle(bevelStyle)
+  }, [bevelStyle])
+
   // Show only the checked failing sub-cuts' markers (null = all, [] = none).
   useEffect(() => {
     if (status !== 'ready') return
@@ -1447,6 +1551,7 @@ export default function PartViewer({
   const hasOverlay = Boolean((stock || beam) && status === 'ready')
   const hasCompare = Boolean(compareBytes && status === 'ready')
   const hasSabre = Boolean(sabreFailures && sabreFailures.length > 0 && status === 'ready')
+  const hasNc = Boolean(nc && status === 'ready')
   const hasDiff = Boolean(hasCompare && diffInfo)
   const diffClean = diffInfo != null && diffInfo.over < 0.001 && diffInfo.under < 0.001
   // Fast probe verdict, shown while the exact boolean still runs.
@@ -1503,6 +1608,15 @@ export default function PartViewer({
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
             {showSabre ? t('viewer.hideSabre') : t('viewer.showSabre')}
+          </button>
+        )}
+        {hasNc && (
+          <button
+            type="button"
+            onClick={toggleBevelStyle}
+            className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
+          >
+            {bevelStyle === 'area' ? t('viewer.bevelArrow') : t('viewer.bevelArea')}
           </button>
         )}
       </div>

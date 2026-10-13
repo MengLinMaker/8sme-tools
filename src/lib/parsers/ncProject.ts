@@ -45,10 +45,18 @@ export interface NcProjection {
   normal: (face: NcFace) => Vec3
 }
 
-/** Cut lines (with their welding-bevel arrows) grouped by the wall thickness they cut. */
+/** Cut lines plus their welding-bevel indications, grouped by the wall thickness they cut. */
 export interface NcLineSets {
-  /** One entry per distinct cut thickness (mm); cut lines and bevel arrows share its colour. */
+  /** Plain cut lines and hole rings; one entry per distinct cut thickness (mm). */
   cuts: { thickness: number; points: number[] }[]
+  /** Stemmed welding-bevel arrows (flat XYZ pair list), coloured like their cut thickness. */
+  bevelArrows: { thickness: number; points: number[] }[]
+  /**
+   * Welding bevels shown as a translucent swept area (flat triangle soup): the cut line swept
+   * along the bevel direction, so many bevels in one spot can be read by their overlap instead of
+   * a thicket of arrows. Coloured like their cut thickness.
+   */
+  bevelAreas: { thickness: number; triangles: number[] }[]
 }
 
 /** Segments around each hole ring — enough to read as a circle at part scale. */
@@ -96,6 +104,8 @@ const DEFAULT_BEVEL_SPUR = 3
 const ARROW_LENGTH = 30
 const ARROW_HEAD = 9
 const ARROW_SPACING = 40
+/** How far (mm) the translucent bevel area sweeps out from the cut line (same reach as an arrow). */
+const BEVEL_AREA_LENGTH = 30
 /** A bevel within this many degrees of the surface normal is a plain (regular) cut — no arrow. */
 const REGULAR_CUT_DEG = 8
 
@@ -148,6 +158,17 @@ function push(target: number[], a: Vec3, b: Vec3): void {
   target.push(a[0], a[1], a[2], b[0], b[1], b[2])
 }
 
+/** One triangle (a, b, c) appended as three vertices, for the translucent bevel-area mesh. */
+function pushTriangle(target: number[], a: Vec3, b: Vec3, c: Vec3): void {
+  target.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2])
+}
+
+/** The quad a → b → c → d as two triangles — a flat fin swept from the cut line. */
+function pushQuad(target: number[], a: Vec3, b: Vec3, c: Vec3, d: Vec3): void {
+  pushTriangle(target, a, b, c)
+  pushTriangle(target, a, c, d)
+}
+
 /**
  * Wall thickness (mm) a face cuts through: the distance from the face plane to the nearest opposite
  * edge of the section (the plate the cut passes through) — e.g. the flange/ web thickness.
@@ -172,6 +193,8 @@ export function faceThickness(
 export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets {
   const { frame, section, toScene, normal } = projection
   const byFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
+  const arrowsByFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
+  const areasByFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
   /** Corner coordinates of the DSTV notch labels on a face — real cuts even where material recedes. */
   const notchCorners = (face: NcFace): [number, number][] =>
     nc.notches.filter((n) => n.face === face).map((n) => [n.x, n.y])
@@ -230,13 +253,13 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       }
       const d0 = bevelDistance(contour.bevels[i])
       const d1 = bevelDistance(contour.bevels[i + 1])
-      // The cut line is grouped by its face's thickness; the bevel just adds a direction arrow.
+      // The cut line is grouped by its face's thickness; the bevel just adds its indication.
       push(byFace[contour.face], a.world, b.world)
       if (d0 <= 0 && d1 <= 0) continue
 
-      // The cut face is tilted off the surface normal by the bevel angle; show that tilt with an
-      // arrow perpendicular to the cut line (in the plane of the normal), plotted periodically.
-      // A bevel within REGULAR_CUT_DEG of the normal is just a plain cut — no arrow.
+      // The cut face is tilted off the surface normal by the bevel angle; show that tilt either as
+      // a stemmed arrow or as a translucent fin swept along the cut line. A bevel within
+      // REGULAR_CUT_DEG of the normal is just a plain cut — neither is drawn.
       const deg =
         Math.abs(bevelAngle(contour.bevels[i])) >= Math.abs(bevelAngle(contour.bevels[i + 1]))
           ? bevelAngle(contour.bevels[i])
@@ -258,6 +281,20 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
         spur[1] * Math.cos(theta) + perp[1] * Math.sin(theta) * side,
         spur[2] * Math.cos(theta) + perp[2] * Math.sin(theta) * side,
       ])
+      // The translucent area: sweep the cut line out along the bevel direction. Overlapping fins of
+      // nearby bevels read by their overlap, instead of a thicket of arrows.
+      const reach: Vec3 = [
+        dir[0] * BEVEL_AREA_LENGTH,
+        dir[1] * BEVEL_AREA_LENGTH,
+        dir[2] * BEVEL_AREA_LENGTH,
+      ]
+      pushQuad(
+        areasByFace[contour.face],
+        a.world,
+        b.world,
+        [b.world[0] + reach[0], b.world[1] + reach[1], b.world[2] + reach[2]],
+        [a.world[0] + reach[0], a.world[1] + reach[1], a.world[2] + reach[2]],
+      )
       const length = Math.hypot(
         b.world[0] - a.world[0],
         b.world[1] - a.world[1],
@@ -271,7 +308,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
           a.world[1] + (b.world[1] - a.world[1]) * t,
           a.world[2] + (b.world[2] - a.world[2]) * t,
         ]
-        arrow(byFace[contour.face], at, dir, line)
+        arrow(arrowsByFace[contour.face], at, dir, line)
       }
     }
   }
@@ -292,20 +329,30 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     for (let i = 0; i < ring.length - 1; i++) push(byFace[hole.face], ring[i], ring[i + 1])
   }
 
-  // Group the cut lines by the wall thickness of the face they cut (same thickness ⇒ same profile).
-  const groups = new Map<number, number[]>()
-  for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
-    const points = byFace[face]
-    if (points.length === 0) continue
-    const key = Math.round(faceThickness(frame, section, face) * 10) / 10
-    const bucket = groups.get(key)
-    if (bucket) bucket.push(...points)
-    else groups.set(key, points)
+  // Group each buffer by the wall thickness of the face it cuts (same thickness ⇒ same colour).
+  const groupByThickness = (
+    buffers: Record<NcFace, number[]>,
+  ): { thickness: number; points: number[] }[] => {
+    const groups = new Map<number, number[]>()
+    for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
+      const points = buffers[face]
+      if (points.length === 0) continue
+      const key = Math.round(faceThickness(frame, section, face) * 10) / 10
+      const bucket = groups.get(key)
+      if (bucket) bucket.push(...points)
+      else groups.set(key, points)
+    }
+    return [...groups.entries()]
+      .map(([thickness, points]) => ({ thickness, points }))
+      .sort((a, b) => a.thickness - b.thickness)
   }
-  const cuts = [...groups.entries()]
-    .map(([thickness, points]) => ({ thickness, points }))
-    .sort((a, b) => a.thickness - b.thickness)
-  return { cuts }
+  const cuts = groupByThickness(byFace)
+  const bevelArrows = groupByThickness(arrowsByFace)
+  const bevelAreas = groupByThickness(areasByFace).map(({ thickness, points }) => ({
+    thickness,
+    triangles: points,
+  }))
+  return { cuts, bevelArrows, bevelAreas }
 }
 
 /** Distinct cut thicknesses (mm) present in an NC, sorted ascending — for the viewer legend. */
