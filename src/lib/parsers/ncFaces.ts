@@ -7,6 +7,12 @@
  * two dimensions — the same rule `reconstructFromNc` uses to build the solid, so the viewer
  * projects each cut onto exactly the face the laser cuts.
  *
+ * DSTV reference (Klietsch poster / DSTV standard): `o`=Topview, `u`=Bottomview, `v`=Frontview
+ * (the *right* face), `h`=Rearview (the *left* face). That letter→side mapping is anchored to
+ * each profile's reference pose and is unreliable for one-sided sections (T, channel, angle),
+ * which is exactly why nothing here trusts the letter — the side is resolved from the section's
+ * own material (`resolveFaceSign`), with the letter only as a tie-break.
+ *
  * Everything here is pure (no three.js / OCC): axes are the section outline's own 2D axes
  * (0 = x/width, 1 = y/depth), matching `partSectionForCode` / `stockOutlineForCode`.
  */

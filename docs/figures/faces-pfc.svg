@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 400" width="520" height="400" font-family="ui-sans-serif, system-ui, sans-serif" role="img" aria-label="200PFC channel face map, canonical stance n">
+  <rect width="520" height="400" fill="#ffffff"/>
+
+  <text x="260" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#111827">200PFC — channel, canonical stance “n” (end view)</text>
+  <text x="260" y="46" text-anchor="middle" font-size="12" fill="#6b7280">web on top, both flanges pointing down · the C opens downward</text>
+
+  <!-- cross-section -->
+  <g transform="translate(260,210) scale(1,-1)">
+    <path d="M -100 37.5 L -100 -37.5 L -88 -37.5 L -88 31.5 L 88 31.5 L 88 -37.5 L 100 -37.5 L 100 37.5 Z"
+          fill="#e5e7eb" stroke="#374151" stroke-width="2" stroke-linejoin="round"/>
+  </g>
+
+  <!-- depth dimension -->
+  <line x1="160" y1="152" x2="360" y2="152" stroke="#9ca3af" stroke-width="1"/>
+  <line x1="160" y1="146" x2="160" y2="158" stroke="#9ca3af" stroke-width="1"/>
+  <line x1="360" y1="146" x2="360" y2="158" stroke="#9ca3af" stroke-width="1"/>
+  <text x="260" y="144" text-anchor="middle" font-size="12" fill="#6b7280">d = 200</text>
+
+  <!-- leaders -->
+  <line x1="260" y1="172" x2="260" y2="156" stroke="#2563eb" stroke-width="1.5"/>
+  <line x1="260" y1="248" x2="260" y2="288" stroke="#dc2626" stroke-width="1.5"/>
+  <line x1="160" y1="210" x2="136" y2="210" stroke="#059669" stroke-width="1.5"/>
+  <line x1="360" y1="210" x2="384" y2="210" stroke="#059669" stroke-width="1.5"/>
+
+  <!-- face chips -->
+  <g>
+    <rect x="212" y="110" width="96" height="26" rx="13" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="260" y="127" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">h = top</text>
+  </g>
+  <g>
+    <rect x="212" y="304" width="96" height="26" rx="13" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="260" y="321" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">v = bottom</text>
+  </g>
+  <g>
+    <rect x="42" y="197" width="94" height="26" rx="13" fill="#dcfce7" stroke="#059669"/>
+    <text x="89" y="214" text-anchor="middle" font-size="13" font-weight="700" fill="#047857">u = side</text>
+  </g>
+  <g>
+    <rect x="384" y="197" width="94" height="26" rx="13" fill="#dcfce7" stroke="#059669"/>
+    <text x="431" y="214" text-anchor="middle" font-size="13" font-weight="700" fill="#047857">o = side</text>
+  </g>
+
+  <text x="260" y="360" text-anchor="middle" font-size="11" fill="#6b7280">200PFC · d=200 · b=75 · tf=12 · tw=6.0 · r=12 mm</text>
+  <text x="260" y="378" text-anchor="middle" font-size="11" fill="#b45309">Tekla authors a PFC web-vertical — our “n” stance is that pose rotated 90°</text>
+</svg>

@@ -45,6 +45,15 @@ maps DSTV faces to machine roles + enforces the cut-side rules.
   `h` behind. In our stance the machine role is the face's outward normal (`+y` top, `−y` bottom,
   `±x` side). E.g. UB → `o`=top, `u`=bottom, `v`/`h`=sides; PFC (`n`) → `o`/`u`=sides (the
   flanges), `h`=top (web), `v`=bottom.
+- **The DSTV standard orientation is authoritative for the face letters / reference poses — always
+  stick to it.** Per DSTV 87 + the Klietsch profile scheme, looking along the member (beam into the
+  page): `o` = Topview (↓), `u` = Bottomview (↑), `v` = Frontview (view ←, the **right** face),
+  `h` = Rearview (view →, the **left** face) — i.e. **`v` is right, `h` is left**. Each profile's
+  letters are anchored to its *reference pose* (e.g. `U`/`C` = web vertical with the C opening
+  right; `T` = flange vertical, web pointing `+v`; `I` = web vertical), which may be a rotation of
+  our machine stance. Face maps + figures: `docs/canonical-orientation.md` §3.
+  - **Open issue:** the `tee` row in `canonical.ts`'s `FACE_ROLES` does **not** fall out of the T
+    reference pose — reconcile on the first real T article (flagged in the doc §3).
 - **Cut-side priority: side first (most controllable), then top, bottom last.**
 - **Bottom cuts** eject a slug that can hit the head: only cut the bottom when the removed piece
   is **< 10 g** (`BOTTOM_CUT_MAX_GRAMS`). `holeRemovedMassGrams(d, t)` / `bottomCutAllowed(g)`

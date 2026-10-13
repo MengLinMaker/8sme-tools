@@ -59,6 +59,28 @@ DSTV face letters (the first token of every `BO` / `AK` / `IK` / `SI` line):
 | `u` | Unten | bottom |
 | `h` | Hinten | behind / rear |
 
+**The letters are the four view directions of the profile, not just labels.** In the DSTV/Tekla
+reference (Klietsch poster; DSTV standard), looking along the member — beam into the page — the
+faces are placed: `o` = **Topview** (view direction ↓), `u` = **Bottomview** (↑), `v` =
+**Frontview** (←, i.e. viewed from the right → the **right** face), `h` = **Rearview** (→, viewed
+from the left → the **left** face). **So `v` is the *right* side and `h` the *left*** — see
+`figures/faces-reference-views.svg`.
+
+The letters are anchored to each profile's **reference pose** (how the standard draws it), which
+is **not always our canonical stance**:
+
+| DSTV type | Reference pose (as the standard draws it) | Faces in that pose |
+|---|---|---|
+| `I` | web vertical, flanges horizontal | `o` top flange, `u` bottom flange, `h`/`v` the two web faces (left/right) |
+| `U` / `C` | **web vertical, C opening right** | `o`/`u` top/bottom flange faces, `h` outer web face (left), `v` the open side (right) |
+| `L` | legs vertical + horizontal, open up-right | `o`/`u` the vertical-leg ends, `h`/`v` the outer faces |
+| `M` | rect tube (longer side per exporter) | `o`/`u` top/bottom, `h`/`v` left/right |
+| `T` | **flange vertical, web horizontal (pointing +v)** | `o`/`u` the flange ends, `h` the flange's outer broad face (left), `v` the web end (right) |
+| `RO` / `RU` | round — the letters are arbitrary | around the circumference |
+
+Source: Klietsch *DSTV NC Data* poster (profile types, axes, views) —
+<https://klietsch.com/?action=240827&lang=en&m=page>.
+
 **These are relative to the part's own modelled orientation, not to the machine.** Which
 physical surface each letter addresses is **profile-type dependent** — that is the whole
 problem. The strongest public evidence for the reference orientation is Tekla's *default hard
@@ -89,6 +111,13 @@ non-ambiguous families:
 "`o`/`u` are on the leg that is vertical on the machine". Confirm on the first article and
 pin the value in `canonical.ts`.
 
+> **T open issue.** Rotating the T's *reference pose* (flange vertical, web pointing `+v`) onto
+> our flange-down / web-up stance the same way as `I` / `U` gives `h` = **bottom** (the flange's
+> outer broad face) and `v` = **top** (the web end), with `o`/`u` as the two sides — **not** the
+> `T` row above. `canonical.ts` currently lists `{ o: side, u: bottom, v: side, h: side }`. One of
+> the two is wrong; confirm against the first real T article (the runtime material-sample in
+> `ncFaces.ts` still places the *geometry* correctly either way; only cut-priority is affected).
+
 **For a channel loaded as `n` this gives a useful result:** the flange broad faces are the
 sides (`o`/`u`) — exactly where we *want* to cut (see §4) — and the web's outer face is the
 top (`h`, matching Tekla's default stamp face). Web holes are top/bottom; flange holes are
@@ -99,6 +128,21 @@ side holes.
 > across-extent to the section's two dimensions, and `faceNormal` yields the outward normal the
 > viewer projects with. The table above is the *documented expectation*; the extent match is the
 > *runtime* truth. They must agree — the m41/m31/m87 overlap tests guard it.
+
+### Figures — which physical side each letter lands on
+
+Real sections, end-on (the member runs into the page), with each DSTV face and the machine role
+it becomes in the canonical stance (`figures/`):
+
+![DSTV/Tekla reference: o=Topview, u=Bottomview, v=Frontview (right face), h=Rearview (left face)](figures/faces-reference-views.svg)
+
+![200UB29.8 I-section — H stance: o top, u bottom, v the right side, h the left side](figures/faces-ub.svg)
+
+![BT100*15 tee in the DSTV reference pose (flange vertical, web +v): o top, u bottom, h left, v right; our job stance is this rotated 90° CCW](figures/faces-tee.svg)
+
+![200PFC channel — n stance: h top (web), v bottom (the opening), o the right flange side, u the left](figures/faces-pfc.svg)
+
+![Generic RHS — o top, u bottom, v the right side, h the left (same map as an I)](figures/faces-generic-tube.svg)
 
 ## 4. Cut-side priority
 
@@ -154,6 +198,7 @@ Unchanged and re-stated for completeness (see `AGENTS.md`):
 - Tekla — NC files (default hard-stamp face per profile): https://support.tekla.com/doc/tekla-structures/2026/int_create_nc_files
 - Tekla — DSTV file description (faces `v`/`o`/`u`/`h`): https://support.tekla.com/doc/tekla-structures/2026/int_nc_dstv_file_description
 - NC1-Viewer — block codes & profile types: https://www.nc1-viewer.com/guides/dstv-block-codes
+- The Fabricator — "File export fundamentals in structural steel fabrication" (plain-language DSTV faces + machine-clearance advice): https://www.thefabricator.com/thefabricator/article/cadcamsoftware/file-export-fundamentals-in-structural-steel-fabrication
 - SDS2 — DSTV options ("`o` and `u` are on the leg that is vertical on the CNC machine"): https://techsupport.sds2.com/sds2_2023/Topics/cnc_dstv.htm
 - Klietsch — DSTV NC profile/axis overview: https://klietsch.com/?action=240827&lang=en&m=page
 - See also `docs/nc1-dstv-format.md` and `docs/wisecam-debugging.md`.

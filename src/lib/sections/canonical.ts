@@ -39,11 +39,22 @@ export const CANONICAL_STANCE: Record<ProfileFamily, StockStance> = {
 }
 
 /**
- * Machine role each DSTV face takes in the canonical stance (see the doc §3). Derived by
- * rotating the DSTV/Tekla reference pose (Klietsch profile diagram) onto machine-up (+y = top,
- * −y = bottom, ±x = side). `I` and `U`/`C` are derived and cross-checked against Tekla's default
- * hard-stamp faces; the angle's split between `o`/`u` and `v`/`h` depends on which leg ends up
- * vertical and must be confirmed on the first article.
+ * Machine role each DSTV face takes in the canonical stance (see the doc §3).
+ *
+ * Reference view directions (Klietsch DSTV poster / DSTV standard): looking along the member
+ * (beam into the page), `o` = Topview (↓), `u` = Bottomview (↑), `v` = Frontview (←, so the
+ * *right* face), `h` = Rearview (→, so the *left* face). The letters are anchored to each
+ * profile's reference *pose*: `I` = web vertical; `U`/`C` = web vertical with the C opening
+ * right; `L` = legs vertical + horizontal; `M` = rect tube; `T` = flange vertical, web
+ * horizontal pointing `+v`.
+ *
+ * A family's row below is that reference pose rotated onto machine-up (+y = top, −y = bottom,
+ * ±x = side). `I` and `U`/`C` reproduce the standard exactly (cross-checked against Tekla's
+ * default hard-stamp faces). The angle's `o`/`u` vs `v`/`h` split depends on which leg is
+ * vertical on the machine. NOTE: the `tee` row does **not** fall out of the T reference pose —
+ * rotating a flange-vertical T 90° CCW into our flange-down/web-up stance gives `h`=bottom,
+ * `v`=top, `o`/`u`=sides, not the row below. Confirm on the first real T article; `ncFaces.ts`
+ * places the geometry at runtime regardless (only cut-priority is affected).
  */
 const FACE_ROLES: Record<ProfileFamily, Record<NcFace, MachineRole>> = {
   i: { o: 'top', u: 'bottom', v: 'side', h: 'side' },

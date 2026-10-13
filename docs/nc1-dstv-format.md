@@ -15,30 +15,72 @@ they are **DSTV NC** files exported by **Tekla Structures**.
 
 ### Blocks
 
-| Code | German | Meaning |
+Official DSTV 87 "code blocs" (7th corrected edition, §code-block table):
+
+| Code | Meaning | German |
 |---|---|---|
-| `ST` | Start | Part header: identifiers, grade, profile, dimensions |
-| `EN` | Ende | End of the part |
-| `BO` | Bohrung | Holes (plain, slotted, counterbore/stepped) |
-| `AK` | Außenkontur | Outer contour: end cuts, copes, miters, bevels |
-| `IK` | Innenkontur | Inner contour: rectangular openings / cut-outs |
-| `SI` | Signierung | **Marking / piece-mark text** (the etch) |
-| `PU` | Pulver | Powder/scribe layout marking |
-| `KO` | Körner | Punch (centre) marks |
-| `KA` | Kanten | Bend lines (plates) |
-| `SC` | Schnitt | Saw cut |
-| `TO` | Toleranz | Tolerances |
-| `UE` | Überhöhung | Camber |
+| `ST` | **Start** — beginning of the piece description (header) | Start |
+| `EN` | **End** — end of the piece description | Ende |
+| `BO` | Holes (plain, slotted, counterbore/stepped, threaded) | Bohrung |
+| `SI` | Numbering / **marking** (the etch text) | Signierung |
+| `AK` | External contour: end cuts, copes, miters, bevels | Außenkontur |
+| `IK` | Internal contour: rectangular openings / cut-outs | Innenkontur |
+| `PU` | Powder / scribe layout marking | Pulver |
+| `KO` | Mark (centre/punch dot) | Körner |
+| `SC` | Cut (saw, cutting) — the special 3-D cuts `AK` cannot express | Schnitt |
+| `TO` | Tolerance | Toleranz |
+| `UE` | Camber | Überhöhung |
+| `PR` | Profile description | — |
+| `KA` | Bending / bend lines (plates) | Kanten |
+| `En` `Bn` `Sn` `An` `In` `Pn` `Kn` | the same block on **numbered plane n** (`n` = 0…9) | — |
+| `**` | **Comment line** (free text; must survive a re-export) | — |
+
+Syntax: the code block occupies columns 1–2 and the rest of its line is empty; **data lines
+start with two spaces**; the separator is a space (a letter↔number transition also separates).
 
 ### Face codes (first token of a data line)
 
-`v` = front / web, `o` = top, `u` = bottom, `h` = rear.
-Coordinates are **per face**: X along the member from the start end, Y within that face.
+`v` = front / web (Vorderseite) · `o` = top (Oben) · `u` = bottom (Unten) · `h` = behind
+(Hinten). The standard's own legend: **V = Web = front face, U = Bottom, O = Top, H =
+Behind**; `Np` = zero point, `T` = displacement (transport) direction.
+
+Coordinates are **per face**: X along the member from the start end (the smallest X of a piece
+is `0.0`), Y within that face. The letters name the profile's four *view directions* in the
+machine's reference planes; **which physical surface each is depends on the profile type and
+stance** — see `docs/canonical-orientation.md` §3. Skew cuts: the **web** skew cuts are shown
+in the front (`v`) view, the **flange** skew cuts in the bottom (`u`) view.
 
 ### `ST` header (order matters)
 
-order id → drawing no → phase → piece mark → grade → quantity → **profile type code** →
-profile name → numeric dims (length, height, flange width, tf, tw, radius, weight/m, …).
+Each header field is prefixed with `2x` (two leading spaces). Official order, per the DSTV 87
+header-data table:
+
+| # | Field | Unit |
+|---|---|---|
+| 1 | Order identification | text |
+| 2 | Drawing identification | text |
+| 3 | Phase identification | text |
+| 4 | Piece identification (mark) | text |
+| 5 | Steel quality (grade) | text |
+| 6 | Quantity of pieces | integer |
+| 7 | Profile | text |
+| 8 | Code profile (type letter) | text |
+| 9 | Length, Saw length | mm |
+| 10 | Profile height | mm |
+| 11 | Flange width | mm |
+| 12 | Flange thickness | mm |
+| 13 | Web thickness | mm |
+| 14 | Radius | mm |
+| 15 | Weight by meter | kg/m |
+| 16 | Painting surface by meter | m²/m |
+| 17 | Web start cut | degree |
+| 18 | Web end cut | degree |
+| 19 | Flange start cut | degree |
+| 20 | Flange end cut | degree |
+| 21–24 | Text info on piece (×4) | text |
+
+> **The skew-cut angles are mandatory** (given in any case). For plate/sheet (`B`) profiles the
+> geometry columns map to width / thickness instead.
 
 ### `BO` (holes)
 
@@ -53,8 +95,46 @@ which is how curved copes/miters appear.
 
 ### Profile types
 
-`I` I-profile · `U` U/C · `L` angle · `M` rectangular tube · `RO` round bar · `RU` round
-tube · `B` plate · `C` C-profile · **`T` T-profile** · `SO` special.
+Official "code profile" list (the `ST` header's profile-type field):
+
+| Code | Profile |
+|---|---|
+| `I` | I profile (our UB / UC / TFB) |
+| `L` | L profile (angle) |
+| `U` | U profile (channel / PFC) |
+| `B` | Sheets, plate, teared sheets, etc. |
+| `RU` | Round (solid bar) |
+| `RO` | Rounded tube (CHS) |
+| `M` | Rectangular tube (RHS / SHS) |
+| `C` | C profile (cold-formed) |
+| `T` | T profile |
+| `SO` | Special profile |
+
+> Per the standard §"Used Profiles". Note **`RO` = tube, `RU` = solid bar** — the two letters are
+> easy to swap (our earlier notes had them backwards).
+
+### Value formats
+
+| Value | Unit | Format |
+|---|---|---|
+| Free text | – | `a` (left-aligned, ≤ 80 chars) |
+| Integer | – | `i` |
+| Length | mm | `f` |
+| Angle | degree | `f` |
+| Weight by metre | kg/m | `f` |
+| Painting surface by metre | m²/m | `f` |
+| Empty column | – | `x` |
+
+Angles are positive **anti-clockwise** (mathematical orientation). Lengths are millimetres.
+
+### Coordinate system & standard views
+
+Every face is a 2-D "sheet": **X runs along the member** (from the start end; the smallest X of a
+piece is `0.0`) and **Y across that face**. The four faces unfold around the profile as **Front
+(`v`) / Top (`o`) / Bottom (`u`) / Behind (`h`)**. The zero point (`Np`) and transport
+(displacement) direction (`T`) are marked in the standard's per-profile scheme (page 7); the
+reference *pose* differs by profile type — see the face maps in `docs/canonical-orientation.md`
+§3.
 
 > This matches our files exactly: `ST` → `CO-7255` (order) → mark → grade `C300` →
 > qty → profile `BT100*15` → type **`T`** → length → dims `[b, d/2, tf, tw, r, …]`, then
@@ -101,6 +181,7 @@ Rather than trust our own DSTV parser, **cross-check against a proven implementa
 
 ## Sources
 
+- **DSTV 87 standard** (7th corrected ed.) — *Standard Description for Steel Structure Pieces for the Numerical Controls*, Tekla-hosted PDF: <https://support.tekla.com/dist/sxf/document/dstv_nc_eng.pdf> — pp. 5–9 are the source of the block, unit, profile-code, coordinate and header tables transposed above.
 - Tekla — DSTV file description: <https://support.tekla.com/doc/tekla-structures/2026/int_nc_dstv_file_description>
 - Tekla — Creating NC files (DSTV / BO block notes): <https://support.tekla.com/doc/tekla-structures/2020/int_create_nc_files>
 - Klietsch — DSTV/NC1 overview (profile types, blocks): <https://klietsch.com/?action=240827&lang=en&m=page>
@@ -108,6 +189,7 @@ Rather than trust our own DSTV parser, **cross-check against a proven implementa
 - NC1-Viewer — profile types: <https://www.nc1-viewer.com/guides/dstv-profile-types>
 - Kinetic USA — DSTV import supported blocks: <https://www.kineticusa.com/PrimecutHelp/dstv_file_format.html>
 - Tectonix — what an NC1 file contains: <https://www.tectonixsteel.com/fabricator-faq/what-is-dstv-nc1-file-format>
+- The Fabricator — file-export fundamentals (plain-language `v`/`o`/`u`/`h` + machine clearances): <https://www.thefabricator.com/thefabricator/article/cadcamsoftware/file-export-fundamentals-in-structural-steel-fabrication>
 - Weihong — WiseCAM Tube (producer of the toolpath the machine runs): <https://www.weihong.com.cn/en/products/detail/121>
 - Weihong — NcStudio G-code programming manual: <http://doc.weihong.com.cn:8889/en-us/doc/gcode_programming/index_en.html>
 
