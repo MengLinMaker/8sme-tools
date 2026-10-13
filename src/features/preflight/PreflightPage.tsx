@@ -488,11 +488,6 @@ export function PreflightPage() {
   useEffect(() => {
     writePref('showStock', showStock)
   }, [showStock])
-  // Bevel indication: translucent swept areas (on) vs the classic stemmed arrows (off).
-  const [bevelAreas, setBevelAreas] = useState(() => readPref('bevelAreas', true))
-  useEffect(() => {
-    writePref('bevelAreas', bevelAreas)
-  }, [bevelAreas])
   const openPart = useCallback((part: PartRecord) => {
     setOrbitBus(createOrbitBus())
     setFindingFocus(null)
@@ -2185,9 +2180,6 @@ export function PreflightPage() {
                   {viewingNcGeom && (
                     <div className="flex flex-wrap items-center gap-2">
                       <NcLegend thicknesses={viewingNcProfiles} showMarkings={viewingHasMarkings} />
-                      <Toggle pressed={bevelAreas} onPressedChange={setBevelAreas}>
-                        {t('viewer.bevelArea')}
-                      </Toggle>
                     </div>
                   )}
                   {/* Live location of the orbit pivot along the member (the reticle's position);
@@ -2313,8 +2305,6 @@ export function PreflightPage() {
                             highlight={highlightSpan}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
-                            bevelStyle={bevelAreas ? 'area' : 'arrow'}
-                            onBevelStyleChange={(style) => setBevelAreas(style === 'area')}
                             onLocationChange={handleLocation}
                             onAxisAngleChange={setLocationAxis}
                             hideControls
@@ -2346,8 +2336,6 @@ export function PreflightPage() {
                             focus={manufactured ? findingFocus : null}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
-                            bevelStyle={bevelAreas ? 'area' : 'arrow'}
-                            onBevelStyleChange={(style) => setBevelAreas(style === 'area')}
                             onLocationChange={stepBytes ? undefined : handleLocation}
                             onAxisAngleChange={stepBytes ? undefined : setLocationAxis}
                             hideControls
@@ -2382,8 +2370,6 @@ export function PreflightPage() {
                             highlight={highlightSpan}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
-                            bevelStyle={bevelAreas ? 'area' : 'arrow'}
-                            onBevelStyleChange={(style) => setBevelAreas(style === 'area')}
                             hideControls
                             smoothLines
                           />

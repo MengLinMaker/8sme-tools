@@ -1331,9 +1331,6 @@ export interface PartViewerProps {
   onShowDiffChange?: (visible: boolean) => void
   showSabre?: boolean
   onShowSabreChange?: (visible: boolean) => void
-  /** How welding bevels are drawn (stemmed arrows or translucent area fins). Omit to use local state. */
-  bevelStyle?: BevelStyle
-  onBevelStyleChange?: (style: BevelStyle) => void
   /** Hide the in-pane control buttons (the shared toolbar drives the toggles instead). */
   hideControls?: boolean
 }
@@ -1365,8 +1362,6 @@ export default function PartViewer({
   onShowDiffChange,
   showSabre: showSabreProp,
   onShowSabreChange,
-  bevelStyle: bevelStyleProp,
-  onBevelStyleChange,
   hideControls = false,
 }: PartViewerProps) {
   const { t } = useTranslation()
@@ -1379,7 +1374,6 @@ export default function PartViewer({
   onAxisAngleRef.current = onAxisAngleChange
   const showStockRef = useRef(true)
   const showDiffRef = useRef(true)
-  const bevelStyleRef = useRef<BevelStyle>('area')
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
   const [stockState, setStockState] = useState(true)
@@ -1389,7 +1383,6 @@ export default function PartViewer({
   const [diffInfo, setDiffInfo] = useState<DiffStats | null>(null)
   const [diffPresence, setDiffPresence] = useState<DiffPresence | null>(null)
   const [sabreState, setSabreState] = useState(true)
-  const [bevelStyleState, setBevelStyleState] = useState<BevelStyle>('area')
   const flippedRef = useRef(false)
   // The four overlay toggles can be driven by a shared toolbar (controlled props) or fall back to
   // local state when the viewer is used standalone (e.g. the nesting viewer).
@@ -1397,8 +1390,6 @@ export default function PartViewer({
   const flipped = flippedProp ?? flipState
   const showDiff = showDiffProp ?? diffState
   const showSabre = showSabreProp ?? sabreState
-  const bevelStyle = bevelStyleProp ?? bevelStyleState
-  bevelStyleRef.current = bevelStyle
   const toggleStock = () =>
     onShowStockChange ? onShowStockChange(!showStock) : setStockState((value) => !value)
   const toggleFlip = () =>
@@ -1407,10 +1398,6 @@ export default function PartViewer({
     onShowDiffChange ? onShowDiffChange(!showDiff) : setDiffState((value) => !value)
   const toggleSabre = () =>
     onShowSabreChange ? onShowSabreChange(!showSabre) : setSabreState((value) => !value)
-  const toggleBevelStyle = () =>
-    onBevelStyleChange
-      ? onBevelStyleChange(bevelStyle === 'area' ? 'arrow' : 'area')
-      : setBevelStyleState((value) => (value === 'area' ? 'arrow' : 'area'))
 
   useEffect(() => {
     if (!bytes) {
@@ -1456,7 +1443,7 @@ export default function PartViewer({
           nc,
           ncSection,
           faceFrame,
-          bevelStyleRef.current,
+          'area',
           (mm, mmLength) => onLocationRef.current?.(mm, mmLength),
           (degrees) => onAxisAngleRef.current?.(degrees),
         )
@@ -1524,10 +1511,6 @@ export default function PartViewer({
     handleRef.current?.setSabreVisible(showSabre)
   }, [showSabre])
 
-  useEffect(() => {
-    handleRef.current?.setBevelStyle(bevelStyle)
-  }, [bevelStyle])
-
   // Show only the checked failing sub-cuts' markers (null = all, [] = none).
   useEffect(() => {
     if (status !== 'ready') return
@@ -1551,7 +1534,6 @@ export default function PartViewer({
   const hasOverlay = Boolean((stock || beam) && status === 'ready')
   const hasCompare = Boolean(compareBytes && status === 'ready')
   const hasSabre = Boolean(sabreFailures && sabreFailures.length > 0 && status === 'ready')
-  const hasNc = Boolean(nc && status === 'ready')
   const hasDiff = Boolean(hasCompare && diffInfo)
   const diffClean = diffInfo != null && diffInfo.over < 0.001 && diffInfo.under < 0.001
   // Fast probe verdict, shown while the exact boolean still runs.
@@ -1608,15 +1590,6 @@ export default function PartViewer({
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
             {showSabre ? t('viewer.hideSabre') : t('viewer.showSabre')}
-          </button>
-        )}
-        {hasNc && (
-          <button
-            type="button"
-            onClick={toggleBevelStyle}
-            className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
-          >
-            {bevelStyle === 'area' ? t('viewer.bevelArrow') : t('viewer.bevelArea')}
           </button>
         )}
       </div>
