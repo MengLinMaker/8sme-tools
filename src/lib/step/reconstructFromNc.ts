@@ -422,7 +422,11 @@ export async function reconstructSolidFromNc(
   // the face a `BEAM_REACH` inward, so it passes through that face's wall and stops, never
   // crossing to the opposite wall (which the beam could not reach anyway). The NC gives each hole
   // size its own face (e.g. Ø14 on `o`, Ø10 on `u`).
-  const positiveFace = (face: string): boolean => face === 'o' || face === 'v'
+  // Which side of the section a hole is drilled from. Must agree with the NC projection's
+  // `faceNormal`/`resolveFaceSign` rule (used by the viewer): the `o`/`v` pair sits on the
+  // negative side, `u`/`h` on the positive one. Getting this backwards put holes on the opposite
+  // flange — invisible on a symmetric section, a wrong part on a PFC/T/angle.
+  const positiveFace = (face: string): boolean => face === 'u' || face === 'h'
   for (const h of geo.holes.filter((h) => h.diameter > 0)) {
     const axis = faceAxis(h.face)
     const half = halfOf(axis)
