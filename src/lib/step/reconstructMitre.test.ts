@@ -55,8 +55,7 @@ function endWallArea(vertices: number[], triangles: number[]): number {
 describe.skipIf(!HAVE)('NC reconstruction end geometry', () => {
   it('does not square a near-flush mitre end into a vertical wall (m128)', async () => {
     const nc = readFileSync(join(DIR, 'm128.nc1'), 'utf8')
-    const reference = new Uint8Array(readFileSync(join(DIR, 'm128.stp')))
-    const step = await reconstructStepFromNc(nc, { reference })
+    const step = await reconstructStepFromNc(nc)
     expect(step).toBeTruthy()
     if (!step) return
     const meshed = await meshStepFile('m128·endwall', new TextEncoder().encode(step))

@@ -1,4 +1,5 @@
 import type { MeshedStep } from './mesh'
+import type { DiffPayload } from './occDiff'
 import type {
   InspectResult,
   ReconstructResult,
@@ -50,6 +51,9 @@ class StepWorkerPool {
   private readonly workers: WorkerHandle[] = []
   private readonly idle: WorkerHandle[] = []
   private readonly queue: Task[] = []
+  /** Background tasks set aside by {@link pauseBackground} until {@link resumeBackground}. */
+  private readonly held: Task[] = []
+  private paused = false
   private nextId = 1
 
   /** Import a STEP and measure it, importing the model only once. */
@@ -66,25 +70,22 @@ class StepWorkerPool {
   reconstruct(
     ncText: string,
     options: {
-      reference?: Uint8Array
       measure?: boolean
       simplify?: boolean
       measureOnly?: boolean
       priority?: number
     } = {},
   ): Promise<ReconstructResult> {
-    const reference = options.reference ? new Uint8Array(options.reference) : undefined
     return this.run<ReconstructResult>(
       {
         id: this.nextId++,
         kind: 'reconstruct',
         ncText,
-        reference,
         measure: options.measure,
         simplify: options.simplify,
         measureOnly: options.measureOnly,
       },
-      reference ? [reference.buffer] : [],
+      [],
       options.priority ?? PRIORITY_BACKGROUND,
     )
   }
@@ -95,6 +96,26 @@ class StepWorkerPool {
     return this.run<MeshedStep>(
       { id: this.nextId++, kind: 'mesh', step: copy, name },
       [copy.buffer],
+      options.priority ?? PRIORITY_BACKGROUND,
+    )
+  }
+
+  /**
+   * Overlay diff: the OCC fuzzy boolean between the manufactured (`primary`) and ideal (`compare`)
+   * STEPs, run in the worker so it neither blocks the main thread nor re-runs per view change. The
+   * result is plain typed arrays (see {@link DiffPayload}), null when the boolean fails (the viewer
+   * falls back to surface flagging).
+   */
+  diff(
+    primary: Uint8Array,
+    compare: Uint8Array,
+    options: { priority?: number } = {},
+  ): Promise<DiffPayload | null> {
+    const a = new Uint8Array(primary)
+    const b = new Uint8Array(compare)
+    return this.run<DiffPayload | null>(
+      { id: this.nextId++, kind: 'diff', primary: a, compare: b },
+      [a.buffer, b.buffer],
       options.priority ?? PRIORITY_BACKGROUND,
     )
   }
@@ -111,15 +132,49 @@ class StepWorkerPool {
   }
 
   /**
+   * Hold back background analysis: queued background tasks are set aside (kept pending, not failed)
+   * and no new background task is dispatched, freeing the workers for viewer meshes/reconstruction
+   * and neighbour prefetch while the user is opening a part. In-flight tasks still finish — a worker's
+   * task can't be interrupted — so this only clears the *queue*, which is the part that piles up.
+   */
+  pauseBackground(): void {
+    this.paused = true
+    const keep: Task[] = []
+    for (const task of this.queue) {
+      if (task.priority <= PRIORITY_BACKGROUND) this.held.push(task)
+      else keep.push(task)
+    }
+    this.queue.length = 0
+    this.queue.push(...keep)
+  }
+
+  /** Release the tasks held by {@link pauseBackground}, back into priority order. */
+  resumeBackground(): void {
+    if (!this.paused && this.held.length === 0) return
+    this.paused = false
+    const released = this.held.splice(0)
+    for (const task of released) this.insert(task)
+    this.wake()
+  }
+
+  /**
    * Drop everything still queued (e.g. a new job was dropped). In-flight tasks keep running — a
    * worker's task can't be interrupted — but their results are delivered to the now-orphaned
    * promises and ignored by the caller.
    */
   abort(): void {
-    const pending = this.queue.splice(0)
+    this.paused = false
+    const pending = [...this.queue.splice(0), ...this.held.splice(0)]
     for (const task of pending) {
       task.reject(new DOMException('step worker pool aborted', 'AbortError'))
     }
+  }
+
+  /** Stable priority insert: higher priority first, FIFO within a priority. */
+  private insert(task: Task): void {
+    const index = this.queue.findIndex((queued) => queued.priority < task.priority)
+    if (index < 0) this.queue.push(task)
+    else this.queue.splice(index, 0, task)
   }
 
   private run<T>(request: StepRequest, transfer: Transferable[], priority: number): Promise<T> {
@@ -131,11 +186,13 @@ class StepWorkerPool {
         reject,
         priority,
       }
-      // Stable priority insert: foreground (viewer) tasks jump ahead of queued background
-      // analysis but keep FIFO order among themselves.
-      const index = this.queue.findIndex((queued) => queued.priority < priority)
-      if (index < 0) this.queue.push(task)
-      else this.queue.splice(index, 0, task)
+      // Background analysis submitted while paused waits in `held` (still pending) instead of the
+      // dispatch queue, so it cannot occupy a worker the viewer needs.
+      if (this.paused && priority <= PRIORITY_BACKGROUND) {
+        this.held.push(task)
+        return
+      }
+      this.insert(task)
       this.wake()
     })
   }

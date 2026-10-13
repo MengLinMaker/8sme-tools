@@ -551,7 +551,7 @@ describe('m148 diff comparison', () => {
       mkdirSync(OUT, { recursive: true })
       const stepBytes = new Uint8Array(readFileSync(join(DIR, 'm148.stp')))
       const nc = readFileSync(join(DIR, 'm148.nc1'), 'utf8')
-      const built = await reconstructSolidFromNc(nc, { reference: stepBytes })
+      const built = await reconstructSolidFromNc(nc)
       expect(built).toBeTruthy()
       if (!built) return
       const madeShape = built.solid as any

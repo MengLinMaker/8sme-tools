@@ -1,6 +1,12 @@
 import { contourHasBevel, contourStepDepth } from '@/lib/audit/manufacturability'
 import { parseDstv } from '@/lib/parsers/dstv'
-import { faceHalf, faceSpanAxis, resolveNcFaceFrame, sectionSpanAt } from '@/lib/parsers/ncFaces'
+import {
+  faceHalf,
+  faceSpanAxis,
+  ncAuthoredStancePoints,
+  resolveNcFaceFrame,
+  sectionSpanAt,
+} from '@/lib/parsers/ncFaces'
 import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stripStraySolids } from './clean'
@@ -176,97 +182,6 @@ function dedupeWithRadii(pts: Pt[], radii: number[]): { pts: Pt[]; radii: number
   return { pts: outPts, radii: outRadii }
 }
 
-interface ShapeOps {
-  boundingBox: { bounds: [number[], number[]] }
-  clone: () => ShapeOps
-  translate: (x: number, y: number, z: number) => ShapeOps
-  mirror: (plane: string) => ShapeOps
-  rotate: (angle: number, position: number[], direction: number[]) => ShapeOps
-  intersect: (other: ShapeOps) => ShapeOps
-}
-
-/**
- * Align the NC-built solid to a reference STEP (the part's own file), so the manufactured view
- * matches the file's orientation.
- *
- * The eight 90°-step transforms about the member axis are ranked cheaply by centre-of-mass distance
- * (a volume moment, no booleans), which already separates the correct orientation — including the
- * mirror that a rotation-only seating cannot undo for asymmetric sections (PFC/angle). Only the
- * top candidate is confirmed with an overlap test; the full overlap search is a fallback for the
- * rare case the moment does not settle it. This replaces eight boolean intersections (the old
- * bottleneck) with eight volume moments plus at most one intersection.
- */
-async function orientToReference(solid: SolidOps, reference: Uint8Array): Promise<SolidOps> {
-  const { importSTEP, measureShapeVolumeProperties, measureVolume } = await import('replicad')
-  const ref = (await importSTEP(
-    new Blob([new Uint8Array(reference)], { type: 'model/step' }),
-  )) as unknown as ShapeOps
-  const [rmin, rmax] = ref.boundingBox.bounds
-  const refCentre = rmin.map((v, k) => (v + rmax[k]) / 2)
-  const refVolume = measureVolume(ref as never)
-  if (!(refVolume > 0)) return solid
-  const refCentroid = (measureShapeVolumeProperties(ref as never) as { centerOfMass: number[] })
-    .centerOfMass
-
-  const base = solid as unknown as ShapeOps
-  const candidates: { shape: ShapeOps; score: number; tag: string }[] = []
-  for (const mirrored of [false, true]) {
-    for (const angle of [0, 90, 180, 270]) {
-      const candidate = mirrored ? base.clone().mirror('XZ') : base.clone()
-      const oriented = angle ? candidate.rotate(angle, [0, 0, 0], [1, 0, 0]) : candidate
-      const [cmin, cmax] = oriented.boundingBox.bounds
-      const shift = rmin.map((_v, k) => refCentre[k] - (cmin[k] + cmax[k]) / 2)
-      const moved = oriented.translate(shift[0], shift[1], shift[2])
-      let score = Number.POSITIVE_INFINITY
-      try {
-        const centroid = (
-          measureShapeVolumeProperties(moved as never) as { centerOfMass: number[] }
-        ).centerOfMass
-        score = Math.hypot(
-          centroid[0] - refCentroid[0],
-          centroid[1] - refCentroid[1],
-          centroid[2] - refCentroid[2],
-        )
-      } catch {
-        score = Number.POSITIVE_INFINITY
-      }
-      candidates.push({ shape: moved, score, tag: `${mirrored ? 'mir' : '   '}/rot${angle}` })
-    }
-  }
-  candidates.sort((a, b) => a.score - b.score)
-  // eslint-disable-next-line no-console
-  console.log(
-    `[orient] ranked: ${candidates.map((c) => `${c.tag}=${c.score.toFixed(2)}`).join(' ')}`,
-  )
-
-  const overlap = (shape: ShapeOps): number => {
-    try {
-      return measureVolume(shape.clone().intersect(ref.clone()) as never) / refVolume
-    } catch {
-      return 0
-    }
-  }
-
-  // Confirm the best-ranked candidate; only fall back to testing the rest if it does not fit.
-  let best: ShapeOps | null = null
-  let bestScore = -1
-  let bestTag = ''
-  for (const candidate of candidates) {
-    const score = overlap(candidate.shape)
-    if (score > bestScore) {
-      bestScore = score
-      best = candidate.shape
-      bestTag = candidate.tag
-    }
-    if (score >= 0.9) break
-  }
-  // eslint-disable-next-line no-console
-  console.log(`[orient] chosen ${bestTag} overlap=${bestScore.toFixed(3)}`)
-  // No transform fits (e.g. the reference is a corrupt/degenerate STEP): keep the native frame.
-  if (!best || bestScore < 0.1) return solid
-  return best as unknown as SolidOps
-}
-
 export interface ReconstructOptions {
   /**
    * Leave a flat surface where a face carries a sudden thickness step (a cut the laser can't
@@ -274,14 +189,8 @@ export interface ReconstructOptions {
    */
   simplify?: boolean
   /**
-   * The part's own STEP file, if available: the built solid is oriented to match it, so the
-   * manufactured view uses the file's orientation rather than the reconstruction's own frame.
-   */
-  reference?: Uint8Array
-  /**
-   * Measure-only: skip reference orientation and the STEP export. Measuring is
-   * orientation-agnostic, and the analysis phase discards the text — both are
-   * pure waste there (orientation alone doubles rebuild cost on real parts).
+   * Measure-only: skip the STEP export. Measuring is orientation-agnostic, and the analysis phase
+   * discards the text — pure waste there.
    */
   measureOnly?: boolean
 }
@@ -306,8 +215,14 @@ export async function reconstructSolidFromNc(
 ): Promise<{ solid: SolidOps & MeasurableShape; step: string } | null> {
   const header = parseDstv(ncText).header
   const geo = parseNcGeometry(ncText)
-  const section = partSectionForCode(header.profile, header.dimensions)
-  if (!section || section.points.length < 3) return null
+  const rawSection = partSectionForCode(header.profile, header.dimensions)
+  if (!rawSection || rawSection.points.length < 3) return null
+  // The canonical PFC stance (`n`, flanges down) is a 90° rotation of the stance this rebuild's
+  // axis logic assumes (web vertical). Build in that authored stance so the tested geometry math is
+  // unchanged, then roll the finished solid back to canonical (see `canonicalSectionFlip`).
+  const authoredPoints = ncAuthoredStancePoints(header.profile, rawSection.points)
+  const canonicalSectionFlip = authoredPoints !== rawSection.points
+  const section = canonicalSectionFlip ? { ...rawSection, points: authoredPoints } : rawSection
 
   await ensureOc()
   const { draw, drawCircle, drawRoundedRectangle } = await import('replicad')
@@ -365,7 +280,10 @@ export async function reconstructSolidFromNc(
     const axis = faceAxis(c.face)
     const half = halfOf(axis)
     const { pts: rawPts, radii } = dedupeWithRadii(c.points, c.radii ?? [])
-    const pts = rawPts.map(([x, y]) => [x, y - half] as Pt)
+    // Channel web faces (`v`/`h`) run the opposite way across the depth once seated canonically —
+    // the same reversal `ncAuthoredAcrossSign` applies for the projection, so the two agree.
+    const flip = canonicalSectionFlip && (c.face === 'v' || c.face === 'h')
+    const pts = rawPts.map(([x, y]) => [x, (flip ? half - y : y - half) as number] as Pt)
     pointsByAxis[axis].push(...pts)
     // Exact outline for both axes. The axis-1 outline used to be kerf-eroded (0.1 mm inset) to
     // stop OCC sharing the trim's faces with the base prism — but the inset left a 0.1 mm ledge
@@ -554,8 +472,13 @@ export async function reconstructSolidFromNc(
   // (centre-of-mass ranking), measure and export all see the manufactured body only.
   solid = (await stripStraySolids(solid as unknown as MeasurableShape)).solid as unknown as SolidOps
 
-  if (options.reference && !options.measureOnly)
-    solid = await orientToReference(solid, options.reference)
+  // Roll the internal-stance build back to the canonical stance (web down→up) so the viewer, NC
+  // projection and exported STEP are all canonical. 90° about the member axis (X).
+  if (canonicalSectionFlip) {
+    solid = (
+      solid as unknown as { rotate: (a: number, p: number[], d: number[]) => SolidOps }
+    ).rotate(-90, [0, 0, 0], [1, 0, 0])
+  }
 
   // Measure-only callers (analysis phase 4) compare the live solid and discard
   // the text — skip the STEP export entirely.

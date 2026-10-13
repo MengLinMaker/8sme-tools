@@ -18,7 +18,6 @@ import {
   type Material,
   Matrix4,
   Mesh,
-  MeshBasicMaterial,
   MeshStandardMaterial,
   type Object3D,
   OrthographicCamera,
@@ -34,7 +33,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
-import type { CutReachFailure } from '@/lib/audit/cutReach'
+import type { CutMarker } from '@/lib/audit/cutReach'
 import {
   faceNormal,
   type NcFaceFrame,
@@ -54,11 +53,11 @@ import type { StockOutline } from '@/lib/sections/stock'
 import { type DiffPresence, probeDiffPresence } from '@/lib/step/booleanDiff'
 import { closeDiffMask, computeDiffMasks, diffFraction } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
-import { OCC_FUZZY_MM, occFuzzyDiff } from '@/lib/step/occDiff'
-import { meshForViewer } from '@/lib/step/viewerModel'
+import { type DiffPayload, type DiffSolidPayload, OCC_FUZZY_MM } from '@/lib/step/occDiff'
+import { diffForViewer, meshForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { attachOrbit, attachWheelPan, type OrbitBus, requestFocus } from './orbitSync'
-import { smoothLines } from './smoothLines'
+import { SMOOTH_LINE_THRESHOLD_DEG, smoothLines } from './smoothLines'
 
 const GHOST_COLOR = 0x3ddc84
 /** Stock outline: neutral grey so it reads as raw material distinct from the part. */
@@ -383,6 +382,16 @@ function buildDiffGeometry(
   return geometry
 }
 
+/** Rebuild a diff solid's geometry from the worker payload (positions + OCC normals, non-indexed). */
+function geometryFromSolid(solid: DiffSolidPayload): BufferGeometry {
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new Float32BufferAttribute(solid.position, 3))
+  if (solid.normal) geometry.setAttribute('normal', new Float32BufferAttribute(solid.normal, 3))
+  else geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  return geometry
+}
+
 /** Builds the three.js scene for a set of meshes and returns a disposer. */
 function mountScene(
   container: HTMLElement,
@@ -396,7 +405,7 @@ function mountScene(
   primaryBytes: Uint8Array | null | undefined,
   compareBytes: Uint8Array | null | undefined,
   deferDiff?: boolean,
-  sabre?: CutReachFailure[] | null,
+  sabre?: CutMarker[] | null,
   nc?: NcGeometry | null,
   ncSection?: [number, number][] | null,
   faceFrame?: NcFaceFrame | null,
@@ -409,14 +418,16 @@ function mountScene(
   container.appendChild(renderer.domElement)
 
   const scene = new Scene()
-  scene.add(new AmbientLight(0xffffff, 0.6))
-  scene.add(new HemisphereLight(0xf2f7ff, 0x1a2733, 0.9))
+  const ambient = new AmbientLight(0xffffff, 0.6)
+  const hemisphere = new HemisphereLight(0xf2f7ff, 0x1a2733, 0.9)
   const key = new DirectionalLight(0xffffff, 2.6)
   key.position.set(0.8, 1, 0.9)
-  scene.add(key)
   const fill = new DirectionalLight(0xffffff, 1.1)
   fill.position.set(-1, -0.6, -0.8)
-  scene.add(fill)
+  // The diff solids render in the layer-1 pass (`camera.layers.set(1)`), and a light only joins a pass
+  // when it is visible on that pass's layer — without this the lit diff materials come out black.
+  for (const light of [ambient, hemisphere, key, fill]) light.layers.enable(1)
+  scene.add(ambient, hemisphere, key, fill)
 
   const profile =
     Array.isArray(stock?.points) && stock.points.length >= 3 ? stock.points : undefined
@@ -462,6 +473,15 @@ function mountScene(
     roughness: 0.55,
   })
   const lineMaterial = new LineBasicMaterial({ color: 0x0b0f14 })
+  // Crease lines for the boolean diff solids: same near-black as the base body, so the strongly-
+  // coloured over/under shells read with the same sharp-edge/smooth-curve look. Offset forward so the
+  // lines sit on top of the (polygon-offset) diff fill instead of z-fighting it.
+  const diffCreaseMaterial = new LineBasicMaterial({
+    color: 0x0b0f14,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  })
   const compareMaterial = new MeshStandardMaterial({
     color: COMPARE_COLOR,
     transparent: true,
@@ -471,7 +491,7 @@ function mountScene(
     metalness: 0.2,
     roughness: 0.6,
   })
-  const materials: Material[] = [faceMaterial, strayMaterial, lineMaterial]
+  const materials: Material[] = [faceMaterial, strayMaterial, lineMaterial, diffCreaseMaterial]
 
   // Overlay mode (a second model is present): the manufactured base keeps the *same* solid grey
   // settings as every other pane — only the diff solid gets special treatment. The compare (STEP)
@@ -533,12 +553,32 @@ function mountScene(
     const orientation = detectOrientation(profile, worldVertices, cross[0], cross[1], [0, 0, 0])
     const eA = unit(cross[0], 1)
     const eB = unit(cross[1], 1)
-    const [xAxis, yAxis] = [
+    const table = [
       [eA, eB],
       [eB, eA.clone().negate()],
       [eA.clone().negate(), eB.clone().negate()],
       [eB.clone().negate(), eA],
-    ][orientation]
+    ]
+    const [fx0, fy0] = table[orientation] as [Vector3, Vector3]
+    // Canonical display: `detectOrientation` anchors the roll to the STEP's native orientation, so
+    // the section's `+y` (the machine "up" the stance is defined on, see canonical-orientation.md)
+    // can land on world Z and read on its side. Roll the whole display about the member axis so
+    // section `+y` points world +Y (the viewer's screen up) — then the model, the stock ghost and
+    // the NC projection all share the canonical frame.
+    const rollAngle = -Math.atan2(fy0.z, fy0.y)
+    if (Math.abs(rollAngle) > 1e-6) {
+      const q = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), rollAngle)
+      primary.group.quaternion.premultiply(q)
+      compareGroup?.quaternion.premultiply(q)
+    }
+    // The diff pane's flip resets the compare model to this base, so capture it *after* the
+    // canonical roll — otherwise the flip undoes the roll and the STEP lands back on its side.
+    if (compareGroup) compareBaseQuaternion = compareGroup.quaternion.clone()
+    const about = new Vector3(1, 0, 0)
+    const [xAxis, yAxis] = [
+      fx0.clone().applyAxisAngle(about, rollAngle),
+      fy0.clone().applyAxisAngle(about, rollAngle),
+    ]
     const overlay = extrudeOverlay(
       profile,
       Array.isArray(stock?.holes) ? stock.holes : [],
@@ -558,7 +598,7 @@ function mountScene(
     if (frame) {
       const OFF = 0.4
       const toScene = (along: number, cross: [number, number], face: NcFace): Vec3 => {
-        const n = faceNormal(frame, face)
+        const n = faceNormal(frame, face, section)
         const local: [number, number] = [cross[0], cross[1]]
         local[n.axis] += n.sign * OFF
         const x = along - length / 2
@@ -569,7 +609,7 @@ function mountScene(
         ]
       }
       const normal = (face: NcFace): Vec3 => {
-        const n = faceNormal(frame, face)
+        const n = faceNormal(frame, face, section)
         const base = n.axis === 0 ? xAxis : yAxis
         return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
       }
@@ -658,13 +698,13 @@ function mountScene(
       const frame = resolveNcFaceFrame(beam.profile, nc)
       const OFF = 0.6
       const toScene = (along: number, cross: [number, number], face: NcFace): Vec3 => {
-        const n = faceNormal(frame, face)
+        const n = faceNormal(frame, face, beam.profile)
         const local: [number, number] = [cross[0], cross[1]]
         local[n.axis] += n.sign * OFF
         return [local[0], local[1], along - beam.length / 2]
       }
       const normal = (face: NcFace): Vec3 => {
-        const n = faceNormal(frame, face)
+        const n = faceNormal(frame, face, beam.profile)
         return n.axis === 0 ? [n.sign, 0, 0] : [0, n.sign, 0]
       }
       for (const line of addNcLines(
@@ -727,53 +767,79 @@ function mountScene(
     diffEdgeLines.push(lines)
     materials.push(material)
   }
+  // The boolean diff comes back as a watertight solid, shaded with its own OCC normals like the base
+  // body. Draw the same angle-filtered crease lines the base body uses (`SMOOTH_LINE_THRESHOLD_DEG`)
+  // so sharp edges outline the volume while the curves between them stay smooth.
+  const addDiffCreases = (source: BufferGeometry, parent: Object3D): void => {
+    const edges = new EdgesGeometry(source, SMOOTH_LINE_THRESHOLD_DEG)
+    if ((edges.getAttribute('position')?.count ?? 0) === 0) {
+      edges.dispose()
+      return
+    }
+    const lines = new LineSegments(edges, diffCreaseMaterial)
+    lines.renderOrder = 12
+    lines.layers.set(1)
+    parent.add(lines)
+    diffEdgeLines.push(lines)
+  }
   const runDiff = async (): Promise<DiffStats | null> => {
     if (!compareStep || !compareGroup || diffStats) return diffStats
-    // OCC B-rep boolean with a fuzzy margin: the kernel merges faces within `OCC_FUZZY_MM`, so the
-    // near-coincident reconstruction offset is absorbed and only the real gap survives — as a solid.
-    // Both models are seated by their viewer matrices first.
-    const diff =
-      primaryBytes && compareBytes
-        ? await occFuzzyDiff(
-            primaryBytes,
-            compareBytes,
-            primary.group.matrixWorld,
-            compareGroup.matrixWorld,
-            OCC_FUZZY_MM,
-          )
-        : null
-    if (diff) {
-      const overcutMaterial = new MeshBasicMaterial({
+    // OCC B-rep boolean with a fuzzy margin, run in the OCC worker: the kernel merges faces within
+    // `OCC_FUZZY_MM`, so the near-coincident reconstruction offset is absorbed and only the real gap
+    // survives — as a solid. The NC and STEP are independent pipelines, so the worker aligns the STEP
+    // to the manufactured model itself; the result is in the manufactured model's frame, so we seat it
+    // here by parenting to the (already seated) primary group.
+    let payload: DiffPayload | null = null
+    if (primaryBytes && compareBytes) {
+      try {
+        payload = await diffForViewer(primaryBytes, compareBytes)
+      } catch {
+        // Worker boolean failed outright (e.g. kernel error) — fall through to surface flagging.
+        payload = null
+      }
+    }
+    if (payload) {
+      // Lit like the base body (`FACE_MATERIAL`), so the shell's shaded curves read as a solid rather
+      // than a flat coloured silhouette — the crease lines above outline the sharp edges. The fill is
+      // polygon-offset *away* from the camera so it never wins the depth test against those coincident
+      // lines and hides them (lines ignore polygon offset, only the fill moves).
+      const overcutMaterial = new MeshStandardMaterial({
+        ...FACE_MATERIAL,
         color: OVERCUT_COLOR,
         side: DoubleSide,
         polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
       })
-      const undercutMaterial = new MeshBasicMaterial({
+      const undercutMaterial = new MeshStandardMaterial({
+        ...FACE_MATERIAL,
         color: UNDERCUT_COLOR,
         side: DoubleSide,
         polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
       })
       materials.push(overcutMaterial, undercutMaterial)
-      if (diff.over) {
-        const mesh = new Mesh(diff.over, overcutMaterial)
+      if (payload.over) {
+        const geometry = geometryFromSolid(payload.over)
+        const mesh = new Mesh(geometry, overcutMaterial)
         mesh.layers.set(1)
-        scene.add(mesh)
+        primary.group.add(mesh)
         diffMeshes.push(mesh)
+        addDiffCreases(geometry, primary.group)
       }
-      if (diff.under) {
-        const mesh = new Mesh(diff.under, undercutMaterial)
+      if (payload.under) {
+        const geometry = geometryFromSolid(payload.under)
+        const mesh = new Mesh(geometry, undercutMaterial)
         mesh.layers.set(1)
-        scene.add(mesh)
+        primary.group.add(mesh)
         diffMeshes.push(mesh)
+        addDiffCreases(geometry, primary.group)
       }
-      const volume = diff.primaryVolume > 0 ? diff.primaryVolume : 1
+      const volume = payload.primaryVolume > 0 ? payload.primaryVolume : 1
       diffStats = {
-        over: diff.overVolume / volume,
-        under: diff.underVolume / volume,
+        over: payload.overVolume / volume,
+        under: payload.underVolume / volume,
         tolerance: OCC_FUZZY_MM,
         approximate: false,
       }
@@ -798,19 +864,21 @@ function mountScene(
       // Close the masks over the topology: fill pinholes, drop specks, so the region reads as one patch.
       const aClosed = closeDiffMask(primaryWorld, primaryTris.triangles, aDiff, 2)
       const bClosed = closeDiffMask(compareWorld, compareTris.triangles, bDiff, 2)
-      const undercutMaterial = new MeshBasicMaterial({
+      const undercutMaterial = new MeshStandardMaterial({
+        ...FACE_MATERIAL,
         color: UNDERCUT_COLOR,
         side: DoubleSide,
         polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
       })
-      const overcutMaterial = new MeshBasicMaterial({
+      const overcutMaterial = new MeshStandardMaterial({
+        ...FACE_MATERIAL,
         color: OVERCUT_COLOR,
         side: DoubleSide,
         polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
       })
       materials.push(undercutMaterial, overcutMaterial)
       step.bodies.forEach((body, index) => {
@@ -1149,7 +1217,7 @@ export interface PartViewerProps {
    */
   smoothLines?: boolean
   /** cut-reach failures (a bevel whose bore is past the pierce cap) — drawn at their NC cut */
-  sabreFailures?: CutReachFailure[] | null
+  sabreFailures?: CutMarker[] | null
   /** NC toolpath geometry to project onto this (manufactured) model */
   nc?: NcGeometry | null
   /** Exact (un-inflated) section outline the NC was matched against, for the projection */
@@ -1299,8 +1367,8 @@ export default function PartViewer({
         setDiffPresence(handle.diffPresence)
         setStatus('ready')
         if (!compare) return
-        // Let the models and the presence verdict paint before the multi-second
-        // boolean blocks the main thread.
+        // Let the models and the presence verdict paint, then pull the diff (already computed in the
+        // worker when prewarmed; otherwise it resolves without blocking the main thread).
         await new Promise((resolve) => requestAnimationFrame(resolve))
         if (disposed) return
         const stats = await handle.runDiff()

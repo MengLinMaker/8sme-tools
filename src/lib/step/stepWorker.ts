@@ -1,5 +1,6 @@
 import { type MeasurableShape, measureShape, type StepMeasure } from './measure'
 import { meshStepFile } from './mesh'
+import { alignToReference, occFuzzyDiff, serializeDiff } from './occDiff'
 import { ensureOc } from './occInit'
 import { reconstructSolidFromNc } from './reconstructFromNc'
 import type {
@@ -37,6 +38,14 @@ async function handle(request: StepRequest): Promise<void> {
     } else if (request.kind === 'warm') {
       await ensureOc()
       scope.postMessage({ id: request.id, kind: 'warm', ok: true, value: null })
+    } else if (request.kind === 'diff') {
+      // Overlay diff: the OCC fuzzy boolean, run here so it never blocks the main thread and can be
+      // prewarmed alongside the manufactured rebuild. The NC (`primary`, canonical) and STEP
+      // (`compare`, its own frame) models are independent, so the diff aligns the STEP to the NC
+      // first — the one place the two frames meet.
+      const compareMatrix = await alignToReference(request.compare, request.primary)
+      const diff = await occFuzzyDiff(request.primary, request.compare, undefined, compareMatrix)
+      scope.postMessage({ id: request.id, kind: 'diff', ok: true, value: serializeDiff(diff) })
     } else {
       const value = await reconstruct(request)
       scope.postMessage({ id: request.id, kind: 'reconstruct', ok: true, value })
@@ -73,13 +82,11 @@ async function inspect(bytes: Uint8Array): Promise<InspectResult> {
 
 async function reconstruct(request: {
   ncText: string
-  reference?: Uint8Array
   measure?: boolean
   simplify?: boolean
   measureOnly?: boolean
 }): Promise<ReconstructResult> {
   const built = await reconstructSolidFromNc(request.ncText, {
-    reference: request.reference,
     simplify: request.simplify,
     measureOnly: request.measureOnly,
   })

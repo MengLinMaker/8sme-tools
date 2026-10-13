@@ -22,7 +22,7 @@ const JOB_SECTIONS: [string, number[], { w: number; h: number }][] = [
   ['SHS100*100*6.0', [100, 100, 6, 6, 15], { w: 100, h: 100 }],
   ['SHS100*100*9.0', [100, 100, 9, 9, 22.5], { w: 100, h: 100 }],
   ['RHS150*100*9.0', [150, 100, 9, 9, 22.5], { w: 100, h: 150 }],
-  ['PFC100*50', [100, 50, 6.7, 4.2, 8], { w: 50, h: 100 }],
+  ['PFC100*50', [100, 50, 6.7, 4.2, 8], { w: 100, h: 50 }], // channel 'n': web on top, flanges down
   ['EA75*75*6', [75, 75, 6, 6, 8], { w: 75, h: 75 }],
 ]
 
@@ -109,16 +109,16 @@ describe('stockOutlineForCode', () => {
 
   it('handles a numeric-prefix channel designation', () => {
     const outline = stockOutlineForCode('150PFC', [150, 75, 8, 5])
-    const { height } = bbox(outline?.points ?? [])
-    expect(height).toBeGreaterThanOrEqual(150)
+    const { width } = bbox(outline?.points ?? [])
+    expect(width).toBeGreaterThanOrEqual(150)
   })
 
   it('uses the standard PFC table for a short channel callout', () => {
     const pfc = stockOutlineForCode('150PFC', [150, 75, 9.5, 6.0])
     expect(pfc?.label).toBe('150 PFC stock')
     const { width, height } = bbox(pfc?.points ?? [])
-    expect(width).toBeGreaterThanOrEqual(75)
-    expect(height).toBeGreaterThanOrEqual(150)
+    expect(width).toBeGreaterThanOrEqual(150)
+    expect(height).toBeGreaterThanOrEqual(75)
   })
 
   it('models the PFC root fillets from the catalogue radius', () => {
@@ -164,8 +164,8 @@ describe('stockOutlineForCode', () => {
 
   it('draws the stock at the exact section size (no clearance offset)', () => {
     const pfc = bbox(stockOutlineForCode('100PFC', [100, 50, 6.7, 4.2, 8])?.points ?? [])
-    expect(pfc.width).toBeCloseTo(50, 1)
-    expect(pfc.height).toBeCloseTo(100, 1)
+    expect(pfc.width).toBeCloseTo(100, 1)
+    expect(pfc.height).toBeCloseTo(50, 1)
 
     const ua = bbox(stockOutlineForCode('UA100*75*6', [])?.points ?? [])
     expect(ua.width).toBeCloseTo(100, 1)

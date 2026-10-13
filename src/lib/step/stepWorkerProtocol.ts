@@ -1,5 +1,6 @@
 import type { StepMeasure } from './measure'
 import type { MeshedStep } from './mesh'
+import type { DiffPayload } from './occDiff'
 
 /**
  * Message protocol between the preflight UI and the STEP worker pool.
@@ -26,22 +27,22 @@ export type StepRequest =
       id: number
       kind: 'reconstruct'
       ncText: string
-      reference?: Uint8Array
       measure?: boolean
       simplify?: boolean
       /**
-       * Measure-only: skip reference orientation and the STEP export (the
-       * analysis phase compares measures and discards the text, so both are
-       * pure waste there — orientation alone doubles rebuild cost).
+       * Measure-only: skip the STEP export (the analysis phase compares measures and discards the
+       * text, so the export is pure waste there).
        */
       measureOnly?: boolean
     }
   | { id: number; kind: 'mesh'; step: Uint8Array; name: string }
+  | { id: number; kind: 'diff'; primary: Uint8Array; compare: Uint8Array }
   | { id: number; kind: 'warm' }
 
 export type StepResponse =
   | { id: number; kind: 'inspect'; ok: true; value: InspectResult }
   | { id: number; kind: 'reconstruct'; ok: true; value: ReconstructResult }
   | { id: number; kind: 'mesh'; ok: true; value: MeshedStep }
+  | { id: number; kind: 'diff'; ok: true; value: DiffPayload | null }
   | { id: number; kind: 'warm'; ok: true; value: null }
   | { id: number; kind: 'error'; ok: false; error: string }

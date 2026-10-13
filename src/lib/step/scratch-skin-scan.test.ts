@@ -29,7 +29,7 @@ describe.skipIf(!HAVE)('skin scan (NW31)', () => {
       try {
         const stepBytes = new Uint8Array(readFileSync(join(NW31, `${mark}.stp`)))
         const nc = readFileSync(join(NW31, `${mark}.nc1`), 'utf8')
-        const madeStep = await reconstructStepFromNc(nc, { reference: stepBytes })
+        const madeStep = await reconstructStepFromNc(nc)
         if (!madeStep) {
           console.log(`${mark}: reconstruct null`)
           continue

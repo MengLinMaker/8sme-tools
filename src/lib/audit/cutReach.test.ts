@@ -106,12 +106,16 @@ describe('cutReach geometry', () => {
 describe('cutReach on real parts', () => {
   const NW31 = nw31Bottom()
   const NW30 = nw30Bottom()
-  // A PFC end cut runs across the flange over the web (deep-backed → flag); an SHS end cut only
-  // ever meets thin walls, so it clears.
+  // A PFC/angle end cut severs the thin-walled profile — the beam follows the flange/web length
+  // near a corner, but that is a lengthwise cut, not a deep pierce, so it clears. The genuine
+  // deep-pierce cases are the synthetic solid/bevel tests above; the corner case is m166.
   const marks: { dir: string; mark: string; expectFlagged: boolean }[] = [
-    { dir: NW31, mark: 'm106', expectFlagged: true },
-    { dir: NW31, mark: 'm128', expectFlagged: true },
+    { dir: NW31, mark: 'm106', expectFlagged: false },
+    { dir: NW31, mark: 'm128', expectFlagged: false },
     { dir: NW30, mark: 'm106', expectFlagged: false },
+    { dir: NW30, mark: 'm71', expectFlagged: false },
+    { dir: NW30, mark: 'm87', expectFlagged: false },
+    { dir: NW30, mark: 'a2', expectFlagged: false },
   ]
   for (const { dir, mark, expectFlagged } of marks) {
     const have = existsSync(join(dir, `${mark}.nc1`))

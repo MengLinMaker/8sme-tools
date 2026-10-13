@@ -20,8 +20,8 @@ const HAVE = MARKS.every(
 
 /**
  * Bottleneck profile for the preflight analysis pipeline: per-part OCC costs
- * (STEP import, measure + light-sabre, tessellation, NC rebuild with and
- * without reference orientation). Analysis fans these across 3 workers, so
+ * (STEP import, measure + light-sabre, tessellation, NC rebuild full and
+ * measure-only). Analysis fans these across 3 workers, so
  * divide wall time by ~3 — but every part still pays each column, which is
  * what hurts 350-part jobs.
  */
@@ -57,36 +57,18 @@ describe.skipIf(!HAVE)('analysis pipeline profile', () => {
       const meshMs = performance.now() - start
 
       start = performance.now()
-      const full = await reconstructSolidFromNc(ncText, { reference: stepBytes })
+      const full = await reconstructSolidFromNc(ncText)
       const rebuildFullMs = performance.now() - start
 
       start = performance.now()
-      const plain = await reconstructSolidFromNc(ncText)
-      const rebuildPlainMs = performance.now() - start
-
-      start = performance.now()
-      const lean = await reconstructSolidFromNc(ncText, { reference: stepBytes, measureOnly: true })
+      const lean = await reconstructSolidFromNc(ncText, { measureOnly: true })
       const rebuildLeanMs = performance.now() - start
 
       expect(measure).not.toBeNull()
       expect(sabre).not.toBeNull()
       expect(full).not.toBeNull()
-      expect(plain).not.toBeNull()
       expect(lean).not.toBeNull()
-      // Orientation must not change the measured solid (frame only): the
-      // no-reference fast path has to agree with the full rebuild.
-      if (full && plain) {
-        const [a, b] = await Promise.all([
-          measureShape(full.solid).catch(() => null),
-          measureShape(plain.solid).catch(() => null),
-        ])
-        expect(a).not.toBeNull()
-        expect(b).not.toBeNull()
-        if (a && b) {
-          expect(Math.abs(a.volume - b.volume) / Math.max(a.volume, 1)).toBeLessThan(0.01)
-        }
-      }
-      // The measure-only fast path skips orientation: same solid, less work.
+      // The measure-only fast path skips the STEP export: same solid, less work.
       if (full && lean) {
         const [a, c] = await Promise.all([
           measureShape(full.solid).catch(() => null),
@@ -104,19 +86,10 @@ describe.skipIf(!HAVE)('analysis pipeline profile', () => {
         inspectMs.toFixed(0),
         meshMs.toFixed(0),
         rebuildFullMs.toFixed(0),
-        rebuildPlainMs.toFixed(0),
         rebuildLeanMs.toFixed(0),
       ])
     }
-    const head = [
-      'part',
-      'import',
-      'measure+sabre',
-      'mesh',
-      'rebuild+orient',
-      'rebuild plain',
-      'rebuild lean',
-    ]
+    const head = ['part', 'import', 'measure+sabre', 'mesh', 'rebuild', 'rebuild lean']
     const width = head.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? '').length)))
     const line = (cells: string[]) => `  ${cells.map((c, i) => c.padEnd(width[i] ?? 0)).join('  ')}`
     console.log(

@@ -292,8 +292,16 @@ and the result went non-deterministic (over/under ≈ the whole operand). Fix:
 `op.SetNonDestructive(true)`. After that the same inputs give the same sane result every time.
 
 The fuzzy value is still non-monotonic, so `occFuzzyDiff` scans a candidate set largest-first and
-takes the first whose volumes validate (`over < ideal · 0.99`, `under < manufactured · 0.99` — a
-failed cut returns ≈ the whole operand). Results after both fixes:
+takes the first whose volumes validate. The validation is three-part: the cut must be strictly
+smaller than the operand it came from (`over < ideal · 0.99`, `under < manufactured · 0.99`); it must
+not be a **paper-thin membrane** (`impliedThickness = 2·V/A ≥ MIN_SOLID_THICKNESS_MM`, 0.5 mm); **and**
+it must agree (within 5 %) with the over/under derived from the **common volume taken at the same
+fuzzy** — `over = ideal − common`, `under = manufactured − common`. Taking the common at the cut's
+own fuzzy makes the sub-mm reconstruction offset count as coincident, so a matching part's expected
+diff is ≈ 0 rather than a thin shell over its whole surface (the "long stretches of skin"), while a
+merge (≈ the whole operand) still fails to agree and is rejected. `a2` (EA75×75×6) used to report
+≈96 %/95 % despite a 99.95 % material overlap; it now reads 0 %/0 %, guarded by
+`occDiff.overgrown.test.ts`. Results after the fixes:
 
 | part | auto fuzzy | over mm³ | under mm³ | tris |
 |---|---|---|---|---|
@@ -302,6 +310,37 @@ failed cut returns ≈ the whole operand). Results after both fixes:
 | m12 | 0.5 | 1,105,671 | 2,036,537 | 1,472 |
 | m122 | 0.5 | 54,554 | 98,476 | 1,040 |
 
+The thickness gate is what the volume checks alone could not catch: **m180** cut cleanly by volume at
+the largest fuzzy (1 mm) but to a ~0.035 mm, whole-part shell — 391,000 mm² of surface for only
+6,900 mm³ — because a membrane has negligible volume. The gate makes the scan skip `f = 1/0.5/0.3`
+for `f = 0.2`, which agrees with the independent surface probe (over ≈ 13,773 vs 13,745 mm³) and
+leaves real material; guarded by `occDiff.skin.test.ts` (m180 fixture).
+
 All sane and compact (hundreds–1.5k tris), and m122 agrees with the boolean/voxel (~100k). `m12`
 stays large — its broken reconstruction (§9). So this is the "good when it works" result made
 reliable: the kernel uses the largest fuzzy it can handle and falls back to the probe otherwise.
+
+## 15. Diff in the OCC worker (eager, all three panes ready)
+
+The boolean used to run on the main thread inside `PartViewer.mountScene` (deferred one frame), so
+the overlay pane filled in seconds after the STEP and manufactured panes. It now runs in the shared
+OCC worker pool as a `diff` task (`stepWorker.ts`, `occFuzzyDiff` + `serializeDiff`), so it never
+blocks the UI and can be prewarmed.
+
+- **Frame-independent, so bytes-cacheable.** `occFuzzyDiff`'s seating matrices default to identity:
+  the manufactured model is rebuilt *referenced to the ideal STEP* (`reconstructForViewer`), so the
+  two already share a frame and the cut needs no per-scene matrices. The viewer parents the diff
+  result to the seated primary group instead. `diffForViewer` (`viewerModel.ts`) memoises on the two
+  byte objects (weak, so it self-clears), and the boolean result crosses the thread as plain typed
+  arrays (`DiffPayload`), since `BufferGeometry` is not cloneable.
+- **Eager.** `PreflightPage` kicks the diff off as soon as the viewed part's manufactured bytes
+  land (foreground) and for each ±1 neighbour after its rebuild (neighbour priority), so opening a
+  part draws all three panes from cache rather than computing the diff on view.
+- **Background analysis yields to navigation.** The pool is only `min(3, cores-1)` workers (one on a
+  2-core machine) and priority reorders the *queue* but cannot preempt an *in-flight* task, so a warm
+  viewer request could still wait behind a multi-second background rebuild. `StepWorkerPool` gained
+  `pauseBackground`/`resumeBackground` (`stepPool.ts`): while a part is open, queued background
+  (analysis + warm) tasks are **held** — kept pending, not failed — so the workers serve the viewer
+  and its neighbour prefetch; they resume a settle interval after the part's manufactured model
+  lands. In-flight tasks still finish (unstoppable), but the pile-up ahead of the viewer is cleared.
+

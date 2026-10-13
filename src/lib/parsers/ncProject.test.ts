@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { type NcFaceFrame, resolveNcFaceFrame } from './ncFaces'
+import {
+  type NcFaceFrame,
+  ncAuthoredStancePoints,
+  placeNcFace,
+  resolveNcFaceFrame,
+} from './ncFaces'
 import type { NcGeometry } from './ncGeometry'
 import { holeOutline, projectNc } from './ncProject'
 
@@ -38,6 +43,62 @@ describe('resolveNcFaceFrame', () => {
       notches: [],
     }
     expect(resolveNcFaceFrame(section, nc)).toEqual({ extent: [200, 100], axisVH: 1, axisOU: 0 })
+  })
+})
+
+describe('channel authored stance', () => {
+  // 100 (x, depth) × 50 (y, flange): a channel's canonical `n` outline proportions.
+  const section: [number, number][] = [
+    [-50, -25],
+    [50, -25],
+    [50, 25],
+    [-50, 25],
+  ]
+  const nc: NcGeometry = {
+    contours: [
+      {
+        face: 'v',
+        kind: 'outer',
+        points: [
+          [0, 0],
+          [10, 100],
+        ],
+        bevels: [],
+      }, // web spans depth (100)
+      {
+        face: 'o',
+        kind: 'outer',
+        points: [
+          [0, 0],
+          [10, 50],
+        ],
+        bevels: [],
+      }, // flange spans 50
+    ],
+    holes: [],
+    notches: [],
+  }
+
+  it('maps a channel section into the authored (web-vertical) stance', () => {
+    expect(ncAuthoredStancePoints('PFC100*50', [[1, 2]])).toEqual([[-2, 1]])
+    expect(ncAuthoredStancePoints('200UB29.8', [[1, 2]])).toEqual([[1, 2]])
+  })
+
+  it('reverses both across directions for a channel (flanges and web)', () => {
+    const frame = resolveNcFaceFrame(section, nc, 'PFC100*50')
+    expect(frame.profile).toBe('PFC100*50')
+    // `o` spans axis 1: across 0 lands at the far (reversed) side, +25 rather than −25.
+    expect(placeNcFace(frame, 'o', 0, 0, section).cross[1]).toBeCloseTo(25, 6)
+    expect(placeNcFace(frame, 'o', 0, 50, section).cross[1]).toBeCloseTo(-25, 6)
+    // `v` spans axis 0 (depth) and is reversed too.
+    expect(placeNcFace(frame, 'v', 0, 0, section).cross[0]).toBeCloseTo(50, 6)
+    expect(placeNcFace(frame, 'v', 0, 100, section).cross[0]).toBeCloseTo(-50, 6)
+  })
+
+  it('leaves the authored direction alone without a profile', () => {
+    const frame = resolveNcFaceFrame(section, nc)
+    expect(frame.profile).toBeUndefined()
+    expect(placeNcFace(frame, 'o', 0, 0, section).cross[1]).toBeCloseTo(-25, 6)
   })
 })
 

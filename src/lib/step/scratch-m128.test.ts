@@ -96,7 +96,7 @@ describe('diff skin diagnostics', () => {
       async () => {
         const stepBytes = new Uint8Array(readFileSync(join(dir, `${mark}.stp`)))
         const nc = readFileSync(join(dir, `${mark}.nc1`), 'utf8')
-        const madeStep = await reconstructStepFromNc(nc, { reference: stepBytes })
+        const madeStep = await reconstructStepFromNc(nc)
         expect(madeStep).toBeTruthy()
         const step = await meshStepFile('step', stepBytes)
         const made = await meshStepFile('made', new TextEncoder().encode(madeStep as string))

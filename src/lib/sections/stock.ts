@@ -216,9 +216,13 @@ function angleL(
 }
 
 /**
- * Parallel-flange channel: solid web on the left (x = −hb..−hb+web), flanges to the right, C
- * opening left-to-right. `radius` is the root fillet where the flanges meet the inner web face;
- * 0 keeps those two corners sharp.
+ * Parallel-flange channel in the **canonical `n` stance** (see `docs/canonical-orientation.md`):
+ * web horizontal on top, both flanges pointing straight down, so the C opens **downward** — the
+ * head cuts from above and the slag drops out the bottom, clear of the machine. `depth` runs
+ * horizontally (x), `flange` vertically (y). Built first in Tekla's web-vertical stance (solid web
+ * on the left, C opening right), then rotated 90° so the fillet construction stays in one place.
+ * `radius` is the root fillet where the flanges meet the inner web face; 0 keeps those two corners
+ * sharp.
  */
 function channel(
   depth: number,
@@ -231,29 +235,31 @@ function channel(
   const hd = depth / 2
   const xWeb = -hb + web
   const r = Math.max(0, Math.min(radius, flange - web, hd - tf))
-  if (r <= 0) {
-    return centre([
-      [-hb, -hd],
-      [hb, -hd],
-      [hb, -hd + tf],
-      [xWeb, -hd + tf],
-      [xWeb, hd - tf],
-      [hb, hd - tf],
-      [hb, hd],
-      [-hb, hd],
-    ])
-  }
-  // Two concave root fillets on the inner web face (arc centres sit in the channel cavity).
-  return centre([
-    [-hb, -hd],
-    [hb, -hd],
-    [hb, -hd + tf],
-    ...arcPoints(xWeb + r, -hd + tf + r, r, -Math.PI / 2, -Math.PI),
-    ...arcPoints(xWeb + r, hd - tf - r, r, Math.PI, Math.PI / 2),
-    [hb, hd - tf],
-    [hb, hd],
-    [-hb, hd],
-  ])
+  const webVertical: [number, number][] =
+    r <= 0
+      ? [
+          [-hb, -hd],
+          [hb, -hd],
+          [hb, -hd + tf],
+          [xWeb, -hd + tf],
+          [xWeb, hd - tf],
+          [hb, hd - tf],
+          [hb, hd],
+          [-hb, hd],
+        ]
+      : [
+          // Two concave root fillets on the inner web face (arc centres sit in the channel cavity).
+          [-hb, -hd],
+          [hb, -hd],
+          [hb, -hd + tf],
+          ...arcPoints(xWeb + r, -hd + tf + r, r, -Math.PI / 2, -Math.PI),
+          ...arcPoints(xWeb + r, hd - tf - r, r, Math.PI, Math.PI / 2),
+          [hb, hd - tf],
+          [hb, hd],
+          [-hb, hd],
+        ]
+  // Rotate 90° CW into the canonical stance (web up, flanges down, C opening downward).
+  return centre(webVertical).map(([x, y]) => [y, -x] as [number, number])
 }
 
 function circle(od: number): [number, number][] {

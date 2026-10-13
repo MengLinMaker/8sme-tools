@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { measureStep } from './measure'
 import { meshStepFile } from './mesh'
+import { alignedOverlap } from './occDiff'
 import { setOcWasmUrl } from './occInit'
 import { reconstructStepFromNc } from './reconstructFromNc'
 
@@ -42,24 +43,24 @@ async function measure(bytes: string | Buffer): Promise<{ size: number[]; vol: n
 
 const HAVE = existsSync(ncPath('m199')) && existsSync(stpPath('m199'))
 
-/** Fraction of the reference STEP's volume the NC-built solid covers when aligned to it. */
+/**
+ * Fraction of the reference STEP's volume the NC-built solid covers once the **diff's** alignment
+ * (not the NC build) has seated them — the NC pipeline is independent of the STEP, so the two are
+ * reconciled here, exactly as `alignToReference` does for the overlay.
+ */
 async function overlapWithReference(mark: string): Promise<number> {
-  const { importSTEP, measureVolume } = await import('replicad')
   const reference = new Uint8Array(readFileSync(stpPath(mark)))
-  const built = await reconstructStepFromNc(readFileSync(ncPath(mark), 'utf8'), { reference })
+  const built = await reconstructStepFromNc(readFileSync(ncPath(mark), 'utf8'))
   if (!built) return 0
-  const b = (await importSTEP(new Blob([new TextEncoder().encode(built)]))) as never
-  const r = (await importSTEP(new Blob([reference]))) as never
-  const inter = (b as unknown as { intersect: (o: never) => never }).intersect(r)
-  return measureVolume(inter as never) / measureVolume(r)
+  return alignedOverlap(new TextEncoder().encode(built), reference)
 }
 
 describe.skipIf(!HAVE)('reconstruct parts from NC (experimental)', () => {
-  it('orients to the part STEP file (m41/m31 are both PFCs needing opposite flips)', async () => {
+  it('aligns to the part STEP file via the diff (m41/m31 are both PFCs needing opposite flips)', async () => {
     for (const mark of ['m41', 'm31', 'm124', 'm117', 'a1', 'm143']) {
       expect(await overlapWithReference(mark), `${mark} overlap`).toBeGreaterThan(0.9)
     }
-  }, 600000)
+  }, 900000)
 
   it('matches healthy sibling parts within tolerance (T, RHS, PFC, angle)', async () => {
     for (const mark of ['m199', 'm143', 'm117', 'm124', 'a1', 'm150', 'm153', 'm164']) {

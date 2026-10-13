@@ -311,6 +311,12 @@ export interface CutReachOptions {
    * Defaults to `0` (the line exactly); production passes `MACHINE.placementToleranceMm`.
    */
   toleranceMm?: number
+  /**
+   * DSTV/Tekla profile code, so the face frame places a channel's across coordinate in the authored
+   * stance it was written in (see `resolveNcFaceFrame` / `ncAuthoredAcrossSign`). Omit for families
+   * whose authored stance is our canonical one.
+   */
+  profile?: string
 }
 
 /** Failure status ordering: a failure beats a clean cut beats an off-material / curve sample. */
@@ -336,7 +342,7 @@ export function assessCutReachGeometry(
   options: CutReachOptions = {},
 ): CutReachFailure[] {
   if (section.length < 3) return []
-  const frame = resolveNcFaceFrame(section, nc)
+  const frame = resolveNcFaceFrame(section, nc, options.profile)
   const failures: CutReachFailure[] = []
   const tol = options.toleranceMm ?? 0
   const offsets = tol > 0 ? [-tol, -tol / 2, 0, tol / 2, tol] : [0]
@@ -344,7 +350,7 @@ export function assessCutReachGeometry(
   for (const contour of nc.contours) {
     if (contour.kind !== 'outer') continue
     const face = contour.face
-    const normal = faceNormal(frame, face)
+    const normal = faceNormal(frame, face, section)
     const dir = unitComponent(normal.axis, -normal.sign)
     const outward = unitComponent(normal.axis, normal.sign)
     const span = faceSpanAxis(frame, face)
@@ -374,6 +380,28 @@ export function assessCutReachGeometry(
       const first = spans[0]
       if (!first) return skip
       if (first[1] > budget + 1e-6) {
+        // Distinguish a genuine deep pierce from the beam running **along a thin wall** (e.g. a
+        // PFC end cut near a flange corner: the ray follows the flange/web length for 50–100 mm,
+        // but the wall is only a few mm thick). Step inside the material and measure the wall
+        // thickness perpendicular to the beam (the connected span through that point); under the
+        // pierce cap means the beam is not boring a thick section — a lengthwise cut, manufacturable.
+        const insideT = Math.min(first[1] * 0.5, budget * 0.5)
+        const inside: [number, number] = [cross[0] + insideT * dir[0], cross[1] + insideT * dir[1]]
+        const perpDir: [number, number] = normal.axis === 0 ? [0, 1] : [1, 0]
+        const fwd = materialSpans(section, holes, inside, perpDir)[0]
+        const back = materialSpans(section, holes, inside, [-perpDir[0], -perpDir[1]])[0]
+        const wallThickness = (fwd ? fwd[1] : 0) + (back ? back[1] : 0)
+        if (wallThickness < budget - 1e-6) {
+          return {
+            x,
+            y,
+            cross,
+            status: 'clean',
+            path: first[1] / cosBevel,
+            entry: cross,
+            exit: cross,
+          }
+        }
         return {
           x,
           y,
@@ -426,7 +454,7 @@ export function assessCutReachGeometry(
         const t = k / steps
         const x = a[0] + (b[0] - a[0]) * t
         const y = a[1] + (b[1] - a[1]) * t
-        const base = placeNcFace(frame, face, x, y).cross
+        const base = placeNcFace(frame, face, x, y, section).cross
         const baseProbe = classify(base, x, y, budget, cosBevel)
         // A cut already on the curve at the nominal position is a legitimate fillet crossing
         // (e.g. a transverse end cut); it is not a tolerance failure, so it is exempt.

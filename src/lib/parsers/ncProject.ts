@@ -157,7 +157,7 @@ export function faceThickness(
   section: [number, number][],
   face: NcFace,
 ): number {
-  const normal = faceNormal(frame, face)
+  const normal = faceNormal(frame, face, section)
   const axis = normal.axis
   const faceCoord = normal.sign * faceHalf(frame, axis)
   let min = Number.POSITIVE_INFINITY
@@ -177,7 +177,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     nc.notches.filter((n) => n.face === face).map((n) => [n.x, n.y])
 
   const place = (face: NcFace, x: number, y: number) => {
-    const point = placeNcFace(frame, face, x, y)
+    const point = placeNcFace(frame, face, x, y, section)
     return { point, world: toScene(point.along, point.cross, face) }
   }
 
@@ -249,7 +249,9 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       ])
       const perp = normalize(cross(spur, line))
       const theta = (Math.abs(deg) * Math.PI) / 180
-      const side = deg >= 0 ? -1 : 1
+      // Bevels lean along the beam: mirroring the across axis (channels) flips the contour
+      // traversal `line` and with it `perp`, so tie the remaining sign to the beam's +X reading.
+      const side = deg >= 0 ? 1 : -1
       // Outward tilt from the surface normal: at 0° it is the normal (regular), grows toward perp.
       const dir = normalize([
         spur[0] * Math.cos(theta) + perp[0] * Math.sin(theta) * side,

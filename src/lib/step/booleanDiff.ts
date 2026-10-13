@@ -17,6 +17,8 @@ import {
 export interface DiffSoup {
   vertices: number[]
   triangles: number[]
+  /** per-vertex normals (same indexing as `vertices`), when the mesh carried them */
+  normals?: number[]
 }
 
 /** Largest input the CSG path attempts; beyond this the viewer falls back to surface flagging. */

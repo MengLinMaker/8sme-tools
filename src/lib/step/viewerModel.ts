@@ -1,4 +1,5 @@
 import type { MeshedStep } from './mesh'
+import type { DiffPayload } from './occDiff'
 import { getStepWorkerPool, PRIORITY_FOREGROUND } from './stepPool'
 
 /**
@@ -12,12 +13,16 @@ import { getStepWorkerPool, PRIORITY_FOREGROUND } from './stepPool'
 const meshCache = new WeakMap<Uint8Array, Promise<MeshedStep>>()
 
 /** Tessellate a STEP for the viewer, reusing the result while the same bytes object is in play. */
-export function meshForViewer(name: string, bytes: Uint8Array): Promise<MeshedStep> {
+export function meshForViewer(
+  name: string,
+  bytes: Uint8Array,
+  options: { priority?: number } = {},
+): Promise<MeshedStep> {
   const hit = meshCache.get(bytes)
   if (hit) return hit
   const promise = getStepWorkerPool()
     // On-demand: the user is looking at this right now, so jump ahead of background analysis.
-    .mesh(name, bytes, { priority: PRIORITY_FOREGROUND })
+    .mesh(name, bytes, { priority: options.priority ?? PRIORITY_FOREGROUND })
     .catch((error) => {
       meshCache.delete(bytes)
       throw error
@@ -34,31 +39,18 @@ const reconstructCache = new Map<string, Promise<Uint8Array | null>>()
  * first key is the stalest — refresh it on hit to approximate LRU.
  */
 const RECONSTRUCT_CACHE_LIMIT = 32
-const referenceIds = new WeakMap<Uint8Array, number>()
-let nextReferenceId = 0
-
-function referenceKey(reference: Uint8Array | undefined): number {
-  if (!reference) return 0
-  let id = referenceIds.get(reference)
-  if (id === undefined) {
-    nextReferenceId += 1
-    id = nextReferenceId
-    referenceIds.set(reference, id)
-  }
-  return id
-}
 
 /**
- * Rebuild a part's STEP from its NC for the viewer (optionally oriented to a reference STEP),
- * reusing the result for repeated opens / view-mode switches of the same `(NC, reference)`.
- * `priority` defaults to foreground (the user is looking at it now); neighbours prefetch at a
- * lower one so they never delay the open part.
+ * Rebuild a part's STEP from its NC for the viewer, in the NC's own canonical frame (independent of
+ * the part's STEP file), reusing the result for repeated opens / view-mode switches of the same NC.
+ * `priority` defaults to foreground (the user is looking at it now); neighbours prefetch at a lower
+ * one so they never delay the open part.
  */
 export function reconstructForViewer(
   ncText: string,
-  options: { reference?: Uint8Array; simplify?: boolean; priority?: number } = {},
+  options: { simplify?: boolean; priority?: number } = {},
 ): Promise<Uint8Array | null> {
-  const key = `${options.simplify ? 1 : 0}:${referenceKey(options.reference)}:${ncText}`
+  const key = `${options.simplify ? 1 : 0}:${ncText}`
   const hit = reconstructCache.get(key)
   if (hit) {
     reconstructCache.delete(key)
@@ -68,7 +60,6 @@ export function reconstructForViewer(
   const promise = getStepWorkerPool()
     // On-demand: the user is looking at this right now, so jump ahead of background analysis.
     .reconstruct(ncText, {
-      reference: options.reference,
       simplify: options.simplify,
       priority: options.priority ?? PRIORITY_FOREGROUND,
     })
@@ -88,4 +79,34 @@ export function reconstructForViewer(
 /** Drop reconstruction results for a superseded job (the mesh cache is keyed weakly, so it self-clears). */
 export function clearViewerModels(): void {
   reconstructCache.clear()
+}
+
+/**
+ * The overlay diff (manufactured vs ideal) computed in the OCC worker, memoised on the two byte
+ * objects. Keyed weakly so it self-clears with the job, and on the raw bytes only because the worker
+ * aligns the two independent models itself (see `alignToReference`), so the result does not change
+ * with stock profile or seat. Prewarming it here means the overlay pane draws from cache.
+ */
+const diffCache = new WeakMap<Uint8Array, WeakMap<Uint8Array, Promise<DiffPayload | null>>>()
+
+export function diffForViewer(
+  primary: Uint8Array,
+  compare: Uint8Array,
+  options: { priority?: number } = {},
+): Promise<DiffPayload | null> {
+  let inner = diffCache.get(primary)
+  if (!inner) {
+    inner = new WeakMap()
+    diffCache.set(primary, inner)
+  }
+  const hit = inner.get(compare)
+  if (hit) return hit
+  const promise = getStepWorkerPool()
+    .diff(primary, compare, { priority: options.priority ?? PRIORITY_FOREGROUND })
+    .catch((error) => {
+      inner?.delete(compare)
+      throw error
+    })
+  inner.set(compare, promise)
+  return promise
 }

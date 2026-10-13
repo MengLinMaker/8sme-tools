@@ -75,7 +75,12 @@ import {
   PRIORITY_NEIGHBOR,
   prebootStepWorkers,
 } from '@/lib/step/stepPool'
-import { clearViewerModels, reconstructForViewer } from '@/lib/step/viewerModel'
+import {
+  clearViewerModels,
+  diffForViewer,
+  meshForViewer,
+  reconstructForViewer,
+} from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
@@ -139,6 +144,13 @@ const SEVERITY_VARIANT = {
 } as const
 
 const PREF_PREFIX = '8sme.preflight.'
+/**
+ * How long to keep the bulk analysis queue paused after a part is opened, so the workers serve the
+ * viewer (its meshes, reconstruction and overlay diff) plus the neighbour prefetch before background
+ * analysis resumes. Priority only reorders the queue — it cannot preempt an in-flight task — so on a
+ * 1–2 worker machine a warm viewer request otherwise still waits behind a multi-second rebuild.
+ */
+const VIEWER_SETTLE_MS = 600
 /** Reads a persisted viewer toggle, falling back to `fallback` when unset or unavailable. */
 function readPref(key: string, fallback: boolean): boolean {
   try {
@@ -300,6 +312,7 @@ export function PreflightPage() {
     setBundle(input)
     setViewing(null)
     setStepOverrides(new Map())
+    setNcOverrides(new Map())
     setSelectedMarks(new Set())
     selectAnchor.current = null
     setMarkQuery('')
@@ -367,8 +380,8 @@ export function PreflightPage() {
     if (!viewingNcGeom) return null
     const section = viewingNcSection ?? (Array.isArray(stock?.points) ? stock.points : null)
     if (!section) return null
-    return resolveNcFaceFrame(section, viewingNcGeom)
-  }, [viewingNcGeom, viewingNcSection, stock])
+    return resolveNcFaceFrame(section, viewingNcGeom, viewing?.nc?.profile)
+  }, [viewingNcGeom, viewingNcSection, stock, viewing])
   // Cut thicknesses present in this part, for the profile legend (same colours the viewer uses).
   const viewingNcProfiles = useMemo(() => {
     if (!viewingNcGeom) return []
@@ -397,9 +410,7 @@ export function PreflightPage() {
     }
     setMfgStatus('pending')
     let cancelled = false
-    void reconstructForViewer(new TextDecoder().decode(ncBytes), {
-      reference: referenceStepBytes,
-    }).then(
+    void reconstructForViewer(new TextDecoder().decode(ncBytes)).then(
       (step) => {
         if (cancelled) return
         if (step) setManufactured(step)
@@ -413,7 +424,33 @@ export function PreflightPage() {
     return () => {
       cancelled = true
     }
-  }, [ncBytes, referenceStepBytes])
+  }, [ncBytes])
+
+  // Kick off the overlay diff as soon as the manufactured model lands, so it is already computed
+  // (in the OCC worker) by the time the overlay pane mounts — the viewer then reads it from cache
+  // instead of showing an empty pane for the seconds the boolean takes.
+  useEffect(() => {
+    if (!manufactured || !stepBytes) return
+    void diffForViewer(manufactured, stepBytes, { priority: PRIORITY_FOREGROUND }).catch(() => {})
+  }, [manufactured, stepBytes])
+
+  // While a part is open (or being opened), hold the background analysis queue so the workers serve
+  // the viewer and its neighbour prefetch instead of a multi-second rebuild. Resumes once the
+  // manufactured model has settled (or at once when there is nothing to build), after a short settle
+  // so rapid right/left navigation never lets analysis back in mid-burst.
+  useEffect(() => {
+    const pool = getStepWorkerPool()
+    if (!viewing) {
+      // No part open — let the background analysis run.
+      pool.resumeBackground()
+      return
+    }
+    pool.pauseBackground()
+    const building = ncBytes != null && manufactured == null && mfgStatus === 'pending'
+    if (building) return
+    const id = window.setTimeout(() => pool.resumeBackground(), VIEWER_SETTLE_MS)
+    return () => window.clearTimeout(id)
+  }, [viewing, ncBytes, manufactured, mfgStatus])
 
   const hasStep = Boolean(stepBytes)
   // The manufactured model counts as ready while it is rebuilding too (a placeholder shows), so
@@ -745,8 +782,8 @@ export function PreflightPage() {
           try {
             const made = await pool.reconstruct(new TextDecoder().decode(ncBytes), {
               measure: true,
-              // Only the measure is read below — skip reference orientation and
-              // the STEP export (they double rebuild cost for nothing here).
+              // Only the measure is read below — skip the STEP export (it doubles rebuild cost
+              // for nothing here).
               measureOnly: true,
             })
             if (cancelled) return
@@ -786,85 +823,89 @@ export function PreflightPage() {
   // On-demand fast-track: the part the user is viewing jumps ahead of the background queue.
   // Meshing/reconstruction for the 3D panes already run at foreground priority via viewerModel;
   // this covers the *analysis* (measure / light-sabre / NC-rebuild comparison) so the viewed
-  // part's warnings, red faces and cut lines appear without waiting for the whole job.
+  // part's warnings, red faces and cut lines appear without waiting for the whole job. The same
+  // routine prewarms a viewed part's neighbours at a lower priority (see the neighbour effect).
+  const fastTrackPart = useCallback(
+    (part: PartRecord, priority: number) => {
+      const mark = part.mark
+      const stepBytes = part.step ? bytesByPath.get(part.step.path) : undefined
+      const ncPath = part.nc?.path
+      const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
+      const needsInspect = stepBytes != null && !modelChecks.has(mark)
+      const needsRebuild = ncBytes != null && stepBytes != null && !manufactureChecks.has(mark)
+      if ((!needsInspect && !needsRebuild) || fastTrackInFlight.current.has(mark)) return
+      fastTrackInFlight.current.add(mark)
+      void (async () => {
+        try {
+          const pool = getStepWorkerPool()
+          let measure: StepMeasure | null = null
+          if (stepBytes && (needsInspect || needsRebuild)) {
+            const inspected = await pool.inspect(stepBytes, { priority })
+            measure = inspected.measure
+            const drawing = drawingMaterials.get(mark)
+            if (measure && drawing) {
+              const checked = compareGeometry(measure, drawing)
+              setGeometryChecks((prev) => new Map(prev).set(mark, checked))
+            }
+            if (needsInspect) {
+              const length =
+                drawingMaterials.get(mark)?.length ?? part.expected?.length ?? part.nc?.length
+              const cross = part.nc?.dimensions?.slice(0, 2) ?? []
+              const check: SizeCheck =
+                length == null || cross.length < 2
+                  ? { ok: false, error: 'noDims' }
+                  : !measure
+                    ? { ok: false, error: 'measureFailed' }
+                    : compareSize(measure.size, length, cross, measure.bodies, measure.extra)
+              setModelChecks((prev) => new Map(prev).set(mark, check))
+            }
+          }
+          if (needsRebuild && ncBytes && measure) {
+            const made = await pool.reconstruct(new TextDecoder().decode(ncBytes), {
+              measure: true,
+              measureOnly: true,
+              priority,
+            })
+            if (!made.measure) return
+            const comparison = compareModels(measure, made.measure)
+            setManufactureChecks((prev) => new Map(prev).set(mark, comparison))
+            const extra = made.measure.bodies - measure.bodies
+            if (extra > 0) {
+              setCutIssues((prev) => {
+                const next = new Map(prev)
+                const list = next.get(mark) ?? []
+                if (!list.some((finding) => finding.code === 'CUT_END_PIECE')) {
+                  next.set(mark, [
+                    ...list,
+                    {
+                      severity: 'warning' as const,
+                      code: 'CUT_END_PIECE',
+                      mark,
+                      message: `Cutting straight through would detach ${extra} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)`,
+                      params: { extra },
+                    },
+                  ])
+                }
+                return next
+              })
+            }
+          }
+        } catch {
+          // best-effort: aborted or unmeasurable — the background pass will retry at its turn
+        } finally {
+          fastTrackInFlight.current.delete(mark)
+        }
+      })()
+    },
+    [bytesByPath, drawingMaterials, modelChecks, manufactureChecks],
+  )
   useEffect(() => {
     if (!result || !viewing) return
-    const part = result.parts.find((candidate) => candidate.mark === viewing.mark) ?? viewing
-    const mark = part.mark
-    const stepBytes = part.step ? bytesByPath.get(part.step.path) : undefined
-    const ncPath = part.nc?.path
-    const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
-    const needsInspect = stepBytes != null && !modelChecks.has(mark)
-    const needsRebuild = ncBytes != null && stepBytes != null && !manufactureChecks.has(mark)
-    if ((!needsInspect && !needsRebuild) || fastTrackInFlight.current.has(mark)) return
-    fastTrackInFlight.current.add(mark)
-    let cancelled = false
-    void (async () => {
-      try {
-        const pool = getStepWorkerPool()
-        let measure: StepMeasure | null = null
-        if (stepBytes && (needsInspect || needsRebuild)) {
-          const inspected = await pool.inspect(stepBytes, { priority: PRIORITY_FOREGROUND })
-          if (cancelled) return
-          measure = inspected.measure
-          const drawing = drawingMaterials.get(mark)
-          if (measure && drawing) {
-            const checked = compareGeometry(measure, drawing)
-            setGeometryChecks((prev) => new Map(prev).set(mark, checked))
-          }
-          if (needsInspect) {
-            const length =
-              drawingMaterials.get(mark)?.length ?? part.expected?.length ?? part.nc?.length
-            const cross = part.nc?.dimensions?.slice(0, 2) ?? []
-            const check: SizeCheck =
-              length == null || cross.length < 2
-                ? { ok: false, error: 'noDims' }
-                : !measure
-                  ? { ok: false, error: 'measureFailed' }
-                  : compareSize(measure.size, length, cross, measure.bodies, measure.extra)
-            setModelChecks((prev) => new Map(prev).set(mark, check))
-          }
-        }
-        if (needsRebuild && ncBytes && measure) {
-          const made = await pool.reconstruct(new TextDecoder().decode(ncBytes), {
-            measure: true,
-            measureOnly: true,
-            priority: PRIORITY_FOREGROUND,
-          })
-          if (cancelled || !made.measure) return
-          const comparison = compareModels(measure, made.measure)
-          setManufactureChecks((prev) => new Map(prev).set(mark, comparison))
-          const extra = made.measure.bodies - measure.bodies
-          if (extra > 0) {
-            setCutIssues((prev) => {
-              const next = new Map(prev)
-              const list = next.get(mark) ?? []
-              if (!list.some((finding) => finding.code === 'CUT_END_PIECE')) {
-                next.set(mark, [
-                  ...list,
-                  {
-                    severity: 'warning' as const,
-                    code: 'CUT_END_PIECE',
-                    mark,
-                    message: `Cutting straight through would detach ${extra} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)`,
-                    params: { extra },
-                  },
-                ])
-              }
-              return next
-            })
-          }
-        }
-      } catch {
-        // best-effort: aborted or unmeasurable — the background pass will retry at its turn
-      } finally {
-        fastTrackInFlight.current.delete(mark)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [result, viewing, bytesByPath, drawingMaterials, modelChecks, manufactureChecks])
+    fastTrackPart(
+      result.parts.find((candidate) => candidate.mark === viewing.mark) ?? viewing,
+      PRIORITY_FOREGROUND,
+    )
+  }, [result, viewing, fastTrackPart])
 
   const allFindings = useMemo(() => {
     if (!result) return []
@@ -1349,24 +1390,47 @@ export function PreflightPage() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [viewing, gotoOffset])
 
-  // Build the manufactured model for the mark either side of the one being viewed, ahead of time:
-  // navigation is ±1 (arrow keys / prev-next), so a neighbour is the next likely open. Queued at a
-  // priority below the on-demand build but above background analysis, so it never delays the part
-  // the user is actually waiting on. Best-effort — a failed/aborted prefetch just rebuilds on open.
+  // Prewarm the marks either side of the one being viewed: navigation is ±1 (arrow keys /
+  // prev-next), so a neighbour is the next likely open. Each neighbour gets its crafted STEP, its
+  // mesh, its overlay diff and its analysis (measure / light-sabre / NC-rebuild comparison) built
+  // ahead of time, all queued at PRIORITY_NEIGHBOR — below the on-demand build but above background
+  // analysis, so a prefetch never delays the part the user is actually waiting on. Best-effort: a
+  // miss rebuilds on open.
   useEffect(() => {
     if (!viewing || viewingIndex < 0) return
     for (const delta of [1, -1]) {
       const neighbour = viewableParts[viewingIndex + delta]
-      const ncPath = neighbour?.nc?.path
+      if (!neighbour) continue
+      fastTrackPart(neighbour, PRIORITY_NEIGHBOR)
+      const stepBytes = neighbour.step ? bytesByPath.get(neighbour.step.path) : undefined
+      if (stepBytes) {
+        void meshForViewer(neighbour.step?.path ?? neighbour.mark, stepBytes, {
+          priority: PRIORITY_NEIGHBOR,
+        }).catch(() => {})
+      }
+      const ncPath = neighbour.nc?.path
       const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
-      if (!ncBytes) continue
-      const reference = neighbour.step ? bytesByPath.get(neighbour.step.path) : undefined
-      void reconstructForViewer(new TextDecoder().decode(ncBytes), {
-        reference,
-        priority: PRIORITY_NEIGHBOR,
-      }).catch(() => {})
+      if (ncBytes) {
+        void reconstructForViewer(new TextDecoder().decode(ncBytes), {
+          priority: PRIORITY_NEIGHBOR,
+        })
+          .then((bytes) => {
+            // Warm the manufactured tessellation and the overlay diff too, so opening is instant.
+            if (bytes) {
+              void meshForViewer(`${neighbour.mark} · manufactured`, bytes, {
+                priority: PRIORITY_NEIGHBOR,
+              }).catch(() => {})
+              if (stepBytes) {
+                void diffForViewer(bytes, stepBytes, {
+                  priority: PRIORITY_NEIGHBOR,
+                }).catch(() => {})
+              }
+            }
+          })
+          .catch(() => {})
+      }
     }
-  }, [viewing, viewingIndex, viewableParts, bytesByPath])
+  }, [viewing, viewingIndex, viewableParts, bytesByPath, fastTrackPart])
 
   /** The override a part carries, if any (cleaned or regenerated). */
   const overrideFor = useCallback(
@@ -1479,8 +1543,7 @@ export function PreflightPage() {
       if (!ncBytes) return
       setFixingMark(part.mark)
       try {
-        const reference = part.step ? bytesByPath.get(part.step.path) : undefined
-        const step = await reconstructForViewer(new TextDecoder().decode(ncBytes), { reference })
+        const step = await reconstructForViewer(new TextDecoder().decode(ncBytes))
         if (step) setOverride(part.mark, step, 'regenerated')
       } catch {
         // leave the original in place if the rebuild fails
@@ -1502,9 +1565,7 @@ export function PreflightPage() {
       if (!ncBytes) return
       setFixingMark(part.mark)
       try {
-        const reference = part.step ? bytesByPath.get(part.step.path) : undefined
         const step = await reconstructForViewer(new TextDecoder().decode(ncBytes), {
-          reference,
           simplify: true,
         })
         if (step) setOverride(part.mark, step, 'simplified')
@@ -2437,6 +2498,7 @@ function viewerFixAction(
   t: TFunction,
   fix: ViewerFix,
   kind: FindingFix,
+  finding: Finding,
 ): { label: string; pendingLabel: string; run: () => void } {
   if (kind === 'clean')
     return {
@@ -2595,7 +2657,7 @@ function ViewerWarnings({
               )
               const fixKind = fix && !resolved ? fixForFinding(finding.code) : null
               const fixable = Boolean(fixKind && fix && viewerFixAvailable(fix, fixKind))
-              const action = fixKind && fix ? viewerFixAction(t, fix, fixKind) : null
+              const action = fixKind && fix ? viewerFixAction(t, fix, fixKind, finding) : null
               // Only findings the viewer can point at in 3D get an eye toggle / are clickable.
               const showable = isVisualisable(finding)
               return (

@@ -2,11 +2,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { nw30Bottom } from '@test/fixtures'
-import { BoxGeometry, Matrix4, Quaternion, Vector3 } from 'three'
+import { BoxGeometry, Matrix4 } from 'three'
 import { describe, expect, it } from 'vitest'
-import { parseDstv } from '@/lib/parsers/dstv'
-import { detectOrientation } from '@/lib/sections/orient'
-import { partSectionForCode } from '@/lib/sections/stock'
 import {
   booleanDiff,
   booleanDiffRaw,
@@ -16,6 +13,7 @@ import {
 } from '@/lib/step/booleanDiff'
 import { createMeshQuery, diffFraction } from '@/lib/step/diffHighlight'
 import { type MeshedStep, meshStepFile } from '@/lib/step/mesh'
+import { alignToReference } from '@/lib/step/occDiff'
 import { ensureOc, setOcWasmUrl } from '@/lib/step/occInit'
 import { reconstructSolidFromNc } from '@/lib/step/reconstructFromNc'
 
@@ -67,54 +65,6 @@ describe('diff presence probe (no fixtures needed)', () => {
 const DIR = nw30Bottom()
 const HAVE_M87 = existsSync(join(DIR, 'm87.nc1')) && existsSync(join(DIR, 'm87.stp'))
 
-const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]
-
-function seatMatrix(vertices: number[], profile: [number, number][] | undefined): Matrix4 {
-  const min = [Infinity, Infinity, Infinity]
-  const max = [-Infinity, -Infinity, -Infinity]
-  for (let i = 0; i + 2 < vertices.length; i += 3) {
-    for (let k = 0; k < 3; k++) {
-      min[k] = Math.min(min[k] ?? Infinity, vertices[i + k] ?? Infinity)
-      max[k] = Math.max(max[k] ?? -Infinity, vertices[i + k] ?? -Infinity)
-    }
-  }
-  const size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]]
-  const centre = new Vector3((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2)
-  const extents = [size[0] ?? 0, size[1] ?? 0, size[2] ?? 0]
-  const longAxis = extents.indexOf(Math.max(...extents))
-  const unit = (axis: number, sign: number) => {
-    const v = new Vector3()
-    v.setComponent(axis, sign)
-    return v
-  }
-  const toX = new Quaternion()
-  if (longAxis !== 0) toX.setFromUnitVectors(unit(longAxis, 1), unit(0, 1))
-  let seat = toX.clone()
-  if (profile && profile.length >= 3 && vertices.length >= 9) {
-    const point = new Vector3()
-    const seated: number[] = new Array(vertices.length)
-    for (let i = 0; i + 2 < vertices.length; i += 3) {
-      point
-        .set(vertices[i] - centre.x, vertices[i + 1] - centre.y, vertices[i + 2] - centre.z)
-        .applyQuaternion(toX)
-      seated[i] = point.x
-      seated[i + 1] = point.y
-      seated[i + 2] = point.z
-    }
-    seat = new Quaternion()
-      .setFromAxisAngle(
-        unit(0, 1),
-        SEAT_ANGLES[detectOrientation(profile, seated, 1, 2, [0, 0, 0])] ?? 0,
-      )
-      .multiply(toX)
-  }
-  return new Matrix4().compose(
-    centre.clone().applyQuaternion(seat).negate(),
-    seat,
-    new Vector3(1, 1, 1),
-  )
-}
-
 /**
  * Bottleneck profile for the overlay diff on a real part (m87: NW30 PFC). Its `o` face carries
  * slotted holes, which the reconstruction used to cut as plain circles — a spurious ~44 % undercut
@@ -128,27 +78,26 @@ describe.skipIf(!HAVE_M87)('overlay diff profile (m87)', () => {
     await ensureOc()
     const ncText = readFileSync(join(DIR, 'm87.nc1'), 'utf8')
     const stepBytes = new Uint8Array(readFileSync(join(DIR, 'm87.stp')))
-    const header = parseDstv(ncText).header
-    const section = partSectionForCode(header.profile, header.dimensions)
-    const profile = section?.points as [number, number][] | undefined
     const triTotal = (m: MeshedStep) =>
       m.bodies.reduce((n, b) => n + Math.floor(b.mesh.faces.triangles.length / 3), 0)
 
     let start = performance.now()
-    const built = await reconstructSolidFromNc(ncText, { reference: stepBytes })
+    // The NC builds in its own canonical frame; the STEP is reconciled by the diff's alignment.
+    const built = await reconstructSolidFromNc(ncText)
     expect(built).not.toBeNull()
+    const madeBytes = new TextEncoder().encode(built?.step ?? '')
     const reconstructMs = performance.now() - start
 
     start = performance.now()
-    const mfg = await meshStepFile('m87·mfg', new TextEncoder().encode(built?.step ?? ''))
+    const mfg = await meshStepFile('m87·mfg', madeBytes)
     const stp = await meshStepFile('m87·step', stepBytes)
     const meshMs = performance.now() - start
 
     const soups = (m: typeof mfg) =>
       m.bodies.map((b) => ({ vertices: b.mesh.faces.vertices, triangles: b.mesh.faces.triangles }))
     start = performance.now()
-    const mfgMatrix = seatMatrix(mfg.vertices, profile)
-    const stpMatrix = seatMatrix(stp.vertices, profile)
+    const mfgMatrix = new Matrix4()
+    const stpMatrix = await alignToReference(stepBytes, madeBytes)
     const seatMs = performance.now() - start
 
     start = performance.now()

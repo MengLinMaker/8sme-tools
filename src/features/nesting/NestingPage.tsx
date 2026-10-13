@@ -365,7 +365,7 @@ export function NestingPage() {
     })
     if (!stitched) return null
     try {
-      return await reconstructForViewer(stitched, { reference: file.bytes })
+      return await reconstructForViewer(stitched)
     } catch (error) {
       // Best-effort: a null/failed rebuild falls back to the STEP view.
       // eslint-disable-next-line no-console

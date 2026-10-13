@@ -215,7 +215,7 @@ describe('NW31 issue parts', () => {
         const stepBytes = new Uint8Array(readFileSync(join(DIR, `${mark}.stp`)))
         const nc = readFileSync(join(DIR, `${mark}.nc1`), 'utf8')
         const header = parseDstv(nc).header
-        const built = await reconstructSolidFromNc(nc, { reference: stepBytes })
+        const built = await reconstructSolidFromNc(nc)
         if (!built) {
           console.log(`${mark} ${header.profile}: reconstruct null`)
           return
