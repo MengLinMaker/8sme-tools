@@ -59,18 +59,37 @@ const CORNER_BAND_MM = MACHINE.envelope.nozzleMm / 2
  */
 const SAMPLE_STEP_MM = 1
 
-export interface CutReachFailure {
+/**
+ * A cut line the viewer draws a marker over, in NC face coords. Both the cut-reach failures and
+ * the bevel-change line reduce to this, so a finding can point at its guilty cut.
+ */
+export interface CutMarker {
+  face: NcFace
+  /** start of the marker, in NC face coords `[X, Y]` */
+  from: [number, number]
+  /** end of the marker, in NC face coords `[X, Y]` */
+  to: [number, number]
+  /**
+   * Optional across-face cut lines (NC face coords) the marker should follow instead of a single
+   * `from` → `to` chord. Used when a cut spans several disjoint across-face segments (e.g. an end
+   * cope, whose lengthwise profile edges are not cuts). Each entry is a connected polyline; the
+   * viewer draws one segment per consecutive pair.
+   */
+  lines?: [number, number][][]
+  /**
+   * Optional marker colour (0xRRGGBB). Defaults to the viewer's red "guilty cut"; warnings set an
+   * amber tone so a merely suspicious cut reads differently from a hard failure.
+   */
+  color?: number
+}
+
+export interface CutReachFailure extends CutMarker {
   /**
    * `reach`: the beam bottoms out inside the material. `wall`: it would cut a wall behind.
    * `corner`: the cut is nominally on the flat face but a ±tolerance shift carries it onto the
    * section's corner radius, where the beam meets the curved surface at a bevel with no flat escape.
    */
   reason: 'reach' | 'wall' | 'corner'
-  face: NcFace
-  /** start of the uncuttable subsection of the cut, in NC face coords `[X, Y]` */
-  from: [number, number]
-  /** end of the uncuttable subsection of the cut, in NC face coords `[X, Y]` */
-  to: [number, number]
   /** length of the uncuttable subsection along the cut (mm) */
   spanMm: number
   /** where along the member the beam enters (NC X) at the representative (worst) sample */

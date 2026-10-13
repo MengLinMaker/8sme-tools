@@ -38,13 +38,21 @@ import {
 } from '@/components/ui/table'
 import { Toggle } from '@/components/ui/toggle'
 import { auditEntries } from '@/lib/audit/auditJob'
+import { assessBevelChange, type BevelChangeIssue } from '@/lib/audit/bevelChange'
 import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
-import { assessCutReach, type CutReachFailure, MAX_CUT_THICKNESS_MM } from '@/lib/audit/cutReach'
+import {
+  assessCutReach,
+  type CutMarker,
+  type CutReachFailure,
+  MAX_CUT_THICKNESS_MM,
+} from '@/lib/audit/cutReach'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
+import { assessUnclosedCuts, type UnclosedCutIssue } from '@/lib/audit/unclosedCuts'
 import { downloadBlob, downloadText } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
+import { removeCutFromNc } from '@/lib/parsers/ncEdit'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { cutThicknesses } from '@/lib/parsers/ncProject'
@@ -85,7 +93,13 @@ function findingLocationOf(finding: Finding): number | null {
 }
 
 /** Finding codes the viewer draws a 3D cut marker for (and hence the eye can toggle). */
-const VISUALISABLE_CODES = new Set(['CUT_DEPTH', 'CUT_CORNER'])
+const VISUALISABLE_CODES = new Set([
+  'CUT_DEPTH',
+  'CUT_CORNER',
+  'CUT_BEVEL_CHANGE',
+  'CUT_UNCLOSED',
+  'CUT_CUTOUT',
+])
 
 /**
  * Whether the viewer can point at this finding in 3D. Only the profile cut checks carry a marker
@@ -163,12 +177,17 @@ function resolvedFindings(kind: StepFixKind): string[] {
   return ['STRAY_BODY']
 }
 
-/** The one-click STEP fix a finding code maps to, when the warning is fixable at all. */
-type FindingFix = 'clean' | 'regenerate' | 'simplify'
+/**
+ * The one-click fix a finding code maps to, when the warning is fixable at all. `clean` /
+ * `regenerate` / `simplify` swap the part's STEP; `removeCut` edits the NC (stripping the flagged
+ * cut) and rebuilds the model from it.
+ */
+type FindingFix = 'clean' | 'regenerate' | 'simplify' | 'removeCut'
 function fixForFinding(code: string): FindingFix | null {
   if (code === 'STRAY_BODY') return 'clean'
   if (code === 'MANUFACTURE_MISMATCH' || code === 'MANUFACTURE_BORDERLINE') return 'regenerate'
   if (code === 'CUT_END_PIECE') return 'simplify'
+  if (code === 'CUT_UNCLOSED' || code === 'CUT_CUTOUT') return 'removeCut'
   return null
 }
 
@@ -253,6 +272,10 @@ export function PreflightPage() {
   const [cutIssues, setCutIssues] = useState<Map<string, Finding[]>>(new Map())
   /** Per-part cut-reach failures (a bevel whose bore exceeds the head's pierce cap). */
   const [reachChecks, setReachChecks] = useState<Map<string, CutReachFailure[]>>(new Map())
+  /** Per-part bevel-change lines (one cut line whose bevel is not a single angle). */
+  const [bevelChanges, setBevelChanges] = useState<Map<string, BevelChangeIssue[]>>(new Map())
+  /** Per-part unclosed / stray cuts (a cut that doesn't run edge to edge). */
+  const [unclosedCuts, setUnclosedCuts] = useState<Map<string, UnclosedCutIssue[]>>(new Map())
   const [checking, setChecking] = useState(false)
   /** True from when a job is dropped until the whole analysis (drawings + models) finishes. */
   const [analyzing, setAnalyzing] = useState(false)
@@ -313,14 +336,19 @@ export function PreflightPage() {
   const viewingPdfBytes = viewing?.pdf ? bytesByPath.get(viewing.pdf.path) : undefined
 
   const [stepOverrides, setStepOverrides] = useState<Map<string, StepOverride>>(new Map())
+  /**
+   * Per-part NC edits (a stray cut removed). These are the source of truth for the manufactured
+   * model and the export: they override the bundled `.nc1` bytes and mark the part export-ready.
+   */
+  const [ncOverrides, setNcOverrides] = useState<Map<string, Uint8Array>>(new Map())
   const [fixingMark, setFixingMark] = useState<string | null>(null)
-  const ncBytes = viewing?.nc ? bytesByPath.get(viewing.nc.path) : undefined
+  const ncBytes = viewing?.nc
+    ? (ncOverrides.get(viewing.mark) ?? bytesByPath.get(viewing.nc.path))
+    : undefined
   const stepBytes = viewing
     ? (stepOverrides.get(viewing.mark)?.bytes ??
       (viewing.step ? bytesByPath.get(viewing.step.path) : undefined))
     : undefined
-  // The part's own STEP file, used to give the manufactured model the file's orientation.
-  const referenceStepBytes = viewing?.step ? bytesByPath.get(viewing.step.path) : undefined
   // Parsed NC toolpath geometry, projected onto the manufactured model so the cut lines,
   // holes and bevels read on the part the laser actually produces.
   const viewingNcGeom = useMemo(
@@ -486,6 +514,8 @@ export function PreflightPage() {
     setGeometryChecks(new Map())
     setCutIssues(new Map())
     setReachChecks(new Map())
+    setBevelChanges(new Map())
+    setUnclosedCuts(new Map())
     let cancelled = false
 
     const pdfParts = result.parts.filter((part) => {
@@ -502,6 +532,8 @@ export function PreflightPage() {
       // draw red in the NC view even while drawings + models still run.
       const issues = new Map<string, Finding[]>()
       const reach = new Map<string, CutReachFailure[]>()
+      const bevel = new Map<string, BevelChangeIssue[]>()
+      const unclosed = new Map<string, UnclosedCutIssue[]>()
       /** Records that cut-depth couldn't be assessed for a model, so it never passes silently. */
       const markUnchecked = (mark: string, reason: string, params?: Record<string, string>) => {
         const list = issues.get(mark) ?? []
@@ -534,9 +566,16 @@ export function PreflightPage() {
           })
           issues.set(part.mark, list)
         }
+        const bevelIssues = assessBevelChange(ncText)
+        if (bevelIssues.length > 0) bevel.set(part.mark, bevelIssues)
         const section = part.nc?.profile
           ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
           : null
+        const unclosedIssues = assessUnclosedCuts(ncText, {
+          section: section?.points,
+          profile: part.nc?.profile,
+        })
+        if (unclosedIssues.length > 0) unclosed.set(part.mark, unclosedIssues)
         if (!section) {
           const profile = part.nc?.profile ?? '?'
           markUnchecked(part.mark, `unrecognised section ${profile}`, { profile })
@@ -544,12 +583,15 @@ export function PreflightPage() {
         }
         const failures = assessCutReach(ncText, section.points, section.holes ?? [], {
           toleranceMm: MACHINE.placementToleranceMm,
+          profile: part.nc?.profile,
         })
         if (failures.length > 0) reach.set(part.mark, failures)
       }
       if (cancelled) return
       if (issues.size > 0) setCutIssues(new Map(issues))
       if (reach.size > 0) setReachChecks(new Map(reach))
+      if (bevel.size > 0) setBevelChanges(new Map(bevel))
+      if (unclosed.size > 0) setUnclosedCuts(new Map(unclosed))
 
       // Phase 1: drawings, up to CONCURRENCY at a time.
       const materials = new Map<string, DrawingMaterial>()
@@ -926,6 +968,36 @@ export function PreflightPage() {
           }
         })
       }
+      const bevel = bevelChanges.get(part.mark)
+      if (bevel) {
+        // One finding per changing cut line. Their 3D marker indices continue after the reach
+        // failures, matching the combined marker list the viewer draws (`viewerSabreFailures`).
+        const base = reach?.length ?? 0
+        bevel.forEach((issue, index) => {
+          extra.push({
+            severity: issue.severity,
+            code: issue.code,
+            mark: part.mark,
+            message: issue.message,
+            params: { ...issue.params, index: base + index },
+          })
+        })
+      }
+      const unclosed = unclosedCuts.get(part.mark)
+      if (unclosed) {
+        // One warning per stray cut. Their marker indices continue after reach + bevel, matching
+        // the combined list `viewerSabreFailures` builds.
+        const base = (reach?.length ?? 0) + (bevel?.length ?? 0)
+        unclosed.forEach((issue, index) => {
+          extra.push({
+            severity: issue.severity,
+            code: issue.code,
+            mark: part.mark,
+            message: issue.message,
+            params: { ...issue.params, index: base + index },
+          })
+        })
+      }
     }
     return [...result.findings, ...extra]
       .filter((finding) => finding.severity !== 'info')
@@ -952,6 +1024,8 @@ export function PreflightPage() {
     geometryChecks,
     cutIssues,
     reachChecks,
+    bevelChanges,
+    unclosedCuts,
     t,
   ])
 
@@ -1134,12 +1208,33 @@ export function PreflightPage() {
     [viewerFindings, shownIssues, toggleIssue, focusFinding],
   )
 
-  /** Cut-reach failures of the viewed part — the manufactured view draws the guilty cuts. */
-  const viewerSabreFailures = useMemo(() => {
+  /**
+   * Cut markers of the viewed part — the manufactured view draws the guilty cuts. Cut-reach
+   * failures come first, then the bevel-change lines, so a finding's `params.index` (assigned in
+   * the same order in `allFindings`) picks the right marker.
+   */
+  const viewerSabreFailures = useMemo<CutMarker[] | null>(() => {
     if (!viewing) return null
-    const failures = reachChecks.get(viewing.mark)
-    return failures && failures.length > 0 ? failures : null
-  }, [viewing, reachChecks])
+    const markers: CutMarker[] = [...(reachChecks.get(viewing.mark) ?? [])]
+    for (const issue of bevelChanges.get(viewing.mark) ?? []) {
+      markers.push({
+        face: issue.face,
+        from: issue.from,
+        to: issue.to,
+        lines: issue.lines,
+      })
+    }
+    for (const issue of unclosedCuts.get(viewing.mark) ?? []) {
+      markers.push({
+        face: issue.face,
+        from: issue.from,
+        to: issue.to,
+        lines: issue.lines,
+        color: issue.color,
+      })
+    }
+    return markers.length > 0 ? markers : null
+  }, [viewing, reachChecks, bevelChanges, unclosedCuts])
 
   // Collapsible sections — long jobs push the tables far down, so profiles
   // and parts collapse like an accordion.
@@ -1329,6 +1424,34 @@ export function PreflightPage() {
     })
   }, [])
 
+  /** Drops a part's NC edit, so it reverts to the bundled `.nc1`. */
+  const undoCut = useCallback(
+    (part: PartRecord) => {
+      setNcOverrides((prev) => {
+        if (!prev.has(part.mark)) return prev
+        const next = new Map(prev)
+        next.delete(part.mark)
+        return next
+      })
+      const original = part.nc ? bytesByPath.get(part.nc.path) : undefined
+      if (!original) return
+      const section = part.nc?.profile
+        ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
+        : null
+      const issues = assessUnclosedCuts(new TextDecoder().decode(original), {
+        section: section?.points,
+        profile: part.nc?.profile,
+      })
+      setUnclosedCuts((prev) => {
+        const next = new Map(prev)
+        if (issues.length > 0) next.set(part.mark, issues)
+        else next.delete(part.mark)
+        return next
+      })
+    },
+    [bytesByPath],
+  )
+
   /** Cleans one part's stray STEP bodies, keeping the real geometry untouched. */
   const cleanPart = useCallback(
     async (part: PartRecord) => {
@@ -1395,23 +1518,78 @@ export function PreflightPage() {
   )
 
   /**
+   * Removes the stray cut behind one `CUT_UNCLOSED` finding from the part's NC and records the
+   * edited NC as an override. The manufactured model rebuilds from it (see the `ncBytes` memo) and
+   * the export ships the edited NC. Recomputing the check drops the resolved warning.
+   */
+  const removeCut = useCallback(
+    async (part: PartRecord, finding: Finding) => {
+      const ncPath = part.nc?.path
+      const original = ncPath ? bytesByPath.get(ncPath) : undefined
+      if (!original) return
+      const current = ncOverrides.get(part.mark) ?? original
+      const currentText = new TextDecoder().decode(current)
+      const section = part.nc?.profile
+        ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
+        : null
+      const options = { section: section?.points, profile: part.nc?.profile }
+      const issueIndex =
+        typeof finding.params?.index === 'number'
+          ? finding.params.index -
+            ((reachChecks.get(part.mark)?.length ?? 0) + (bevelChanges.get(part.mark)?.length ?? 0))
+          : -1
+      const issue = assessUnclosedCuts(currentText, options)[issueIndex]
+      if (!issue) return
+      setFixingMark(part.mark)
+      try {
+        const edited = removeCutFromNc(currentText, {
+          contourIndex: issue.contourIndex,
+          removeVertices: issue.removal,
+        })
+        if (edited === currentText) return
+        setNcOverrides((prev) => {
+          const next = new Map(prev)
+          next.set(part.mark, new TextEncoder().encode(edited))
+          return next
+        })
+        const remaining = assessUnclosedCuts(edited, options)
+        setUnclosedCuts((prev) => {
+          const next = new Map(prev)
+          if (remaining.length > 0) next.set(part.mark, remaining)
+          else next.delete(part.mark)
+          return next
+        })
+      } catch {
+        // leave the original NC in place if editing fails
+      } finally {
+        setFixingMark(null)
+      }
+    },
+    [bytesByPath, ncOverrides, reachChecks, bevelChanges],
+  )
+
+  /**
    * Exports the job with every STEP the user fixed (cleaned/regenerated) substituted in.
    * The archive is flattened to basenames so the operator gets a folderless drop into WiseCAM.
    */
   const exportFixed = useCallback(() => {
-    if (!result || !bundle || stepOverrides.size === 0) return
+    if (!result || !bundle || (stepOverrides.size === 0 && ncOverrides.size === 0)) return
     const files = new Map<string, Uint8Array>()
     for (const entry of bundle.entries) files.set(entry.path, entry.bytes)
     for (const [mark, override] of stepOverrides) {
       const path = result.parts.find((part) => part.mark === mark)?.step?.path
       if (path) files.set(path, override.bytes)
     }
+    for (const [mark, bytes] of ncOverrides) {
+      const path = result.parts.find((part) => part.mark === mark)?.nc?.path
+      if (path) files.set(path, bytes)
+    }
     const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
     downloadBlob(
       `fixed-${safeName || 'job'}.zip`,
       new Blob([zipSync(flattenZipEntries(files))], { type: 'application/zip' }),
     )
-  }, [result, bundle, stepOverrides])
+  }, [result, bundle, stepOverrides, ncOverrides])
 
   /**
    * Exports the ticked parts' PDF drawing + STEP + NC together in one flattened zip
@@ -1424,8 +1602,13 @@ export function PreflightPage() {
       if (!selectedMarks.has(part.mark)) continue
       for (const path of [part.pdf?.path, part.nc?.path, part.step?.path]) {
         if (!path) continue
-        const override = part.step?.path === path ? stepOverrides.get(part.mark) : undefined
-        const bytes = override?.bytes ?? bytesByPath.get(path)
+        const override =
+          part.step?.path === path
+            ? stepOverrides.get(part.mark)?.bytes
+            : part.nc?.path === path
+              ? ncOverrides.get(part.mark)
+              : undefined
+        const bytes = override ?? bytesByPath.get(path)
         if (bytes) files.set(path, bytes)
       }
     }
@@ -1438,7 +1621,7 @@ export function PreflightPage() {
       `selected-${safeName || 'job'}.zip`,
       new Blob([zipSync(flattenZipEntries(files))], { type: 'application/zip' }),
     )
-  }, [result, bundle, selectedMarks, bytesByPath, stepOverrides, t])
+  }, [result, bundle, selectedMarks, bytesByPath, stepOverrides, ncOverrides, t])
 
   return (
     <div className="flex flex-col gap-6">
@@ -1675,9 +1858,11 @@ export function PreflightPage() {
                 <Button size="sm" onClick={exportSelected} disabled={selectedMarks.size === 0}>
                   {t('preflight.findings.exportSelected', { count: selectedMarks.size })}
                 </Button>
-                {stepOverrides.size > 0 && (
+                {stepOverrides.size + ncOverrides.size > 0 && (
                   <Button variant="outline" size="sm" onClick={exportFixed}>
-                    {t('preflight.findings.exportFixed', { count: stepOverrides.size })}
+                    {t('preflight.findings.exportFixed', {
+                      count: stepOverrides.size + ncOverrides.size,
+                    })}
                   </Button>
                 )}
               </div>
@@ -1773,7 +1958,16 @@ export function PreflightPage() {
                               />
                             </label>
                           </TableCell>
-                          <TableCell className="font-mono text-xs">{part.mark}</TableCell>
+                          <TableCell className="font-mono text-xs">
+                            <span className="flex items-center gap-1.5">
+                              {part.mark}
+                              {ncOverrides.has(part.mark) && (
+                                <Badge variant="success" className="font-sans font-normal">
+                                  {t('preflight.warnings.cutRemovedBadge')}
+                                </Badge>
+                              )}
+                            </span>
+                          </TableCell>
                           <TableCell>
                             {pills.length === 0 ? (
                               <Badge variant="success">{t('preflight.status.ok')}</Badge>
@@ -2167,11 +2361,15 @@ export function PreflightPage() {
                         canClean: isCleanable(viewing),
                         canRegenerate: isRegeneratable(viewing),
                         canSimplify: isSimplifiable(viewing),
+                        canRemoveCut: Boolean(viewing.nc),
+                        cutRemoved: ncOverrides.has(viewing.mark),
                         pending: fixingMark === viewing.mark,
                         onClean: () => void cleanPart(viewing),
                         onRegenerate: () => void regeneratePart(viewing),
                         onSimplify: () => void simplifyPart(viewing),
+                        onRemoveCut: (finding) => void removeCut(viewing, finding),
                         onUndo: () => undoOverride(viewing.mark),
+                        onUndoCut: () => undoCut(viewing),
                       }}
                     />
                   ) : viewingPdfBytes ? (
@@ -2221,11 +2419,17 @@ interface ViewerFix {
   canClean: boolean
   canRegenerate: boolean
   canSimplify: boolean
+  /** A `CUT_UNCLOSED` finding can be resolved by editing the NC. */
+  canRemoveCut: boolean
+  /** The part already carries an NC edit (a stray cut removed). */
+  cutRemoved: boolean
   pending: boolean
   onClean: () => void
   onRegenerate: () => void
   onSimplify: () => void
+  onRemoveCut: (finding: Finding) => void
   onUndo: () => void
+  onUndoCut: () => void
 }
 
 /** Which fix action a viewer Fix button runs, with its labels. */
@@ -2246,6 +2450,12 @@ function viewerFixAction(
       pendingLabel: t('common.actions.working'),
       run: fix.onRegenerate,
     }
+  if (kind === 'removeCut')
+    return {
+      label: t('common.actions.removeCut'),
+      pendingLabel: t('common.actions.removing'),
+      run: () => fix.onRemoveCut(finding),
+    }
   return {
     label: t('common.actions.simplify'),
     pendingLabel: t('common.actions.working'),
@@ -2257,6 +2467,7 @@ function viewerFixAction(
 function viewerFixAvailable(fix: ViewerFix, kind: FindingFix): boolean {
   if (kind === 'clean') return fix.canClean
   if (kind === 'regenerate') return fix.canRegenerate
+  if (kind === 'removeCut') return fix.canRemoveCut
   return fix.canSimplify
 }
 
@@ -2326,7 +2537,7 @@ function ViewerWarnings({
   )
   const invalid = step && !step.valid ? step.problems.join('; ') : null
   const hasFixRow = Boolean(
-    fix?.override || fix?.canClean || fix?.canRegenerate || fix?.canSimplify,
+    fix?.override || fix?.canClean || fix?.canRegenerate || fix?.canSimplify || fix?.cutRemoved,
   )
   if (findings.length === 0 && !invalid && !hasFixRow) return null
   const errors = findings.filter((finding) => finding.severity === 'error').length
@@ -2483,6 +2694,15 @@ function ViewerWarnings({
       {invalid && (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive-foreground">
           {invalid}
+        </div>
+      )}
+      {fix?.cutRemoved && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          <span>{t('preflight.warnings.cutRemoved')}</span>
+          <Button variant="ghost" size="sm" onClick={fix.onUndoCut}>
+            <Undo2 />
+            {t('common.actions.undo')}
+          </Button>
         </div>
       )}
       {fix?.override ? (

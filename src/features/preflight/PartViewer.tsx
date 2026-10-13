@@ -586,36 +586,55 @@ function mountScene(
           ncObjects.push(line)
         }
       }
-      // The uncuttable subsection of each failing cut, drawn as a red marker spanning from its
-      // start to its end (both in NC face coords → projected with the shared `toScene`). One
-      // object per failure, so a clicked finding can zoom to its own sub-cut.
+      // The guilty cut drawn as a red marker, projected with the shared `toScene`. A marker may
+      // carry across-face cut `lines` (a cope, whose lengthwise profile edges are not cuts);
+      // otherwise it spans `from` → `to`. One object per marker, so a clicked finding can zoom to
+      // its own cut.
       if (sabre && sabre.length > 0) {
         for (const failure of sabre) {
           // Look at the cut from its own face, tilted off-axis so the camera never looks straight
           // down (which would make the up-vector ambiguous).
           const faceDir = normal(failure.face)
           sabreDirections.push([faceDir[0] + 0.45, faceDir[1] + 0.45, faceDir[2] + 0.45])
-          // A failure can collapse to a point (a corner-risk run of a single sample). Draw a short
-          // tick along the member so it still reads in the 3D.
-          let from = failure.from
-          let to = failure.to
-          if (Math.hypot(to[0] - from[0], to[1] - from[1]) < 0.1) {
-            const half = SABRE_TICK_MM / 2
-            from = [failure.from[0] - half, failure.from[1]]
-            to = [failure.from[0] + half, failure.from[1]]
+          let lines = failure.lines
+          if (!lines || lines.length === 0) {
+            // A failure can collapse to a point (a corner-risk run of a single sample). Draw a short
+            // tick along the member so it still reads in the 3D.
+            let from = failure.from
+            let to = failure.to
+            if (Math.hypot(to[0] - from[0], to[1] - from[1]) < 0.1) {
+              const half = SABRE_TICK_MM / 2
+              from = [failure.from[0] - half, failure.from[1]]
+              to = [failure.from[0] + half, failure.from[1]]
+            }
+            lines = [[from, to]]
           }
-          const a = placeNcFace(frame, failure.face, from[0], from[1]).cross
-          const b = placeNcFace(frame, failure.face, to[0], to[1]).cross
-          const pA = toScene(from[0], a, failure.face)
-          const pB = toScene(to[0], b, failure.face)
-          const positions = [pA[0], pA[1], pA[2], pB[0], pB[1], pB[2]]
-          const mark = ncLineObject(positions, SABRE_CUT_COLOR, ncResolution, ncMaterials, true)
+          const positions: number[] = []
+          for (const line of lines) {
+            for (let i = 0; i < line.length - 1; i++) {
+              const [x0, y0] = line[i] as [number, number]
+              const [x1, y1] = line[i + 1] as [number, number]
+              const pA = toScene(
+                x0,
+                placeNcFace(frame, failure.face, x0, y0, section).cross,
+                failure.face,
+              )
+              const pB = toScene(
+                x1,
+                placeNcFace(frame, failure.face, x1, y1, section).cross,
+                failure.face,
+              )
+              positions.push(pA[0], pA[1], pA[2], pB[0], pB[1], pB[2])
+            }
+          }
+          const color = failure.color ?? SABRE_CUT_COLOR
+          const mark = ncLineObject(positions, color, ncResolution, ncMaterials, true)
           if (mark) {
             scene.add(mark)
             sabreObjects.push(mark)
             sabreSpanObjects.push(mark)
             spanShown.push(false)
-            const halo = ncHaloObject(positions, SABRE_CUT_COLOR, ncResolution, ncMaterials)
+            const halo = ncHaloObject(positions, color, ncResolution, ncMaterials)
             if (halo) scene.add(halo)
             sabreHaloObjects.push(halo)
           } else {

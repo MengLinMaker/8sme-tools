@@ -21,8 +21,10 @@ export const en = {
       regenerate: 'Regenerate',
       regenerateStep: 'Regenerate STEP',
       simplify: 'Simplify STEP (flat)',
+      removeCut: 'Remove cut',
       working: 'Working…',
       cleaning: 'Cleaning…',
+      removing: 'Removing…',
     },
     severity: {
       error: 'error',
@@ -230,6 +232,9 @@ export const en = {
       ncMismatch: "NC build doesn't match the STEP — regenerating rebuilds the STEP from the NC.",
       cutEndPiece:
         'Straight-through cut would detach a bevel-cut end piece — simplifying leaves that surface uncut.',
+      cutRemoved:
+        'Stray cut removed from the NC — the model is rebuilt from the edited NC and the export ships it.',
+      cutRemovedBadge: 'cut removed',
     },
   },
   nesting: {
@@ -376,6 +381,12 @@ export const en = {
       "Cut can't pass through: {{span}} mm of the cut on face {{face}} needs a {{path}} mm bore ({{bevel}}° bevel), past the head's ~25 mm pierce — not manufacturable",
     CUT_CORNER:
       "Cut lands on a corner: with the head's ±{{tol}} mm placement error, {{span}} mm of the cut on face {{face}} can fall on the section's corner radius — the beam meets the curve at a bevel with no flat escape for the slag — not manufacturable",
+    CUT_BEVEL_CHANGE:
+      'Bevel changes along one cut on face {{face}}: {{angles}} — the head must rotate the nozzle mid-cut and grinds it down. Keep one bevel ({{suggested}}°) or remove it',
+    CUT_UNCLOSED:
+      "Unclosed cut on face {{face}}: {{span}} mm that doesn't run edge to edge — possibly a stray cut that shouldn't be there",
+    CUT_CUTOUT:
+      'Small cut-out on face {{face}}: {{span}} mm perimeter — a triangular/tiny opening that is possibly a stray cut (WiseCAM can misread it as a tiny line)',
     CUT_REACH_UNCHECKED: 'Cut-depth (bevel reach) not assessed: {{reason}}',
     MANUFACTURE_MISMATCH: '{{note}} — the model is badly wrong; regenerate the STEP from the NC',
     MANUFACTURE_BORDERLINE:
@@ -406,8 +417,10 @@ export const zh = {
       regenerate: '重建',
       regenerateStep: '重建 STEP',
       simplify: '简化 STEP（平面）',
+      removeCut: '移除切缝',
       working: '处理中…',
       cleaning: '清理中…',
+      removing: '移除中…',
     },
     severity: {
       error: '错误',
@@ -596,6 +609,8 @@ export const zh = {
       strayBodies: '橙色显示的是多余悬浮实体——清理会保留真实几何。',
       ncMismatch: 'NC 构建与 STEP 不一致——重建将根据 NC 重新生成 STEP。',
       cutEndPiece: '直线切透会切掉坡口切割的端部小件——简化将保留该面不切。',
+      cutRemoved: '已从 NC 中移除多余切缝——模型已根据修改后的 NC 重建，导出时将以此为准。',
+      cutRemovedBadge: '已移除切缝',
     },
   },
   nesting: {
@@ -740,6 +755,12 @@ export const zh = {
       '无法切透：{{face}} 面上 {{span}} mm 的切缝需要 {{path}} mm 的切割深度（{{bevel}}° 坡口），超过机头约 25 mm 的穿透能力——无法制造',
     CUT_CORNER:
       '切缝落在圆角上：受机头 ±{{tol}} mm 定位误差影响，{{face}} 面上 {{span}} mm 的切缝可能落到型材圆角上——激光束斜切曲面且无平面排渣通道——无法制造',
+    CUT_BEVEL_CHANGE:
+      '{{face}} 面上同一条切缝的坡口发生变化：{{angles}}——机头需在切割过程中旋转喷嘴，会磨损喷嘴。请统一为一个坡口（{{suggested}}°）或去除坡口',
+    CUT_UNCLOSED:
+      '{{face}} 面上存在未封闭切缝：{{span}} mm，未从边到边贯通——可能是本不该存在的多余切缝',
+    CUT_CUTOUT:
+      '{{face}} 面上存在小内轮廓：周长 {{span}} mm——三角形/微小的开口，可能是多余切缝（WiseCAM 可能误读为一条细线）',
     CUT_REACH_UNCHECKED: '未评估切割深度（坡口穿透）：{{reason}}',
     MANUFACTURE_MISMATCH: '{{note}}——模型严重错误；请根据 NC 重建 STEP',
     MANUFACTURE_BORDERLINE: '{{note}}——临界（通常为型材端部圆弧）；运行前请核对',
