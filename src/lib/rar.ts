@@ -24,7 +24,10 @@ export async function extractRarEntries(
   wasmBinary?: ArrayBuffer,
 ): Promise<ZipEntry[]> {
   const { createExtractorFromData } = await import('node-unrar-js/esm')
-  const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  const data = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer
   const extractor = await createExtractorFromData({ data, wasmBinary })
   const entries: ZipEntry[] = []
   for (const file of extractor.extract().files) {
