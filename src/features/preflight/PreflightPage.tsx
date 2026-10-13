@@ -52,7 +52,7 @@ import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib
 import { assessUnclosedCuts, type UnclosedCutIssue } from '@/lib/audit/unclosedCuts'
 import { downloadBlob, downloadText } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
-import { removeCutFromNc } from '@/lib/parsers/ncEdit'
+import { removeCutFromNc, setBevelInNc } from '@/lib/parsers/ncEdit'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { cutThicknesses } from '@/lib/parsers/ncProject'
@@ -128,6 +128,9 @@ const CONCURRENCY = 6
 const MASS_RED_KG = 30
 const MASS_YELLOW_KG = 20
 
+/** The head's bevel range (deg); a unify-bevel angle outside it is rejected. */
+const MAX_BEVEL_DEG = Math.max(Math.abs(MACHINE.bevel.minDeg), Math.abs(MACHINE.bevel.maxDeg))
+
 const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [
   { labelKey: 'preflight.columns.mark', key: 'mark' },
   { labelKey: 'preflight.columns.status', key: 'severity' },
@@ -181,6 +184,18 @@ interface StepOverride {
   kind: StepFixKind
 }
 
+/**
+ * A per-part NC (`.nc1`) edit: a stray cut removed, or a cut line's changing bevel unified to one
+ * angle (`0` = no bevel). These override the bundled NC for the manufactured model and the export.
+ */
+type NcEditKind = 'removeCut' | 'setBevel'
+interface NcOverride {
+  bytes: Uint8Array
+  kind: NcEditKind
+  /** For a bevel edit, the unified angle (deg; `0` = no bevel). */
+  angle?: number
+}
+
 /** A finding an override resolves — greyed out in the list, with an undo. */
 function resolvedFindings(kind: StepFixKind): string[] {
   if (kind === 'regenerated')
@@ -192,14 +207,16 @@ function resolvedFindings(kind: StepFixKind): string[] {
 /**
  * The one-click fix a finding code maps to, when the warning is fixable at all. `clean` /
  * `regenerate` / `simplify` swap the part's STEP; `removeCut` edits the NC (stripping the flagged
- * cut) and rebuilds the model from it.
+ * cut) and rebuilds the model from it; `setBevel` edits the NC (unifying the cut line's bevel) via
+ * a mini menu that offers an angle (prefilled with the recommended one) or no bevel.
  */
-type FindingFix = 'clean' | 'regenerate' | 'simplify' | 'removeCut'
+type FindingFix = 'clean' | 'regenerate' | 'simplify' | 'removeCut' | 'setBevel'
 function fixForFinding(code: string): FindingFix | null {
   if (code === 'STRAY_BODY') return 'clean'
   if (code === 'MANUFACTURE_MISMATCH' || code === 'MANUFACTURE_BORDERLINE') return 'regenerate'
   if (code === 'CUT_END_PIECE') return 'simplify'
   if (code === 'CUT_UNCLOSED' || code === 'CUT_CUTOUT') return 'removeCut'
+  if (code === 'CUT_BEVEL_CHANGE') return 'setBevel'
   return null
 }
 
@@ -353,10 +370,14 @@ export function PreflightPage() {
    * Per-part NC edits (a stray cut removed). These are the source of truth for the manufactured
    * model and the export: they override the bundled `.nc1` bytes and mark the part export-ready.
    */
-  const [ncOverrides, setNcOverrides] = useState<Map<string, Uint8Array>>(new Map())
+  const [ncOverrides, setNcOverrides] = useState<Map<string, NcOverride>>(new Map())
   const [fixingMark, setFixingMark] = useState<string | null>(null)
+  /** The `CUT_BEVEL_CHANGE` finding whose "unify bevel" mini menu is open, if any. */
+  const [bevelEdit, setBevelEdit] = useState<{ part: PartRecord; finding: Finding } | null>(null)
+  /** The menu's angle field (deg); prefilled with the recommended angle. */
+  const [bevelAngle, setBevelAngle] = useState('')
   const ncBytes = viewing?.nc
-    ? (ncOverrides.get(viewing.mark) ?? bytesByPath.get(viewing.nc.path))
+    ? (ncOverrides.get(viewing.mark)?.bytes ?? bytesByPath.get(viewing.nc.path))
     : undefined
   const stepBytes = viewing
     ? (stepOverrides.get(viewing.mark)?.bytes ??
@@ -1488,8 +1509,8 @@ export function PreflightPage() {
     })
   }, [])
 
-  /** Drops a part's NC edit, so it reverts to the bundled `.nc1`. */
-  const undoCut = useCallback(
+  /** Drops a part's NC edit, so it reverts to the bundled `.nc1`, and re-runs the NC checks. */
+  const undoNcEdit = useCallback(
     (part: PartRecord) => {
       setNcOverrides((prev) => {
         if (!prev.has(part.mark)) return prev
@@ -1499,16 +1520,22 @@ export function PreflightPage() {
       })
       const original = part.nc ? bytesByPath.get(part.nc.path) : undefined
       if (!original) return
+      const text = new TextDecoder().decode(original)
       const section = part.nc?.profile
         ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
         : null
-      const issues = assessUnclosedCuts(new TextDecoder().decode(original), {
-        section: section?.points,
-        profile: part.nc?.profile,
-      })
+      const options = { section: section?.points, profile: part.nc?.profile }
+      const unclosed = assessUnclosedCuts(text, options)
       setUnclosedCuts((prev) => {
         const next = new Map(prev)
-        if (issues.length > 0) next.set(part.mark, issues)
+        if (unclosed.length > 0) next.set(part.mark, unclosed)
+        else next.delete(part.mark)
+        return next
+      })
+      const bevel = assessBevelChange(text)
+      setBevelChanges((prev) => {
+        const next = new Map(prev)
+        if (bevel.length > 0) next.set(part.mark, bevel)
         else next.delete(part.mark)
         return next
       })
@@ -1588,7 +1615,7 @@ export function PreflightPage() {
       const ncPath = part.nc?.path
       const original = ncPath ? bytesByPath.get(ncPath) : undefined
       if (!original) return
-      const current = ncOverrides.get(part.mark) ?? original
+      const current = ncOverrides.get(part.mark)?.bytes ?? original
       const currentText = new TextDecoder().decode(current)
       const section = part.nc?.profile
         ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
@@ -1610,7 +1637,7 @@ export function PreflightPage() {
         if (edited === currentText) return
         setNcOverrides((prev) => {
           const next = new Map(prev)
-          next.set(part.mark, new TextEncoder().encode(edited))
+          next.set(part.mark, { bytes: new TextEncoder().encode(edited), kind: 'removeCut' })
           return next
         })
         const remaining = assessUnclosedCuts(edited, options)
@@ -1630,6 +1657,77 @@ export function PreflightPage() {
   )
 
   /**
+   * Unifies the changing bevel on one cut line to a single angle (`0` removes it) by editing the
+   * part's NC and recording it as an override — the same path as `removeCut`, so the manufactured
+   * model rebuilds from the edited NC and the export ships it. Recomputing the check drops the
+   * resolved finding.
+   */
+  const changeBevel = useCallback(
+    async (part: PartRecord, finding: Finding, angle: number) => {
+      const ncPath = part.nc?.path
+      const original = ncPath ? bytesByPath.get(ncPath) : undefined
+      if (!original) return
+      const current = ncOverrides.get(part.mark)?.bytes ?? original
+      const currentText = new TextDecoder().decode(current)
+      // Bevel findings come after the cut-reach failures in the combined marker order, so the
+      // finding's `index` (assigned in `allFindings`) maps back to a bevel issue by that base.
+      const issueIndex =
+        typeof finding.params?.index === 'number'
+          ? finding.params.index - (reachChecks.get(part.mark)?.length ?? 0)
+          : -1
+      const issue = assessBevelChange(currentText)[issueIndex]
+      if (!issue) return
+      setFixingMark(part.mark)
+      try {
+        const edited = setBevelInNc(currentText, {
+          contourIndex: issue.contourIndex,
+          vertices: issue.vertices,
+          angle,
+        })
+        if (edited === currentText) return
+        setNcOverrides((prev) => {
+          const next = new Map(prev)
+          next.set(part.mark, {
+            bytes: new TextEncoder().encode(edited),
+            kind: 'setBevel',
+            angle,
+          })
+          return next
+        })
+        const remaining = assessBevelChange(edited)
+        setBevelChanges((prev) => {
+          const next = new Map(prev)
+          if (remaining.length > 0) next.set(part.mark, remaining)
+          else next.delete(part.mark)
+          return next
+        })
+      } catch {
+        // leave the original NC in place if editing fails
+      } finally {
+        setFixingMark(null)
+      }
+    },
+    [bytesByPath, ncOverrides, reachChecks],
+  )
+
+  /** Opens the "unify bevel" mini menu, prefilling the recommended angle for the cut line. */
+  const openBevelEdit = useCallback((part: PartRecord, finding: Finding) => {
+    const suggested = finding.params?.suggested
+    setBevelAngle(typeof suggested === 'string' ? suggested : '')
+    setBevelEdit({ part, finding })
+  }, [])
+  const closeBevelEdit = useCallback(() => setBevelEdit(null), [])
+  /** Applies the chosen bevel angle (`0` = no bevel) to the open finding's cut line. */
+  const applyBevel = useCallback(
+    (angle: number) => {
+      const target = bevelEdit
+      setBevelEdit(null)
+      if (target) void changeBevel(target.part, target.finding, angle)
+    },
+    [bevelEdit, changeBevel],
+  )
+
+  /**
    * Exports the job with every STEP the user fixed (cleaned/regenerated) substituted in.
    * The archive is flattened to basenames so the operator gets a folderless drop into WiseCAM.
    */
@@ -1641,9 +1739,9 @@ export function PreflightPage() {
       const path = result.parts.find((part) => part.mark === mark)?.step?.path
       if (path) files.set(path, override.bytes)
     }
-    for (const [mark, bytes] of ncOverrides) {
+    for (const [mark, override] of ncOverrides) {
       const path = result.parts.find((part) => part.mark === mark)?.nc?.path
-      if (path) files.set(path, bytes)
+      if (path) files.set(path, override.bytes)
     }
     const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
     downloadBlob(
@@ -1667,7 +1765,7 @@ export function PreflightPage() {
           part.step?.path === path
             ? stepOverrides.get(part.mark)?.bytes
             : part.nc?.path === path
-              ? ncOverrides.get(part.mark)
+              ? ncOverrides.get(part.mark)?.bytes
               : undefined
         const bytes = override ?? bytesByPath.get(path)
         if (bytes) files.set(path, bytes)
@@ -2022,9 +2120,11 @@ export function PreflightPage() {
                           <TableCell className="font-mono text-xs">
                             <span className="flex items-center gap-1.5">
                               {part.mark}
-                              {ncOverrides.has(part.mark) && (
+                              {ncOverrides.get(part.mark) && (
                                 <Badge variant="success" className="font-sans font-normal">
-                                  {t('preflight.warnings.cutRemovedBadge')}
+                                  {ncOverrides.get(part.mark)?.kind === 'setBevel'
+                                    ? t('preflight.warnings.bevelSetBadge')
+                                    : t('preflight.warnings.cutRemovedBadge')}
                                 </Badge>
                               )}
                             </span>
@@ -2423,14 +2523,16 @@ export function PreflightPage() {
                         canRegenerate: isRegeneratable(viewing),
                         canSimplify: isSimplifiable(viewing),
                         canRemoveCut: Boolean(viewing.nc),
-                        cutRemoved: ncOverrides.has(viewing.mark),
+                        canSetBevel: Boolean(viewing.nc),
+                        ncEdit: ncOverrides.get(viewing.mark),
                         pending: fixingMark === viewing.mark,
                         onClean: () => void cleanPart(viewing),
                         onRegenerate: () => void regeneratePart(viewing),
                         onSimplify: () => void simplifyPart(viewing),
                         onRemoveCut: (finding) => void removeCut(viewing, finding),
+                        onSetBevel: (finding) => openBevelEdit(viewing, finding),
                         onUndo: () => undoOverride(viewing.mark),
-                        onUndoCut: () => undoCut(viewing),
+                        onUndoNc: () => undoNcEdit(viewing),
                       }}
                     />
                   ) : viewingPdfBytes ? (
@@ -2446,6 +2548,19 @@ export function PreflightPage() {
           </div>
         )}
       </Dialog>
+
+      <BevelMenu
+        open={bevelEdit !== null}
+        recommended={
+          typeof bevelEdit?.finding.params?.suggested === 'string'
+            ? bevelEdit.finding.params.suggested
+            : undefined
+        }
+        angle={bevelAngle}
+        onAngle={setBevelAngle}
+        onApply={applyBevel}
+        onClose={closeBevelEdit}
+      />
     </div>
   )
 }
@@ -2482,15 +2597,18 @@ interface ViewerFix {
   canSimplify: boolean
   /** A `CUT_UNCLOSED` finding can be resolved by editing the NC. */
   canRemoveCut: boolean
-  /** The part already carries an NC edit (a stray cut removed). */
-  cutRemoved: boolean
+  /** A `CUT_BEVEL_CHANGE` finding can be resolved by unifying the cut line's bevel via the NC. */
+  canSetBevel: boolean
+  /** The NC edit already applied to the part, if any. */
+  ncEdit?: NcOverride
   pending: boolean
   onClean: () => void
   onRegenerate: () => void
   onSimplify: () => void
   onRemoveCut: (finding: Finding) => void
+  onSetBevel: (finding: Finding) => void
   onUndo: () => void
-  onUndoCut: () => void
+  onUndoNc: () => void
 }
 
 /** Which fix action a viewer Fix button runs, with its labels. */
@@ -2518,6 +2636,12 @@ function viewerFixAction(
       pendingLabel: t('common.actions.removing'),
       run: () => fix.onRemoveCut(finding),
     }
+  if (kind === 'setBevel')
+    return {
+      label: t('common.actions.setBevel'),
+      pendingLabel: t('common.actions.working'),
+      run: () => fix.onSetBevel(finding),
+    }
   return {
     label: t('common.actions.simplify'),
     pendingLabel: t('common.actions.working'),
@@ -2530,6 +2654,7 @@ function viewerFixAvailable(fix: ViewerFix, kind: FindingFix): boolean {
   if (kind === 'clean') return fix.canClean
   if (kind === 'regenerate') return fix.canRegenerate
   if (kind === 'removeCut') return fix.canRemoveCut
+  if (kind === 'setBevel') return fix.canSetBevel
   return fix.canSimplify
 }
 
@@ -2599,7 +2724,7 @@ function ViewerWarnings({
   )
   const invalid = step && !step.valid ? step.problems.join('; ') : null
   const hasFixRow = Boolean(
-    fix?.override || fix?.canClean || fix?.canRegenerate || fix?.canSimplify || fix?.cutRemoved,
+    fix?.override || fix?.canClean || fix?.canRegenerate || fix?.canSimplify || fix?.ncEdit,
   )
   if (findings.length === 0 && !invalid && !hasFixRow) return null
   const errors = findings.filter((finding) => finding.severity === 'error').length
@@ -2758,10 +2883,16 @@ function ViewerWarnings({
           {invalid}
         </div>
       )}
-      {fix?.cutRemoved && (
+      {fix?.ncEdit && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-          <span>{t('preflight.warnings.cutRemoved')}</span>
-          <Button variant="ghost" size="sm" onClick={fix.onUndoCut}>
+          <span>
+            {fix.ncEdit.kind === 'setBevel'
+              ? fix.ncEdit.angle
+                ? t('preflight.warnings.bevelSet', { angle: fix.ncEdit.angle })
+                : t('preflight.warnings.bevelRemoved')
+              : t('preflight.warnings.cutRemoved')}
+          </span>
+          <Button variant="ghost" size="sm" onClick={fix.onUndoNc}>
             <Undo2 />
             {t('common.actions.undo')}
           </Button>
@@ -2873,5 +3004,70 @@ function SortHead({
         </span>
       </button>
     </TableHead>
+  )
+}
+
+/**
+ * The "unify bevel" mini menu for a `CUT_BEVEL_CHANGE` cut line. The best bevel is one the head
+ * never has to change: pick one angle for the whole line (prefilled with the recommended angle it
+ * mostly already uses) or drop the bevel entirely. Applying rewrites the NC.
+ */
+function BevelMenu({
+  open,
+  recommended,
+  angle,
+  onAngle,
+  onApply,
+  onClose,
+}: {
+  open: boolean
+  recommended?: string
+  angle: string
+  onAngle: (value: string) => void
+  onApply: (angle: number) => void
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+  const parsed = Number.parseFloat(angle)
+  const valid = Number.isFinite(parsed) && parsed !== 0 && Math.abs(parsed) <= MAX_BEVEL_DEG
+  return (
+    <Dialog open={open} onClose={onClose} title={t('preflight.bevel.title')}>
+      <div className="flex flex-col gap-4 p-5">
+        <p className="text-sm text-muted-foreground">{t('preflight.bevel.hint')}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="bevel-angle" className="text-sm font-medium">
+            {t('preflight.bevel.angle')}
+          </label>
+          <input
+            id="bevel-angle"
+            type="number"
+            inputMode="decimal"
+            step="0.1"
+            min={MACHINE.bevel.minDeg}
+            max={MACHINE.bevel.maxDeg}
+            value={angle}
+            onChange={(event) => onAngle(event.target.value)}
+            className="h-8 w-24 rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <span className="text-sm text-muted-foreground">°</span>
+          {recommended && (
+            <span className="text-xs text-muted-foreground">
+              {t('preflight.bevel.recommended', { angle: recommended })}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            {t('common.actions.cancel')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => onApply(0)}>
+            {t('preflight.bevel.noBevel')}
+          </Button>
+          <Button size="sm" disabled={!valid} onClick={() => onApply(parsed)}>
+            {t('preflight.bevel.apply')}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   )
 }

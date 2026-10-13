@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { removeCutFromNc, removeNcHole } from './ncEdit'
+import { removeCutFromNc, removeNcHole, setBevelInNc } from './ncEdit'
 import { parseNcGeometry } from './ncGeometry'
 
 function row(head: string, x: number, y: number): string {
   const pad = (value: number) => value.toFixed(2).padStart(12)
   return `${head}${pad(x)}${pad(y)}${pad(0)}${pad(0).padStart(12)}${pad(0).padStart(12)}${pad(0)}${pad(0)}`
+}
+
+/** One `AK` row carrying a bevel: `X Y R angle distance 0 0`. */
+function bevRow(head: string, x: number, y: number, angle = 0): string {
+  const pad = (value: number) => value.toFixed(2).padStart(12)
+  const a = angle === 0 ? '0.00' : angle.toFixed(2)
+  return `${head}${pad(x)}${pad(y)}${pad(0)}${a.padStart(12)}${pad(0).padStart(12)}${pad(0)}${pad(0)}`
 }
 
 function nc(akBody: string, boBody = ''): string {
@@ -89,5 +96,39 @@ describe('removeNcHole', () => {
   it('leaves the file untouched when no hole matches', () => {
     const before = nc(OPEN, '  v     100.00      50.00      14.00')
     expect(removeNcHole(before, { face: 'v', x: 999, y: 50 })).toBe(before)
+  })
+})
+
+/** A cut line (vertices 3–5) tapering through 5° / 12° / 20°, split by a stock edge. */
+const TAPER = [
+  bevRow('  v', 0, 0),
+  bevRow(' ', 100, 0),
+  bevRow(' ', 100, 100),
+  bevRow(' ', 20, 100, 5),
+  bevRow(' ', 15, 50, 12),
+  bevRow(' ', 10, 10, 20),
+  bevRow(' ', 0, 0),
+].join('\n')
+
+describe('setBevelInNc', () => {
+  it('unifies the bevel angles on the flagged cut line', () => {
+    const before = nc(TAPER)
+    const after = setBevelInNc(before, { contourIndex: 0, vertices: [3, 4, 5], angle: 20 })
+    const angles = parseNcGeometry(after).contours[0]?.bevels.map((bevel) => bevel[0])
+    // Only the already-bevelled vertices change; the square vertices stay square.
+    expect(angles).toEqual([0, 0, 0, 20, 20, 20, 0])
+    expect(after).toContain('PFC100*50')
+  })
+
+  it('removes the bevel entirely when the angle is 0', () => {
+    const before = nc(TAPER)
+    const after = setBevelInNc(before, { contourIndex: 0, vertices: [3, 4, 5], angle: 0 })
+    const angles = parseNcGeometry(after).contours[0]?.bevels.map((bevel) => bevel[0])
+    expect(angles).toEqual([0, 0, 0, 0, 0, 0, 0])
+  })
+
+  it('ignores an out-of-range contour index', () => {
+    const before = nc(TAPER)
+    expect(setBevelInNc(before, { contourIndex: 9, vertices: [3], angle: 20 })).toBe(before)
   })
 })

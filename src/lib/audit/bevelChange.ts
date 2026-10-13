@@ -32,6 +32,10 @@ export interface BevelChangeIssue extends CutMarker {
   /** A changed bevel mid-cut rotates the nozzle into the work — unmanufacturable, so an error. */
   severity: 'error'
   message: string
+  /** Index of the contour in `parseNcGeometry(...).contours`, so the NC can be edited in place. */
+  contourIndex: number
+  /** Contour vertex indices (`points`/`bevels` order) that make up this cut line, for the edit. */
+  vertices: number[]
   params: {
     face: NcFace
     /** Location along the member (NC X, mm) at the middle of the cut line. */
@@ -64,6 +68,8 @@ interface LineVertex {
   angle: number
   x: number
   y: number
+  /** Index of this vertex in the contour's `points`/`bevels` arrays. */
+  index: number
   /** Length along the cut line attributed to this vertex (mm). */
   weight: number
 }
@@ -105,7 +111,7 @@ function cutLines(contour: NcContour): LineVertex[][] {
 
   const vertexAt = (i: number): LineVertex => {
     const point = points[i] ?? [0, 0]
-    return { angle: bevelAngleAt(contour, i), x: point[0], y: point[1], weight: 0 }
+    return { angle: bevelAngleAt(contour, i), x: point[0], y: point[1], index: i, weight: 0 }
   }
 
   const chains: LineVertex[][] = []
@@ -168,8 +174,9 @@ export function assessBevelChange(ncText: string): BevelChangeIssue[] {
   const { contours } = parseNcGeometry(ncText)
   const issues: BevelChangeIssue[] = []
 
-  for (const contour of contours) {
-    if (contour.kind !== 'outer') continue
+  for (let contourIndex = 0; contourIndex < contours.length; contourIndex++) {
+    const contour = contours[contourIndex]
+    if (contour?.kind !== 'outer') continue
     for (const line of cutLines(contour)) {
       const bevels = line.filter((vertex) => vertex.angle !== 0)
       if (bevels.length === 0) continue
@@ -205,6 +212,8 @@ export function assessBevelChange(ncText: string): BevelChangeIssue[] {
         from: [first[0], first[1]],
         to: [last[0], last[1]],
         lines,
+        contourIndex,
+        vertices: line.map((vertex) => vertex.index),
         message: `Bevel changes along one cut on face ${contour.face}: ${angles}${extra} — the head must rotate the nozzle mid-cut and grinds it down. Keep one bevel (${suggested.mean.toFixed(1)}°) or remove it`,
         params: {
           face: contour.face,

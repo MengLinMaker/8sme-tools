@@ -95,6 +95,9 @@ describe('bevelChange', () => {
         [20, 0],
       ],
     ])
+    // The contour + vertex indices an NC edit needs to unify the line's bevel.
+    expect(issues[0]?.contourIndex).toBe(0)
+    expect(issues[0]?.vertices).toEqual([3, 4, 5])
   })
 })
 

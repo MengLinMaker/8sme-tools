@@ -22,9 +22,11 @@ export const en = {
       regenerateStep: 'Regenerate STEP',
       simplify: 'Simplify STEP (flat)',
       removeCut: 'Remove cut',
+      setBevel: 'Unify bevel',
       working: 'Working…',
       cleaning: 'Cleaning…',
       removing: 'Removing…',
+      cancel: 'Cancel',
     },
     severity: {
       error: 'error',
@@ -207,6 +209,14 @@ export const en = {
       noDims: 'no STEP / dims',
       measureFailed: 'measure failed',
     },
+    bevel: {
+      title: 'Unify bevel',
+      hint: 'The head sets one bevel per cut — a change mid-cut rotates the nozzle into the work. Keep one angle for the whole cut, or remove the bevel.',
+      angle: 'Bevel angle',
+      recommended: 'Recommended {{angle}}°',
+      noBevel: 'No bevel',
+      apply: 'Apply bevel',
+    },
     warnings: {
       cancelFix: 'Undo',
       issues: 'Issues ({{count}})',
@@ -235,6 +245,11 @@ export const en = {
       cutRemoved:
         'Stray cut removed from the NC — the model is rebuilt from the edited NC and the export ships it.',
       cutRemovedBadge: 'cut removed',
+      bevelSet:
+        'Bevel unified to {{angle}}° on that cut — the model is rebuilt from the edited NC and the export ships it.',
+      bevelRemoved:
+        'Bevel removed from that cut — the model is rebuilt from the edited NC and the export ships it.',
+      bevelSetBadge: 'bevel set',
     },
   },
   nesting: {
@@ -418,9 +433,11 @@ export const zh = {
       regenerateStep: '重建 STEP',
       simplify: '简化 STEP（平面）',
       removeCut: '移除切缝',
+      setBevel: '统一坡口',
       working: '处理中…',
       cleaning: '清理中…',
       removing: '移除中…',
+      cancel: '取消',
     },
     severity: {
       error: '错误',
@@ -601,6 +618,14 @@ export const zh = {
       noDims: '无 STEP / 尺寸',
       measureFailed: '测量失败',
     },
+    bevel: {
+      title: '统一坡口',
+      hint: '机头每条切缝只设定一个坡口——中途改变会使喷嘴在切割中旋转并磨损。整条切缝保留同一角度，或取消坡口。',
+      angle: '坡口角度',
+      recommended: '推荐 {{angle}}°',
+      noBevel: '无坡口',
+      apply: '应用坡口',
+    },
     warnings: {
       cancelFix: '撤销',
       stepCleaned: 'STEP 已清理——导出的即为该文件。',
@@ -611,6 +636,9 @@ export const zh = {
       cutEndPiece: '直线切透会切掉坡口切割的端部小件——简化将保留该面不切。',
       cutRemoved: '已从 NC 中移除多余切缝——模型已根据修改后的 NC 重建，导出时将以此为准。',
       cutRemovedBadge: '已移除切缝',
+      bevelSet: '该切缝的坡口已统一为 {{angle}}°——模型已根据修改后的 NC 重建，导出时将以此为准。',
+      bevelRemoved: '该切缝已取消坡口——模型已根据修改后的 NC 重建，导出时将以此为准。',
+      bevelSetBadge: '已设置坡口',
     },
   },
   nesting: {

@@ -1,3 +1,4 @@
+import { MACHINE } from '@/lib/machine/profile'
 import type { NcFace } from './ncGeometry'
 
 /**
@@ -25,6 +26,8 @@ const BLOCK_CODES = new Set([
   'UE',
 ])
 const FACE = /^[vouh]$/
+/** The head's bevel range; values outside it are not weld prep (see `bevelChange.ts`). */
+const MAX_BEVEL_DEG = Math.max(Math.abs(MACHINE.bevel.minDeg), Math.abs(MACHINE.bevel.maxDeg))
 
 const num = (token: string | undefined): number => {
   const match = token?.match(/-?\d+(?:\.\d+)?/)
@@ -193,4 +196,78 @@ export function removeNcHole(ncText: string, target: RemoveHoleTarget): string {
     return lines.filter((_, kept) => kept !== index).join('\n')
   }
   return ncText
+}
+
+export interface SetBevelTarget {
+  /** Index of the contour in `parseNcGeometry(...).contours`. */
+  contourIndex: number
+  /** Contour vertex indices (into `points`/`bevels`) whose bevel should be unified. */
+  vertices: number[]
+  /** Bevel angle (deg) to apply; `0` removes the bevel from the line. */
+  angle: number
+}
+
+/**
+ * Replaces the numeric tokens at the given token indices of a raw line, preserving the surrounding
+ * whitespace and right-aligning each replacement to at least the width it replaced. DSTV is a
+ * fixed-column format, so leaving every other byte and space untouched keeps the block readable.
+ */
+function replaceTokens(raw: string, replacements: Map<number, string>): string {
+  const tokens = [...raw.matchAll(/\S+/g)]
+  let out = ''
+  let last = 0
+  tokens.forEach((match, index) => {
+    const start = match.index ?? 0
+    const text = match[0]
+    out += raw.slice(last, start)
+    const replacement = replacements.get(index)
+    out +=
+      replacement == null ? text : replacement.padStart(Math.max(text.length, replacement.length))
+    last = start + text.length
+  })
+  return out + raw.slice(last)
+}
+
+/**
+ * Unifies the bevel on a flagged cut line: every already-bevelled vertex on the line is set to one
+ * angle, so the head never has to change tilt mid-cut — and with `angle: 0` the bevel is removed
+ * entirely. Vertices with no bevel (a square portion) are left alone when setting an angle; only
+ * the bevel `angle`/`distance` fields change, so every other field and all whitespace is preserved.
+ *
+ * `vertices` come from the same contour the geometry reader used, so they line up with the block's
+ * data lines. An out-of-range contour index leaves the file untouched.
+ */
+export function setBevelInNc(ncText: string, target: SetBevelTarget): string {
+  const lines = ncText.split(/\r?\n/)
+  const blocks = readContourBlocks(ncText)
+  const block = blocks[target.contourIndex]
+  if (!block) return ncText
+  const wanted = new Set(target.vertices)
+  for (let index = 0; index < block.vertices.length; index++) {
+    if (!wanted.has(index)) continue
+    const vertex = block.vertices[index]
+    const raw = vertex ? lines[vertex.line] : undefined
+    if (raw == null) continue
+    const tokens = [...raw.matchAll(/\S+/g)]
+    const first = tokens[0]?.[0]
+    const offset = first && FACE.test(first) ? 1 : 0
+    const replacements = new Map<number, string>()
+    // Angle fields are the 1st and 3rd values after the radius (`offset+3`, `offset+5`); their
+    // distances follow (`offset+4`, `offset+6`). Values outside the head's range are not weld prep.
+    for (const slot of [offset + 3, offset + 5]) {
+      const current = num(tokens[slot]?.[0])
+      if (target.angle === 0) {
+        replacements.set(slot, '0.00')
+      } else if (Number.isFinite(current) && current !== 0 && Math.abs(current) <= MAX_BEVEL_DEG) {
+        replacements.set(slot, target.angle.toFixed(2))
+      }
+    }
+    if (target.angle === 0) {
+      for (const slot of [offset + 4, offset + 6]) {
+        if (tokens[slot]) replacements.set(slot, '0.00')
+      }
+    }
+    lines[vertex.line] = replaceTokens(raw, replacements)
+  }
+  return lines.join('\n')
 }
