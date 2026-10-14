@@ -411,6 +411,13 @@ export function PreflightPage() {
     const frame = resolveNcFaceFrame(section, viewingNcGeom)
     return cutThicknesses(frame, section, viewingNcGeom)
   }, [viewingNcGeom, viewingNcSection, stock])
+  // STEP cut-edge colouring: the ideal model's cut edges on the side/top faces, keyed to the same
+  // thickness legend. `profile` lets the viewer resolve the target faces for the right family.
+  const viewingProfileCode = viewing?.nc?.profile ?? null
+  const viewingCutEdgeOptions = useMemo(
+    () => ({ thicknesses: viewingNcProfiles, profile: viewingProfileCode }),
+    [viewingNcProfiles, viewingProfileCode],
+  )
   // The NC only carries etch (`SI`) / marking (`PU`/`KO`) data when those blocks are present.
   const viewingHasMarkings = useMemo(() => {
     if (!ncBytes) return false
@@ -2401,6 +2408,7 @@ export function PreflightPage() {
                             sabreFailures={viewerSabreFailures}
                             ncSection={viewingNcSection}
                             faceFrame={viewingNcFrame}
+                            cutEdges={viewingCutEdgeOptions}
                             visibleSpans={visibleSpans}
                             highlight={highlightSpan}
                             showStock={showStock}

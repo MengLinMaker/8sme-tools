@@ -37,6 +37,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import type { CutMarker } from '@/lib/audit/cutReach'
 import {
   faceNormal,
+  faceSpanAxis,
   type NcFaceFrame,
   placeNcFace,
   resolveNcFaceFrame,
@@ -49,9 +50,11 @@ import {
   THICKNESS_COLORS,
   type Vec3,
 } from '@/lib/parsers/ncProject'
+import { faceRole, type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
 import { detectOrientation } from '@/lib/sections/orient'
 import type { StockOutline } from '@/lib/sections/stock'
 import { type DiffPresence, probeDiffPresence } from '@/lib/step/booleanDiff'
+import { brepCutSegments, type SeatedBrepFace } from '@/lib/step/cutEdges'
 import { closeDiffMask, computeDiffMasks, diffFraction } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { type DiffPayload, type DiffSolidPayload, OCC_FUZZY_MM } from '@/lib/step/occDiff'
@@ -175,6 +178,49 @@ function ncHaloObject(
 /** How welding bevels are drawn: the classic stemmed arrows, or translucent swept area fins. */
 export type BevelStyle = 'arrow' | 'area'
 
+/**
+ * Enables cut-edge colouring: the STEP model's cut edges are drawn as coloured lines, keyed to the
+ * wall thickness they pass through. `thicknesses` is the NC legend's thickness list (ascending), so
+ * the STEP pane's colours match the legend chips; empty falls back to the model's own cut
+ * thicknesses. `faces`/`profile` restrict colouring to those DSTV face sides (default `o`/`u`/`h`),
+ * resolved through the canonical stance so one-sided sections map correctly.
+ */
+export interface CutEdgeOptions {
+  thicknesses: number[]
+  /** DSTV face letters to colour. Defaults to the side + top faces (`o`/`u`/`h`). */
+  faces?: NcFace[]
+  /** DSTV/Tekla profile code, so the target faces resolve for the right family. */
+  profile?: string | null
+}
+
+/** Default faces to colour: the two sides and the top (the accessible cut faces, not the bottom). */
+const DEFAULT_CUT_FACES: NcFace[] = ['o', 'u', 'h']
+
+/**
+ * World-space outward normals of the DSTV faces that should carry cut-edge colouring. The side is
+ * taken from the canonical stance (`faceRole`) rather than `resolveFaceSign`, which cannot tell a
+ * one-sided section's top from its bottom (both resolve to the same side for a channel).
+ */
+function targetFaceNormals(
+  faces: NcFace[],
+  frame: NcFaceFrame,
+  family: ProfileFamily,
+  xAxis: Vector3,
+  yAxis: Vector3,
+): Vec3[] {
+  const normals: Vec3[] = []
+  for (const face of faces) {
+    const role = faceRole(family, face)
+    const axis = (1 - faceSpanAxis(frame, face)) as 0 | 1
+    const base = axis === 0 ? xAxis : yAxis
+    const signs = role === 'side' ? [1, -1] : [role === 'top' ? 1 : -1]
+    for (const sign of signs) {
+      normals.push([base.x * sign, base.y * sign, base.z * sign])
+    }
+  }
+  return normals
+}
+
 /** The three objects `addNcLines` produces for a projected NC. */
 interface NcProjectedObjects {
   /** Plain cut lines + hole rings (always drawn). */
@@ -226,6 +272,21 @@ function addNcLines(
     bevelAreas.push(area)
   })
   return { cutLines, bevelArrows, bevelAreas }
+}
+
+/** Colours a cut thickness by its nearest entry in `scale` (the NC legend's thickness order). */
+function edgeColorForThickness(thickness: number, scale: number[]): number {
+  if (scale.length === 0) return FALLBACK_COLOR
+  let index = 0
+  let best = Number.POSITIVE_INFINITY
+  scale.forEach((value, i) => {
+    const distance = Math.abs(value - thickness)
+    if (distance < best) {
+      best = distance
+      index = i
+    }
+  })
+  return THICKNESS_COLORS[index % THICKNESS_COLORS.length] ?? FALLBACK_COLOR
 }
 
 /** Formats a 0–1 fraction as a percentage, keeping a decimal for tiny-but-nonzero shares. */
@@ -457,6 +518,7 @@ function mountScene(
   bevelStyle: BevelStyle = 'arrow',
   onLocationChange?: (locationMm: number, lengthMm: number) => void,
   onAxisAngleChange?: (degrees: number) => void,
+  cutEdges?: CutEdgeOptions | null,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -572,6 +634,8 @@ function mountScene(
   // same seated frame as the model so they land on the surfaces the laser actually cut.
   const ncObjects: LineSegments2[] = []
   const ncMaterials: LineMaterial[] = []
+  /** STEP cut edges (non-stock edges), coloured by wall thickness — drawn when `cutEdges` is set. */
+  const cutEdgeObjects: LineSegments2[] = []
   /** Welding-bevel indications, split by style so the toggle just flips visibility. */
   const ncArrowObjects: LineSegments2[] = []
   const ncAreaObjects: Mesh[] = []
@@ -633,6 +697,87 @@ function mountScene(
       fx0.clone().applyAxisAngle(about, rollAngle),
       fy0.clone().applyAxisAngle(about, rollAngle),
     ]
+
+    // Colour the STEP's cut edges by wall thickness (the NC legend's key). The worker emits every
+    // face; `brepCutSegments` classifies stock vs cut by topology and returns the coloured segments
+    // for the target `o`/`u`/`h` faces (lengthwise cuts kept; cuts on a rounded corner projected
+    // onto the nearest target face so they read flat).
+    if (cutEdges) {
+      primary.group.updateMatrixWorld(true)
+      const matrixWorld = primary.group.matrixWorld
+      const rotation = primary.group.quaternion
+      const basisX: Vec3 = [xAxis.x, xAxis.y, xAxis.z]
+      const basisY: Vec3 = [yAxis.x, yAxis.y, yAxis.z]
+      const holes = Array.isArray(stock?.holes) ? stock.holes : []
+      const family = cutEdges.profile ? profileFamily(cutEdges.profile) : null
+      const frame = faceFrame ?? (nc ? resolveNcFaceFrame(ncSection ?? profile, nc) : null)
+      const targetVectors: Vec3[] | null =
+        family && frame
+          ? targetFaceNormals(cutEdges.faces ?? DEFAULT_CUT_FACES, frame, family, xAxis, yAxis)
+          : null
+      const groups = new Map<number, number[]>()
+      for (const body of step.bodies) {
+        const seated: SeatedBrepFace[] = (body.brep ?? []).map((face) => {
+          const normal = new Vector3(
+            face.normal[0],
+            face.normal[1],
+            face.normal[2],
+          ).applyQuaternion(rotation)
+          const center = new Vector3(face.center[0], face.center[1], face.center[2]).applyMatrix4(
+            matrixWorld,
+          )
+          return {
+            normal: [normal.x, normal.y, normal.z],
+            center: [center.x, center.y, center.z],
+            planar: face.planar,
+            samples: transformVertices(face.samples, matrixWorld),
+            wires: face.wires.map((wire) => ({
+              enclosed: wire.enclosed,
+              edges: wire.edges.map((edge) => ({
+                points: transformVertices(edge.points, matrixWorld),
+                neighbours: edge.neighbours,
+              })),
+            })),
+          }
+        })
+        for (const cut of brepCutSegments(
+          seated,
+          profile,
+          holes,
+          basisX,
+          basisY,
+          [1, 0, 0],
+          targetVectors,
+        )) {
+          const bucket = groups.get(cut.thickness)
+          if (bucket) bucket.push(...cut.points)
+          else groups.set(cut.thickness, cut.points)
+        }
+      }
+      const order = [...groups.keys()].sort((a, b) => a - b)
+      const scale = cutEdges.thicknesses.length > 0 ? cutEdges.thicknesses : order
+      for (const thickness of order) {
+        const points = groups.get(thickness)
+        if (!points || points.length === 0) continue
+        const line = ncLineObject(
+          points,
+          edgeColorForThickness(thickness, scale),
+          ncResolution,
+          ncMaterials,
+        )
+        if (line) {
+          // The cut lines sit exactly on the surface (they *are* its edges), so nudge their depth
+          // toward the camera to keep them from z-fighting the face behind them.
+          const material = line.material as LineMaterial
+          material.polygonOffset = true
+          material.polygonOffsetFactor = -2
+          material.polygonOffsetUnits = -2
+          scene.add(line)
+          cutEdgeObjects.push(line)
+        }
+      }
+    }
+
     const overlay = extrudeOverlay(
       profile,
       Array.isArray(stock?.holes) ? stock.holes : [],
@@ -1249,6 +1394,11 @@ function mountScene(
         line.geometry.dispose()
         ;(line.material as LineMaterial).dispose()
       }
+      for (const line of cutEdgeObjects) {
+        scene.remove(line)
+        line.geometry.dispose()
+        ;(line.material as LineMaterial).dispose()
+      }
       for (const line of ncArrowObjects) {
         line.geometry.dispose()
         ;(line.material as LineMaterial).dispose()
@@ -1333,6 +1483,11 @@ export interface PartViewerProps {
   onShowSabreChange?: (visible: boolean) => void
   /** Hide the in-pane control buttons (the shared toolbar drives the toggles instead). */
   hideControls?: boolean
+  /**
+   * Colour the STEP model's cut edges (non-stock edges) by wall thickness, keyed to the NC
+   * legend's thickness list. Omit to keep the plain dark edges.
+   */
+  cutEdges?: CutEdgeOptions | null
 }
 
 export default function PartViewer({
@@ -1363,6 +1518,7 @@ export default function PartViewer({
   showSabre: showSabreProp,
   onShowSabreChange,
   hideControls = false,
+  cutEdges = null,
 }: PartViewerProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -1446,6 +1602,7 @@ export default function PartViewer({
           'area',
           (mm, mmLength) => onLocationRef.current?.(mm, mmLength),
           (degrees) => onAxisAngleRef.current?.(degrees),
+          cutEdges,
         )
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
         handle.setFlip(false)
@@ -1487,6 +1644,7 @@ export default function PartViewer({
     nc,
     ncSection,
     faceFrame,
+    cutEdges,
     t,
   ])
 
