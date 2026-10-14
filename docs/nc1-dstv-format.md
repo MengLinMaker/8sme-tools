@@ -88,6 +88,13 @@ header-data table:
 counterbore is often two paired lines). Suffix letters on coordinates indicate the
 reference edge.
 
+Slotted holes carry a fabrication letter `l` after a `ttt.tt` code field, then three values:
+`face X Y diameter ttt.ttl width height angle`. `X`/`Y` is the slot's **start end centre**
+(not its centre); `width`/`height` are the slot vector to the far end *before* rotation and
+`angle` (deg, CCW) rotates it to the slot's true direction — e.g. `0.00l 0.00 10.00 69.95` is a
+10 mm end-to-end slot tilted ~20° off the face's Y axis. The slot index ignores the tilt if only
+`width`/`height` are used (see `slotOffset` in `src/lib/parsers/ncGeometry.ts`).
+
 ### `AK` / `IK` (contours)
 
 Polyline of X/Y vertices; a third value is a **bulge/radius** (arc to the next vertex),

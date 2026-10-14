@@ -21,7 +21,7 @@ import {
   type NcFaceFrame,
   placeNcFace,
 } from './ncFaces'
-import type { NcFace, NcGeometry, NcHole } from './ncGeometry'
+import { type NcFace, type NcGeometry, type NcHole, slotOffset } from './ncGeometry'
 
 export type Vec3 = [number, number, number]
 
@@ -65,20 +65,22 @@ const HOLE_STEPS = 24
 /**
  * The face-space outline of a hole as a closed polyline (last point repeats the first): a circle,
  * or — for a DSTV slotted (`l`) hole — an **obround** (stadium) whose end centres are the hole's
- * start point `(x, y)` and its far end `(x + dx, y + dy)`, each of radius `diameter / 2`.
+ * start point `(x, y)` and its far end (the rotated {@link slotOffset}), each of radius
+ * `diameter / 2`.
  */
 export function holeOutline(hole: NcHole, steps = HOLE_STEPS): [number, number][] {
   const r = hole.diameter / 2
   const slot = hole.slot
   const points: [number, number][] = []
   if (slot && (slot.dx !== 0 || slot.dy !== 0)) {
-    const base = Math.atan2(slot.dy, slot.dx)
+    const [dx, dy] = slotOffset(slot)
+    const base = Math.atan2(dy, dx)
     const half = Math.max(2, Math.round(steps / 2))
     // Far end's semicircle, sweeping through the slot direction (base ± 90°), then the near
     // end's, back to the start — together they trace the full stadium.
     for (let i = 0; i <= half; i++) {
       const a = base - Math.PI / 2 + (i / half) * Math.PI
-      points.push([hole.x + slot.dx + Math.cos(a) * r, hole.y + slot.dy + Math.sin(a) * r])
+      points.push([hole.x + dx + Math.cos(a) * r, hole.y + dy + Math.sin(a) * r])
     }
     for (let i = 0; i <= half; i++) {
       const a = base + Math.PI / 2 + (i / half) * Math.PI

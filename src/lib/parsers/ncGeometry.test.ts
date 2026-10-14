@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { nw31Bottom } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
-import { parseNcGeometry } from './ncGeometry'
+import { parseNcGeometry, slotOffset } from './ncGeometry'
 
 /** A real shaft whose o/u ends carry DSTV notch lines (`w`). */
 const M147 = nw31Bottom('m147.nc1')
@@ -70,6 +70,24 @@ EN`
     })
     expect(geometry.holes[1]).toMatchObject({ face: 'u', diameter: 14 })
     expect(geometry.holes[1]?.slot).toBeUndefined()
+  })
+
+  it('keeps a tilted (`l`) hole’s rotation angle', () => {
+    // Real NW31 a1 BO lines (EA75×75×6): the `v` slots are Ø10 and the DSTV angle field is ~70°,
+    // i.e. ~20° off the face's Y axis. The far-end offset is `(dx, dy)` rotated by that angle.
+    const text = `ST
+  a1
+  EA75*75*6
+  L
+BO
+  v    1005.67u     35.89      10.00      0.00l      0.00     10.00     69.95
+EN`
+    const slot = parseNcGeometry(text).holes[0]?.slot
+    expect(slot).toMatchObject({ dx: 0, dy: 10, angle: 69.95 })
+    const [x, y] = slotOffset(slot as never)
+    expect(x).toBeCloseTo(-9.394, 3)
+    expect(y).toBeCloseTo(3.428, 3)
+    expect(Math.hypot(x, y)).toBeCloseTo(10, 6)
   })
 
   it('separates DSTV notch lines (t/w) from contour vertices', () => {

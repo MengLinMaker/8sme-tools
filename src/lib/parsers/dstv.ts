@@ -54,10 +54,11 @@ function numbersFrom(tokens: string[]): number[] {
 }
 
 export const dstvSlotSchema = z.object({
-  /** offset (mm) from the hole's start point to the far end centre */
+  /** DSTV "width" (mm): slot vector X from the start point, *before* the `angle` rotation. */
   dx: z.number(),
+  /** DSTV "height" (mm): slot vector Y from the start point, *before* the `angle` rotation. */
   dy: z.number(),
-  /** slot direction as DSTV reports it (deg); advisory */
+  /** Counter-clockwise rotation (deg) applied to `(dx, dy)` to give the slot's true direction. */
   angle: z.number(),
 })
 export type DstvSlot = z.infer<typeof dstvSlotSchema>

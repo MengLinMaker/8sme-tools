@@ -222,4 +222,25 @@ describe('holeOutline', () => {
     // A circle of the same diameter would top out at y = 5; the slot must reach 25.
     expect(Math.max(...ys)).toBeGreaterThan(20)
   })
+
+  it('rotates a tilted (`l`) slot by its DSTV angle, not straight along `dy`', () => {
+    // Real NW31 a1 slot: `0.00l 0.00 10.00 69.95` at (0, 0). The far end is (dx, dy) = (0, 10)
+    // rotated 69.95° CCW → (−9.394, 3.428), so the obround leans ~20° off vertical.
+    const ring = holeOutline({
+      face: 'v',
+      x: 0,
+      y: 0,
+      diameter: 10,
+      slot: { dx: 0, dy: 10, angle: 69.95 },
+    })
+    const xs = ring.map(([x]) => x)
+    const ys = ring.map(([, y]) => y)
+    // If the angle were ignored the slot would be vertical: x ∈ [−5, 5], y ∈ [−5, 15].
+    expect(Math.min(...xs)).toBeCloseTo(-9.394 - 5, 1)
+    expect(Math.max(...xs)).toBeCloseTo(5, 1)
+    expect(Math.min(...ys)).toBeCloseTo(-5, 1)
+    expect(Math.max(...ys)).toBeCloseTo(3.428 + 5, 1)
+    // A vertical slot would never reach x = −8; the tilt does.
+    expect(Math.min(...xs)).toBeLessThan(-8)
+  })
 })

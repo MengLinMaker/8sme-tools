@@ -7,7 +7,7 @@ import {
   resolveNcFaceFrame,
   sectionSpanAt,
 } from '@/lib/parsers/ncFaces'
-import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { type NcFace, parseNcGeometry, slotOffset } from '@/lib/parsers/ncGeometry'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stripStraySolids } from './clean'
 import type { MeasurableShape } from './measure'
@@ -256,7 +256,10 @@ export async function reconstructSolidFromNc(
   const outer = geo.contours.filter((c) => c.kind === 'outer')
   const maxX = Math.max(
     ...geo.contours.flatMap((c) => c.points.map((p) => p[0])),
-    ...geo.holes.map((h) => Math.max(h.x, h.x + (h.slot?.dx ?? 0)) + h.diameter),
+    ...geo.holes.map((h) => {
+      const farX = h.slot ? slotOffset(h.slot)[0] : 0
+      return Math.max(h.x, h.x + farX) + h.diameter
+    }),
   )
   const faceAxis = (face: string): Axis => faceSpanAxis(frame, face as NcFace)
   const halfOf = (axis: Axis): number => faceHalf(frame, axis)
@@ -446,15 +449,18 @@ export async function reconstructSolidFromNc(
     const outside = faceOut + 2
     // A plain hole is a circle; a DSTV slotted (`l`) hole is an obround (stadium) — a rounded
     // rectangle whose corner radius is the hole radius, so its ends are true semicircles — laid
-    // from the start point `(x, y)` to the far end `(x + dx, y + dy)` in the face plane.
+    // from the start point `(x, y)` to the far end in the face plane. The DSTV `dx`/`dy` are the
+    // slot vector *before* its `angle` rotation, so the far end (and thus the tilt) comes from
+    // `slotOffset` — using `dx`/`dy` directly would drop the slot's tilt.
     const crossDrawing = (): ReturnType<typeof drawCircle> => {
       const slot = h.slot
       if (slot && (slot.dx !== 0 || slot.dy !== 0)) {
-        const length = Math.hypot(slot.dx, slot.dy)
-        const angle = (Math.atan2(slot.dy, slot.dx) * 180) / Math.PI
+        const [dx, dy] = slotOffset(slot)
+        const length = Math.hypot(dx, dy)
+        const angle = (Math.atan2(dy, dx) * 180) / Math.PI
         return drawRoundedRectangle(length + h.diameter, h.diameter, h.diameter / 2)
           .rotate(angle)
-          .translate(h.x + slot.dx / 2, h.y + slot.dy / 2 - half)
+          .translate(h.x + dx / 2, h.y + dy / 2 - half)
       }
       return drawCircle(h.diameter / 2).translate(h.x, h.y - half)
     }

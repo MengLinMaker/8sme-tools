@@ -26,16 +26,31 @@ export interface NcContour {
 /**
  * A DSTV slotted hole (`BO` line with fabrication letter `l`). The cut is an **obround**
  * (stadium): two end semicircles of radius `diameter / 2`, centred at the hole's start point
- * `(x, y)` and at `(x + dx, y + dy)`. `dx`/`dy` are the DSTV "width/height" fields (the offset to
- * the far end centre), not a bounding box; the start point is an end centre, not the slot centre.
+ * `(x, y)` and at the far end. The DSTV `width`/`height` fields (`dx`/`dy`) are the slot vector
+ * *before* rotation; `angle` (deg, counter-clockwise) rotates it to the slot's true direction — so
+ * an axis-aligned slot leaves the sum as `dx`/`dy`, while `0.00l 0.00 10.00 69.95` is a 10 mm
+ * end-to-end slot tilted ~20° off the face's Y axis. The start point is an end centre, not the
+ * slot centre. Use {@link slotOffset} to get the far end, not `dx`/`dy` directly.
  */
 export interface NcSlot {
-  /** Offset (mm) from the start point `(x, y)` to the far end centre. */
+  /** Slot vector X (mm) from the start point before the `angle` rotation; DSTV "width" field. */
   dx: number
-  /** Offset (mm) from the start point `(x, y)` to the far end centre. */
+  /** Slot vector Y (mm) from the start point before the `angle` rotation; DSTV "height" field. */
   dy: number
-  /** Slot direction as DSTV reports it (deg); advisory — `dx`/`dy` already give the direction. */
+  /** Counter-clockwise rotation (deg) applied to `(dx, dy)` to give the slot's true direction. */
   angle: number
+}
+
+/**
+ * The slotted hole's far-end offset from its start point, in face coordinates (mm): the DSTV
+ * `(dx, dy)` vector rotated counter-clockwise by the slot's `angle`. This is the vector the slot
+ * actually runs along — the raw `dx`/`dy` alone drop the tilt and must not be used directly.
+ */
+export function slotOffset(slot: NcSlot): [number, number] {
+  const rad = (slot.angle * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  return [slot.dx * cos - slot.dy * sin, slot.dx * sin + slot.dy * cos]
 }
 
 export interface NcHole {
