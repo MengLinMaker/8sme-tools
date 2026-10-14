@@ -105,11 +105,12 @@ non-ambiguous families:
 | `U`/`C` (n stance) | **side** | **side** | **bottom** | **top** |
 | `M` (tube, long-horizontal) | top | bottom | side | side |
 | `T` (flange-down) | side | bottom | side | side |
-| `L` (L stance) | top / side † | bottom / side † | side / top † | side / top † |
+| `L` (L stance) | **top** † | **bottom** † | **side** | **side** |
 
 † For an angle the roles depend on which leg is vertical once seated; Tekla's own rule is
-"`o`/`u` are on the leg that is vertical on the machine". Confirm on the first article and
-pin the value in `canonical.ts`.
+"`o`/`u` are on the leg that is vertical on the machine". In our L stance the vertical leg
+(top end → `o`) stands on +y, so `o`/`u` are top/bottom and `v`/`h` the two sides — the value
+pinned in `canonical.ts` and drawn in `figures/faces-angle.svg`. Confirm on the first article.
 
 > **T open issue.** Rotating the T's *reference pose* (flange vertical, web pointing `+v`) onto
 > our flange-down / web-up stance the same way as `I` / `U` gives `h` = **bottom** (the flange's
@@ -141,6 +142,8 @@ it becomes in the canonical stance (`figures/`):
 ![BT100*15 tee in the DSTV reference pose (flange vertical, web +v): o top, u bottom, h left, v right; our job stance is this rotated 90° CCW](figures/faces-tee.svg)
 
 ![200PFC channel — n stance: h top (web), v bottom (the opening), o the right flange side, u the left](figures/faces-pfc.svg)
+
+![UA150*90*12 angle — L stance: o the vertical leg's top end, u the underside, v the right end, h the left outer face](figures/faces-angle.svg)
 
 ![Generic RHS — o top, u bottom, v the right side, h the left (same map as an I)](figures/faces-generic-tube.svg)
 
