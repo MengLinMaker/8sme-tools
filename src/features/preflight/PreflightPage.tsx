@@ -85,7 +85,7 @@ import { cn } from '@/lib/utils'
 import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
-import { createOrbitBus, requestLocation } from './orbitSync'
+import { createOrbitBus, requestLocation, requestView, type ViewPreset } from './orbitSync'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 
@@ -147,6 +147,14 @@ const PANE_LAYOUTS: { id: PaneLayout; labelKey: string }[] = [
   { id: 'auto', labelKey: 'preflight.viewer.layoutAuto' },
   { id: 'rows', labelKey: 'preflight.viewer.layoutRows' },
   { id: 'cols', labelKey: 'preflight.viewer.sideBySide' },
+]
+
+/** Camera snaps onto the member's four DSTV faces, for fast drawing comparison. */
+const VIEW_PRESETS: { id: ViewPreset; labelKey: string }[] = [
+  { id: 'left', labelKey: 'preflight.viewer.left' },
+  { id: 'right', labelKey: 'preflight.viewer.right' },
+  { id: 'top', labelKey: 'preflight.viewer.top' },
+  { id: 'bottom', labelKey: 'preflight.viewer.bottom' },
 ]
 
 const SEVERITY_VARIANT = {
@@ -528,6 +536,9 @@ export function PreflightPage() {
   useEffect(() => {
     writePrefString('paneLayout', paneLayout)
   }, [paneLayout])
+  // The last camera view snapped to (for the button highlight). Cleared on a manual orbit via the
+  // bus — see the effect below — and on opening a part.
+  const [activeView, setActiveView] = useState<ViewPreset | null>(null)
 
   // The part's length-to-cross-section ratio: a long beam reads as one wide side view (which fills
   // full-width stacked rows at the largest zoom), a stubby part as a boxy shape (which fills
@@ -577,6 +588,17 @@ export function PreflightPage() {
 
   // One orbit bus per part, shared by the STEP and NC viewports so they rotate together.
   const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
+  // Drop the view-button highlight once the operator free-orbits: a preset broadcast keeps
+  // `bus.preset` set, while a manual drag clears it before notifying, so the flag tells them apart.
+  useEffect(() => {
+    const sync = (): void => {
+      if (!orbitBus.preset) setActiveView(null)
+    }
+    orbitBus.listeners.add(sync)
+    return () => {
+      orbitBus.listeners.delete(sync)
+    }
+  }, [orbitBus])
   // Bumped when an issue is opened, so the viewers pan/zoom/rotate onto its geometry (`index`
   // picks the specific failing sub-cut of a `CUT_*` finding).
   const [findingFocus, setFindingFocus] = useState<{
@@ -614,6 +636,7 @@ export function PreflightPage() {
     setLocationEditing(false)
     setLocationAxis(0)
     setViewingLength(null)
+    setActiveView(null)
     setViewing(part)
   }, [])
   const focusFinding = useCallback((finding: Finding) => {
@@ -2406,6 +2429,26 @@ export function PreflightPage() {
                       <NcLegend thicknesses={viewingNcProfiles} showMarkings={viewingHasMarkings} />
                     </div>
                   )}
+                  <div className="flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5">
+                    {VIEW_PRESETS.map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => {
+                          requestView(orbitBus, option.id)
+                          setActiveView(option.id)
+                        }}
+                        className={cn(
+                          'rounded px-2 py-0.5 text-xs font-medium transition-colors',
+                          activeView === option.id
+                            ? 'bg-accent text-accent-foreground'
+                            : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                        )}
+                      >
+                        {t(option.labelKey)}
+                      </button>
+                    ))}
+                  </div>
                   {/* Live location of the orbit pivot along the member (the reticle's position);
                       type an mm and press Enter to jump the view there. The arrow points along the
                       member's positive (increasing mm) direction as seen in the 3D. */}

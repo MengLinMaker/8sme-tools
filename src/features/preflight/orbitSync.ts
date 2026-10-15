@@ -12,10 +12,19 @@ export interface OrbitState {
 }
 
 /** Named viewing angles for quick technical comparison. */
-export type ViewPreset = 'iso' | 'front' | 'top' | 'side'
+export type ViewPreset = 'iso' | 'top' | 'bottom' | 'left' | 'right'
 
 /** An arbitrary view direction (from the target toward the camera), one of the 26 cube faces. */
 export type ViewDirection = [number, number, number]
+
+/**
+ * The seated member's cross-section frame, so named views face the right *physical* side: `up` is
+ * the section's machine-up (`o`), `right` its `+x` (`v`). Omit to fall back to world axes.
+ */
+export interface ViewAxes {
+  right: ViewDirection
+  up: ViewDirection
+}
 
 /** A point in the scene frame to pull the camera toward (clicking a finding jumps here). */
 export type FocusPoint = [number, number, number]
@@ -88,12 +97,30 @@ export function requestLocation(bus: OrbitBus, location: number): void {
 
 const EPSILON = 0.001
 
-/** Unit direction from the target toward the camera for each preset angle. */
-const PRESET_DIRECTION: Record<ViewPreset, [number, number, number]> = {
+/** Unit direction from the target toward the camera for each preset angle (world frame). */
+const PRESET_DIRECTION: Record<ViewPreset, ViewDirection> = {
   iso: [1, 1, 1],
-  front: [0, 0, 1],
   top: [0, 1, 0],
-  side: [1, 0, 0],
+  bottom: [0, -1, 0],
+  right: [0, 0, 1],
+  left: [0, 0, -1],
+}
+
+/** Maps a named view onto the member's seated frame so each face view faces the right surface. */
+function axisDirection(preset: ViewPreset, axes: ViewAxes): ViewDirection {
+  const { right, up } = axes
+  switch (preset) {
+    case 'top':
+      return up
+    case 'bottom':
+      return [-up[0], -up[1], -up[2]]
+    case 'right':
+      return right
+    case 'left':
+      return [-right[0], -right[1], -right[2]]
+    default:
+      return PRESET_DIRECTION.iso
+  }
 }
 
 function near(a: [number, number, number], b: [number, number, number]): boolean {
@@ -110,6 +137,7 @@ export function attachOrbit(
   camera: ZoomableCamera,
   controls: OrbitControls,
   frame: OrbitFrame,
+  axes?: ViewAxes,
 ): () => void {
   let applying = false
   let animRaf = 0
@@ -229,7 +257,8 @@ export function attachOrbit(
     for (const listener of bus.listeners) if (listener !== apply) listener(orbit)
   }
 
-  const applyPreset = (preset: ViewPreset): void => applyDirection(PRESET_DIRECTION[preset])
+  const applyPreset = (preset: ViewPreset): void =>
+    applyDirection(axes ? axisDirection(preset, axes) : PRESET_DIRECTION[preset])
 
   /** Slide along the member so the pivot sits at `location` mm, keeping the angle and zoom. */
   const applyLocation = (mm: number): void => {

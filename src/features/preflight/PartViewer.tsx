@@ -1322,13 +1322,23 @@ function mountScene(
   controls.addEventListener('change', confinePivot)
 
   const detachOrbit = bus
-    ? attachOrbit(bus, camera, controls, {
-        centre: [axisCentre.x, axisCentre.y, axisCentre.z],
-        distance,
-        radius: modelRadius,
-        axis: longAxis as 0 | 1 | 2,
-        length,
-      })
+    ? attachOrbit(
+        bus,
+        camera,
+        controls,
+        {
+          centre: [axisCentre.x, axisCentre.y, axisCentre.z],
+          distance,
+          radius: modelRadius,
+          axis: longAxis as 0 | 1 | 2,
+          length,
+        },
+        // Face the right physical side for the named views: `right` is the section's `+x` (`v`),
+        // `up` its machine-up (`o`). Without a profile the world axes stand in.
+        profile
+          ? { right: [xAxis.x, xAxis.y, xAxis.z], up: [yAxis.x, yAxis.y, yAxis.z] }
+          : undefined,
+      )
     : null
   const detachWheelPan = attachWheelPan(container, controls, camera, longAxis as 0 | 1 | 2)
 
