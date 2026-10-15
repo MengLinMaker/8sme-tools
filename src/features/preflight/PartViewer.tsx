@@ -37,7 +37,6 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import type { CutMarker } from '@/lib/audit/cutReach'
 import {
   faceNormal,
-  faceSpanAxis,
   type NcFaceFrame,
   placeNcFace,
   resolveNcFaceFrame,
@@ -197,13 +196,16 @@ export interface CutEdgeOptions {
 const DEFAULT_CUT_FACES: NcFace[] = ['o', 'u', 'h']
 
 /**
- * World-space outward normals of the DSTV faces that should carry cut-edge colouring. The side is
- * taken from the canonical stance (`faceRole`) rather than `resolveFaceSign`, which cannot tell a
- * one-sided section's top from its bottom (both resolve to the same side for a channel).
+ * World-space outward normals of the DSTV faces that should carry cut-edge colouring. The machine
+ * role (`faceRole`) gives each face's side — top/bottom lie on the machine-up axis, a side on the
+ * cross axis — so the normals never depend on the NC's authored frame. (An angle's authored frame
+ * can resolve a quarter-turn off, which used to leak `o` into the targets even when it was not
+ * listed.) A symmetric section's two side letters are interchangeable, so a requested side face
+ * colours both sides; an asymmetric angle's sides are distinct, so the letter picks its own — `v`
+ * the right (`+x`), `h` the left (`−x`).
  */
 function targetFaceNormals(
   faces: NcFace[],
-  frame: NcFaceFrame,
   family: ProfileFamily,
   xAxis: Vector3,
   yAxis: Vector3,
@@ -211,9 +213,13 @@ function targetFaceNormals(
   const normals: Vec3[] = []
   for (const face of faces) {
     const role = faceRole(family, face)
-    const axis = (1 - faceSpanAxis(frame, face)) as 0 | 1
-    const base = axis === 0 ? xAxis : yAxis
-    const signs = role === 'side' ? [1, -1] : [role === 'top' ? 1 : -1]
+    const base = role === 'side' ? xAxis : yAxis
+    const signs =
+      role === 'side'
+        ? family === 'angle'
+          ? [face === 'v' ? 1 : -1]
+          : [1, -1]
+        : [role === 'top' ? 1 : -1]
     for (const sign of signs) {
       normals.push([base.x * sign, base.y * sign, base.z * sign])
     }
@@ -713,7 +719,7 @@ function mountScene(
       const frame = faceFrame ?? (nc ? resolveNcFaceFrame(ncSection ?? profile, nc) : null)
       const targetVectors: Vec3[] | null =
         family && frame
-          ? targetFaceNormals(cutEdges.faces ?? DEFAULT_CUT_FACES, frame, family, xAxis, yAxis)
+          ? targetFaceNormals(cutEdges.faces ?? DEFAULT_CUT_FACES, family, xAxis, yAxis)
           : null
       const groups = new Map<number, number[]>()
       for (const body of step.bodies) {

@@ -4,7 +4,7 @@ import { nw30Bottom, nw31Bottom, nw31Top } from '@test/fixtures'
 import { Box3, Matrix4, Quaternion, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
-import { faceSpanAxis, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
+import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { cutThicknesses } from '@/lib/parsers/ncProject'
 import { faceRole, type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
@@ -65,19 +65,17 @@ function seatQuaternion(vertices: number[], profile: [number, number][]): Quater
 }
 
 /** Canonical-stance target normals for `o`/`u`/`h` (mirrors `PartViewer.targetFaceNormals`). */
-function targetNormals(
-  family: ProfileFamily,
-  frame: { extent: [number, number]; axisVH: 0 | 1; axisOU: 0 | 1 },
-  xAxis: Vector3,
-  yAxis: Vector3,
-): Vec3[] {
-  const basis = [xAxis, yAxis]
+function targetNormals(family: ProfileFamily, xAxis: Vector3, yAxis: Vector3): Vec3[] {
   const out: Vec3[] = []
   for (const face of ['o', 'u', 'h'] as const) {
     const role = faceRole(family, face)
-    const axis = (1 - faceSpanAxis(frame, face)) as 0 | 1
-    const base = basis[axis] as Vector3
-    const signs = role === 'side' ? [1, -1] : [role === 'top' ? 1 : -1]
+    const base = role === 'side' ? xAxis : yAxis
+    const signs =
+      role === 'side'
+        ? family === 'angle'
+          ? [face === 'v' ? 1 : -1]
+          : [1, -1]
+        : [role === 'top' ? 1 : -1]
     for (const sign of signs) {
       out.push([base.x * sign, base.y * sign, base.z * sign])
     }
@@ -131,7 +129,7 @@ async function run(mark: string, ncPath: string, stpPath: string): Promise<Pipel
     box.expandByPoint(probe.set(raw[i] as number, raw[i + 1] as number, raw[i + 2] as number))
   const position = box.getCenter(new Vector3()).applyQuaternion(seat).negate()
   const placement = new Matrix4().compose(position, rotation, new Vector3(1, 1, 1))
-  const targets = targetNormals(family, frame, xAxis, yAxis)
+  const targets = targetNormals(family, xAxis, yAxis)
   const xa: Vec3 = [xAxis.x, xAxis.y, xAxis.z]
   const ya: Vec3 = [yAxis.x, yAxis.y, yAxis.z]
 
