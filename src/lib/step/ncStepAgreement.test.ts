@@ -195,14 +195,23 @@ async function ncToStepGap(
   return { mean: ncSegs.length ? sum / ncSegs.length : 0, max }
 }
 
-/** Parts whose NC and STEP geometry agree — a projection must land on the STEP to ~0. */
+/**
+ * Parts whose NC and STEP geometry agree — a projection must land on the STEP to ~0. `m40` is the
+ * reference example: the NC and STEP cut lines agree everywhere except a ~1.5 mm divergence in the
+ * curved section near the end (mean stays well under the bar; the max is that localised end).
+ */
 const AGREES = [
   ['a1', 'angle', nw31Top('NC files', 'a1.nc1'), nw31Top('STP files', 'a1.stp')],
   ['a2', 'angle', nw30Bottom('a2.nc1'), nw30Bottom('a2.stp')],
   ['m31', 'PFC', nw31Top('NC files', 'm31.nc1'), nw31Top('STP files', 'm31.stp')],
   ['m130', 'PFC', nw31Top('NC files', 'm130.nc1'), nw31Top('STP files', 'm130.stp')],
+  ['m40', 'PFC', nw31Top('NC files', 'm40.nc1'), nw31Top('STP files', 'm40.stp')],
 ] as const
-/** Parts whose NC genuinely differs from the STEP (weird-curve-side-cut PFC, tubes). Recorded, not fixed. */
+/**
+ * Parts whose NC genuinely differs from the STEP geometry (recorded, not fixed). m40 (PFC) is the
+ * reference example: its NC and STEP cut lines visibly diverge, and that divergence is the thing to
+ * surface — not a projection bug to paper over.
+ */
 const DIVERGES = [
   ['m116', 'PFC', nw31Bottom('m116.nc1'), nw31Bottom('m116.stp')],
   ['m117', 'RHS', nw31Top('NC files', 'm117.nc1'), nw31Top('STP files', 'm117.stp')],
