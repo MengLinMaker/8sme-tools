@@ -140,6 +140,15 @@ const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [
   { labelKey: 'preflight.columns.model', key: 'model' },
 ]
 
+/** How the 2–3 viewer panes are arranged: `auto` picks rows/cols to maximise zoom. */
+type PaneLayout = 'auto' | 'rows' | 'cols'
+
+const PANE_LAYOUTS: { id: PaneLayout; labelKey: string }[] = [
+  { id: 'auto', labelKey: 'preflight.viewer.layoutAuto' },
+  { id: 'rows', labelKey: 'preflight.viewer.layoutRows' },
+  { id: 'cols', labelKey: 'preflight.viewer.sideBySide' },
+]
+
 const SEVERITY_VARIANT = {
   error: 'destructive',
   warning: 'warning',
@@ -167,6 +176,22 @@ function readPref(key: string, fallback: boolean): boolean {
 function writePref(key: string, value: boolean): void {
   try {
     localStorage.setItem(PREF_PREFIX + key, value ? '1' : '0')
+  } catch {
+    // ignored
+  }
+}
+/** Reads a persisted string pref, falling back when unset or unavailable. */
+function readPrefString(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(PREF_PREFIX + key) ?? fallback
+  } catch {
+    return fallback
+  }
+}
+/** Persists a string pref, ignoring storage failures (private mode, quota). */
+function writePrefString(key: string, value: string): void {
+  try {
+    localStorage.setItem(PREF_PREFIX + key, value)
   } catch {
     // ignored
   }
@@ -490,6 +515,61 @@ export function PreflightPage() {
   const manufacturedShown = mfgReady
   const overlayShown = mfgReady && hasStep
   const paneCount = Number(stepShown) + Number(manufacturedShown) + Number(overlayShown)
+
+  // How the viewer panes are stacked. Persisted, so the operator's choice sticks across marks.
+  const [paneLayout, setPaneLayout] = useState<PaneLayout>(() => {
+    const stored = readPrefString('paneLayout', 'auto')
+    return stored === 'rows' || stored === 'cols' ? stored : 'auto'
+  })
+  useEffect(() => {
+    writePrefString('paneLayout', paneLayout)
+  }, [paneLayout])
+
+  // The part's length-to-cross-section ratio: a long beam reads as one wide side view (which fills
+  // full-width stacked rows at the largest zoom), a stubby part as a boxy shape (which fills
+  // side-by-side columns). Only the two stacked layouts are considered, so the choice is stable
+  // while orbiting.
+  const crossExtent = useMemo(() => {
+    const points = stock?.points
+    if (!points?.length) return null
+    let minX = Number.POSITIVE_INFINITY
+    let minY = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let maxY = Number.NEGATIVE_INFINITY
+    for (const [x, y] of points) {
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+    return Math.max(maxX - minX, maxY - minY) || null
+  }, [stock])
+  const modelAspect = viewingLength && crossExtent ? viewingLength / crossExtent : null
+
+  // The available pane area's aspect (width/height), measured on the grid itself. `auto` picks the
+  // layout whose per-pane shape best matches the part — the one that fits the model largest.
+  const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null)
+  const [gridAspect, setGridAspect] = useState<number | null>(null)
+  useEffect(() => {
+    if (!gridEl) return
+    const measure = () => {
+      const width = gridEl.clientWidth
+      const height = gridEl.clientHeight
+      setGridAspect(width > 0 && height > 0 ? width / height : null)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(gridEl)
+    return () => observer.disconnect()
+  }, [gridEl])
+  // `rows` puts each pane full-width (wide, short — good for a long beam side view); `cols` stacks
+  // them side by side (tall, narrow — good for a compact part). Ties fall to columns.
+  const resolvedLayout: 'rows' | 'cols' =
+    paneLayout === 'rows' || paneLayout === 'cols'
+      ? paneLayout
+      : modelAspect != null && gridAspect != null && modelAspect >= gridAspect
+        ? 'rows'
+        : 'cols'
 
   // One orbit bus per part, shared by the STEP and NC viewports so they rotate together.
   const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
@@ -2289,6 +2369,28 @@ export function PreflightPage() {
                       </span>
                     )}
                   </div>
+                  {paneCount > 1 && (
+                    <div
+                      className="flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5"
+                      title={t('preflight.viewer.layoutHint')}
+                    >
+                      {PANE_LAYOUTS.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => setPaneLayout(option.id)}
+                          className={cn(
+                            'rounded px-2 py-0.5 text-xs font-medium transition-colors',
+                            paneLayout === option.id
+                              ? 'bg-accent text-accent-foreground'
+                              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                          )}
+                        >
+                          {t(option.labelKey)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {viewingNcGeom && (
                     <div className="flex flex-wrap items-center gap-2">
                       <NcLegend thicknesses={viewingNcProfiles} showMarkings={viewingHasMarkings} />
@@ -2386,13 +2488,14 @@ export function PreflightPage() {
                     }
                   >
                     <div
+                      ref={setGridEl}
                       className={cn(
-                        'grid h-full auto-rows-fr gap-px bg-border xl:grid-cols-1',
-                        paneCount >= 3
-                          ? 'grid-cols-3'
-                          : paneCount === 2
-                            ? 'grid-cols-2'
-                            : 'grid-cols-1',
+                        'grid h-full auto-rows-fr gap-px bg-border',
+                        resolvedLayout === 'rows' || paneCount <= 1
+                          ? 'grid-cols-1'
+                          : paneCount >= 3
+                            ? 'grid-cols-3'
+                            : 'grid-cols-2',
                       )}
                     >
                       {/* 1. STEP — the ideal model. */}
