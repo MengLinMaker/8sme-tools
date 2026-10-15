@@ -6,6 +6,7 @@ import {
   Float32BufferAttribute,
   LineBasicMaterial,
   LineSegments,
+  Matrix4,
   OrthographicCamera,
   Scene,
   Vector3,
@@ -128,18 +129,53 @@ function mountScene(
   const centre = bounds.getCenter(new Vector3())
   const maxDim = Math.max(size.x, size.y, size.z) || 1
 
-  const aspect = (container.clientWidth || 1) / (container.clientHeight || 1)
-  const frustumHeight = maxDim * 1.15
-  const halfHeight = frustumHeight / 2
+  const corners: Vector3[] = []
+  for (let i = 0; i < 8; i++) {
+    corners.push(
+      new Vector3(
+        i & 1 ? bounds.max.x : bounds.min.x,
+        i & 2 ? bounds.max.y : bounds.min.y,
+        i & 4 ? bounds.max.z : bounds.min.z,
+      ),
+    )
+  }
+  // Measure the beam's on-screen footprint (max |x|/|y| in camera space) for a view direction, so
+  // a view fills the viewport from the bounding-box corners alone (an axis-aligned frame left it
+  // tiny).
+  const distance = maxDim * 2
+  const measure = (dir: Vector3): { halfWidth: number; halfHeight: number } => {
+    const scratch = new OrthographicCamera()
+    const point = new Vector3()
+    const toView = new Matrix4()
+    scratch.position.copy(centre).add(dir.clone().normalize().multiplyScalar(distance))
+    scratch.up.set(0, 1, 0)
+    scratch.lookAt(centre)
+    scratch.updateMatrixWorld()
+    toView.copy(scratch.matrixWorld).invert()
+    let halfWidth = 0
+    let halfHeight = 0
+    for (const corner of corners) {
+      // The pivot sits on the view axis, so camera-space x/y is measured from the frame centre.
+      point.copy(corner).applyMatrix4(toView)
+      halfWidth = Math.max(halfWidth, Math.abs(point.x))
+      halfHeight = Math.max(halfHeight, Math.abs(point.y))
+    }
+    return { halfWidth, halfHeight }
+  }
+
+  const MARGIN = 1.02
+  const initialFit = measure(new Vector3(1, 1, 1))
+  let frustumHalfWidth = initialFit.halfWidth * MARGIN
+  let frustumHalfHeight = initialFit.halfHeight * MARGIN
+
   const camera = new OrthographicCamera(
-    -halfHeight * aspect,
-    halfHeight * aspect,
-    halfHeight,
-    -halfHeight,
+    -frustumHalfWidth,
+    frustumHalfWidth,
+    frustumHalfHeight,
+    -frustumHalfHeight,
     Math.max(maxDim / 1000, 0.01),
     maxDim * 100,
   )
-  const distance = maxDim * 2
   camera.position.set(distance, distance, distance).multiplyScalar(1 / Math.sqrt(3))
   camera.position.add(centre)
   camera.lookAt(centre)
@@ -177,6 +213,32 @@ function mountScene(
   })
   const detachWheelPan = attachWheelPan(container, controls, camera, 0)
 
+  const applyFrustum = (): void => {
+    const aspect = (container.clientWidth || 1) / (container.clientHeight || 1)
+    const halfH = Math.max(frustumHalfHeight, frustumHalfWidth / aspect)
+    const halfW = halfH * aspect
+    camera.left = -halfW
+    camera.right = halfW
+    camera.top = halfH
+    camera.bottom = -halfH
+    camera.updateProjectionMatrix()
+  }
+  applyFrustum()
+
+  // Re-frame from the bbox whenever a preset is chosen, so each preset fills the viewport tightly
+  // instead of inheriting the isometric frame. Runs after `attachOrbit`'s preset handler (added
+  // first), so the camera is already oriented when we measure.
+  const refitPreset = (): void => {
+    const dir = new Vector3().subVectors(camera.position, controls.target)
+    if (dir.lengthSq() < 1e-9) return
+    const fit = measure(dir)
+    frustumHalfWidth = fit.halfWidth * MARGIN
+    frustumHalfHeight = fit.halfHeight * MARGIN
+    applyFrustum()
+  }
+  bus.presetListeners.add(refitPreset)
+  if (bus.preset) refitPreset()
+
   let raf = 0
   const render = (): void => {
     controls.update()
@@ -190,13 +252,7 @@ function mountScene(
     const height = container.clientHeight
     if (!width || !height) return
     renderer.setSize(width, height)
-    const halfH = frustumHeight / 2
-    const halfW = halfH * (width / height)
-    camera.left = -halfW
-    camera.right = halfW
-    camera.top = halfH
-    camera.bottom = -halfH
-    camera.updateProjectionMatrix()
+    applyFrustum()
   }
   const observer = new ResizeObserver(resize)
   observer.observe(container)
@@ -205,6 +261,7 @@ function mountScene(
     cancelAnimationFrame(raf)
     observer.disconnect()
     detachOrbit()
+    bus.presetListeners.delete(refitPreset)
     detachWheelPan()
     controls.removeEventListener('change', confinePivot)
     controls.dispose()

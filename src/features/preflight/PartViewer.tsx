@@ -1175,29 +1175,75 @@ function mountScene(
   // `addNcLines` and collected into `sabreObjects` — not as a red surface patch.
 
   const maxDim = Math.max(fitSize.x, fitSize.y, fitSize.z) || 1
-  // Cover the model's bounding-box diagonal, so it is never cropped at any preset view or
-  // free-orbit angle (a fixed `maxDim` frame cuts long or wide parts).
-  const diameter = Math.hypot(fitSize.x, fitSize.y, fitSize.z) || maxDim
-  const MARGIN = 1.06
-  const baseHalf = (diameter / 2) * MARGIN
 
-  const camera = new OrthographicCamera(
-    -baseHalf,
-    baseHalf,
-    baseHalf,
-    -baseHalf,
-    Math.max(maxDim / 1000, 0.01),
-    maxDim * 100,
-  )
+  // Snap the orbit pivot onto the beam's longitudinal centre line. Seating places the model's
+  // bbox centre at the origin, so the centre line is the model's long axis through the origin.
+  // Pan may slide along the beam and cursor-zoom may nudge the target, but the pivot can never
+  // leave the line — so orbiting always turns the beam about its own axis instead of swinging it
+  // around an off-axis point. Mirrors the NC beam viewer's pivot confinement.
+  const crossAxes = [0, 1, 2].filter((axis) => axis !== longAxis)
+  const axisCentre = fitCentre.clone()
+  for (const axis of crossAxes) axisCentre.setComponent(axis, 0)
 
   // Default to a true isometric angle: equal X/Y/Z so no axis is foreshortened.
   const distance = maxDim * 2
-  camera.position.copy(fitCentre).add(new Vector3(1, 1, 1).normalize().multiplyScalar(distance))
-  camera.lookAt(fitCentre)
+
+  const corners: Vector3[] = []
+  for (let i = 0; i < 8; i++) {
+    corners.push(
+      new Vector3(
+        i & 1 ? fit.max.x : fit.min.x,
+        i & 2 ? fit.max.y : fit.min.y,
+        i & 4 ? fit.max.z : fit.min.z,
+      ),
+    )
+  }
+  // Measure the model's on-screen footprint (max |x|/|y| in camera space) for a view direction, so
+  // a view fills the viewport from the bounding-box corners alone. Sizing to the bbox diagonal (as
+  // before) left a long thin beam filling only a fraction of a wide viewport.
+  const measure = (dir: Vector3): { halfWidth: number; halfHeight: number } => {
+    const scratch = new OrthographicCamera()
+    const point = new Vector3()
+    const toView = new Matrix4()
+    scratch.position.copy(axisCentre).add(dir.clone().normalize().multiplyScalar(distance))
+    scratch.up.set(0, 1, 0)
+    scratch.lookAt(axisCentre)
+    scratch.updateMatrixWorld()
+    toView.copy(scratch.matrixWorld).invert()
+    let halfWidth = 0
+    let halfHeight = 0
+    for (const corner of corners) {
+      // The pivot sits on the view axis, so camera-space x/y is measured from the frame centre.
+      point.copy(corner).applyMatrix4(toView)
+      halfWidth = Math.max(halfWidth, Math.abs(point.x))
+      halfHeight = Math.max(halfHeight, Math.abs(point.y))
+    }
+    return { halfWidth, halfHeight }
+  }
+
+  const MARGIN = 1.02
+  let modelRadius = 0
+  for (const corner of corners) modelRadius = Math.max(modelRadius, corner.distanceTo(axisCentre))
+
+  const initialFit = measure(new Vector3(1, 1, 1))
+  let frustumHalfWidth = initialFit.halfWidth * MARGIN
+  let frustumHalfHeight = initialFit.halfHeight * MARGIN
+
+  const camera = new OrthographicCamera(
+    -frustumHalfWidth,
+    frustumHalfWidth,
+    frustumHalfHeight,
+    -frustumHalfHeight,
+    Math.max(maxDim / 1000, 0.01),
+    maxDim * 100,
+  )
+  camera.position.copy(axisCentre).add(new Vector3(1, 1, 1).normalize().multiplyScalar(distance))
+  camera.lookAt(axisCentre)
 
   const applyFrustum = (width: number, height: number) => {
     const aspect = width / height || 1
-    const halfHeight = Math.max(baseHalf, baseHalf / aspect)
+    // Grow the frame's short side so the required extent fits at this aspect (fills the long side).
+    const halfHeight = Math.max(frustumHalfHeight, frustumHalfWidth / aspect)
     const halfWidth = halfHeight * aspect
     camera.left = -halfWidth
     camera.right = halfWidth
@@ -1212,17 +1258,6 @@ function mountScene(
   controls.dampingFactor = 0.08
   // Zoom where the pointer is, not always toward the centre — far handier for inspecting a part.
   controls.zoomToCursor = true
-
-  // Snap the orbit pivot onto the beam's longitudinal centre line. Seating places the model's
-  // bbox centre at the origin, so the centre line is the model's long axis through the origin.
-  // Pan may slide along the beam and cursor-zoom may nudge the target, but the pivot can never
-  // leave the line — so orbiting always turns the beam about its own axis instead of swinging it
-  // around an off-axis point. Mirrors the NC beam viewer's pivot confinement.
-  const crossAxes = [0, 1, 2].filter((axis) => axis !== longAxis)
-  const axisCentre = fitCentre.clone()
-  for (const axis of crossAxes) axisCentre.setComponent(axis, 0)
-  const pivotShift = axisCentre.clone().sub(fitCentre)
-  camera.position.add(pivotShift)
   controls.target.copy(axisCentre)
   camera.lookAt(controls.target)
 
@@ -1242,12 +1277,26 @@ function mountScene(
     ? attachOrbit(bus, camera, controls, {
         centre: [axisCentre.x, axisCentre.y, axisCentre.z],
         distance,
-        radius: baseHalf,
+        radius: modelRadius,
         axis: longAxis as 0 | 1 | 2,
         length,
       })
     : null
   const detachWheelPan = attachWheelPan(container, controls, camera, longAxis as 0 | 1 | 2)
+
+  // Re-frame from the bbox whenever a preset is chosen, so each preset fills the viewport tightly
+  // instead of inheriting the isometric frame. Runs after `attachOrbit`'s preset handler (added
+  // first), so the camera is already oriented when we measure.
+  const refitPreset = (): void => {
+    const dir = new Vector3().subVectors(camera.position, controls.target)
+    if (dir.lengthSq() < 1e-9) return
+    const fit = measure(dir)
+    frustumHalfWidth = fit.halfWidth * MARGIN
+    frustumHalfHeight = fit.halfHeight * MARGIN
+    applyFrustum(container.clientWidth || 1, container.clientHeight || 1)
+  }
+  bus?.presetListeners.add(refitPreset)
+  if (bus?.preset) refitPreset()
 
   // Report the pivot's location along the member for the toolbar readout. The pivot is snapped to
   // the model's centre line, so along `longAxis` it runs from one end (-length/2) to the other
@@ -1395,6 +1444,7 @@ function mountScene(
       cancelAnimationFrame(raf)
       observer.disconnect()
       detachOrbit?.()
+      bus?.presetListeners.delete(refitPreset)
       detachWheelPan()
       controls.removeEventListener('change', confinePivot)
       controls.removeEventListener('change', reportLocation)
