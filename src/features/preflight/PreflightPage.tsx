@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react'
 import {
+  type CSSProperties,
   lazy,
   type ReactNode,
   Suspense,
@@ -86,6 +87,7 @@ import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
 import { createOrbitBus, requestLocation, requestView, type ViewPreset } from './orbitSync'
+import type { DiffStats } from './PartViewer'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 
@@ -540,6 +542,33 @@ export function PreflightPage() {
   // bus — see the effect below — and on opening a part.
   const [activeView, setActiveView] = useState<ViewPreset | null>(null)
 
+  // The overlay pane's diff result, lifted so the shared legend strip can show the overcut/undercut
+  // key. Null while the boolean is still building.
+  const [mfgDiff, setMfgDiff] = useState<DiffStats | null>(null)
+
+  // Draggable 3D ↔ drawing/issues split (fraction of the row given to the right panel).
+  const [rightPct, setRightPct] = useState(50)
+  const [splitting, setSplitting] = useState(false)
+  const splitRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!splitting) return
+    const move = (event: PointerEvent): void => {
+      const el = splitRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      if (rect.width === 0) return
+      const pct = ((rect.right - event.clientX) / rect.width) * 100
+      setRightPct(Math.min(80, Math.max(20, pct)))
+    }
+    const stop = (): void => setSplitting(false)
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', stop)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', stop)
+    }
+  }, [splitting])
+
   // The part's length-to-cross-section ratio: a long beam reads as one wide side view (which fills
   // full-width stacked rows at the largest zoom), a stubby part as a boxy shape (which fills
   // side-by-side columns). Only the two stacked layouts are considered, so the choice is stable
@@ -637,6 +666,7 @@ export function PreflightPage() {
     setLocationAxis(0)
     setViewingLength(null)
     setActiveView(null)
+    setMfgDiff(null)
     setViewing(part)
   }, [])
   const focusFinding = useCallback((finding: Finding) => {
@@ -2383,153 +2413,143 @@ export function PreflightPage() {
       >
         {viewing && (viewing.step || viewing.nc) && (
           <div className="flex h-full min-h-0 flex-col">
-            <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-4 py-1.5 text-xs font-medium text-muted-foreground">
-                  {stock && (
-                    <div className="flex items-center gap-1.5">
-                      <Toggle pressed={showStock} onPressedChange={setShowStock}>
-                        {t('viewer.stock')}
-                      </Toggle>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-1.5">
-                    <Toggle
-                      pressed={showGrid}
-                      onPressedChange={setShowGrid}
-                      title={t('viewer.gridHint')}
-                    >
-                      {t('viewer.grid')}
-                    </Toggle>
-                  </div>
-                  {paneCount > 1 && (
-                    <div
-                      className="flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5"
-                      title={t('preflight.viewer.layoutHint')}
-                    >
-                      {PANE_LAYOUTS.map((option) => (
-                        <button
-                          key={option.id}
-                          type="button"
-                          onClick={() => setPaneLayout(option.id)}
-                          className={cn(
-                            'rounded px-2 py-0.5 text-xs font-medium transition-colors',
-                            paneLayout === option.id
-                              ? 'bg-accent text-accent-foreground'
-                              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                          )}
+            <div
+              ref={splitRef}
+              className="flex min-h-0 flex-1 flex-col xl:flex-row"
+              style={{ '--split-right': `${rightPct}%` } as CSSProperties}
+            >
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <div className="flex items-stretch border-b border-border bg-card">
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <div className="flex flex-wrap items-center gap-2 px-4 py-1.5 text-xs font-medium text-muted-foreground">
+                      {stock && (
+                        <div className="flex items-center gap-1.5">
+                          <Toggle size="xs" pressed={showStock} onPressedChange={setShowStock}>
+                            {t('viewer.stock')}
+                          </Toggle>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1.5">
+                        <Toggle
+                          size="xs"
+                          pressed={showGrid}
+                          onPressedChange={setShowGrid}
+                          title={t('viewer.gridHint')}
                         >
-                          {t(option.labelKey)}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {viewingNcGeom && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <NcLegend thicknesses={viewingNcProfiles} showMarkings={viewingHasMarkings} />
-                    </div>
-                  )}
-                  <div className="flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5">
-                    {VIEW_PRESETS.map((option) => (
-                      <button
-                        key={option.id}
-                        type="button"
-                        onClick={() => {
-                          requestView(orbitBus, option.id)
-                          setActiveView(option.id)
+                          {t('viewer.grid')}
+                        </Toggle>
+                      </div>
+                      {paneCount > 1 && (
+                        <TabBar
+                          options={PANE_LAYOUTS.map((o) => ({ id: o.id, label: t(o.labelKey) }))}
+                          value={paneLayout}
+                          onChange={setPaneLayout}
+                          title={t('preflight.viewer.layoutHint')}
+                        />
+                      )}
+                      <TabBar
+                        options={VIEW_PRESETS.map((o) => ({ id: o.id, label: t(o.labelKey) }))}
+                        value={activeView}
+                        onChange={(id) => {
+                          requestView(orbitBus, id)
+                          setActiveView(id)
                         }}
-                        className={cn(
-                          'rounded px-2 py-0.5 text-xs font-medium transition-colors',
-                          activeView === option.id
-                            ? 'bg-accent text-accent-foreground'
-                            : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                        )}
-                      >
-                        {t(option.labelKey)}
-                      </button>
-                    ))}
-                  </div>
-                  {/* Live location of the orbit pivot along the member (the reticle's position);
-                      type an mm and press Enter to jump the view there. The arrow points along the
-                      member's positive (increasing mm) direction as seen in the 3D. */}
-                  <div
-                    className="ml-auto flex items-center gap-2 tabular-nums"
-                    title={t('preflight.viewer.locationHint')}
-                  >
-                    <span className="uppercase tracking-wide">
-                      {t('preflight.viewer.location')}
-                    </span>
-                    <div className="flex items-stretch overflow-hidden rounded border border-border bg-background focus-within:border-primary">
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={
-                          locationEditing
-                            ? locationInput
-                            : locationMm == null
-                              ? ''
-                              : formatLocation(locationMm)
-                        }
-                        onChange={(event) =>
-                          setLocationInput(event.target.value.replace(/[^\d.-]/g, ''))
-                        }
-                        onFocus={(event) => {
-                          const field = event.currentTarget
-                          setLocationInput(locationMm == null ? '' : String(Math.round(locationMm)))
-                          setLocationEditing(true)
-                          requestAnimationFrame(() => field.select())
-                        }}
-                        onBlur={commitLocation}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') event.currentTarget.blur()
-                        }}
-                        placeholder="—"
-                        aria-label={t('preflight.viewer.location')}
-                        className="w-20 bg-transparent px-1.5 py-0.5 text-right text-xs text-foreground outline-none"
+                        title={t('preflight.viewer.viewHint')}
                       />
-                      <span className="border-l border-border px-1.5 py-0.5 text-muted-foreground">
-                        mm
-                      </span>
-                    </div>
-                    <span
-                      className="inline-flex items-center"
-                      title={t('preflight.viewer.locationDirection')}
-                    >
-                      <svg
-                        aria-hidden="true"
-                        viewBox="0 0 24 24"
-                        className="size-4 text-foreground"
+                      {/* Live location of the orbit pivot along the member (the reticle's position);
+                          type an mm and press Enter to jump the view there. The member-direction
+                          arrow spans both strips in the right column. */}
+                      <div
+                        className="ml-auto flex items-center gap-1.5 tabular-nums"
+                        title={t('preflight.viewer.locationHint')}
                       >
-                        <g transform={`rotate(${locationAxis} 12 12)`}>
-                          <line
-                            x1="3"
-                            y1="12"
-                            x2="17"
-                            y2="12"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
+                        <span className="text-[10px] uppercase tracking-wide">
+                          {t('preflight.viewer.location')}
+                        </span>
+                        <div className="flex items-stretch overflow-hidden rounded-sm border border-border bg-background focus-within:border-primary">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={
+                              locationEditing
+                                ? locationInput
+                                : locationMm == null
+                                  ? ''
+                                  : formatLocation(locationMm)
+                            }
+                            onChange={(event) =>
+                              setLocationInput(event.target.value.replace(/[^\d.-]/g, ''))
+                            }
+                            onFocus={(event) => {
+                              const field = event.currentTarget
+                              setLocationInput(
+                                locationMm == null ? '' : String(Math.round(locationMm)),
+                              )
+                              setLocationEditing(true)
+                              requestAnimationFrame(() => field.select())
+                            }}
+                            onBlur={commitLocation}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') event.currentTarget.blur()
+                            }}
+                            placeholder="—"
+                            aria-label={t('preflight.viewer.location')}
+                            className="w-14 bg-transparent px-1 py-0.5 text-right text-[11px] text-foreground outline-none"
                           />
-                          <path d="M20.5 12 L13.5 8.2 L13.5 15.8 Z" fill="currentColor" />
-                          {locationMm != null && (
-                            <circle
-                              cx={
-                                3 +
-                                (viewingLength != null && viewingLength > 0
-                                  ? Math.min(1, Math.max(0, locationMm / viewingLength))
-                                  : 0) *
-                                  10.5
-                              }
-                              cy="12"
-                              r="3"
-                              fill="#ef4444"
-                              stroke="#0b0f14"
-                              strokeWidth="1"
-                            />
-                          )}
-                        </g>
-                      </svg>
-                    </span>
+                          <span className="border-l border-border px-1 py-0.5 text-[10px] text-muted-foreground">
+                            mm
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    {(viewingNcGeom || (overlayShown && mfgDiff)) && (
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border bg-card/50 px-3 py-1 text-[11px] font-medium text-muted-foreground">
+                        {viewingNcGeom && (
+                          <NcLegend
+                            thicknesses={viewingNcProfiles}
+                            showMarkings={viewingHasMarkings}
+                          />
+                        )}
+                        {overlayShown && mfgDiff && <DiffLegend info={mfgDiff} />}
+                      </div>
+                    )}
+                  </div>
+                  <div
+                    className="flex size-14 shrink-0 grow-0 basis-auto items-center justify-center self-center border-l border-border"
+                    title={t('preflight.viewer.locationDirection')}
+                  >
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 24 24"
+                      className="size-full shrink-0 text-foreground"
+                    >
+                      <g transform={`rotate(${locationAxis} 12 12)`}>
+                        <line
+                          x1="3"
+                          y1="12"
+                          x2="16.5"
+                          y2="12"
+                          stroke="currentColor"
+                          strokeWidth="0.5"
+                          strokeLinecap="round"
+                        />
+                        <path d="M19 12 L16.5 10.9 L16.5 13.1 Z" fill="currentColor" />
+                        {locationMm != null && (
+                          <circle
+                            cx={
+                              3 +
+                              (viewingLength != null && viewingLength > 0
+                                ? Math.min(1, Math.max(0, locationMm / viewingLength))
+                                : 0) *
+                                16
+                            }
+                            cy="12"
+                            r="1"
+                            fill="#ef4444"
+                          />
+                        )}
+                      </g>
+                    </svg>
                   </div>
                 </div>
                 <div className="relative min-h-0 w-full flex-1 bg-[#0b0f14]">
@@ -2645,6 +2665,7 @@ export function PreflightPage() {
                             onShowStockChange={setShowStock}
                             showGrid={showGrid}
                             onShowGridChange={setShowGrid}
+                            onDiffInfo={setMfgDiff}
                             hideControls
                             smoothLines
                           />
@@ -2661,26 +2682,28 @@ export function PreflightPage() {
                     </div>
                   </Suspense>
                 </div>
+                <div
+                  onPointerDown={(event) => {
+                    event.preventDefault()
+                    setSplitting(true)
+                  }}
+                  className="hidden w-1 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/60 xl:block"
+                  title={t('preflight.viewer.resizeSplit')}
+                />
               </div>
-              <div className="flex h-[60vh] w-full shrink-0 flex-col overflow-hidden border-t border-border xl:h-auto xl:min-h-0 xl:w-[70vw] xl:shrink xl:border-l xl:border-t-0">
+              <div className="flex h-[60vh] w-full shrink-0 flex-col overflow-hidden border-t border-border xl:h-auto xl:min-h-0 xl:w-[var(--split-right)] xl:border-t-0">
                 <div className="relative z-10 flex shrink-0 items-center gap-1 border-b border-border bg-card px-2 py-1">
-                  {(['drawing', 'issues'] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => setRightTab(tab)}
-                      className={cn(
-                        'rounded px-2.5 py-1 text-xs font-medium transition-colors',
-                        rightTab === tab
-                          ? 'bg-accent text-accent-foreground'
-                          : 'text-muted-foreground hover:bg-accent/50',
-                      )}
-                    >
-                      {tab === 'drawing'
-                        ? t('preflight.viewer.drawing')
-                        : t('preflight.warnings.issues', { count: viewerFindings.length })}
-                    </button>
-                  ))}
+                  <TabBar
+                    options={[
+                      { id: 'drawing' as const, label: t('preflight.viewer.drawing') },
+                      {
+                        id: 'issues' as const,
+                        label: t('preflight.warnings.issues', { count: viewerFindings.length }),
+                      },
+                    ]}
+                    value={rightTab}
+                    onChange={setRightTab}
+                  />
                 </div>
                 <div className="min-h-0 flex-1 overflow-hidden">
                   {rightTab === 'issues' ? (
@@ -3146,9 +3169,83 @@ function Stat({
   )
 }
 
+/** Compact segmented tabs — tight rectangles with no pill padding/margin, to save viewer chrome. */
+function TabBar<T extends string>({
+  options,
+  value,
+  onChange,
+  title,
+}: {
+  options: { id: T; label: string }[]
+  value: T | null
+  onChange: (id: T) => void
+  title?: string
+}) {
+  return (
+    <div
+      className="inline-flex items-center overflow-hidden rounded-sm border border-border"
+      title={title}
+    >
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          onClick={() => onChange(option.id)}
+          className={cn(
+            'px-1.5 py-0.5 text-[11px] font-medium leading-none transition-colors',
+            value === option.id
+              ? 'bg-accent text-accent-foreground'
+              : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** The overlay-diff key (overcut/undercut vs the STEP ideal), for the shared legend strip. */
+function DiffLegend({ info }: { info: DiffStats }) {
+  const { t } = useTranslation()
+  const chip = 'inline-block size-3 rounded-sm border'
+  const pct = (value: number) => `${(value * 100).toFixed(value > 0 && value < 0.01 ? 1 : 0)}%`
+  const title =
+    t('viewer.diffTitle', { over: pct(info.over), under: pct(info.under) }) +
+    (info.approximate ? '' : ` · ${t('viewer.facesHiddenNote')}`)
+  if (info.over < 0.001 && info.under < 0.001) {
+    return (
+      <span className="flex items-center gap-1.5" title={title}>
+        <span className={cn(chip, 'border-emerald-400 bg-emerald-400/50')} />
+        <span className="text-emerald-300">{t('viewer.noDifferences')}</span>
+      </span>
+    )
+  }
+  if (info.approximate) {
+    return (
+      <span className="flex items-center gap-1.5" title={title}>
+        <span className={cn(chip, 'border-red-400 bg-red-500/65')} />
+        <span className="text-red-300">{t('viewer.differences')}</span>
+      </span>
+    )
+  }
+  return (
+    <span className="flex items-center gap-3" title={title}>
+      <span className="flex items-center gap-1.5">
+        <span className={cn(chip, 'border-red-400 bg-red-500/65')} />
+        <span className="text-red-300">{t('viewer.overcut')}</span>
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className={cn(chip, 'border-blue-400 bg-blue-500/65')} />
+        <span className="text-blue-300">{t('viewer.undercut')}</span>
+      </span>
+    </span>
+  )
+}
+
 function PaneTag({ children }: { children: ReactNode }) {
   return (
-    <span className="pointer-events-none absolute left-2 top-2 z-10 whitespace-nowrap rounded border border-border bg-card/80 px-2 py-0.5 text-[11px] font-medium text-muted-foreground backdrop-blur">
+    <span className="pointer-events-none absolute left-0 top-0 z-10 whitespace-nowrap rounded-br-sm bg-card/85 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground backdrop-blur">
       {children}
     </span>
   )

@@ -177,6 +177,8 @@ export const en = {
       layoutRows: 'Stacked',
       layoutHint:
         'Arrange the panes: stacked rows, side-by-side columns, or auto (picks the fit that zooms most)',
+      viewHint: 'Snap to a face view — start on the left, matching the drawing',
+      resizeSplit: 'Drag to resize the drawing / 3D split',
       overlay: 'Overlay',
       iso: 'Iso',
       front: 'Front',
@@ -597,6 +599,8 @@ export const zh = {
       layoutAuto: '自动',
       layoutRows: '堆叠',
       layoutHint: '排列视图：堆叠成行、并排成列，或自动（选择缩放最大的布局）',
+      viewHint: '切换到面视图——起点在左，与图纸一致',
+      resizeSplit: '拖动调整图纸 / 3D 的比例',
       overlay: '叠加',
       iso: '等轴',
       front: '正视',

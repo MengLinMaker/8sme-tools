@@ -302,11 +302,6 @@ function edgeColorForThickness(thickness: number, scale: number[]): number {
   return THICKNESS_COLORS[index % THICKNESS_COLORS.length] ?? FALLBACK_COLOR
 }
 
-/** Formats a 0–1 fraction as a percentage, keeping a decimal for tiny-but-nonzero shares. */
-function percent(value: number): string {
-  return `${(value * 100).toFixed(value > 0 && value < 0.01 ? 1 : 0)}%`
-}
-
 /**
  * Paints per-face alpha onto a diff geometry from per-triangle clearances, so
  * barely-out faces whisper and far-out faces pop. The geometry must be
@@ -1626,6 +1621,8 @@ export interface PartViewerProps {
   onLocationChange?: (locationMm: number, lengthMm: number) => void
   /** On-screen angle (deg, clockwise from +x) of the member's positive axis, for the compass arrow. */
   onAxisAngleChange?: (degrees: number) => void
+  /** Overlay diff result, lifted so the shared legend strip can show it (null while building). */
+  onDiffInfo?: (info: DiffStats | null) => void
   /** Controlled overlay toggles (shared toolbar). Omit to keep the per-pane buttons. */
   showStock?: boolean
   onShowStockChange?: (visible: boolean) => void
@@ -1666,6 +1663,7 @@ export default function PartViewer({
   highlight = null,
   onLocationChange,
   onAxisAngleChange,
+  onDiffInfo,
   showStock: showStockProp,
   onShowStockChange,
   showGrid: showGridProp,
@@ -1687,6 +1685,8 @@ export default function PartViewer({
   onLocationRef.current = onLocationChange
   const onAxisAngleRef = useRef(onAxisAngleChange)
   onAxisAngleRef.current = onAxisAngleChange
+  const onDiffInfoRef = useRef(onDiffInfo)
+  onDiffInfoRef.current = onDiffInfo
   const showStockRef = useRef(true)
   const showDiffRef = useRef(true)
   const showGridRef = useRef(true)
@@ -1733,6 +1733,7 @@ export default function PartViewer({
     flippedRef.current = false
     setHasStray(false)
     setDiffInfo(null)
+    onDiffInfoRef.current?.(null)
     setDiffPresence(null)
 
     meshForViewer(name, bytes)
@@ -1784,6 +1785,7 @@ export default function PartViewer({
         if (disposed) return
         handle.setDiffVisible(showDiffRef.current && !flippedRef.current)
         setDiffInfo(stats)
+        onDiffInfoRef.current?.(stats)
       })
       .catch((error: unknown) => {
         if (disposed) return
@@ -1863,7 +1865,6 @@ export default function PartViewer({
   const hasCompare = Boolean(compareBytes && status === 'ready')
   const hasSabre = Boolean(sabreFailures && sabreFailures.length > 0 && status === 'ready')
   const hasDiff = Boolean(hasCompare && diffInfo)
-  const diffClean = diffInfo != null && diffInfo.over < 0.001 && diffInfo.under < 0.001
   // Fast probe verdict, shown while the exact boolean still runs.
   const diffFound = Boolean(hasCompare && !diffInfo && diffPresence?.found)
 
@@ -1947,48 +1948,6 @@ export default function PartViewer({
             style={{ background: 'rgba(245, 158, 11, 0.5)' }}
           />
           {t('viewer.buildingDiff')}
-        </div>
-      )}
-      {hasDiff && !flipped && diffInfo && showDiff && (
-        <div
-          className="absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur"
-          title={
-            t('viewer.diffTitle', {
-              over: percent(diffInfo.over),
-              under: percent(diffInfo.under),
-            }) + (diffInfo.approximate ? '' : ` · ${t('viewer.facesHiddenNote')}`)
-          }
-        >
-          {diffClean ? (
-            <>
-              <span
-                className="inline-block size-3 rounded-sm border border-emerald-400"
-                style={{ background: 'rgba(52, 211, 153, 0.5)' }}
-              />
-              <span className="text-emerald-300">{t('viewer.noDifferences')}</span>
-            </>
-          ) : diffInfo.approximate ? (
-            <>
-              <span
-                className="inline-block size-3 rounded-sm border border-red-400"
-                style={{ background: 'rgba(239, 68, 68, 0.65)' }}
-              />
-              <span className="text-red-300">{t('viewer.differences')}</span>
-            </>
-          ) : (
-            <>
-              <span
-                className="inline-block size-3 rounded-sm border border-red-400"
-                style={{ background: 'rgba(239, 68, 68, 0.65)' }}
-              />
-              <span className="text-red-300">{t('viewer.overcut')}</span>
-              <span
-                className="inline-block size-3 rounded-sm border border-blue-400"
-                style={{ background: 'rgba(59, 130, 246, 0.65)' }}
-              />
-              <span className="text-blue-300">{t('viewer.undercut')}</span>
-            </>
-          )}
         </div>
       )}
       {status !== 'ready' && (

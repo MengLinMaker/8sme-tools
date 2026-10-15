@@ -11,6 +11,7 @@ const toggleVariants = cva(
         outline: 'border border-input bg-transparent',
       },
       size: {
+        xs: 'h-auto gap-1.5 rounded-sm px-1.5 py-0.5 text-[11px] leading-none',
         default: 'h-9 px-3 text-sm',
         sm: 'h-7 px-2.5 text-xs',
         lg: 'h-10 px-3 text-sm',
