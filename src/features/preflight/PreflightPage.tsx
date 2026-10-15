@@ -516,6 +516,10 @@ export function PreflightPage() {
   useEffect(() => {
     writePref('showStock', showStock)
   }, [showStock])
+  const [showGrid, setShowGrid] = useState(() => readPref('showGrid', true))
+  useEffect(() => {
+    writePref('showGrid', showGrid)
+  }, [showGrid])
   const openPart = useCallback((part: PartRecord) => {
     setOrbitBus(createOrbitBus())
     setFindingFocus(null)
@@ -2275,6 +2279,16 @@ export function PreflightPage() {
                       </Toggle>
                     </div>
                   )}
+                  <div className="flex items-center gap-1.5">
+                    <Toggle pressed={showGrid} onPressedChange={setShowGrid}>
+                      {t('viewer.grid')}
+                    </Toggle>
+                    {showGrid && (
+                      <span className="tabular-nums text-muted-foreground">
+                        {t('viewer.gridScale')}
+                      </span>
+                    )}
+                  </div>
                   {viewingNcGeom && (
                     <div className="flex flex-wrap items-center gap-2">
                       <NcLegend thicknesses={viewingNcProfiles} showMarkings={viewingHasMarkings} />
@@ -2404,6 +2418,8 @@ export function PreflightPage() {
                             highlight={highlightSpan}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
+                            showGrid={showGrid}
+                            onShowGridChange={setShowGrid}
                             onLocationChange={handleLocation}
                             onAxisAngleChange={setLocationAxis}
                             hideControls
@@ -2435,6 +2451,8 @@ export function PreflightPage() {
                             focus={manufactured ? findingFocus : null}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
+                            showGrid={showGrid}
+                            onShowGridChange={setShowGrid}
                             onLocationChange={stepBytes ? undefined : handleLocation}
                             onAxisAngleChange={stepBytes ? undefined : setLocationAxis}
                             hideControls
@@ -2469,6 +2487,8 @@ export function PreflightPage() {
                             highlight={highlightSpan}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
+                            showGrid={showGrid}
+                            onShowGridChange={setShowGrid}
                             hideControls
                             smoothLines
                           />

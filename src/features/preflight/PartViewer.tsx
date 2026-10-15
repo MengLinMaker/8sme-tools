@@ -127,6 +127,7 @@ function ncLineObject(
   resolution: Vector2,
   materials: LineMaterial[],
   onTop = false,
+  linewidth = NC_LINE_WIDTH,
 ): LineSegments2 | null {
   if (points.length === 0) return null
   const geometry = new LineSegmentsGeometry()
@@ -135,7 +136,7 @@ function ncLineObject(
     color,
     transparent: true,
     opacity: 0.98,
-    linewidth: NC_LINE_WIDTH,
+    linewidth,
     worldUnits: false,
     // Error markers draw on top of the model (no occlusion): they render in the second pass
     // (layer 1, after the depth buffer is cleared) and ignore depth.
@@ -380,6 +381,8 @@ interface SceneHandle {
   setSabreVisible: (visible: boolean) => void
   /** Switch the welding-bevel indication between stemmed arrows and translucent area fins. */
   setBevelStyle: (style: BevelStyle) => void
+  /** Show/hide the base-plane reference grid. */
+  setGridVisible: (visible: boolean) => void
   /** Show only the span markers whose index is in `indices` (null = all; [] = none). */
   setVisibleSpans: (indices: number[] | null) => void
   /** Glow the sub-cut marker at `index` and dim the rest (null clears the hover highlight). */
@@ -963,6 +966,51 @@ function mountScene(
   const fitSize = fit.getSize(new Vector3())
   const fitCentre = fit.getCenter(new Vector3())
 
+  // Reference grid on the member's base plane (XZ) — a fixed metric ladder (1 cm / 10 cm / 1 m) so a
+  // line's spacing is always a known round value: the 1 m lines are thickest, 10 cm the middle,
+  // 1 cm the thinnest and faintest. A tier hides itself once its cells fall below a few pixels, so a
+  // wide zoom shows only the coarse lines instead of a solid smear. The grid hugs the beam — the
+  // length runs its full length, the width only as wide as the section (min 1 m, so there is margin
+  // to judge how the beam sits on the roller bed). Placed just under the base and depth-tested, so
+  // the part occludes it and it never hides a diff; hidden until the toggle turns it on.
+  const snapMetre = (span: number): number => Math.max(1000, Math.ceil(span / 1000) * 1000)
+  const gridHalfX = snapMetre(fitSize.x) / 2
+  const gridHalfZ = snapMetre(fitSize.z) / 2
+  /** Widest tiers keep their lines at least this far apart (px); finer ones drop out as you zoom out. */
+  const GRID_MIN_PX = 7
+  const gridMaterials: LineMaterial[] = []
+  const gridTiers: { step: number; lines: LineSegments2 }[] = []
+  const gridGroup = new Group()
+  const gridResolution = new Vector2(container.clientWidth || 1, container.clientHeight || 1)
+  const makeGridTier = (step: number, color: number, linewidth: number, opacity: number): void => {
+    const points: number[] = []
+    // Lines parallel to the length (X), one at each z across the width.
+    const nz = Math.round((gridHalfZ * 2) / step)
+    for (let i = 0; i <= nz; i++) {
+      const z = -gridHalfZ + i * step
+      points.push(-gridHalfX, 0, z, gridHalfX, 0, z)
+    }
+    // Lines parallel to the width (Z), one at each x along the length.
+    const nx = Math.round((gridHalfX * 2) / step)
+    for (let i = 0; i <= nx; i++) {
+      const x = -gridHalfX + i * step
+      points.push(x, 0, -gridHalfZ, x, 0, gridHalfZ)
+    }
+    const line = ncLineObject(points, color, gridResolution, gridMaterials, false, linewidth)
+    if (!line) return
+    ;(line.material as LineMaterial).opacity = opacity
+    line.visible = false
+    gridGroup.add(line)
+    gridTiers.push({ step, lines: line })
+  }
+  makeGridTier(10, 0x1e2a38, 1, 0.5)
+  makeGridTier(100, 0x33495e, 1.5, 0.6)
+  makeGridTier(1000, 0x4b6a8a, 2.4, 0.85)
+  const gridDrop = Math.max(Math.max(gridHalfX, gridHalfZ) * 2e-4, 0.02)
+  gridGroup.position.set(fitCentre.x, fit.min.y - gridDrop, fitCentre.z)
+  gridGroup.visible = false
+  scene.add(gridGroup)
+
   // Closest-point margin diff, with the STEP treated as nominal. Both groups are already seated in
   // the same frame, so the difference runs in world coordinates: red = overcut (the ideal surface the
   // manufactured model lacks — scrap), blue = undercut (manufactured outside the ideal — leftover).
@@ -1337,8 +1385,17 @@ function mountScene(
     lastAxisAngle = degrees
     onAxisAngleChange(degrees)
   }
+  // Shows only the grid tiers whose cells stay comfortably apart at the current zoom, so the fine
+  // 1 cm lines appear when close in and drop out (leaving 10 cm, then 1 m) as you pull back.
+  const updateGridTiers = (): void => {
+    if (!gridGroup.visible) return
+    const mmPerPx = (camera.top - camera.bottom) / camera.zoom / (container.clientHeight || 1)
+    if (!(mmPerPx > 0)) return
+    for (const tier of gridTiers) tier.lines.visible = tier.step / mmPerPx >= GRID_MIN_PX
+  }
   const render = () => {
     controls.update()
+    updateGridTiers()
     renderer.clear()
     camera.layers.set(0)
     renderer.render(scene, camera)
@@ -1357,6 +1414,7 @@ function mountScene(
     renderer.setSize(width, height)
     applyFrustum(width, height)
     for (const material of ncMaterials) material.resolution.set(width, height)
+    for (const material of gridMaterials) material.resolution.set(width, height)
   }
   const observer = new ResizeObserver(resize)
   observer.observe(container)
@@ -1402,6 +1460,9 @@ function mountScene(
     setBevelStyle(style: BevelStyle) {
       bevelStyleState = style
       applyBevelStyle()
+    },
+    setGridVisible(visible: boolean) {
+      gridGroup.visible = visible
     },
     setVisibleSpans(indices: number[] | null) {
       const set = indices == null ? null : new Set(indices)
@@ -1494,6 +1555,11 @@ function mountScene(
         halo.geometry.dispose()
         ;(halo.material as LineMaterial).dispose()
       }
+      for (const tier of gridTiers) {
+        scene.remove(tier.lines)
+        tier.lines.geometry.dispose()
+      }
+      for (const material of gridMaterials) material.dispose()
       for (const material of materials) material.dispose()
       for (const overlay of overlays) {
         overlay.traverse((object) => {
@@ -1551,6 +1617,9 @@ export interface PartViewerProps {
   /** Controlled overlay toggles (shared toolbar). Omit to keep the per-pane buttons. */
   showStock?: boolean
   onShowStockChange?: (visible: boolean) => void
+  /** Reference grid on the base plane, for a sense of scale. Omit to keep local state. */
+  showGrid?: boolean
+  onShowGridChange?: (visible: boolean) => void
   flipped?: boolean
   onFlippedChange?: (flipped: boolean) => void
   showDiff?: boolean
@@ -1587,6 +1656,8 @@ export default function PartViewer({
   onAxisAngleChange,
   showStock: showStockProp,
   onShowStockChange,
+  showGrid: showGridProp,
+  onShowGridChange,
   flipped: flippedProp,
   onFlippedChange,
   showDiff: showDiffProp,
@@ -1606,6 +1677,7 @@ export default function PartViewer({
   onAxisAngleRef.current = onAxisAngleChange
   const showStockRef = useRef(true)
   const showDiffRef = useRef(true)
+  const showGridRef = useRef(true)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
   const [stockState, setStockState] = useState(true)
@@ -1615,13 +1687,15 @@ export default function PartViewer({
   const [diffInfo, setDiffInfo] = useState<DiffStats | null>(null)
   const [diffPresence, setDiffPresence] = useState<DiffPresence | null>(null)
   const [sabreState, setSabreState] = useState(true)
+  const [gridState, setGridState] = useState(true)
   const flippedRef = useRef(false)
-  // The four overlay toggles can be driven by a shared toolbar (controlled props) or fall back to
+  // The overlay toggles can be driven by a shared toolbar (controlled props) or fall back to
   // local state when the viewer is used standalone (e.g. the nesting viewer).
   const showStock = showStockProp ?? stockState
   const flipped = flippedProp ?? flipState
   const showDiff = showDiffProp ?? diffState
   const showSabre = showSabreProp ?? sabreState
+  const showGrid = showGridProp ?? gridState
   const toggleStock = () =>
     onShowStockChange ? onShowStockChange(!showStock) : setStockState((value) => !value)
   const toggleFlip = () =>
@@ -1630,6 +1704,8 @@ export default function PartViewer({
     onShowDiffChange ? onShowDiffChange(!showDiff) : setDiffState((value) => !value)
   const toggleSabre = () =>
     onShowSabreChange ? onShowSabreChange(!showSabre) : setSabreState((value) => !value)
+  const toggleGrid = () =>
+    onShowGridChange ? onShowGridChange(!showGrid) : setGridState((value) => !value)
 
   useEffect(() => {
     if (!bytes) {
@@ -1681,6 +1757,7 @@ export default function PartViewer({
           cutEdges,
         )
         for (const overlay of handle.overlays) overlay.visible = showStockRef.current
+        handle.setGridVisible(showGridRef.current)
         handle.setFlip(false)
         handleRef.current = handle
         setHasStray(highlightStray && step.bodies.some((body) => body.stray))
@@ -1728,6 +1805,11 @@ export default function PartViewer({
     showStockRef.current = showStock
     for (const overlay of handleRef.current?.overlays ?? []) overlay.visible = showStock
   }, [showStock])
+
+  useEffect(() => {
+    showGridRef.current = showGrid
+    handleRef.current?.setGridVisible(showGrid)
+  }, [showGrid])
 
   useEffect(() => {
     handleRef.current?.setFlip(flipped)
@@ -1824,6 +1906,15 @@ export default function PartViewer({
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
             {showSabre ? t('viewer.hideSabre') : t('viewer.showSabre')}
+          </button>
+        )}
+        {status === 'ready' && (
+          <button
+            type="button"
+            onClick={toggleGrid}
+            className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
+          >
+            {showGrid ? t('viewer.hideGrid') : t('viewer.showGrid')}
           </button>
         )}
       </div>
