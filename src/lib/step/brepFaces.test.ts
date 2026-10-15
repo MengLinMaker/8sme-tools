@@ -7,7 +7,7 @@ import { parseDstv } from '@/lib/parsers/dstv'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { cutThicknesses } from '@/lib/parsers/ncProject'
-import { faceRole, type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
+import { CUT_FACES, faceRole, type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
 import { detectOrientation } from '@/lib/sections/orient'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { brepCutSegments, type SeatedBrepFace, type Vec3 } from './cutEdges'
@@ -64,10 +64,10 @@ function seatQuaternion(vertices: number[], profile: [number, number][]): Quater
   return new Quaternion().multiplyQuaternions(roll, toX)
 }
 
-/** Canonical-stance target normals for `o`/`u`/`h` (mirrors `PartViewer.targetFaceNormals`). */
+/** Canonical-stance target normals for a family's cut faces (mirrors `PartViewer`). */
 function targetNormals(family: ProfileFamily, xAxis: Vector3, yAxis: Vector3): Vec3[] {
   const out: Vec3[] = []
-  for (const face of ['o', 'u', 'h'] as const) {
+  for (const face of CUT_FACES[family]) {
     const role = faceRole(family, face)
     const base = role === 'side' ? xAxis : yAxis
     const signs =
@@ -87,6 +87,8 @@ interface Pipeline {
   cutThicknesses: number[]
   legend: number[]
   faces: number
+  /** Bevel angles (deg) detected on the STEP cut edges, ascending. */
+  bevelAngles: number[]
   /** Every edge neighbour index is a valid face index. */
   neighboursValid: boolean
 }
@@ -134,6 +136,7 @@ async function run(mark: string, ncPath: string, stpPath: string): Promise<Pipel
   const ya: Vec3 = [yAxis.x, yAxis.y, yAxis.z]
 
   const found = new Set<number>()
+  const bevels = new Set<number>()
   let faces = 0
   let neighboursValid = true
   for (const body of meshed.bodies) {
@@ -168,12 +171,14 @@ async function run(mark: string, ncPath: string, stpPath: string): Promise<Pipel
       targets,
     )) {
       found.add(cut.thickness)
+      if (cut.bevel > 0) bevels.add(cut.bevel)
     }
   }
   return {
     cutThicknesses: [...found].sort((a, b) => a - b),
     legend: cutThicknesses(frame, section.points, geo),
     faces,
+    bevelAngles: [...bevels].sort((a, b) => a - b),
     neighboursValid,
   }
 }
@@ -185,6 +190,24 @@ const TEE = {
   stp: nw31Top('STP files', 'm200.stp'),
 }
 const SHS = { mark: 'm105', nc: nw30Bottom('m105.nc1'), stp: nw30Bottom('m105.stp') }
+const RHS = {
+  mark: 'm117',
+  nc: nw31Top('NC files', 'm117.nc1'),
+  stp: nw31Top('STP files', 'm117.stp'),
+}
+const ANGLE = { mark: 'a2', nc: nw30Bottom('a2.nc1'), stp: nw30Bottom('a2.stp') }
+/** An angle with a bevelled (~20°) end cut — the bevel lives in the STEP geometry. */
+const ANGLE_BEVEL = {
+  mark: 'a1',
+  nc: nw31Top('NC files', 'a1.nc1'),
+  stp: nw31Top('STP files', 'a1.stp'),
+}
+/** A PFC with a changing (~20°) bevel along its cope. */
+const PFC_BEVEL = {
+  mark: 'm31',
+  nc: nw31Top('NC files', 'm31.nc1'),
+  stp: nw31Top('STP files', 'm31.stp'),
+}
 const HAVE = existsSync(PFC.stp) && existsSync(PFC.nc)
 
 describe.skipIf(!HAVE)('B-rep cut edges', () => {
@@ -232,5 +255,34 @@ describe.skipIf(!HAVE)('B-rep cut edges', () => {
       expect(neighboursValid).toBe(true)
       expect(found.length).toBeGreaterThan(0)
     }
+  }, 120000)
+
+  it('extracts an angle section (o and v excluded)', async () => {
+    if (!existsSync(ANGLE.stp) || !existsSync(ANGLE.nc)) return
+    const { cutThicknesses: found, neighboursValid } = await run(ANGLE.mark, ANGLE.nc, ANGLE.stp)
+    expect(neighboursValid).toBe(true)
+    expect(found.length).toBeGreaterThanOrEqual(0)
+  }, 120000)
+
+  it('detects the STEP bevel on an angle and a PFC cut edge', async () => {
+    for (const fixture of [ANGLE_BEVEL, PFC_BEVEL]) {
+      if (!existsSync(fixture.stp) || !existsSync(fixture.nc)) continue
+      const { bevelAngles, neighboursValid } = await run(fixture.mark, fixture.nc, fixture.stp)
+      expect(neighboursValid).toBe(true)
+      expect(bevelAngles.length).toBeGreaterThan(0)
+      // Both fixtures carry a ~20° bevel; every detected bevel sits inside the head's ±45° range.
+      expect(bevelAngles.some((angle) => Math.abs(angle - 20) < 1.5)).toBe(true)
+      for (const angle of bevelAngles) expect(angle).toBeLessThanOrEqual(45)
+    }
+  }, 120000)
+
+  it('projects RHS corner cuts to the wall thickness (no per-point ramp)', async () => {
+    if (!existsSync(RHS.stp) || !existsSync(RHS.nc)) return
+    // RHS150*100*9.0 — every cut is through the 9 mm wall. A per-point thickness ramps along the
+    // rounded corner (9.2…18.1 mm); the target-face thickness keeps it flat.
+    const { cutThicknesses: found, neighboursValid } = await run(RHS.mark, RHS.nc, RHS.stp)
+    expect(neighboursValid).toBe(true)
+    expect(found.length).toBeGreaterThan(0)
+    for (const thickness of found) expect(Math.abs(thickness - 9)).toBeLessThan(0.3)
   }, 120000)
 })

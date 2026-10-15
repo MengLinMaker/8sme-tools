@@ -49,14 +49,20 @@ import {
   THICKNESS_COLORS,
   type Vec3,
 } from '@/lib/parsers/ncProject'
-import { faceRole, type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
-import { detectOrientation } from '@/lib/sections/orient'
+import { CUT_FACES, faceRole, type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
 import type { StockOutline } from '@/lib/sections/stock'
 import { type DiffPresence, probeDiffPresence } from '@/lib/step/booleanDiff'
 import { brepCutSegments, type SeatedBrepFace } from '@/lib/step/cutEdges'
 import { closeDiffMask, computeDiffMasks, diffFraction } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { type DiffPayload, type DiffSolidPayload, OCC_FUZZY_MM } from '@/lib/step/occDiff'
+import {
+  bboxOfVertices,
+  seatedPair,
+  seatQuaternion,
+  transformVertices,
+  unit,
+} from '@/lib/step/seat'
 import { diffForViewer, meshForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { attachOrbit, attachWheelPan, type OrbitBus, requestFocus } from './orbitSync'
@@ -88,8 +94,6 @@ const DIFF_EXTRA_MARGIN_MM = 1
  */
 const DIFF_EDGE_THRESHOLD_DEG = 55
 const FACE_MATERIAL = { color: 0x9aa3ad, metalness: 0.15, roughness: 0.75 }
-/** Roll about the length axis for each `detectOrientation` result (world YZ → profile-local). */
-const SEAT_ANGLES = [0, -Math.PI / 2, Math.PI, Math.PI / 2]
 
 /** Fallback colour for a cut-thickness bucket when there are more buckets than palette colours. */
 const FALLBACK_COLOR = 0x9ca3af
@@ -102,6 +106,8 @@ const NC_LINE_WIDTH = 3
  * double-sided, so its two faces stack — the on-screen density is higher than this value.)
  */
 const BEVEL_AREA_OPACITY = 0.34
+/** How far (mm) a STEP bevel's translucent area fin sweeps out from its cut line. */
+const STEP_BEVEL_LENGTH = 30
 /** Glow used when an issue row is hovered: a wide additive halo behind the marker + a fatter core. */
 const SABRE_HALO_WIDTH = 16
 const SABRE_HALO_OPACITY = 0.32
@@ -310,63 +316,6 @@ function percent(value: number): string {
 export interface BeamOutline {
   profile: [number, number][]
   length: number
-}
-
-function unit(axis: number, sign: number): Vector3 {
-  const vector = new Vector3()
-  vector.setComponent(axis, sign)
-  return vector
-}
-
-function bboxOfVertices(vertices: number[]): Box3 {
-  const box = new Box3()
-  const point = new Vector3()
-  for (let i = 0; i + 2 < vertices.length; i += 3) {
-    box.expandByPoint(point.set(vertices[i], vertices[i + 1], vertices[i + 2]))
-  }
-  return box
-}
-
-function transformVertices(vertices: number[], matrix: Matrix4): number[] {
-  const out = new Array<number>(vertices.length)
-  const point = new Vector3()
-  for (let i = 0; i + 2 < vertices.length; i += 3) {
-    point.set(vertices[i], vertices[i + 1], vertices[i + 2]).applyMatrix4(matrix)
-    out[i] = point.x
-    out[i + 1] = point.y
-    out[i + 2] = point.z
-  }
-  return out
-}
-
-/**
- * Seats a model in `profile`'s canonical frame: rotate its length axis to X, then roll about X
- * so the cross-section matches the profile. Manufactured (NC-built) and STEP models therefore
- * land in the *same* orientation, and the two never disagree in split/overlay views.
- */
-function seatQuaternion(vertices: number[], profile: [number, number][] | undefined): Quaternion {
-  if (!profile || profile.length < 3 || vertices.length < 9) return new Quaternion()
-  const box = bboxOfVertices(vertices)
-  const size = box.getSize(new Vector3())
-  const centre = box.getCenter(new Vector3())
-  const extents = [size.x, size.y, size.z]
-  const longAxis = extents.indexOf(Math.max(...extents))
-
-  const toX = new Quaternion()
-  if (longAxis !== 0) toX.setFromUnitVectors(unit(longAxis, 1), unit(0, 1))
-
-  const seated = transformVertices(
-    vertices.map((value, index) =>
-      // centre first (every 3rd component set is a point)
-      index % 3 === 0 ? value - centre.x : index % 3 === 1 ? value - centre.y : value - centre.z,
-    ),
-    new Matrix4().makeRotationFromQuaternion(toX),
-  )
-  const roll = new Quaternion().setFromAxisAngle(
-    unit(0, 1),
-    SEAT_ANGLES[detectOrientation(profile, seated, 1, 2, [0, 0, 0])],
-  )
-  return new Quaternion().multiplyQuaternions(roll, toX)
 }
 
 /** Extrudes a section outline along a basis and returns a translucent overlay. */
@@ -642,6 +591,11 @@ function mountScene(
   const ncMaterials: LineMaterial[] = []
   /** STEP cut edges (non-stock edges), coloured by wall thickness — drawn when `cutEdges` is set. */
   const cutEdgeObjects: LineSegments2[] = []
+  /**
+   * STEP welding-bevel area fins — detected from the STEP geometry on the cut edges themselves,
+   * never from the NC. Drawn with the STEP cut lines, styled like the NC bevel areas.
+   */
+  const stepBevelObjects: Mesh[] = []
   /** Welding-bevel indications, split by style so the toggle just flips visibility. */
   const ncArrowObjects: LineSegments2[] = []
   const ncAreaObjects: Mesh[] = []
@@ -649,6 +603,7 @@ function mountScene(
   const applyBevelStyle = (): void => {
     for (const object of ncArrowObjects) object.visible = bevelStyleState === 'arrow'
     for (const object of ncAreaObjects) object.visible = bevelStyleState === 'area'
+    for (const object of stepBevelObjects) object.visible = bevelStyleState === 'area'
   }
   const ncResolution = new Vector2(container.clientWidth || 1, container.clientHeight || 1)
   // Red bevel arrows at uncuttable cuts (light-sabre failures) — toggled as one object.
@@ -671,38 +626,26 @@ function mountScene(
   // When a profile is present the model is seated with its length along X, so the ghost's
   // length axis is X too; otherwise fall back to the model's own longest axis.
   const longAxis = profile ? 0 : nativeLongAxis
+  let xAxis = unit(0, 1)
+  let yAxis = unit(1, 1)
   if (profile) {
-    const worldVertices = transformVertices(primary.raw, primary.group.matrixWorld)
-    const cross = [0, 1, 2].filter((axis) => axis !== longAxis)
-    const orientation = detectOrientation(profile, worldVertices, cross[0], cross[1], [0, 0, 0])
-    const eA = unit(cross[0], 1)
-    const eB = unit(cross[1], 1)
-    const table = [
-      [eA, eB],
-      [eB, eA.clone().negate()],
-      [eA.clone().negate(), eB.clone().negate()],
-      [eB.clone().negate(), eA],
-    ]
-    const [fx0, fy0] = table[orientation] as [Vector3, Vector3]
-    // Canonical display: `detectOrientation` anchors the roll to the STEP's native orientation, so
-    // the section's `+y` (the machine "up" the stance is defined on, see canonical-orientation.md)
-    // can land on world Z and read on its side. Roll the whole display about the member axis so
-    // section `+y` points world +Y (the viewer's screen up) — then the model, the stock ghost and
-    // the NC projection all share the canonical frame.
-    const rollAngle = -Math.atan2(fy0.z, fy0.y)
-    if (Math.abs(rollAngle) > 1e-6) {
-      const q = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), rollAngle)
-      primary.group.quaternion.premultiply(q)
-      compareGroup?.quaternion.premultiply(q)
+    // Canonical display seating, shared with the overlay diff (`viewerModel.diffForViewer`) so the
+    // two never reorient independently. `seatedPair` rolls the whole display about the member axis
+    // so section `+y` (the machine "up", see canonical-orientation.md) points world +Y — then the
+    // model, the stock ghost and the NC projection all share the canonical frame.
+    const seats = seatedPair(primary.raw, compareStep?.vertices ?? null, profile)
+    const seatScale = new Vector3()
+    seats.primary.decompose(primary.group.position, primary.group.quaternion, seatScale)
+    primary.group.updateMatrixWorld(true)
+    if (compareGroup && seats.compare) {
+      seats.compare.decompose(compareGroup.position, compareGroup.quaternion, seatScale)
+      compareGroup.updateMatrixWorld(true)
+      // The diff pane's flip resets the compare model to this base, so capture it *after* the
+      // canonical roll — otherwise the flip undoes the roll and the STEP lands back on its side.
+      compareBaseQuaternion = compareGroup.quaternion.clone()
     }
-    // The diff pane's flip resets the compare model to this base, so capture it *after* the
-    // canonical roll — otherwise the flip undoes the roll and the STEP lands back on its side.
-    if (compareGroup) compareBaseQuaternion = compareGroup.quaternion.clone()
-    const about = new Vector3(1, 0, 0)
-    const [xAxis, yAxis] = [
-      fx0.clone().applyAxisAngle(about, rollAngle),
-      fy0.clone().applyAxisAngle(about, rollAngle),
-    ]
+    xAxis = seats.xAxis
+    yAxis = seats.yAxis
 
     // Colour the STEP's cut edges by wall thickness (the NC legend's key). The worker emits every
     // face; `brepCutSegments` classifies stock vs cut by topology and returns the coloured segments
@@ -719,9 +662,16 @@ function mountScene(
       const frame = faceFrame ?? (nc ? resolveNcFaceFrame(ncSection ?? profile, nc) : null)
       const targetVectors: Vec3[] | null =
         family && frame
-          ? targetFaceNormals(cutEdges.faces ?? DEFAULT_CUT_FACES, family, xAxis, yAxis)
+          ? targetFaceNormals(
+              cutEdges.faces ?? CUT_FACES[family] ?? DEFAULT_CUT_FACES,
+              family,
+              xAxis,
+              yAxis,
+            )
           : null
       const groups = new Map<number, number[]>()
+      /** Translucent bevel-area triangle soup per thickness (STEP-detected bevels). */
+      const bevelGroups = new Map<number, number[]>()
       for (const body of step.bodies) {
         const seated: SeatedBrepFace[] = (body.brep ?? []).map((face) => {
           const normal = new Vector3(
@@ -758,6 +708,45 @@ function mountScene(
           const bucket = groups.get(cut.thickness)
           if (bucket) bucket.push(...cut.points)
           else groups.set(cut.thickness, cut.points)
+          // A beveled cut carries a sweep direction: build its translucent area fin from the cut
+          // segment, swept outward along it (STEP geometry only — never the NC).
+          if (!cut.bevelDir) continue
+          const [dx, dy, dz] = cut.bevelDir
+          const rx = dx * STEP_BEVEL_LENGTH
+          const ry = dy * STEP_BEVEL_LENGTH
+          const rz = dz * STEP_BEVEL_LENGTH
+          const p = cut.points
+          for (let k = 0; k + 5 < p.length; k += 6) {
+            const ax = p[k] as number
+            const ay = p[k + 1] as number
+            const az = p[k + 2] as number
+            const bx = p[k + 3] as number
+            const by = p[k + 4] as number
+            const bz = p[k + 5] as number
+            const quad = [
+              ax,
+              ay,
+              az,
+              bx,
+              by,
+              bz,
+              bx + rx,
+              by + ry,
+              bz + rz,
+              ax,
+              ay,
+              az,
+              bx + rx,
+              by + ry,
+              bz + rz,
+              ax + rx,
+              ay + ry,
+              az + rz,
+            ]
+            const fins = bevelGroups.get(cut.thickness)
+            if (fins) fins.push(...quad)
+            else bevelGroups.set(cut.thickness, quad)
+          }
         }
       }
       const order = [...groups.keys()].sort((a, b) => a - b)
@@ -781,6 +770,26 @@ function mountScene(
           scene.add(line)
           cutEdgeObjects.push(line)
         }
+      }
+      // Draw the STEP-detected bevels as translucent fins, each swept from its cut line along the
+      // bevel direction — the same look the NC bevel areas use, but sourced purely from the STEP.
+      for (const thickness of order) {
+        const triangles = bevelGroups.get(thickness)
+        if (!triangles || triangles.length === 0) continue
+        const geometry = new BufferGeometry()
+        geometry.setAttribute('position', new Float32BufferAttribute(triangles, 3))
+        const area = new Mesh(
+          geometry,
+          new MeshBasicMaterial({
+            color: edgeColorForThickness(thickness, scale),
+            transparent: true,
+            opacity: BEVEL_AREA_OPACITY,
+            side: DoubleSide,
+            depthWrite: false,
+          }),
+        )
+        scene.add(area)
+        stepBevelObjects.push(area)
       }
     }
 
@@ -1009,13 +1018,14 @@ function mountScene(
     if (!compareStep || !compareGroup || diffStats) return diffStats
     // OCC B-rep boolean with a fuzzy margin, run in the OCC worker: the kernel merges faces within
     // `OCC_FUZZY_MM`, so the near-coincident reconstruction offset is absorbed and only the real gap
-    // survives — as a solid. The NC and STEP are independent pipelines, so the worker aligns the STEP
-    // to the manufactured model itself; the result is in the manufactured model's frame, so we seat it
-    // here by parenting to the (already seated) primary group.
+    // survives — as a solid. The worker is given the *same* canonical seating this view already
+    // applies (from `seatedPair`), so it never reorients independently; the result is in the
+    // manufactured model's frame, so we seat it here by parenting to the (already seated) primary
+    // group.
     let payload: DiffPayload | null = null
     if (primaryBytes && compareBytes) {
       try {
-        payload = await diffForViewer(primaryBytes, compareBytes)
+        payload = await diffForViewer(primaryBytes, compareBytes, { profile })
       } catch {
         // Worker boolean failed outright (e.g. kernel error) — fall through to surface flagging.
         payload = null
@@ -1404,6 +1414,11 @@ function mountScene(
         scene.remove(line)
         line.geometry.dispose()
         ;(line.material as LineMaterial).dispose()
+      }
+      for (const area of stepBevelObjects) {
+        scene.remove(area)
+        area.geometry.dispose()
+        ;(area.material as MeshBasicMaterial).dispose()
       }
       for (const line of ncArrowObjects) {
         line.geometry.dispose()

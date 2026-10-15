@@ -14,6 +14,8 @@
  * outline plus the two cross-section basis vectors, so this is unit-tested directly.
  */
 
+import { MACHINE } from '@/lib/machine/profile'
+
 export type Vec3 = [number, number, number]
 
 /** Flat XYZ pairs, `[x0,y0,z0, x1,y1,z1, …]`. */
@@ -32,6 +34,22 @@ export interface CutEdgeResult {
   stock: SegmentList
   /** Cut edges grouped by wall thickness, ascending. */
   cuts: CutEdgeGroup[]
+}
+
+/**
+ * One cut edge segment (a single straight run) with the wall thickness it bores through and any
+ * **bevel** its adjacent cut face carries. The bevel is read from the STEP topology alone: the tilt
+ * of the cut face off square against the stock face the edge rides (`0` = a plain cut).
+ */
+export interface CutEdgeSegment {
+  /** Wall thickness (mm) the cut passes through. */
+  thickness: number
+  /** Bevel angle (deg, `0` = square) of the cut face meeting this edge. */
+  bevel: number
+  /** Unit outward sweep direction for the bevel's area fin, or `null` for a square cut. */
+  bevelDir: Vec3 | null
+  /** Flat XYZ pair for the segment. */
+  points: number[]
 }
 
 export interface ClassifyCutEdgesOptions {
@@ -253,6 +271,44 @@ function sub(a: Vec3, b: Vec3): Vec3 {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
+function normalize(a: Vec3): Vec3 {
+  const length = Math.hypot(a[0], a[1], a[2]) || 1
+  return [a[0] / length, a[1] / length, a[2] / length]
+}
+
+/** Below this bevel (deg) a cut face is square — no bevel indication. */
+const REGULAR_CUT_DEG = 8
+/** Steepest bevel the head cuts (deg); a steeper tilt is a step/parallel face, not a bevel. */
+const MAX_BEVEL_DEG = Math.max(Math.abs(MACHINE.bevel.minDeg), Math.abs(MACHINE.bevel.maxDeg))
+
+/** A cut edge's bevel: its angle off square and the outward sweep direction for its area fin. */
+interface Bevel {
+  angle: number
+  dir: Vec3 | null
+}
+const NO_BEVEL: Bevel = { angle: 0, dir: null }
+
+/**
+ * The bevel of a cut face meeting a planar stock face along an edge — read from the STEP geometry.
+ * The angle is the cut face's tilt off square (the angle between its normal and the stock face
+ * plane); the sweep direction is the cut face **extended out past the stock surface** (the stock
+ * normal tilted toward the side the sloped face rises to), which is what a bevel-area fin should
+ * show. Square cuts, and step / parallel faces steeper than the head can cut, report no bevel.
+ */
+function edgeBevel(stockNormal: Vec3, cutNormal: Vec3): Bevel {
+  const angle = (Math.asin(Math.min(1, Math.abs(dot(cutNormal, stockNormal)))) * 180) / Math.PI
+  if (angle < REGULAR_CUT_DEG || angle > MAX_BEVEL_DEG) return NO_BEVEL
+  // The fin sweeps along the cut face's up-slope: the stock normal projected onto the cut plane
+  // (its outward extension past the surface, always leaning up out of the material).
+  const into = dot(stockNormal, cutNormal)
+  const dir = normalize([
+    stockNormal[0] - into * cutNormal[0],
+    stockNormal[1] - into * cutNormal[1],
+    stockNormal[2] - into * cutNormal[2],
+  ])
+  return { angle, dir }
+}
+
 /**
  * Whether a seated face is part of the raw-stock surface. It must be lengthwise AND its *surface*
  * must lie on the section outline — sampling the surface (not just the boundary) distinguishes a
@@ -302,7 +358,7 @@ export function brepCutSegments(
   yAxis: Vec3,
   memberAxis: Vec3,
   targetNormals: Vec3[] | null,
-): { thickness: number; points: number[] }[] {
+): CutEdgeSegment[] {
   const stock = faces.map((face) => isStockFace(face, section, xAxis, yAxis, memberAxis))
 
   // Target faces: the planar o/u/h stock faces (a hollow section's inset inner wall shares a normal
@@ -344,9 +400,23 @@ export function brepCutSegments(
     .map((i) => faces[i] as SeatedBrepFace)
     .filter((face) => face.planar)
 
-  // Project a polyline onto the nearest target face (identity when it is already on one of them).
-  const project = (points: number[]): number[] => {
-    if (planarTargets.length === 0) return points
+  // A cut's thickness is the *target face's* plate thickness — one value for the whole face, as the
+  // NC keys on the face. Computing it per point fails near a face edge (and gives a bogus ramp when
+  // a rounded corner's arc is projected onto the face).
+  const thicknessOf = (face: SeatedBrepFace): number => {
+    const cross: [number, number] = [
+      face.center[0] * xAxis[0] + face.center[1] * xAxis[1] + face.center[2] * xAxis[2],
+      face.center[0] * yAxis[0] + face.center[1] * yAxis[1] + face.center[2] * yAxis[2],
+    ]
+    return cutEdgeThicknessAt(section, holes, cross)
+  }
+
+  // Project a polyline onto the nearest target face (identity when it is already on one of them)
+  // and report which face it landed on.
+  const projectToNearest = (
+    points: number[],
+  ): { points: number[]; plane: SeatedBrepFace | null } => {
+    if (planarTargets.length === 0) return { points, plane: null }
     const last = points.length - 3
     const mid: Vec3 = [
       ((points[0] as number) + (points[last] as number)) / 2,
@@ -362,7 +432,7 @@ export function brepCutSegments(
         plane = target
       }
     }
-    if (!plane) return points
+    if (!plane) return { points, plane: null }
     const projected: number[] = []
     for (let k = 0; k + 2 < points.length; k += 3) {
       const p: Vec3 = [points[k] as number, points[k + 1] as number, points[k + 2] as number]
@@ -373,17 +443,60 @@ export function brepCutSegments(
         p[2] - d * plane.normal[2],
       )
     }
-    return projected
+    return { points: projected, plane }
   }
 
-  const out: { thickness: number; points: number[] }[] = []
+  const out: CutEdgeSegment[] = []
+  const pushSegments = (points: number[], thickness: number, bevel: Bevel): void => {
+    const value = Math.round(thickness * 10) / 10
+    const angle = Math.round(bevel.angle * 10) / 10
+    for (let k = 0; k + 5 < points.length; k += 3) {
+      out.push({
+        thickness: value,
+        bevel: angle,
+        bevelDir: bevel.dir,
+        points: [
+          points[k] as number,
+          points[k + 1] as number,
+          points[k + 2] as number,
+          points[k + 3] as number,
+          points[k + 4] as number,
+          points[k + 5] as number,
+        ],
+      })
+    }
+  }
+  // The bevel of a cut edge, from the planar cut face it borders across the edge (a curved cope /
+  // hole wall has no single normal, so it carries no bevel). Read against the target face's normal.
+  const bevelOf = (
+    face: SeatedBrepFace,
+    edge: SeatedBrepFace['wires'][number]['edges'][number],
+  ) => {
+    if (!face.planar) return NO_BEVEL
+    const cut = edge.neighbours
+      .filter((n) => !stock[n])
+      .map((n) => faces[n])
+      .find((candidate) => candidate?.planar)
+    if (!cut) return NO_BEVEL
+    return edgeBevel(face.normal, cut.normal)
+  }
   for (const i of targetIndices) {
     const face = faces[i] as SeatedBrepFace
+    const ownThickness = thicknessOf(face)
     for (const wire of face.wires) {
       for (const edge of wire.edges) {
         if (!wire.enclosed && !edge.neighbours.some((n) => !stock[n])) continue
-        const points = face.planar ? edge.points : project(edge.points)
-        out.push(...edgeCutSegments(points, section, holes, xAxis, yAxis, true))
+        const bevel = bevelOf(face, edge)
+        if (face.planar) {
+          pushSegments(edge.points, ownThickness, bevel)
+        } else {
+          const projected = projectToNearest(edge.points)
+          pushSegments(
+            projected.points,
+            projected.plane ? thicknessOf(projected.plane) : ownThickness,
+            bevel,
+          )
+        }
       }
     }
   }

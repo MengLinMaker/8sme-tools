@@ -164,6 +164,95 @@ describe('brepCutSegments', () => {
     expect(cut).toHaveLength(2)
   })
 
+  it('reads a bevel from a tilted cut face and gives its outward sweep direction', () => {
+    const degrees = 20
+    const rad = (degrees * Math.PI) / 180
+    // Top (stock) face + a cut face tilted 20° about the cross-edge: its normal gains a +z component.
+    const cut = brepCutSegments(
+      [
+        {
+          normal: [0, 0, 1],
+          center: [50, 0, 25],
+          planar: true,
+          samples: [50, 0, 25],
+          wires: [
+            {
+              enclosed: false,
+              edges: [{ points: [0, -50, 25, 0, 50, 25], neighbours: [1] }],
+            },
+          ],
+        },
+        {
+          normal: [Math.cos(rad), 0, Math.sin(rad)],
+          center: [0, 0, 0],
+          planar: true,
+          samples: [0, 0, 0],
+          wires: [
+            {
+              enclosed: false,
+              edges: [{ points: [0, -50, 25, 0, 50, 25], neighbours: [0] }],
+            },
+          ],
+        },
+      ],
+      SECTION,
+      [],
+      X_AXIS,
+      Y_AXIS,
+      MEMBER,
+      [[0, 0, 1]],
+    )
+    expect(cut).toHaveLength(1)
+    expect(cut[0]?.bevel).toBeCloseTo(degrees, 1)
+    // The fin sweeps outward (+z, the stock normal), tilted to the side the cut face rises to —
+    // opposite the cut normal's +x in-plane lean (the face rises toward −x as it leaves the stock).
+    expect(cut[0]?.bevelDir?.[0]).toBeCloseTo(-Math.sin(rad), 3)
+    expect(cut[0]?.bevelDir?.[2]).toBeCloseTo(Math.cos(rad), 3)
+  })
+
+  it('reports no bevel for a square cut or a step parallel to the face', () => {
+    const square = brepCutSegments(faces(1, 2), SECTION, [], X_AXIS, Y_AXIS, MEMBER, [[0, 0, 1]])
+    expect(square[0]?.bevel).toBe(0)
+    expect(square[0]?.bevelDir).toBeNull()
+    // A face parallel to the top face (a step) reads as 90° — past the head's range, so no bevel.
+    const step = brepCutSegments(
+      [
+        {
+          normal: [0, 0, 1],
+          center: [50, 0, 25],
+          planar: true,
+          samples: [50, 0, 25],
+          wires: [
+            {
+              enclosed: false,
+              edges: [{ points: [0, -50, 25, 0, 50, 25], neighbours: [1] }],
+            },
+          ],
+        },
+        {
+          normal: [0, 0, 1],
+          center: [0, 0, 10],
+          planar: true,
+          samples: [0, 0, 10],
+          wires: [
+            {
+              enclosed: false,
+              edges: [{ points: [0, -50, 25, 0, 50, 25], neighbours: [0] }],
+            },
+          ],
+        },
+      ],
+      SECTION,
+      [],
+      X_AXIS,
+      Y_AXIS,
+      MEMBER,
+      [[0, 0, 1]],
+    )
+    expect(step[0]?.bevel).toBe(0)
+    expect(step[0]?.bevelDir).toBeNull()
+  })
+
   it('treats a lengthwise chamfer as a cut even though its boundary sits on the outline', () => {
     // A chamfer cut down the corner: its boundary edges touch the outline (top face at z = 25), but
     // its *surface* (sampled by the centroid) is inset → a cut face, so the edge is captured.
