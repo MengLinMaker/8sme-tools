@@ -9,6 +9,8 @@ export interface OrbitState {
   position: [number, number, number]
   target: [number, number, number]
   zoom: number
+  /** Camera roll (up vector), so a face view's drawing orientation is shared by every synced pane. */
+  up?: [number, number, number]
 }
 
 /** Named viewing angles for quick technical comparison. */
@@ -153,6 +155,7 @@ export function attachOrbit(
     controls.target.set(orbit.target[0], orbit.target[1], orbit.target[2])
     camera.position.set(orbit.position[0], orbit.position[1], orbit.position[2])
     camera.zoom = orbit.zoom
+    if (orbit.up) camera.up.set(orbit.up[0], orbit.up[1], orbit.up[2])
     camera.updateProjectionMatrix()
     camera.lookAt(controls.target)
     controls.update()
@@ -165,6 +168,7 @@ export function attachOrbit(
     controls.target.set(orbit.target[0], orbit.target[1], orbit.target[2])
     camera.position.set(orbit.position[0], orbit.position[1], orbit.position[2])
     camera.zoom = orbit.zoom
+    if (orbit.up) camera.up.set(orbit.up[0], orbit.up[1], orbit.up[2])
     camera.updateProjectionMatrix()
     camera.lookAt(controls.target)
     controls.update()
@@ -214,6 +218,7 @@ export function attachOrbit(
         position: [camera.position.x, camera.position.y, camera.position.z],
         target: [controls.target.x, controls.target.y, controls.target.z],
         zoom: camera.zoom,
+        up: [camera.up.x, camera.up.y, camera.up.z],
       }
     }
     animRaf = requestAnimationFrame(step)
@@ -225,13 +230,15 @@ export function attachOrbit(
       position: [camera.position.x, camera.position.y, camera.position.z],
       target: [controls.target.x, controls.target.y, controls.target.z],
       zoom: camera.zoom,
+      up: [camera.up.x, camera.up.y, camera.up.z],
     }
     const current = bus.orbit
     if (
       current &&
       near(current.position, orbit.position) &&
       near(current.target, orbit.target) &&
-      Math.abs(current.zoom - orbit.zoom) < EPSILON
+      Math.abs(current.zoom - orbit.zoom) < EPSILON &&
+      (!current.up || near(current.up, orbit.up ?? [0, 1, 0]))
     ) {
       return
     }
@@ -240,7 +247,7 @@ export function attachOrbit(
     for (const listener of bus.listeners) if (listener !== apply) listener(orbit)
   }
 
-  const applyDirection = (direction: ViewDirection): void => {
+  const applyDirection = (direction: ViewDirection, up?: ViewDirection): void => {
     const [dx, dy, dz] = direction
     const length = Math.hypot(dx, dy, dz) || 1
     const orbit: OrbitState = {
@@ -252,13 +259,42 @@ export function attachOrbit(
       target: [frame.centre[0], frame.centre[1], frame.centre[2]],
       zoom: 1,
     }
+    // The roll rides on the orbit so every synced pane faces the same way.
+    if (up) {
+      camera.up.set(up[0], up[1], up[2]).normalize()
+      orbit.up = [camera.up.x, camera.up.y, camera.up.z]
+    }
     apply(orbit)
     bus.orbit = orbit
     for (const listener of bus.listeners) if (listener !== apply) listener(orbit)
   }
 
-  const applyPreset = (preset: ViewPreset): void =>
-    applyDirection(axes ? axisDirection(preset, axes) : PRESET_DIRECTION[preset])
+  /**
+   * Snap to a named face. The camera is rolled so the member axis runs **start→end left→right**:
+   * DSTV X is `0` at the start end and the viewer seats that at world `−axis` (`PartViewer`'s
+   * projection, `x = along − length/2`). The roll is set exactly for the drawing — it is not bent to
+   * suit OrbitControls; rotating instead snaps to the nearest normal orbit view (see below).
+   */
+  const applyPreset = (preset: ViewPreset): void => {
+    if (preset === 'iso') {
+      camera.up.set(0, 1, 0)
+      applyDirection(PRESET_DIRECTION.iso)
+      return
+    }
+    const direction = axes ? axisDirection(preset, axes) : PRESET_DIRECTION[preset]
+    const axis = frame.axis ?? 0
+    const end: ViewDirection = [axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0]
+    // up = direction × memberEnd makes the member end land screen-right (screen-right = up × dir).
+    const up = new Vector3(direction[0], direction[1], direction[2]).cross(
+      new Vector3(end[0], end[1], end[2]),
+    )
+    if (up.lengthSq() < 1e-9) {
+      applyDirection(direction)
+      return
+    }
+    up.normalize()
+    applyDirection(direction, [up.x, up.y, up.z])
+  }
 
   /** Slide along the member so the pivot sits at `location` mm, keeping the angle and zoom. */
   const applyLocation = (mm: number): void => {
@@ -319,6 +355,23 @@ export function attachOrbit(
   controls.addEventListener('change', onChange)
   // Grabbing the view mid-glide hands control straight back to the user.
   controls.addEventListener('start', cancelAnimation)
+  // A face view may hold a drawing roll (up ≠ world Y). Grabbing to rotate snaps to the nearest
+  // normal orbit view — drop the roll back to world up — so free orbit is a plain turntable.
+  // Captured first so it lands before OrbitControls starts its own drag.
+  const onRotateStart = (event: Event): void => {
+    if ((event as PointerEvent).button !== 0) return
+    const up = camera.up
+    if (Math.abs(up.x) < 1e-6 && Math.abs(up.y - 1) < 1e-6 && Math.abs(up.z) < 1e-6) return
+    camera.up.set(0, 1, 0)
+    controls.update()
+    const current = bus.orbit
+    if (!current) return
+    const next: OrbitState = { ...current, up: [0, 1, 0] }
+    bus.orbit = next
+    for (const listener of bus.listeners) if (listener !== apply) listener(next)
+  }
+  const canvas = controls.domElement
+  canvas?.addEventListener('pointerdown', onRotateStart, true)
   bus.listeners.add(apply)
   bus.presetListeners.add(applyPreset)
   bus.focusListeners.add(applyFocus)
@@ -331,6 +384,7 @@ export function attachOrbit(
     cancelAnimation()
     controls.removeEventListener('change', onChange)
     controls.removeEventListener('start', cancelAnimation)
+    canvas?.removeEventListener('pointerdown', onRotateStart, true)
     bus.listeners.delete(apply)
     bus.presetListeners.delete(applyPreset)
     bus.focusListeners.delete(applyFocus)

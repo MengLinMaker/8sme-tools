@@ -1249,12 +1249,14 @@ function mountScene(
   // Measure the model's on-screen footprint (max |x|/|y| in camera space) for a view direction, so
   // a view fills the viewport from the bounding-box corners alone. Sizing to the bbox diagonal (as
   // before) left a long thin beam filling only a fraction of a wide viewport.
-  const measure = (dir: Vector3): { halfWidth: number; halfHeight: number } => {
+  const measure = (dir: Vector3, up?: Vector3): { halfWidth: number; halfHeight: number } => {
     const scratch = new OrthographicCamera()
     const point = new Vector3()
     const toView = new Matrix4()
     scratch.position.copy(axisCentre).add(dir.clone().normalize().multiplyScalar(distance))
-    scratch.up.set(0, 1, 0)
+    // Match the live camera's roll so a face view's footprint is measured in its own screen frame
+    // (with the default up, a top/bottom view is degenerate and the fit comes out wrong).
+    if (up) scratch.up.copy(up)
     scratch.lookAt(axisCentre)
     scratch.updateMatrixWorld()
     toView.copy(scratch.matrixWorld).invert()
@@ -1348,7 +1350,7 @@ function mountScene(
   const refitPreset = (): void => {
     const dir = new Vector3().subVectors(camera.position, controls.target)
     if (dir.lengthSq() < 1e-9) return
-    const fit = measure(dir)
+    const fit = measure(dir, camera.up)
     frustumHalfWidth = fit.halfWidth * MARGIN
     frustumHalfHeight = fit.halfHeight * MARGIN
     applyFrustum(container.clientWidth || 1, container.clientHeight || 1)
