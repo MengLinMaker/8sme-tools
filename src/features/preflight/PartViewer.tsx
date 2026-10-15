@@ -36,7 +36,9 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import type { CutMarker } from '@/lib/audit/cutReach'
 import {
+  faceHalf,
   faceNormal,
+  faceSpanAxis,
   type NcFaceFrame,
   placeNcFace,
   resolveNcFaceFrame,
@@ -52,7 +54,8 @@ import {
 import { CUT_FACES, faceRole, type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
 import type { StockOutline } from '@/lib/sections/stock'
 import { type DiffPresence, probeDiffPresence } from '@/lib/step/booleanDiff'
-import { brepCutSegments, type SeatedBrepFace } from '@/lib/step/cutEdges'
+import { brepCutSegments, cutEdgeThicknessAt, type SeatedBrepFace } from '@/lib/step/cutEdges'
+import { projectCutEdgesToFaces } from '@/lib/step/cutProjection'
 import { closeDiffMask, computeDiffMasks, diffFraction } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { type DiffPayload, type DiffSolidPayload, OCC_FUZZY_MM } from '@/lib/step/occDiff'
@@ -197,6 +200,8 @@ export interface CutEdgeOptions {
   faces?: NcFace[]
   /** DSTV/Tekla profile code, so the target faces resolve for the right family. */
   profile?: string | null
+  /** Outer corner radius (mm) — how far a rounded-corner cut reaches onto the adjacent face. */
+  radius?: number
 }
 
 /** Default faces to colour: the two sides and the top (the accessible cut faces, not the bottom). */
@@ -703,7 +708,7 @@ function mountScene(
             })),
           }
         })
-        for (const cut of brepCutSegments(
+        const cuts = brepCutSegments(
           seated,
           profile,
           holes,
@@ -711,10 +716,59 @@ function mountScene(
           basisY,
           [1, 0, 0],
           targetVectors,
-        )) {
-          const bucket = groups.get(cut.thickness)
-          if (bucket) bucket.push(...cut.points)
-          else groups.set(cut.thickness, cut.points)
+        )
+        // Tubes: cut lines come from the face projection — the cut plane's trace on each nominal
+        // face, a rounded corner onto BOTH adjacent faces, and all four faces (incl. the bottom).
+        // Open sections (PFC/angle/T) keep the topology-based extraction below (the projection is
+        // only validated for closed tubes).
+        if (frame && family === 'tube') {
+          const projected = projectCutEdgesToFaces(
+            seated,
+            profile,
+            frame,
+            basisX,
+            basisY,
+            [1, 0, 0],
+            { radius: cutEdges.radius ?? 0 },
+          )
+          // The projection's X is already the seated member coordinate (centred), so no origin shift.
+          const toPoint = (along: number, cross: [number, number]): Vec3 => [
+            along + cross[0] * xAxis.x + cross[1] * yAxis.x,
+            cross[0] * xAxis.y + cross[1] * yAxis.y,
+            cross[0] * xAxis.z + cross[1] * yAxis.z,
+          ]
+          for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
+            const segs = projected[face]
+            if (segs.length === 0) continue
+            const faceCentre = placeNcFace(
+              frame,
+              face,
+              0,
+              faceHalf(frame, faceSpanAxis(frame, face)),
+              profile,
+            ).cross
+            const thickness = Math.round(cutEdgeThicknessAt(profile, holes, faceCentre) * 10) / 10
+            const positions: number[] = []
+            for (const seg of segs) {
+              const a = placeNcFace(frame, face, seg.a.X, seg.a.Y, profile)
+              const b = placeNcFace(frame, face, seg.b.X, seg.b.Y, profile)
+              const pa = toPoint(a.along, a.cross)
+              const pb = toPoint(b.along, b.cross)
+              positions.push(pa[0], pa[1], pa[2], pb[0], pb[1], pb[2])
+            }
+            const bucket = groups.get(thickness)
+            if (bucket) bucket.push(...positions)
+            else groups.set(thickness, positions)
+          }
+        } else {
+          for (const cut of cuts) {
+            const bucket = groups.get(cut.thickness)
+            if (bucket) bucket.push(...cut.points)
+            else groups.set(cut.thickness, cut.points)
+          }
+        }
+        // Bevel fins come from `brepCutSegments` (topology + local cut-face normals).
+        for (const cut of cuts) {
           // A beveled cut carries a sweep direction: build its translucent area fin from the cut
           // segment, swept outward along it (STEP geometry only — never the NC).
           if (!cut.bevelDir) continue

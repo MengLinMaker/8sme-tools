@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BOTTOM_CUT_MAX_GRAMS,
   bottomCutAllowed,
+  CUT_FACES,
   cutPriority,
   faceRole,
   holeRemovedMassGrams,
@@ -45,6 +46,15 @@ describe('faceRole', () => {
     expect(faceRole('channel', 'v')).toBe('bottom')
   })
 
+  it('a tube in the long-horizontal stance puts the short faces on the sides and v/h flat', () => {
+    // Tekla authors an RHS long-side-vertical; seated long-horizontal the short `o`/`u` become the
+    // two sides and the long `v`/`h` become bottom/top.
+    expect(faceRole('tube', 'o')).toBe('side')
+    expect(faceRole('tube', 'u')).toBe('side')
+    expect(faceRole('tube', 'v')).toBe('bottom')
+    expect(faceRole('tube', 'h')).toBe('top')
+  })
+
   it('ranks side cuts ahead of top, and top ahead of bottom', () => {
     // I: o = top (1), v = side (0), u = bottom (2).
     expect(cutPriority('i', 'v')).toBeLessThan(cutPriority('i', 'o'))
@@ -52,6 +62,18 @@ describe('faceRole', () => {
     // Channel: both flanges are sides — the preferred cut.
     expect(cutPriority('channel', 'o')).toBe(0)
     expect(cutPriority('channel', 'u')).toBe(0)
+  })
+})
+
+describe('CUT_FACES', () => {
+  it('extracts the sides + top by default', () => {
+    expect(CUT_FACES.i).toEqual(['o', 'u', 'h'])
+    expect(CUT_FACES.channel).toEqual(['o', 'u', 'h'])
+    expect(CUT_FACES.tee).toEqual(['o', 'u', 'h'])
+  })
+
+  it('drops o and v for an angle', () => {
+    expect(CUT_FACES.angle).toEqual(['u', 'h'])
   })
 })
 

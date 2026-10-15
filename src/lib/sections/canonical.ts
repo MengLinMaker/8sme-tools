@@ -51,16 +51,22 @@ export const CANONICAL_STANCE: Record<ProfileFamily, StockStance> = {
  * A family's row below is that reference pose rotated onto machine-up (+y = top, −y = bottom,
  * ±x = side). `I` and `U`/`C` reproduce the standard exactly (cross-checked against Tekla's
  * default hard-stamp faces). The angle's `o`/`u` vs `v`/`h` split depends on which leg is
- * vertical on the machine. NOTE: the `tee` row does **not** fall out of the T reference pose —
- * rotating a flange-vertical T 90° CCW into our flange-down/web-up stance gives `h`=bottom,
- * `v`=top, `o`/`u`=sides, not the row below. Confirm on the first real T article; `ncFaces.ts`
- * places the geometry at runtime regardless (only cut-priority is affected).
+ * vertical on the machine.
+ *
+ * The `M` (tube) row is the reference pose rotated 90° CW into our long-side-horizontal stance:
+ * Tekla authors an RHS with the longer side **vertical**, so its `o`/`u` (short faces) become the
+ * two sides and its `v`/`h` (long faces) become bottom/top — `v` flat down, `h` up.
+ *
+ * NOTE: the `tee` row does **not** fall out of the T reference pose — rotating a
+ * flange-vertical T 90° CCW into our flange-down/web-up stance gives `h`=bottom, `v`=top,
+ * `o`/`u`=sides, not the row below. Confirm on the first real T article; `ncFaces.ts` places the
+ * geometry at runtime regardless (only cut-priority is affected).
  */
 const FACE_ROLES: Record<ProfileFamily, Record<NcFace, MachineRole>> = {
   i: { o: 'top', u: 'bottom', v: 'side', h: 'side' },
   channel: { o: 'side', u: 'side', v: 'bottom', h: 'top' },
   angle: { o: 'top', u: 'bottom', v: 'side', h: 'side' },
-  tube: { o: 'top', u: 'bottom', v: 'side', h: 'side' },
+  tube: { o: 'side', u: 'side', v: 'bottom', h: 'top' },
   tee: { o: 'side', u: 'bottom', v: 'side', h: 'side' },
   round: { o: 'top', u: 'bottom', v: 'side', h: 'side' },
 }
@@ -97,6 +103,19 @@ export function profileFamily(code: string): ProfileFamily | null {
 /** Machine role of a DSTV face once the stock is in its canonical stance. */
 export function faceRole(family: ProfileFamily, face: NcFace): MachineRole {
   return FACE_ROLES[family][face]
+}
+
+/**
+ * DSTV faces whose cut lines the STEP viewer extracts, per family. The default is the two sides
+ * plus the top; an **angle** drops `o` and `v` (those legs aren't cut / aren't extracted).
+ */
+export const CUT_FACES: Record<ProfileFamily, NcFace[]> = {
+  i: ['o', 'u', 'h'],
+  channel: ['o', 'u', 'h'],
+  tee: ['o', 'u', 'h'],
+  tube: ['o', 'u', 'h'],
+  angle: ['u', 'h'],
+  round: ['o', 'u', 'h'],
 }
 
 /** Lower is better: cut sides first (most controllable), then top, and the bottom last. */

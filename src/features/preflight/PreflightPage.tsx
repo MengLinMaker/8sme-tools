@@ -450,8 +450,12 @@ export function PreflightPage() {
   // thickness legend. `profile` lets the viewer resolve the target faces for the right family.
   const viewingProfileCode = viewing?.nc?.profile ?? null
   const viewingCutEdgeOptions = useMemo(
-    () => ({ thicknesses: viewingNcProfiles, profile: viewingProfileCode }),
-    [viewingNcProfiles, viewingProfileCode],
+    () => ({
+      thicknesses: viewingNcProfiles,
+      profile: viewingProfileCode,
+      radius: viewing?.nc?.dimensions?.[4] ?? 0,
+    }),
+    [viewingNcProfiles, viewingProfileCode, viewing],
   )
   // The NC only carries etch (`SI`) / marking (`PU`/`KO`) data when those blocks are present.
   const viewingHasMarkings = useMemo(() => {

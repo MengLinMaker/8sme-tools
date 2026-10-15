@@ -98,14 +98,31 @@ export function ncAuthoredStancePoints(
 
 /**
  * Sign to apply to a face's across (span) coordinate so a DSTV/Tekla-authored NC point lands in our
- * canonical stance. Rotating the authored channel stance back to canonical (`[-y,x]` then a −90° roll
- * about the member axis) reverses both across directions relative to how the face letters read, so
- * every channel face is negated — the flanges (`o`/`u`) along the height axis and the web (`v`/`h`)
- * along the depth axis. Every other family shares our stance (sign +1).
+ * canonical stance. Two families differ:
+ *
+ *  - **Channel**: rotating the authored channel stance back to canonical (`[-y,x]` then a −90° roll
+ *    about the member axis) reverses both across directions relative to how the face letters read,
+ *    so every channel face is negated.
+ *  - **Tube (RHS)**: the canonical long-side-horizontal stance is the authored long-side-vertical
+ *    stance rotated 90° CW, so the short faces (`o`/`u`) read the opposite way along the member; the
+ *    long faces (`v`/`h`) keep the authored direction. A **square** (SHS) is rotationally symmetric,
+ *    so it keeps Tekla's authored stance (no rotation) — the seat finds no cross-section cue.
+ *
+ * Every other family shares our stance (sign +1).
  */
-export function ncAuthoredAcrossSign(frame: NcFaceFrame, _face: NcFace): 1 | -1 {
-  if (!frame.profile || profileFamily(frame.profile) !== 'channel') return 1
-  return -1
+export function ncAuthoredAcrossSign(frame: NcFaceFrame, face: NcFace): 1 | -1 {
+  const family = frame.profile ? profileFamily(frame.profile) : null
+  if (family === 'channel') return -1
+  if (family === 'tube') {
+    if (isSquareTube(frame)) return 1
+    return face === 'o' || face === 'u' ? -1 : 1
+  }
+  return 1
+}
+
+/** A tube whose two cross-section dimensions are equal (SHS) — no long-side rotation to apply. */
+export function isSquareTube(frame: NcFaceFrame): boolean {
+  return Math.abs(frame.extent[0] - frame.extent[1]) < 0.5
 }
 
 /**
@@ -140,6 +157,14 @@ export function resolveFaceSign(
   }
   if (plus > minus) return 1
   if (minus > plus) return -1
+  // Symmetric sections tie; the letter's side depends on the family's canonical rotation. A
+  // long-side-horizontal tube puts `o` (short right face) and `h` (long top face) on the +side; a
+  // square (SHS) keeps the authored DSTV pairing (no rotation).
+  const family = frame.profile ? profileFamily(frame.profile) : null
+  if (family === 'tube') {
+    if (isSquareTube(frame)) return face === 'u' || face === 'h' ? 1 : -1
+    return face === 'o' || face === 'h' ? 1 : -1
+  }
   return face === 'u' || face === 'h' ? 1 : -1
 }
 

@@ -21,7 +21,7 @@ const JOB_SECTIONS: [string, number[], { w: number; h: number }][] = [
   ['BT100*15', [134, 103, 9.6, 6.3, 8.9], { w: 134, h: 103 }], // halved UB (T)
   ['SHS100*100*6.0', [100, 100, 6, 6, 15], { w: 100, h: 100 }],
   ['SHS100*100*9.0', [100, 100, 9, 9, 22.5], { w: 100, h: 100 }],
-  ['RHS150*100*9.0', [150, 100, 9, 9, 22.5], { w: 100, h: 150 }],
+  ['RHS150*100*9.0', [150, 100, 9, 9, 22.5], { w: 150, h: 100 }],
   ['PFC100*50', [100, 50, 6.7, 4.2, 8], { w: 100, h: 50 }], // channel 'n': web on top, flanges down
   ['EA75*75*6', [75, 75, 6, 6, 8], { w: 75, h: 75 }],
 ]
@@ -55,12 +55,13 @@ describe('stockOutlineForCode', () => {
   it('makes RHS/SHS hollow with a single void', () => {
     const rhs = stockOutlineForCode('RHS150*100*9.0', [150, 100, 9, 9, 22.5])
     expect(rhs?.holes).toHaveLength(1)
+    // Canonical stance: the longer side (150) runs horizontal.
     const outer = bbox(rhs?.points ?? [])
-    expect(outer.width).toBeGreaterThanOrEqual(100)
-    expect(outer.height).toBeGreaterThanOrEqual(150)
+    expect(outer.width).toBeGreaterThanOrEqual(150)
+    expect(outer.height).toBeGreaterThanOrEqual(100)
     const inner = bbox(rhs?.holes?.[0] ?? [])
-    expect(inner.width).toBeLessThanOrEqual(100 - 2 * 9) // void clear of the 9 mm wall
-    expect(inner.height).toBeLessThanOrEqual(150 - 2 * 9)
+    expect(inner.width).toBeLessThanOrEqual(150 - 2 * 9) // void clear of the 9 mm wall
+    expect(inner.height).toBeLessThanOrEqual(100 - 2 * 9)
 
     const shs = stockOutlineForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])
     expect(shs?.holes).toHaveLength(1)

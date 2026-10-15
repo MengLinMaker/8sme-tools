@@ -1,3 +1,4 @@
+import type { Matrix4 } from 'three'
 import type { MeshedStep } from './mesh'
 import type { DiffPayload } from './occDiff'
 import type {
@@ -103,18 +104,21 @@ class StepWorkerPool {
   /**
    * Overlay diff: the OCC fuzzy boolean between the manufactured (`primary`) and ideal (`compare`)
    * STEPs, run in the worker so it neither blocks the main thread nor re-runs per view change. The
-   * result is plain typed arrays (see {@link DiffPayload}), null when the boolean fails (the viewer
-   * falls back to surface flagging).
+   * caller passes the `compareMatrix` that seats the STEP onto the manufactured model's frame (the
+   * same seating the viewer uses), so the worker never reorients. The result is plain typed arrays
+   * (see {@link DiffPayload}), null when the boolean fails (the viewer falls back to surface
+   * flagging).
    */
   diff(
     primary: Uint8Array,
     compare: Uint8Array,
-    options: { priority?: number } = {},
+    options: { compareMatrix?: Matrix4; priority?: number } = {},
   ): Promise<DiffPayload | null> {
     const a = new Uint8Array(primary)
     const b = new Uint8Array(compare)
+    const compareMatrix = options.compareMatrix?.toArray()
     return this.run<DiffPayload | null>(
-      { id: this.nextId++, kind: 'diff', primary: a, compare: b },
+      { id: this.nextId++, kind: 'diff', primary: a, compare: b, compareMatrix },
       [a.buffer, b.buffer],
       options.priority ?? PRIORITY_BACKGROUND,
     )

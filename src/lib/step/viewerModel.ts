@@ -1,5 +1,6 @@
 import type { MeshedStep } from './mesh'
 import type { DiffPayload } from './occDiff'
+import { relativeSeat } from './seat'
 import { getStepWorkerPool, PRIORITY_FOREGROUND } from './stepPool'
 
 /**
@@ -83,30 +84,69 @@ export function clearViewerModels(): void {
 
 /**
  * The overlay diff (manufactured vs ideal) computed in the OCC worker, memoised on the two byte
- * objects. Keyed weakly so it self-clears with the job, and on the raw bytes only because the worker
- * aligns the two independent models itself (see `alignToReference`), so the result does not change
- * with stock profile or seat. Prewarming it here means the overlay pane draws from cache.
+ * objects and the section profile. The viewer has already seated both models in the section's
+ * canonical frame, so the diff is given the *same* seating (via `relativeSeat`) rather than
+ * reorienting the STEP itself. Keyed weakly so it self-clears with the job. Prewarming it here means
+ * the overlay pane draws from cache.
  */
-const diffCache = new WeakMap<Uint8Array, WeakMap<Uint8Array, Promise<DiffPayload | null>>>()
+type Profile = [number, number][]
+
+const diffCache = new WeakMap<
+  Uint8Array,
+  WeakMap<Uint8Array, Map<string, Promise<DiffPayload | null>>>
+>()
+
+function profileKey(profile: Profile | undefined): string {
+  if (!profile || profile.length < 3) return ''
+  let key = ''
+  for (const [x, y] of profile) key += `${x},${y};`
+  return key
+}
 
 export function diffForViewer(
   primary: Uint8Array,
   compare: Uint8Array,
-  options: { priority?: number } = {},
+  options: { profile?: Profile | null; priority?: number } = {},
 ): Promise<DiffPayload | null> {
+  const profile = options.profile && options.profile.length >= 3 ? options.profile : undefined
+  const key = profileKey(profile)
   let inner = diffCache.get(primary)
   if (!inner) {
     inner = new WeakMap()
     diffCache.set(primary, inner)
   }
-  const hit = inner.get(compare)
+  let byProfile = inner.get(compare)
+  if (!byProfile) {
+    byProfile = new Map()
+    inner.set(compare, byProfile)
+  }
+  const hit = byProfile.get(key)
   if (hit) return hit
-  const promise = getStepWorkerPool()
-    .diff(primary, compare, { priority: options.priority ?? PRIORITY_FOREGROUND })
-    .catch((error) => {
-      inner?.delete(compare)
-      throw error
-    })
-  inner.set(compare, promise)
+  const priority = options.priority ?? PRIORITY_FOREGROUND
+  const promise = buildDiff(primary, compare, profile, priority).catch((error) => {
+    byProfile?.delete(key)
+    throw error
+  })
+  byProfile.set(key, promise)
   return promise
+}
+
+/**
+ * Mesh both models (cached) and hand the worker the transform that maps the STEP's raw frame onto
+ * the manufactured model's raw frame, so the boolean runs once the two already share the view's
+ * orientation. Without a profile there is no seating to apply and the boolean runs as-is.
+ */
+async function buildDiff(
+  primary: Uint8Array,
+  compare: Uint8Array,
+  profile: Profile | undefined,
+  priority: number,
+): Promise<DiffPayload | null> {
+  if (!profile) return getStepWorkerPool().diff(primary, compare, { priority })
+  const [manufactured, step] = await Promise.all([
+    meshForViewer('overlay · manufactured', primary, { priority }),
+    meshForViewer('overlay · step', compare, { priority }),
+  ])
+  const compareMatrix = relativeSeat(manufactured.vertices, step.vertices, profile)
+  return getStepWorkerPool().diff(primary, compare, { compareMatrix, priority })
 }

@@ -21,6 +21,7 @@ import {
   faceSpanAxis,
   materialReaches,
   type NcFaceFrame,
+  ncAuthoredAcrossSign,
   placeNcFace,
 } from './ncFaces'
 import { type NcFace, type NcGeometry, type NcHole, slotOffset } from './ncGeometry'
@@ -359,9 +360,13 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       ])
       const perp = normalize(cross(spur, line))
       const theta = (Math.abs(deg) * Math.PI) / 180
-      // Bevels lean along the beam: mirroring the across axis (channels) flips the contour
-      // traversal `line` and with it `perp`, so tie the remaining sign to the beam's +X reading.
-      const side = deg >= 0 ? 1 : -1
+      // Bevels lean along the beam: mirroring the across axis flips the contour traversal `line`
+      // and with it `perp`. A tube's short faces (`o`/`u`) are authored-traversed the other way in
+      // our long-horizontal stance (see `ncAuthoredAcrossSign`), so their lean is negated.
+      const mirrored =
+        (frame.profile ? profileFamily(frame.profile) : null) === 'tube' &&
+        ncAuthoredAcrossSign(frame, contour.face) < 0
+      const side = (deg >= 0 ? 1 : -1) * (mirrored ? -1 : 1)
       // Outward tilt from the surface normal: at 0° it is the normal (regular), grows toward perp.
       const dir = normalize([
         spur[0] * Math.cos(theta) + perp[0] * Math.sin(theta) * side,

@@ -191,10 +191,10 @@ function impliedThickness(volume: number, soup: DiffSoup): number {
 /**
  * Runs the fuzzy boolean between the manufactured (`primaryBytes`) and STEP (`compareBytes`) models.
  * Each is seated by its viewer matrix; both default to identity. The NC and STEP are independent
- * pipelines built in their own frames, so the worker passes the STEP's alignment (from
- * {@link alignToReference}) as `compareMatrix` — the two are not in a shared frame otherwise. Returns
- * the same shape as {@link BooleanDiff}, or null when the kernel fails (the caller falls back to
- * surface flagging).
+ * pipelines built in their own frames, so the viewer passes the seating that maps the STEP onto the
+ * manufactured model (the same canonical frame it draws both in, see `seat.ts`) as `compareMatrix` —
+ * the diff never reorients on its own. Returns the same shape as {@link BooleanDiff}, or null when
+ * the kernel fails (the caller falls back to surface flagging).
  */
 export async function occFuzzyDiff(
   primaryBytes: Uint8Array,
@@ -322,11 +322,13 @@ function bboxInfo(shape: unknown): { centre: number[]; size: number[]; long: num
  * Seats `subjectBytes` onto `referenceBytes` up to the eight D2 alignments about the member axis
  * (four 90° rotations × mirror), choosing the one with the largest volume overlap.
  *
- * The overlay diff is the only place the **independently-built** NC model (`reference`, canonical)
- * and STEP model (`subject`, its own arbitrary frame) meet — neither pipeline knows the other's
- * frame — so the alignment lives here. The member axes are brought together first (longest box axis
- * → longest box axis, centres aligned), then the remaining rotation/mirror about the member is
- * searched. Returns the transform to apply to the subject; the reference stays put.
+ * The **independently-built** NC model and STEP model have no shared frame, and this recovers one
+ * blind. The viewer no longer uses it for the overlay diff — there the frame is already known (the
+ * view seats both, see `seat.ts`), so the diff is handed that seating directly. Kept for the
+ * overlap/"is this the same part" checks (`alignedOverlap`, tests), where no profile is on hand. The
+ * member axes are brought together first (longest box axis → longest box axis, centres aligned), then
+ * the remaining rotation/mirror about the member is searched. Returns the transform to apply to the
+ * subject; the reference stays put.
  */
 export async function alignToReference(
   subjectBytes: Uint8Array,

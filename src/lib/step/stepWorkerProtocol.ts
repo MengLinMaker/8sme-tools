@@ -36,7 +36,17 @@ export type StepRequest =
       measureOnly?: boolean
     }
   | { id: number; kind: 'mesh'; step: Uint8Array; name: string }
-  | { id: number; kind: 'diff'; primary: Uint8Array; compare: Uint8Array }
+  | {
+      id: number
+      kind: 'diff'
+      primary: Uint8Array
+      compare: Uint8Array
+      /**
+       * Column-major 4×4 seating matrix (as `Matrix4.toArray`) mapping the STEP's raw frame onto the
+       * manufactured model's raw frame — the viewer's canonical seating. Absent = identity.
+       */
+      compareMatrix?: number[]
+    }
   | { id: number; kind: 'warm' }
 
 export type StepResponse =

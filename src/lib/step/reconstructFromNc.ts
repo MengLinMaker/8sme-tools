@@ -3,11 +3,14 @@ import { parseDstv } from '@/lib/parsers/dstv'
 import {
   faceHalf,
   faceSpanAxis,
+  isSquareTube,
+  ncAuthoredAcrossSign,
   ncAuthoredStancePoints,
   resolveNcFaceFrame,
   sectionSpanAt,
 } from '@/lib/parsers/ncFaces'
-import { type NcFace, parseNcGeometry, slotOffset } from '@/lib/parsers/ncGeometry'
+import { type NcContour, type NcFace, parseNcGeometry, slotOffset } from '@/lib/parsers/ncGeometry'
+import { profileFamily } from '@/lib/sections/canonical'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stripStraySolids } from './clean'
 import type { MeasurableShape } from './measure'
@@ -32,12 +35,41 @@ type Pt = [number, number]
 type Axis = 0 | 1
 
 /**
- * How far the modelled cut tool over-reaches into the material — 3–4 cm. An enclosed NC surface
- * (a hole) is only ever cut this deep from its own face, never straight through the section; a
- * notch is stripped from both faces. Distinct from the analysis pierce cap
+ * Fallback cut reach (mm) when the section's plate thickness can't be read from the NC header.
+ * The modelled cut tool normally reaches only through the wall it belongs to — the section's own
+ * plate thickness plus {@link CUT_MARGIN} — so it strips one wall and stops, instead of overrunning
+ * a fixed 3–4 cm into whatever lies behind it. Distinct from the analysis pierce cap
  * (`MAX_CUT_THICKNESS_MM`), which is the head's real single-pass material limit.
  */
 const BEAM_REACH = 35
+
+/** Overtravel (mm) past the wall so the removal tool clears the finished surface for OCC booleans. */
+const CUT_MARGIN = 1
+
+/** How far (mm) a cut tool starts outside the face before reaching in, so it never shares a face. */
+const CUT_OUTSIDE = 2
+
+/**
+ * The section's own plate / wall thickness (mm) behind a face, read from the DSTV `ST` header dims.
+ * This is the depth a cut from that face must reach to pass through the wall behind it. `axis` is
+ * the face's **normal** cross-section axis (0 = width `Y`, 1 = depth `Z`), because a rolled I/T has
+ * two walls — `ST` lists `tf` (flange, along the depth) before `tw` (web, along the width), and a
+ * cut from a flange face must reach `tf` while a cut from a web face only needs `tw`. Angles/tubes
+ * have one wall, so both axes share `ST` dims `[2]`. 0 when unknown.
+ */
+export function plateThicknessMm(profile: string | undefined, dims: number[], axis: Axis): number {
+  const family = profile ? profileFamily(profile) : null
+  const t2 = dims[2] ?? 0
+  const t3 = dims[3] ?? 0
+  if (family === 'round') return dims[1] ?? t2
+  if (family === 'angle' || family === 'tube') return t2 || t3
+  // I / T / channel: `ST` = [b, d/2, tf, tw, r] (or the channel equivalent). `tf` (dims[2]) is the
+  // wall along the depth axis, `tw` (dims[3]) the wall along the width axis; channels are drawn
+  // with one thickness for both (`stock.ts`), so fall back to whichever is present.
+  const alongDepth = t2
+  const alongWidth = t3 || t2
+  return axis === 1 ? alongDepth || alongWidth : alongWidth
+}
 
 /**
  * Laser kerf (mm) modelled in the NC fabrication: every outline cut removes a kerf-wide slot,
@@ -56,6 +88,25 @@ export const LASER_KERF = 0.2
  * reaches the end (a near-zero gap), or it squares a mitre off into a full-height end wall.
  */
 const BAND_MIN_GAP = 0.5
+
+/**
+ * Bevel factor for a contour: the steepest welding-preparation angle on it turns a perpendicular
+ * wall thickness `t` into a slanted cut path `t / cos θ` — at 60° a 3 mm wall needs a 6 mm cut.
+ * Each DSTV vertex carries up to two `angle, distance` bevel pairs; only the angle matters here.
+ * Returns 1 when the contour has no bevel (the common case).
+ */
+export function contourBevelFactor(contour: NcContour): number {
+  let factor = 1
+  for (const bevel of contour.bevels) {
+    for (const angle of [bevel[0] ?? 0, bevel[2] ?? 0]) {
+      const magnitude = Math.abs(angle)
+      if (Number.isFinite(magnitude) && magnitude > 1e-6 && magnitude < 89) {
+        factor = Math.max(factor, 1 / Math.cos((magnitude * Math.PI) / 180))
+      }
+    }
+  }
+  return factor
+}
 
 /**
  * Erodes a closed outline inward by `d` (mm): each edge shifts along its inward normal and
@@ -252,7 +303,7 @@ export async function reconstructSolidFromNc(
   // `v`/`h` faces share one cross-section axis, `o`/`u` the other; the shared frame resolves
   // which by matching a contour's across-extent to the section's two dimensions (the same rule
   // the viewer uses to project cuts onto the face the laser cuts).
-  const frame = resolveNcFaceFrame(section.points, geo)
+  const frame = resolveNcFaceFrame(section.points, geo, header.profile)
   const outer = geo.contours.filter((c) => c.kind === 'outer')
   const maxX = Math.max(
     ...geo.contours.flatMap((c) => c.points.map((p) => p[0])),
@@ -263,8 +314,24 @@ export async function reconstructSolidFromNc(
   )
   const faceAxis = (face: string): Axis => faceSpanAxis(frame, face as NcFace)
   const halfOf = (axis: Axis): number => faceHalf(frame, axis)
+  // Sign applied to a face's across coordinate to bring the authored NC into our canonical stance.
+  // A channel is handled by the authored-build `flip`; a tube (RHS/SHS) is seated long-horizontal,
+  // a 90° rotation of the authored long-vertical pose (see `ncAuthoredAcrossSign`).
+  const family = profileFamily(header.profile)
+  const acrossSign = (face: NcFace): 1 | -1 => {
+    if (family === 'tube') return ncAuthoredAcrossSign(frame, face)
+    return canonicalSectionFlip && (face === 'v' || face === 'h') ? -1 : 1
+  }
+  // Cut reach per face normal: through the section's own wall, plus a hair so the tool clears the
+  // finished surface. Falls back to BEAM_REACH when the header dims don't carry a thickness.
+  const reachFor = (normalAxis: Axis, bevelFactor = 1): number => {
+    const plate = plateThicknessMm(header.profile, header.dimensions, normalAxis)
+    return plate > 0 ? plate * bevelFactor + CUT_MARGIN + CUT_OUTSIDE : BEAM_REACH
+  }
   const pointsByAxis: Record<Axis, Pt[]> = { 0: [], 1: [] }
   const drawingsByAxis: Record<Axis, ReturnType<typeof poly>[]> = { 0: [], 1: [] }
+  // Steepest bevel per face axis: a slanted cut has to reach `t / cos θ` through the wall.
+  const bevelFactorByAxis: Record<Axis, number> = { 0: 1, 1: 1 }
 
   // Base prism: cross-section in the (width=Y, depth=Z) plane, extruded along the member (X).
   let solid = poly(section.points)
@@ -283,10 +350,12 @@ export async function reconstructSolidFromNc(
     const axis = faceAxis(c.face)
     const half = halfOf(axis)
     const { pts: rawPts, radii } = dedupeWithRadii(c.points, c.radii ?? [])
-    // Channel web faces (`v`/`h`) run the opposite way across the depth once seated canonically —
-    // the same reversal `ncAuthoredAcrossSign` applies for the projection, so the two agree.
-    const flip = canonicalSectionFlip && (c.face === 'v' || c.face === 'h')
-    const pts = rawPts.map(([x, y]) => [x, (flip ? half - y : y - half) as number] as Pt)
+    // Across coordinate into the canonical stance: a channel's web faces (`v`/`h`) and a tube's
+    // short faces (`o`/`u`) run the opposite way once seated — the same sign `ncAuthoredAcrossSign`
+    // applies for the projection, so the two agree.
+    const sign = acrossSign(c.face)
+    const pts = rawPts.map(([x, y]) => [x, sign * (y - half)] as Pt)
+    bevelFactorByAxis[axis] = Math.max(bevelFactorByAxis[axis], contourBevelFactor(c))
     pointsByAxis[axis].push(...pts)
     // Exact outline for both axes. The axis-1 outline used to be kerf-eroded (0.1 mm inset) to
     // stop OCC sharing the trim's faces with the base prism — but the inset left a 0.1 mm ledge
@@ -404,35 +473,42 @@ export async function reconstructSolidFromNc(
       // `sketchOnPlane('XZ')` extrudes towards −Y, so shift the prism back over the section
       // (which sits at Y = −half..half) rather than away from it.
       //
-      // Limited distance: the laser only reaches BEAM_REACH into the material from each
-      // face, so the trim cuts a skin that deep from both sides instead of vaporising the
-      // whole width. A full-width cut deletes extensions (flange tips past a mitred web)
-      // the head physically cannot reach — the manufactured model then runs short and the
-      // detached rest shows up as stray bodies.
+      // Limited distance: the cut from a face only needs to pass through the wall behind it
+      // (the section's own plate thickness), so the trim cuts a skin that deep from both sides
+      // instead of vaporising the whole width. A full-width cut deletes extensions (flange tips
+      // past a mitred web) the head physically cannot reach — the manufactured model then runs
+      // short and the detached rest shows up as stray bodies.
       const faceOut = halfOf(0 as Axis)
+      const reach = reachFor(0, bevelFactorByAxis[1])
       const skin = (topEdge: number): SolidOps =>
         (notch as ReturnType<typeof poly>)
           .sketchOnPlane('XZ')
-          .extrude(BEAM_REACH)
+          .extrude(reach)
           .translate(0, topEdge, 0) as unknown as SolidOps
       solid = solid.cut(skin(faceOut + 2))
-      solid = solid.cut(skin(-faceOut - 2 + BEAM_REACH))
+      solid = solid.cut(skin(-faceOut - 2 + reach))
     }
   }
 
-  // Holes, drilled perpendicular to the face they sit on — and ONLY as deep as the beam reaches.
-  // An enclosed NC surface (a `BO` hole) is a single 3–4 cm cut: the cutter runs from just outside
-  // the face a `BEAM_REACH` inward, so it passes through that face's wall and stops, never
-  // crossing to the opposite wall (which the beam could not reach anyway). The NC gives each hole
-  // size its own face (e.g. Ø14 on `o`, Ø10 on `u`).
+  // Holes, drilled perpendicular to the face they sit on — and only as deep as that face's wall.
+  // An enclosed NC surface (a `BO` hole) is a single cut: the cutter runs from just outside the
+  // face a `reach` inward, so it passes through that face's wall and stops, never crossing to the
+  // opposite wall (which the beam could not reach anyway). The NC gives each hole size its own
+  // face (e.g. Ø14 on `o`, Ø10 on `u`).
   // Which side of the section a hole is drilled from. Must agree with the NC projection's
-  // `faceNormal`/`resolveFaceSign` rule (used by the viewer): the `o`/`v` pair sits on the
-  // negative side, `u`/`h` on the positive one. Getting this backwards put holes on the opposite
-  // flange — invisible on a symmetric section, a wrong part on a PFC/T/angle.
-  const positiveFace = (face: string): boolean => face === 'u' || face === 'h'
+  // `faceNormal`/`resolveFaceSign` rule (used by the viewer). A tube seated long-horizontal puts
+  // `o` (short right face) and `h` (long top face) on the +side; every other family uses the
+  // DSTV-authored pairing (`o`/`v` negative, `u`/`h` positive). Getting this backwards put holes
+  // on the opposite flange — invisible on a symmetric section, a wrong part on a PFC/T/angle.
+  const positiveFace = (face: string): boolean =>
+    family === 'tube' && !isSquareTube(frame)
+      ? face === 'o' || face === 'h'
+      : face === 'u' || face === 'h'
   for (const h of geo.holes.filter((h) => h.diameter > 0)) {
     const axis = faceAxis(h.face)
     const half = halfOf(axis)
+    // The hole's across coordinate in our canonical stance.
+    const across = acrossSign(h.face)
     // The drill runs along the *other* cross-section axis; the face sits at ±(that axis's half).
     const faceOut = halfOf((1 - axis) as Axis)
     let sign: 1 | -1 = positiveFace(h.face) ? 1 : -1
@@ -440,39 +516,44 @@ export async function reconstructSolidFromNc(
     // drill where section material actually reaches at this hole's position,
     // not where symmetry assumes it. Symmetric sections reach both sides, so
     // the pairing table stands for them.
-    const [lo, hi] = sectionSpanAt(section.points, axis, h.y - half)
+    const [lo, hi] = sectionSpanAt(section.points, axis, across * (h.y - half))
     const reached = sign > 0 ? hi >= faceOut - 2 : lo <= -faceOut + 2
     if (!reached) {
       const otherReached = sign > 0 ? lo <= -faceOut + 2 : hi >= faceOut - 2
       if (otherReached) sign = sign > 0 ? -1 : 1
     }
     const outside = faceOut + 2
+    // The drill traverses the wall along the face normal, so its reach follows that axis's wall
+    // (and that face's steepest bevel, when the surrounding contour is cut at an angle).
+    const reach = reachFor((1 - axis) as Axis, bevelFactorByAxis[axis])
     // A plain hole is a circle; a DSTV slotted (`l`) hole is an obround (stadium) — a rounded
     // rectangle whose corner radius is the hole radius, so its ends are true semicircles — laid
     // from the start point `(x, y)` to the far end in the face plane. The DSTV `dx`/`dy` are the
     // slot vector *before* its `angle` rotation, so the far end (and thus the tilt) comes from
-    // `slotOffset` — using `dx`/`dy` directly would drop the slot's tilt.
+    // `slotOffset` — using `dx`/`dy` directly would drop the slot's tilt. The across component is
+    // signed into the canonical stance like the hole itself.
     const crossDrawing = (): ReturnType<typeof drawCircle> => {
       const slot = h.slot
       if (slot && (slot.dx !== 0 || slot.dy !== 0)) {
         const [dx, dy] = slotOffset(slot)
-        const length = Math.hypot(dx, dy)
-        const angle = (Math.atan2(dy, dx) * 180) / Math.PI
+        const sdy = across * dy
+        const length = Math.hypot(dx, sdy)
+        const angle = (Math.atan2(sdy, dx) * 180) / Math.PI
         return drawRoundedRectangle(length + h.diameter, h.diameter, h.diameter / 2)
           .rotate(angle)
-          .translate(h.x + dx / 2, h.y + dy / 2 - half)
+          .translate(h.x + dx / 2, across * (h.y - half) + sdy / 2)
       }
-      return drawCircle(h.diameter / 2).translate(h.x, h.y - half)
+      return drawCircle(h.diameter / 2).translate(h.x, across * (h.y - half))
     }
     if (axis === 0) {
       // Drill along the 3D Z axis (perpendicular to the `v`/`h` faces).
-      const cyl = crossDrawing().sketchOnPlane('XY').extrude(BEAM_REACH)
-      const shift = sign > 0 ? outside - BEAM_REACH : -outside
+      const cyl = crossDrawing().sketchOnPlane('XY').extrude(reach)
+      const shift = sign > 0 ? outside - reach : -outside
       solid = solid.cut(cyl.translate(0, 0, shift) as unknown as SolidOps)
     } else {
       // Drill along the 3D Y axis (`o`/`u`); `sketchOnPlane('XZ')` extrudes towards −Y.
-      const cyl = crossDrawing().sketchOnPlane('XZ').extrude(BEAM_REACH)
-      const shift = sign > 0 ? outside : BEAM_REACH - outside
+      const cyl = crossDrawing().sketchOnPlane('XZ').extrude(reach)
+      const shift = sign > 0 ? outside : reach - outside
       solid = solid.cut(cyl.translate(0, shift, 0) as unknown as SolidOps)
     }
   }

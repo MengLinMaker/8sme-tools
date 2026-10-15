@@ -107,6 +107,40 @@ describe('channel authored stance', () => {
   })
 })
 
+describe('tube canonical stance (RHS150*100*9.0)', () => {
+  it('seats the long side horizontal and the DSTV faces on the right sides', () => {
+    const text = readFileSync(nw31Top('NC files', 'm150.nc1'), 'utf8')
+    const header = parseDstv(text).header
+    const geo = parseNcGeometry(text)
+    const section = partSectionForCode(header.profile, header.dimensions)?.points
+    expect(section).toBeTruthy()
+    if (!section) return
+    // Tekla authors the tube long-side-vertical; our stance is long-side-horizontal.
+    const frame = resolveNcFaceFrame(section, geo, header.profile)
+    expect(frame.extent[0]).toBeCloseTo(150, 6)
+    expect(frame.extent[1]).toBeCloseTo(100, 6)
+    // `v`/`h` (the long faces) span the 150 side; `o`/`u` (short) the 100.
+    expect(frame.axisVH).toBe(0)
+    expect(frame.axisOU).toBe(1)
+    // `o` is the short right face: across 0 → +y, on the +x side.
+    const o = placeNcFace(frame, 'o', 0, 0, section)
+    expect(o.cross[0]).toBeCloseTo(75, 6)
+    expect(o.cross[1]).toBeCloseTo(50, 6)
+    // `v` is the long bottom face, on the −y side, reading back the other way.
+    const v = placeNcFace(frame, 'v', 0, 0, section)
+    expect(v.cross[0]).toBeCloseTo(-75, 6)
+    expect(v.cross[1]).toBeCloseTo(-50, 6)
+    // `h` (long top face) mirrors `v` across the member.
+    const h = placeNcFace(frame, 'h', 0, 0, section)
+    expect(h.cross[0]).toBeCloseTo(-75, 6)
+    expect(h.cross[1]).toBeCloseTo(50, 6)
+    // `u` (short left face) mirrors `o`.
+    const u = placeNcFace(frame, 'u', 0, 0, section)
+    expect(u.cross[0]).toBeCloseTo(-75, 6)
+    expect(u.cross[1]).toBeCloseTo(50, 6)
+  })
+})
+
 describe('faceThickness', () => {
   const empty: NcGeometry = { contours: [], holes: [], notches: [] }
   const section = partSectionForCode('EA75*75*6', [75, 75, 6, 6, 8])?.points ?? []

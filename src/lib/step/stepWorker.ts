@@ -1,6 +1,7 @@
+import { Matrix4 } from 'three'
 import { type MeasurableShape, measureShape, type StepMeasure } from './measure'
 import { meshStepFile } from './mesh'
-import { alignToReference, occFuzzyDiff, serializeDiff } from './occDiff'
+import { occFuzzyDiff, serializeDiff } from './occDiff'
 import { ensureOc } from './occInit'
 import { reconstructSolidFromNc } from './reconstructFromNc'
 import type {
@@ -40,10 +41,12 @@ async function handle(request: StepRequest): Promise<void> {
       scope.postMessage({ id: request.id, kind: 'warm', ok: true, value: null })
     } else if (request.kind === 'diff') {
       // Overlay diff: the OCC fuzzy boolean, run here so it never blocks the main thread and can be
-      // prewarmed alongside the manufactured rebuild. The NC (`primary`, canonical) and STEP
-      // (`compare`, its own frame) models are independent, so the diff aligns the STEP to the NC
-      // first — the one place the two frames meet.
-      const compareMatrix = await alignToReference(request.compare, request.primary)
+      // prewarmed alongside the manufactured rebuild. The viewer supplies the seating that maps the
+      // STEP (`compare`, its own frame) onto the manufactured model (`primary`, canonical) — the two
+      // are drawn in that same orientation, so the diff never reorients on its own.
+      const compareMatrix = request.compareMatrix
+        ? new Matrix4().fromArray(request.compareMatrix)
+        : undefined
       const diff = await occFuzzyDiff(request.primary, request.compare, undefined, compareMatrix)
       scope.postMessage({ id: request.id, kind: 'diff', ok: true, value: serializeDiff(diff) })
     } else {

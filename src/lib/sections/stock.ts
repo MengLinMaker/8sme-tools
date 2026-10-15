@@ -20,17 +20,16 @@ import { getUc, getUcByDepth } from './uc'
  * `+x = right, +y = up` and the length runs along the member axis. Target stances:
  *
  *  - UB / UC / TFB (`I`)   → `H`  web vertical, flanges horizontal  → **implemented**
- *  - PFC / TFC (`U`, `C`)  → `n`  web on top, both flanges down     → *pending*
- *  - RHS / SHS (`M`)       → longer cross-section side horizontal   → *pending*
+ *  - PFC / TFC (`U`, `C`)  → `n`  web on top, both flanges down     → **implemented**
+ *  - RHS / SHS (`M`)       → longer cross-section side horizontal   → **implemented**
  *  - angle EA / UA (`L`)   → `L`  longer leg horizontal, open up-right → **implemented**
  *  - T (`T`)               → flange down, web up                    → **implemented**
  *
  * DSTV faces (`v` front/web, `o` top, `u` bottom, `h` behind) are **profile-relative**, not
  * machine-relative; once seated, a face's machine role is its outward normal (`+y` top,
- * `−y` bottom, `±x` side). Machine-readable form of these rules: `./canonical.ts`. The PFC
- * `n` and RHS long-side-horizontal builders are not drawn yet — this header records the
- * intent so the geometry can be changed deliberately (it currently draws the DSTV-reference
- * C and a tall RHS).
+ * `−y` bottom, `±x` side). Machine-readable form of these rules: `./canonical.ts`. The RHS/SHS
+ * builder draws the canonical long-horizontal stance — a 90° rotation of the DSTV/Tekla
+ * authored (long-vertical) stance — so its face sides are resolved in `./../parsers/ncFaces.ts`.
  */
 
 export interface StockOutline {
@@ -293,6 +292,18 @@ function arcPoints(
   return points
 }
 
+/**
+ * Canonical cross-section size for a rectangular hollow (RHS/SHS) from its callout numbers:
+ * the longer side becomes `width` (horizontal), the shorter `height` (vertical). The DSTV/Tekla
+ * export authors these with the longer side vertical, so the machine stance is a 90° rotation —
+ * see `docs/canonical-orientation.md`. A square comes out unchanged.
+ */
+function hollowCanonicalSize(n: number[]): { width: number; height: number } {
+  const a = n[0] ?? 0
+  const b = n[1] ?? a
+  return { width: Math.max(a, b), height: Math.min(a, b) }
+}
+
 /** Rounded rectangle outline (counter-clockwise), radius clamped to the half-size. */
 function roundedRect(width: number, height: number, radius: number): [number, number][] {
   const hw = width / 2
@@ -516,8 +527,8 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
     }
     case 'rhs':
     case 'shs': {
-      const height = n[0]
-      const width = n[1] ?? n[0]
+      // Canonical stance: longer cross-section side horizontal (see `docs/canonical-orientation.md`).
+      const { width, height } = hollowCanonicalSize(n)
       const wall = n[2] ?? dims[2] ?? 0
       const radius = dims[4] ?? 0
       if (height > 0 && width > 0 && wall > 0 && wall < Math.min(height, width) / 2) {
@@ -646,8 +657,9 @@ export function partSectionForCode(
     }
     case 'rhs':
     case 'shs': {
-      const height = n[0]
-      const width = n[1] ?? n[0]
+      // Canonical stance: the longer cross-section side runs horizontal (see
+      // `docs/canonical-orientation.md`), so swap the callout's `long*short` into `width*height`.
+      const { width, height } = hollowCanonicalSize(n)
       const wall = n[2] ?? dims[2] ?? 0
       const radius = dims[4] ?? 0
       if (height > 0 && width > 0 && wall > 0 && wall < Math.min(height, width) / 2) {
