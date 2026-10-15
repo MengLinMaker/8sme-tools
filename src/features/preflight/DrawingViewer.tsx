@@ -207,13 +207,13 @@ export function DrawingViewer({ bytes }: { bytes: Uint8Array }) {
     <div className="relative h-full w-full bg-[#15181c]">
       <div
         ref={scrollRef}
-        className="absolute inset-0 cursor-grab overflow-hidden active:cursor-grabbing"
+        className="absolute inset-0 cursor-grab overflow-auto active:cursor-grabbing"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       >
-        <div className="flex min-h-full min-w-full flex-col items-center gap-4">
+        <div className="flex min-h-full w-max min-w-full flex-col items-center gap-4">
           {sizes.map((size, index) => (
             <canvas
               // biome-ignore lint/suspicious/noArrayIndexKey: pages are ordered and never reordered.
