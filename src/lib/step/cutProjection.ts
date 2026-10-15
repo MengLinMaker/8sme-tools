@@ -14,6 +14,7 @@
  * the model and passes the already-transformed faces + frame.
  */
 
+import { MACHINE } from '@/lib/machine/profile'
 import {
   faceHalf,
   faceSpanAxis,
@@ -22,7 +23,7 @@ import {
   resolveFaceSign,
 } from '@/lib/parsers/ncFaces'
 import type { NcFace } from '@/lib/parsers/ncGeometry'
-import type { SeatedBrepFace, Vec3 } from './cutEdges'
+import { distanceToOutline, type SeatedBrepFace, type Vec3 } from './cutEdges'
 
 /** One projected contour point: `X` along the member (mm), `Y` across the face (mm from the edge). */
 export interface FacePoint {
@@ -34,6 +35,31 @@ export interface FacePoint {
 export interface FaceSegment {
   a: FacePoint
   b: FacePoint
+  /** Weld bevel (deg, 0 = square) of the cut face against this face. */
+  bevel: number
+  /** Outward sweep direction for the bevel fin (unit, seated frame), or null when square. */
+  dir: Vec3 | null
+}
+
+/** Below this bevel (deg) a cut face is square — no bevel indication. */
+const REGULAR_CUT_DEG = 8
+/** Steepest bevel the head cuts (deg); steeper is a step/parallel face, not a bevel. */
+const MAX_BEVEL_DEG = Math.max(Math.abs(MACHINE.bevel.minDeg), Math.abs(MACHINE.bevel.maxDeg))
+
+/** The bevel of a cut face against a stock face, and its outward fin-sweep direction. */
+function faceBevel(nCut: Vec3, nf: Vec3): { bevel: number; dir: Vec3 | null } {
+  const angle = (Math.asin(Math.min(1, Math.abs(dot(nCut, nf)))) * 180) / Math.PI
+  if (angle < REGULAR_CUT_DEG || angle > MAX_BEVEL_DEG) return { bevel: 0, dir: null }
+  const into = dot(nf, nCut)
+  return {
+    bevel: angle,
+    dir: normalize([nf[0] - into * nCut[0], nf[1] - into * nCut[1], nf[2] - into * nCut[2]]),
+  }
+}
+
+function normalize(a: Vec3): Vec3 {
+  const length = Math.hypot(a[0], a[1], a[2]) || 1
+  return [a[0] / length, a[1] / length, a[2] / length]
 }
 
 export interface CutProjectionOptions {
@@ -63,7 +89,22 @@ export function projectCutEdgesToFaces(
   options: CutProjectionOptions = {},
 ): Record<NcFace, FaceSegment[]> {
   const radius = options.radius ?? 0
-  const stock = faces.map((face) => Math.abs(dot(face.normal, memberAxis)) <= 0.3)
+  // A stock face is lengthwise **and** lies on the section outline (the outer surface). The tube's
+  // inner walls are also lengthwise, so without the outline test their cut edges would be emitted
+  // too — the same cut drawn twice on the outer face.
+  const stock = faces.map((face) => {
+    if (Math.abs(dot(face.normal, memberAxis)) > 0.3) return false
+    const samples = face.samples
+    if (samples.length === 0) return false
+    let on = 0
+    let total = 0
+    for (let i = 0; i + 2 < samples.length; i += 3) {
+      const s: Vec3 = [samples[i] as number, samples[i + 1] as number, samples[i + 2] as number]
+      total++
+      if (distanceToOutline(section, [dot(s, xAxis), dot(s, yAxis)]) <= 2) on++
+    }
+    return total > 0 && on / total >= 0.7
+  })
   const crossAxis = (axis: 0 | 1): Vec3 => (axis === 0 ? xAxis : yAxis)
 
   // Each DSTV face's nominal plane: outward normal axis + side, plane offset, and span axis.
@@ -113,9 +154,16 @@ export function projectCutEdgesToFaces(
           ]
           const X = dot(p, memberAxis)
           for (const plane of planes) {
-            const cN = dot(p, plane.normal) // signed distance along the outward normal
-            const d = plane.q - cN // 0 on the face, >0 inside
-            if (d > radius + 0.6 || d < -Math.max(radius, 1) - 0.6) continue
+            // A **flat** face's cut edge belongs only to its own face; a **rounded corner** edge is
+            // shared onto both adjacent flats (within the radius). Emitting a flat's edge onto a
+            // neighbouring flat too would double the cut line near the corner.
+            if (face.planar) {
+              if (dot(face.normal, plane.normal) < 0.98) continue
+            } else {
+              const cN = dot(p, plane.normal)
+              const d = plane.q - cN // 0 on the face, >0 inside
+              if (d > radius + 0.6 || d < -Math.max(radius, 1) - 0.6) continue
+            }
             const cSpan = dot(p, plane.spanVec)
             // Along: the cut plane's trace on this face plane (the rim X when not exploitable).
             const Xp =
@@ -133,10 +181,12 @@ export function projectCutEdgesToFaces(
         }
         for (const plane of planes) {
           const arr = onFace.get(plane.face) as (FacePoint | null)[]
+          const bevel = planarCut ? faceBevel(nCut, plane.normal) : { bevel: 0, dir: null }
           for (let s = 0; s + 1 < count; s++) {
             const a = arr[s]
             const b = arr[s + 1]
-            if (a && b) out[plane.face].push({ a, b })
+            if (!a || !b) continue
+            out[plane.face].push({ a, b, bevel: bevel.bevel, dir: bevel.dir })
           }
         }
       }

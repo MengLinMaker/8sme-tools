@@ -755,58 +755,83 @@ function mountScene(
               const pa = toPoint(a.along, a.cross)
               const pb = toPoint(b.along, b.cross)
               positions.push(pa[0], pa[1], pa[2], pb[0], pb[1], pb[2])
+              // The fin sweeps the *projected* (straight) segment along the cut plane's lean, so it
+              // matches the NC bevel instead of bowing to follow the rounded-corner rim.
+              if (!seg.dir) continue
+              const rx = seg.dir[0] * STEP_BEVEL_LENGTH
+              const ry = seg.dir[1] * STEP_BEVEL_LENGTH
+              const rz = seg.dir[2] * STEP_BEVEL_LENGTH
+              const quad = [
+                pa[0],
+                pa[1],
+                pa[2],
+                pb[0],
+                pb[1],
+                pb[2],
+                pb[0] + rx,
+                pb[1] + ry,
+                pb[2] + rz,
+                pa[0],
+                pa[1],
+                pa[2],
+                pb[0] + rx,
+                pb[1] + ry,
+                pb[2] + rz,
+                pa[0] + rx,
+                pa[1] + ry,
+                pa[2] + rz,
+              ]
+              const fins = bevelGroups.get(thickness)
+              if (fins) fins.push(...quad)
+              else bevelGroups.set(thickness, quad)
             }
             const bucket = groups.get(thickness)
             if (bucket) bucket.push(...positions)
             else groups.set(thickness, positions)
           }
         } else {
+          // Open sections: lines *and* bevel fins both come from `brepCutSegments`.
           for (const cut of cuts) {
             const bucket = groups.get(cut.thickness)
             if (bucket) bucket.push(...cut.points)
             else groups.set(cut.thickness, cut.points)
-          }
-        }
-        // Bevel fins come from `brepCutSegments` (topology + local cut-face normals).
-        for (const cut of cuts) {
-          // A beveled cut carries a sweep direction: build its translucent area fin from the cut
-          // segment, swept outward along it (STEP geometry only — never the NC).
-          if (!cut.bevelDir) continue
-          const [dx, dy, dz] = cut.bevelDir
-          const rx = dx * STEP_BEVEL_LENGTH
-          const ry = dy * STEP_BEVEL_LENGTH
-          const rz = dz * STEP_BEVEL_LENGTH
-          const p = cut.points
-          for (let k = 0; k + 5 < p.length; k += 6) {
-            const ax = p[k] as number
-            const ay = p[k + 1] as number
-            const az = p[k + 2] as number
-            const bx = p[k + 3] as number
-            const by = p[k + 4] as number
-            const bz = p[k + 5] as number
-            const quad = [
-              ax,
-              ay,
-              az,
-              bx,
-              by,
-              bz,
-              bx + rx,
-              by + ry,
-              bz + rz,
-              ax,
-              ay,
-              az,
-              bx + rx,
-              by + ry,
-              bz + rz,
-              ax + rx,
-              ay + ry,
-              az + rz,
-            ]
-            const fins = bevelGroups.get(cut.thickness)
-            if (fins) fins.push(...quad)
-            else bevelGroups.set(cut.thickness, quad)
+            if (!cut.bevelDir) continue
+            const [dx, dy, dz] = cut.bevelDir
+            const rx = dx * STEP_BEVEL_LENGTH
+            const ry = dy * STEP_BEVEL_LENGTH
+            const rz = dz * STEP_BEVEL_LENGTH
+            const p = cut.points
+            for (let k = 0; k + 5 < p.length; k += 6) {
+              const ax = p[k] as number
+              const ay = p[k + 1] as number
+              const az = p[k + 2] as number
+              const bx = p[k + 3] as number
+              const by = p[k + 4] as number
+              const bz = p[k + 5] as number
+              const quad = [
+                ax,
+                ay,
+                az,
+                bx,
+                by,
+                bz,
+                bx + rx,
+                by + ry,
+                bz + rz,
+                ax,
+                ay,
+                az,
+                bx + rx,
+                by + ry,
+                bz + rz,
+                ax + rx,
+                ay + ry,
+                az + rz,
+              ]
+              const fins = bevelGroups.get(cut.thickness)
+              if (fins) fins.push(...quad)
+              else bevelGroups.set(cut.thickness, quad)
+            }
           }
         }
       }

@@ -164,6 +164,7 @@ function bestMatch(
 const RHS = {
   m117: { nc: nw31Top('NC files', 'm117.nc1'), stp: nw31Top('STP files', 'm117.stp') },
   m150: { nc: nw31Top('NC files', 'm150.nc1'), stp: nw31Top('STP files', 'm150.stp') },
+  m24: { nc: nw31Top('NC files', 'm24.nc1'), stp: nw31Top('STP files', 'm24.stp') },
 }
 
 describe('projectCutEdgesToFaces — RHS', () => {
