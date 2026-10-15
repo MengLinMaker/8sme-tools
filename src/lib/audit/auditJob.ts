@@ -134,6 +134,19 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
     const exp = expected.get(part.mark)
     if (exp) part.expected = exp
 
+    // A mark with neither an NC nor a STEP is almost certainly not a laser part
+    // (e.g. a stray drawing or an assembly), so skip it rather than flag missing files.
+    if (!part.nc && !part.step) {
+      findings.push({
+        severity: 'info',
+        code: 'NOT_A_PART',
+        mark: part.mark,
+        message: `${part.mark} has neither an NC nor a STEP file — skipped (not a part)`,
+        params: { mark: part.mark },
+      })
+      continue
+    }
+
     if (part.nc) {
       if (!part.nc.valid) {
         findings.push({
@@ -286,8 +299,13 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
     return (a.mark ?? '').localeCompare(b.mark ?? '')
   })
 
+  // Only marks with a manufacturable file (NC or STEP) count as parts.
+  const partRecords = [...parts.values()]
+    .filter((part) => part.nc || part.step)
+    .sort((a, b) => a.mark.localeCompare(b.mark))
+
   const summary: AuditSummary = {
-    parts: parts.size,
+    parts: partRecords.length,
     errors: findings.filter((f) => f.severity === 'error').length,
     warnings: findings.filter((f) => f.severity === 'warning').length,
     infos: findings.filter((f) => f.severity === 'info').length,
@@ -300,7 +318,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
   return {
     sourceName,
     entriesTotal: entries.length,
-    parts: [...parts.values()].sort((a, b) => a.mark.localeCompare(b.mark)),
+    parts: partRecords,
     findings,
     summary,
   }

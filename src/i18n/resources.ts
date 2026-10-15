@@ -385,6 +385,7 @@ export const en = {
       'NC length {{nc}}mm vs part-list {{list}}mm (Δ{{diff}}mm) — verify against drawing',
     PART_LIST_NO_FILES: 'Part list lists {{part}} but no NC/STEP/PDF files were found',
     NO_PART_LIST: 'No part list (.xlsx) found — quantity cross-checks were skipped',
+    NOT_A_PART: '{{mark}} has neither an NC nor a STEP file — skipped (not a part)',
     STRAY_BODY: 'STEP has {{bodies}} solid bodies — extra floating piece(s); can be cleaned',
     CUT_END_PIECE:
       'Cutting straight through would detach {{extra}} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)',
@@ -771,6 +772,7 @@ export const zh = {
       'NC 长度 {{nc}}mm 与零件清单 {{list}}mm 不符（相差 {{diff}}mm）——请对照图纸核对',
     PART_LIST_NO_FILES: '零件清单列出了 {{part}}，但未找到对应的 NC/STEP/PDF 文件',
     NO_PART_LIST: '未找到零件清单（.xlsx）——已跳过数量交叉核对',
+    NOT_A_PART: '{{mark}} 既无 NC 也无 STEP 文件——已跳过（非零件）',
     STRAY_BODY: 'STEP 含 {{bodies}} 个实体——存在多余悬浮件；可清理',
     CUT_END_PIECE: '直线切透会切掉图纸上保留的 {{extra}} 个小件——需要坡口/斜切（或该面不切）',
     CUT_STEP:

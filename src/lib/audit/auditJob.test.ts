@@ -90,4 +90,16 @@ describe('auditEntries', () => {
     expect(stepOnly.findings.some((f) => f.code === 'MISSING_STEP' && f.mark === 'b1')).toBe(true)
     expect(stepOnly.findings.some((f) => f.code === 'MISSING_PDF' && f.mark === 'b1')).toBe(true)
   })
+
+  it('skips marks with neither an NC nor a STEP as non-parts', () => {
+    const result = auditEntries('job.zip', [
+      { path: 'a1.nc1', bytes: strToU8(makeNc('a1', 1, 100)) },
+      { path: 'a1.stp', bytes: strToU8(VALID_STEP) },
+      { path: 'x9 - ASSEMBLY.pdf', bytes: PDF_BYTES },
+    ])
+    expect(result.parts.map((part) => part.mark)).toEqual(['a1'])
+    expect(result.findings.some((f) => f.code === 'NOT_A_PART' && f.mark === 'x9')).toBe(true)
+    expect(result.findings.some((f) => f.code === 'MISSING_NC' && f.mark === 'x9')).toBe(false)
+    expect(result.findings.some((f) => f.code === 'MISSING_STEP' && f.mark === 'x9')).toBe(false)
+  })
 })
