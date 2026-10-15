@@ -481,11 +481,15 @@ export function PreflightPage() {
 
   // Kick off the overlay diff as soon as the manufactured model lands, so it is already computed
   // (in the OCC worker) by the time the overlay pane mounts — the viewer then reads it from cache
-  // instead of showing an empty pane for the seconds the boolean takes.
+  // instead of showing an empty pane for the seconds the boolean takes. The stock profile is the
+  // same seating the viewer applies; the diff must not reorient on its own.
   useEffect(() => {
     if (!manufactured || !stepBytes) return
-    void diffForViewer(manufactured, stepBytes, { priority: PRIORITY_FOREGROUND }).catch(() => {})
-  }, [manufactured, stepBytes])
+    void diffForViewer(manufactured, stepBytes, {
+      profile: stock?.points,
+      priority: PRIORITY_FOREGROUND,
+    }).catch(() => {})
+  }, [manufactured, stepBytes, stock])
 
   // While a part is open (or being opened), hold the background analysis queue so the workers serve
   // the viewer and its neighbour prefetch instead of a multi-second rebuild. Resumes once the
@@ -1524,7 +1528,14 @@ export function PreflightPage() {
                 priority: PRIORITY_NEIGHBOR,
               }).catch(() => {})
               if (stepBytes) {
+                // The diff needs the same seating the viewer applies, so resolve the neighbour's
+                // section here (from its NC/part-list code — no PDF pass needed for a prefetch).
+                const profile = partSectionForCode(
+                  neighbour.expected?.profile ?? neighbour.nc?.profile ?? '',
+                  neighbour.nc?.dimensions ?? [],
+                )?.points
                 void diffForViewer(bytes, stepBytes, {
+                  profile,
                   priority: PRIORITY_NEIGHBOR,
                 }).catch(() => {})
               }
