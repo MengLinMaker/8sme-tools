@@ -81,6 +81,12 @@ export interface CutMarker {
    * amber tone so a merely suspicious cut reads differently from a hard failure.
    */
   color?: number
+  /**
+   * Whether the marker is an NC-specific issue (e.g. a cut line whose bevel changes along its
+   * length). Only meaningful on the manufactured NC model, so the viewer draws it on that pane
+   * alone — on the STEP ideal / overlay it would read as a defect in a model this NC won't cut.
+   */
+  ncOnly?: boolean
 }
 
 export interface CutReachFailure extends CutMarker {

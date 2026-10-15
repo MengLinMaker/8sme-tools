@@ -561,6 +561,10 @@ function mountScene(
   if (isOverlay) {
     compareMaterial.opacity = 0.3
   }
+  // NC-specific issue markers (e.g. a cut line whose bevel changes) only make sense on the
+  // manufactured NC pane — the STEP ideal and the overlay aren't cut by this NC, so drawing them
+  // there misleads. The pane is identified the same way the toolpath is: only it passes `nc`.
+  const showNcOnlyMarkers = Boolean(nc) && !isOverlay
 
   // Always draw the model's angle-filtered edges (`smoothModelLines`) so sharp corners read on
   // every pane, including the manufactured NC rebuild — the projected toolpath adds to them
@@ -862,6 +866,14 @@ function mountScene(
           // down (which would make the up-vector ambiguous).
           const faceDir = normal(failure.face)
           sabreDirections.push([faceDir[0] + 0.45, faceDir[1] + 0.45, faceDir[2] + 0.45])
+          // NC-specific markers are hidden on panes that don't show the manufactured NC. Keep the
+          // slot (a null marker) so every finding's `index` still lines up across panes.
+          if (failure.ncOnly && !showNcOnlyMarkers) {
+            sabreSpanObjects.push(null)
+            spanShown.push(false)
+            sabreHaloObjects.push(null)
+            continue
+          }
           let lines = failure.lines
           if (!lines || lines.length === 0) {
             // A failure can collapse to a point (a corner-risk run of a single sample). Draw a short
@@ -1483,6 +1495,9 @@ function mountScene(
     },
     focus(code: string | null, index?: number) {
       if (!bus) return
+      // An NC-specific marker isn't drawn on this pane; skip the focus so it stays driven by the
+      // manufactured pane (which has the marker) instead of framing every other marker here.
+      if (index != null && sabre?.[index]?.ncOnly && !showNcOnlyMarkers) return
       const box = new Box3()
       const cut = code?.startsWith('CUT') ?? false
       let direction: Vec3 | undefined

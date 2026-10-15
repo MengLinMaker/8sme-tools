@@ -1418,11 +1418,14 @@ export function PreflightPage() {
     if (!viewing) return null
     const markers: CutMarker[] = [...(reachChecks.get(viewing.mark) ?? [])]
     for (const issue of bevelChanges.get(viewing.mark) ?? []) {
+      // A changing bevel is an NC-specific error: it only reads on the manufactured model, so the
+      // viewer draws it there alone (see `CutMarker.ncOnly`).
       markers.push({
         face: issue.face,
         from: issue.from,
         to: issue.to,
         lines: issue.lines,
+        ncOnly: true,
       })
     }
     for (const issue of unclosedCuts.get(viewing.mark) ?? []) {
