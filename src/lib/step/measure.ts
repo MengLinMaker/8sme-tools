@@ -13,8 +13,6 @@ export interface StepMeasure {
   extra: boolean
   /** volume (mm³) of the main (largest-volume) solid body */
   volume: number
-  /** surface area (mm²) of the main (largest-volume) solid body */
-  area: number
 }
 
 type Bounds = { bounds: [number[], number[]] }
@@ -57,10 +55,10 @@ export async function measureStep(bytes: Uint8Array): Promise<StepMeasure> {
  * import a STEP once and reuse the same shape for several checks (measure + light-sabre).
  */
 export async function measureShape(shape: MeasurableShape): Promise<StepMeasure> {
-  const { measureArea, measureVolume } = await import('replicad')
+  const { measureVolume } = await import('replicad')
   const whole = extents(shape.boundingBox)
   const solids = shape.solids
-  if (solids.length === 0) return { size: whole, bodies: 0, extra: false, volume: 0, area: 0 }
+  if (solids.length === 0) return { size: whole, bodies: 0, extra: false, volume: 0 }
 
   // Rank solids by bounding-box volume (a Bnd_Box pass, no surface integration) and only run the
   // expensive exact volume on candidates that can still win: a solid's true volume never exceeds
@@ -88,7 +86,6 @@ export async function measureShape(shape: MeasurableShape): Promise<StepMeasure>
     bodies: solids.length,
     extra: solids.length > 1 || growsBeyond(whole, size),
     volume: largest,
-    area: measureArea(main.solid as never),
   }
 }
 
@@ -185,21 +182,15 @@ export function compareModels(reference: StepMeasure, other: StepMeasure): Model
 /** Density of steel (kg/mm³): 7850 kg/m³ = 7.85 g/cm³. */
 export const STEEL_DENSITY_KG_PER_MM3 = 7.85e-6
 
-/** Relative slack allowed between the drawing's AREA/WEIGHT and the STEP — export/rounding noise. */
+/** Relative slack allowed between the drawing's WEIGHT and the STEP — export/rounding noise. */
 const GEOMETRY_TOLERANCE_REL = 0.05
 
 export interface GeometryCheck {
   ok: boolean
-  /** measured surface area (m²) */
-  area: number
-  /** drawing surface area (m²), when the drawing carried one */
-  expectedArea?: number
   /** density-derived mass (kg) */
   mass: number
   /** drawing mass (kg), when the drawing carried one */
   expectedMass?: number
-  /** the surface-area cross-check passed (or was skipped) */
-  areaOk: boolean
   /** the mass cross-check passed (or was skipped) */
   massOk: boolean
 }
@@ -209,25 +200,24 @@ function withinTolerance(measured: number, expected: number): boolean {
 }
 
 /**
- * Cross-checks a STEP's geometry against the drawing's title-block AREA and WEIGHT. Both are
- * derived by Tekla from the real solid, so matching them proves holes/cuts/mitres agree without
- * any view alignment. Either column is skipped when the drawing omits it.
+ * Cross-checks a STEP's geometry against the drawing's title-block WEIGHT. Tekla derives it from
+ * the real solid, so a matching mass proves holes/cuts/mitres agree without any view alignment.
+ *
+ * The drawing also carries an AREA column, but Tekla reports the *outer/exposed* surface there,
+ * whereas the kernel measures the total boundary surface (outer + inner walls). The two agree for
+ * solid profiles but diverge ~1.9× for hollow ones (RHS/SHS/CHS), so area is not compared.
+ * Volume tracks the material exactly and already catches any real geometry drift.
  */
 export function compareGeometry(
-  measured: Pick<StepMeasure, 'volume' | 'area'>,
-  drawing: { area?: number; weight?: number },
+  measured: Pick<StepMeasure, 'volume'>,
+  drawing: { weight?: number },
 ): GeometryCheck {
-  const area = measured.area / 1e6
   const mass = measured.volume * STEEL_DENSITY_KG_PER_MM3
-  const areaOk = drawing.area == null || withinTolerance(area, drawing.area)
   const massOk = drawing.weight == null || withinTolerance(mass, drawing.weight)
   return {
-    ok: areaOk && massOk,
-    area,
-    expectedArea: drawing.area,
+    ok: massOk,
     mass,
     expectedMass: drawing.weight,
-    areaOk,
     massOk,
   }
 }

@@ -699,8 +699,8 @@ export function PreflightPage() {
       const pool = getStepWorkerPool()
       const checks = new Map<string, SizeCheck>()
       const measures = new Map<string, StepMeasure>()
-      // STEP geometry vs the drawing's title-block AREA/WEIGHT (both derived from the real
-      // solid) — a projection-free way to catch geometry that drifted from the drawing.
+      // STEP geometry vs the drawing's title-block WEIGHT (derived from the real solid) — a
+      // projection-free way to catch geometry that drifted from the drawing.
       const geometries = new Map<string, GeometryCheck>()
 
       const stepParts = result.parts.filter(
@@ -982,15 +982,6 @@ export function PreflightPage() {
         }
       }
       const geometry = geometryChecks.get(part.mark)
-      if (geometry && !geometry.areaOk) {
-        extra.push({
-          severity: 'warning',
-          code: 'GEOMETRY_AREA_MISMATCH',
-          mark: part.mark,
-          message: `STEP surface area ${geometry.area.toFixed(2)} m² vs drawing ${geometry.expectedArea} m² — geometry may not match the drawing`,
-          params: { step: geometry.area.toFixed(2), drawing: geometry.expectedArea ?? '' },
-        })
-      }
       if (geometry && !geometry.massOk) {
         extra.push({
           severity: 'warning',

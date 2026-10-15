@@ -7,8 +7,8 @@ import {
   type StepMeasure,
 } from './measure'
 
-function measure(size: [number, number, number], volume: number, area = 0): StepMeasure {
-  return { size, bodies: 1, extra: false, volume, area }
+function measure(size: [number, number, number], volume: number): StepMeasure {
+  return { size, bodies: 1, extra: false, volume }
 }
 
 describe('compareModels', () => {
@@ -58,33 +58,25 @@ describe('compareSize', () => {
 })
 
 describe('compareGeometry', () => {
-  // m118: drawing lists 1.19 m² / 38.84 kg; a matching STEP measures 1.2002 m² and ~38.25 kg.
-  const drawing = { area: 1.19, weight: 38.84 }
+  // m118 (a solid T): drawing lists 38.84 kg; a matching STEP measures ~38.25 kg.
+  const drawing = { weight: 38.84 }
   const volumeFor = (kg: number) => kg / STEEL_DENSITY_KG_PER_MM3
 
-  it('passes when the STEP area and mass match the drawing', () => {
-    const check = compareGeometry({ volume: volumeFor(38.25), area: 1_200_183 }, drawing)
+  it('passes when the STEP mass matches the drawing', () => {
+    const check = compareGeometry({ volume: volumeFor(38.25) }, drawing)
     expect(check.ok).toBe(true)
-    expect(check.areaOk).toBe(true)
     expect(check.massOk).toBe(true)
   })
 
-  it('flags a surface-area mismatch', () => {
-    const check = compareGeometry({ volume: volumeFor(38.25), area: 900_000 }, drawing)
-    expect(check.areaOk).toBe(false)
-    expect(check.ok).toBe(false)
-  })
-
   it('flags a mass mismatch', () => {
-    const check = compareGeometry({ volume: volumeFor(20), area: 1_200_183 }, drawing)
+    const check = compareGeometry({ volume: volumeFor(20) }, drawing)
     expect(check.massOk).toBe(false)
     expect(check.ok).toBe(false)
   })
 
-  it('skips a column the drawing omits', () => {
-    const check = compareGeometry({ volume: 0, area: 0 }, {})
+  it('skips the check when the drawing omits the weight', () => {
+    const check = compareGeometry({ volume: 0 }, {})
     expect(check.ok).toBe(true)
-    expect(check.expectedArea).toBeUndefined()
     expect(check.expectedMass).toBeUndefined()
   })
 })

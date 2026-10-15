@@ -377,8 +377,6 @@ export const en = {
     MISSING_PDF: 'No drawing PDF found for {{mark}}',
     QTY_MISMATCH: 'NC quantity {{nc}} differs from part list quantity {{list}}',
     QTY_MISMATCH_DRAWING: 'NC quantity {{nc}} differs from drawing quantity {{drawing}}',
-    GEOMETRY_AREA_MISMATCH:
-      'STEP surface area {{step}} m² vs drawing {{drawing}} m² — geometry may not match the drawing',
     GEOMETRY_WEIGHT_MISMATCH:
       'STEP mass {{step}} kg vs drawing {{drawing}} kg — geometry may not match the drawing',
     PROFILE_MISMATCH: 'NC profile {{nc}} differs from part list {{list}}',
@@ -765,8 +763,6 @@ export const zh = {
     MISSING_PDF: '未找到 {{mark}} 的图纸 PDF',
     QTY_MISMATCH: 'NC 数量 {{nc}} 与零件清单数量 {{list}} 不一致',
     QTY_MISMATCH_DRAWING: 'NC 数量 {{nc}} 与图纸数量 {{drawing}} 不一致',
-    GEOMETRY_AREA_MISMATCH:
-      'STEP 表面积 {{step}} m² 与图纸 {{drawing}} m² 不一致——几何可能与图纸不符',
     GEOMETRY_WEIGHT_MISMATCH:
       'STEP 重量 {{step}} kg 与图纸 {{drawing}} kg 不一致——几何可能与图纸不符',
     PROFILE_MISMATCH: 'NC 型材 {{nc}} 与零件清单 {{list}} 不一致',
