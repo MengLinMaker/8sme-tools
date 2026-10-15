@@ -74,7 +74,7 @@ is **not always our canonical stance**:
 | `I` | web vertical, flanges horizontal | `o` top flange, `u` bottom flange, `h`/`v` the two web faces (left/right) |
 | `U` / `C` | **web vertical, C opening right** | `o`/`u` top/bottom flange faces, `h` outer web face (left), `v` the open side (right) |
 | `L` | legs vertical + horizontal, open up-right | `o`/`u` the vertical-leg ends, `h`/`v` the outer faces |
-| `M` | rect tube (longer side per exporter) | `o`/`u` top/bottom, `h`/`v` left/right |
+| `M` | rect tube (Tekla authors the **longer side vertical**) | `o`/`u` the short faces, `h`/`v` the long faces |
 | `T` | **flange vertical, web horizontal (pointing +v)** | `o`/`u` the flange ends, `h` the flange's outer broad face (left), `v` the web end (right) |
 | `RO` / `RU` | round — the letters are arbitrary | around the circumference |
 
@@ -103,7 +103,7 @@ non-ambiguous families:
 |---|---|---|---|---|
 | `I` (H stance) | **top** | **bottom** | **side** | **side** |
 | `U`/`C` (n stance) | **side** | **side** | **bottom** | **top** |
-| `M` (tube, long-horizontal) | top | bottom | side | side |
+| `M` (tube, long-horizontal) | **side** | **side** | **bottom** | **top** |
 | `T` (flange-down) | side | bottom | side | side |
 | `L` (L stance) | **top** † | **bottom** † | **side** | **side** |
 
@@ -118,6 +118,13 @@ pinned in `canonical.ts` and drawn in `figures/faces-angle.svg`. Confirm on the 
 > `T` row above. `canonical.ts` currently lists `{ o: side, u: bottom, v: side, h: side }`. One of
 > the two is wrong; confirm against the first real T article (the runtime material-sample in
 > `ncFaces.ts` still places the *geometry* correctly either way; only cut-priority is affected).
+
+**For a tube loaded as `M`:** Tekla authors the RHS with the **longer** cross-section side
+**vertical**, so its top/bottom view (`o`/`u`) faces are the *short* faces and its front/rear
+(`v`/`h`) faces are the *long* ones. Seating it long-side-horizontal is a 90° CW rotation: the
+short faces (`o`/`u`) become the two sides, the long faces become bottom (`v`) and top (`h`).
+`o`/`u` are the short right/left sides and `h` the long top — so the machine still cuts the
+accessible sides + top, and the long bottom face `v` is the one whose slug must clear (see §4).
 
 **For a channel loaded as `n` this gives a useful result:** the flange broad faces are the
 sides (`o`/`u`) — exactly where we *want* to cut (see §4) — and the web's outer face is the
@@ -145,7 +152,7 @@ it becomes in the canonical stance (`figures/`):
 
 ![UA150*90*12 angle — L stance: o the vertical leg's top end, u the underside, v the right end, h the left outer face](figures/faces-angle.svg)
 
-![Generic RHS — o top, u bottom, v the right side, h the left (same map as an I)](figures/faces-generic-tube.svg)
+![Generic RHS — long side horizontal: h top, v bottom (long faces); o/u the short side faces](figures/faces-generic-tube.svg)
 
 ## 4. Cut-side priority
 

@@ -327,11 +327,14 @@ the overlay pane filled in seconds after the STEP and manufactured panes. It now
 OCC worker pool as a `diff` task (`stepWorker.ts`, `occFuzzyDiff` + `serializeDiff`), so it never
 blocks the UI and can be prewarmed.
 
-- **Frame-independent, so bytes-cacheable.** `occFuzzyDiff`'s seating matrices default to identity:
-  the manufactured model is rebuilt *referenced to the ideal STEP* (`reconstructForViewer`), so the
-  two already share a frame and the cut needs no per-scene matrices. The viewer parents the diff
-  result to the seated primary group instead. `diffForViewer` (`viewerModel.ts`) memoises on the two
-  byte objects (weak, so it self-clears), and the boolean result crosses the thread as plain typed
+- **The view's seating, never its own.** The NC pipeline is independent of the STEP, so the two are
+  built in different frames — but the *viewer* already seats both in the section's canonical frame
+  (`seat.ts` `seatedPair`). `diffForViewer` (`viewerModel.ts`) meshes the two and passes the worker
+  the relative transform that maps the STEP's raw frame onto the manufactured frame
+  (`relativeSeat`); `occFuzzyDiff` then cuts with `compareMatrix` and the result is parented to the
+  seated primary group. The worker no longer runs `alignToReference` — the diff cannot pick a flip
+  that disagrees with what is drawn. `diffForViewer` memoises on the two byte objects *and the
+  profile* (weak, so it self-clears), and the boolean result crosses the thread as plain typed
   arrays (`DiffPayload`), since `BufferGeometry` is not cloneable.
 - **Eager.** `PreflightPage` kicks the diff off as soon as the viewed part's manufactured bytes
   land (foreground) and for each ±1 neighbour after its rebuild (neighbour priority), so opening a
