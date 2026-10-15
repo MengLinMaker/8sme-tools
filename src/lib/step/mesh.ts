@@ -75,15 +75,9 @@ export interface BrepEdge {
   /** Indices (into `MeshedBody.brep`) of the other faces this edge bounds. */
   neighbours: number[]
   /**
-   * This face's own outward normals at each of `points` (flat XYZ), set only for a **curved**
-   * face (a planar face's normal is constant — use `BrepFace.normal`). Lets a bevel be read
-   * locally along the edge rather than against one representative normal.
-   */
-  selfNormals?: number[]
-  /**
    * Per neighbour (aligned with `neighbours`): that neighbour's outward normals at each of
-   * `points` (flat XYZ), set only when the neighbour is **curved**; `undefined` for a planar
-   * neighbour (use its `BrepFace.normal`).
+   * `points` (flat XYZ), set only when the neighbour is **curved** — a coped end whose bevel
+   * varies along the edge; `undefined` for a planar neighbour (use its `BrepFace.normal`).
    */
   neighbourNormals?: (number[] | undefined)[]
 }
@@ -195,17 +189,16 @@ function edgeKey(edge: EdgeLike, mid: VectorLike): string {
 /**
  * The B-rep faces of a shape, each with its outward unit normal and its outer/inner wires. A
  * non-planar face (a fillet, a cope, a hole wall) still reports a representative normal, but every
- * edge also carries the **local** normals along it — its own (`selfNormals`) and each curved
- * neighbour's (`neighbourNormals`) — so a bevel can be read per point rather than against one
- * representative normal. Each edge also carries its adjacent face indices (native frame): a cut (a
- * transverse neighbour) is told from a raw-stock silhouette edge (a lengthwise neighbour).
+ * edge also carries each **curved neighbour's** local normals along it (`neighbourNormals`), so a
+ * coped end's bevel can be read per point rather than against one representative normal. Each edge
+ * also carries its adjacent face indices (native frame): a cut (a transverse neighbour) is told
+ * from a raw-stock silhouette edge (a lengthwise neighbour).
  */
 function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
   interface RawEdge {
     points: number[]
     curveType: string
     key: string
-    selfNormals?: number[]
   }
   interface RawWire {
     enclosed: boolean
@@ -244,11 +237,7 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
           const owners = edgeOwners.get(key)
           if (owners) owners.push(index)
           else edgeOwners.set(key, [index])
-          const points = sampleEdge(edge)
-          // A curved face's own normal varies along the edge — sample it, so a bevel on this face
-          // (or between it and a neighbour) can be read locally.
-          const selfNormals = planar ? undefined : sampleNormals(face, points)
-          edges.push({ points, curveType: edge.geomType, key, selfNormals })
+          edges.push({ points: sampleEdge(edge), curveType: edge.geomType, key })
           edge.delete()
         }
         wires.push({ enclosed, edges })
@@ -320,13 +309,7 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
             ? sampleNormals(neighbour, edge.points)
             : undefined
         })
-        return {
-          points: edge.points,
-          curveType: edge.curveType,
-          neighbours,
-          selfNormals: edge.selfNormals,
-          neighbourNormals,
-        }
+        return { points: edge.points, curveType: edge.curveType, neighbours, neighbourNormals }
       }),
     })),
   }))

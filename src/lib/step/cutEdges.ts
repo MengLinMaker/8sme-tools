@@ -254,8 +254,6 @@ export function classifyEdgeSegments(
 export interface SeatedBrepEdge {
   points: number[]
   neighbours: number[]
-  /** This face's own normals at each point (seated, flat XYZ); set for a curved face only. */
-  selfNormals?: number[]
   /** Per neighbour (aligned with `neighbours`): a curved neighbour's normals at each point. */
   neighbourNormals?: (number[] | undefined)[]
 }
@@ -484,26 +482,20 @@ export function brepCutSegments(
   /**
    * Per-segment bevels of a cut edge: the local tilt between the stock surface and the cut face it
    * borders, both sampled at each point so a **curved** stock corner or cut face (a cope, a fillet)
-   * is followed rather than read against one representative normal. `fallbackStockNormal` is the
-   * plane a curved stock face projects onto. A planar face's normal is constant.
+   * is followed rather than read against one representative normal. `stockNormal` is the flat face
+   * the edge rides — a curved stock corner reads against the plane it projects onto, so a square end
+   * across a rounded RHS/SHS corner is **not** mistaken for a bevel.
    */
-  const edgeBevels = (
-    face: SeatedBrepFace,
-    edge: SeatedBrepEdge,
-    fallbackStockNormal: Vec3,
-  ): Bevel[] => {
+  const edgeBevels = (edge: SeatedBrepEdge, stockNormal: Vec3): Bevel[] => {
     const count = edge.points.length / 3
     const out: Bevel[] = new Array(Math.max(0, count - 1)).fill(NO_BEVEL)
     const pos = edge.neighbours.findIndex((n) => !stock[n])
     if (pos < 0) return out
     const cut = faces[edge.neighbours[pos] as number]
     if (!cut) return out
-    // The cut face's local normals along this edge (only a curved face carries them; a planar one
-    // uses its single normal). Same for the stock face — a curved stock corner samples locally.
+    // A curved cut face (a coped end) carries local normals; a planar one uses its single normal.
     const cutNormals = cut.planar ? undefined : edge.neighbourNormals?.[pos]
-    const stockNormals = face.planar ? undefined : edge.selfNormals
     for (let s = 0; s < out.length; s++) {
-      const stockNormal = sampleNormal(stockNormals, s) ?? fallbackStockNormal
       const cutNormal = sampleNormal(cutNormals, s) ?? cut.normal
       out[s] = edgeBevel(stockNormal, cutNormal)
     }
@@ -516,13 +508,13 @@ export function brepCutSegments(
       for (const edge of wire.edges) {
         if (!wire.enclosed && !edge.neighbours.some((n) => !stock[n])) continue
         if (face.planar) {
-          pushSegments(edge.points, ownThickness, edgeBevels(face, edge, face.normal))
+          pushSegments(edge.points, ownThickness, edgeBevels(edge, face.normal))
         } else {
           const projected = projectToNearest(edge.points)
           pushSegments(
             projected.points,
             projected.plane ? thicknessOf(projected.plane) : ownThickness,
-            edgeBevels(face, edge, projected.plane?.normal ?? face.normal),
+            edgeBevels(edge, projected.plane?.normal ?? face.normal),
           )
         }
       }

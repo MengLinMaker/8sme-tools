@@ -408,9 +408,9 @@ export function PreflightPage() {
     if (!viewingNcGeom) return []
     const section = viewingNcSection ?? stock?.points ?? null
     if (!section) return []
-    const frame = resolveNcFaceFrame(section, viewingNcGeom)
+    const frame = resolveNcFaceFrame(section, viewingNcGeom, viewing?.nc?.profile)
     return cutThicknesses(frame, section, viewingNcGeom)
-  }, [viewingNcGeom, viewingNcSection, stock])
+  }, [viewingNcGeom, viewingNcSection, stock, viewing])
   // STEP cut-edge colouring: the ideal model's cut edges on the side/top faces, keyed to the same
   // thickness legend. `profile` lets the viewer resolve the target faces for the right family.
   const viewingProfileCode = viewing?.nc?.profile ?? null

@@ -163,9 +163,6 @@ async function run(mark: string, ncPath: string, stpPath: string): Promise<Pipel
             return {
               points: transform(edge.points, placement),
               neighbours: edge.neighbours,
-              selfNormals: edge.selfNormals
-                ? transform(edge.selfNormals, rotationMatrix)
-                : undefined,
               neighbourNormals: edge.neighbourNormals?.map((normals) =>
                 normals ? transform(normals, rotationMatrix) : undefined,
               ),

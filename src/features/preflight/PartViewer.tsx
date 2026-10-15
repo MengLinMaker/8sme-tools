@@ -694,9 +694,6 @@ function mountScene(
               edges: wire.edges.map((edge) => ({
                 points: transformVertices(edge.points, matrixWorld),
                 neighbours: edge.neighbours,
-                selfNormals: edge.selfNormals
-                  ? transformVertices(edge.selfNormals, rotationMatrix)
-                  : undefined,
                 neighbourNormals: edge.neighbourNormals?.map((normals) =>
                   normals ? transformVertices(normals, rotationMatrix) : undefined,
                 ),

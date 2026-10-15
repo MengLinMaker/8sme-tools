@@ -13,7 +13,9 @@
  * `normal` for orienting bevel spurs.
  */
 
+import { profileFamily } from '@/lib/sections/canonical'
 import {
+  type Axis,
   faceHalf,
   faceNormal,
   faceSpanAxis,
@@ -171,9 +173,80 @@ function pushQuad(target: number[], a: Vec3, b: Vec3, c: Vec3, d: Vec3): void {
   pushTriangle(target, a, c, d)
 }
 
+/** Signed area of a closed polygon (positive = counter-clockwise). */
+function signedArea(points: [number, number][]): number {
+  let twice = 0
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    twice += points[j][0] * points[i][1] - points[i][0] * points[j][1]
+  }
+  return twice / 2
+}
+
+/**
+ * Leg thickness (mm) an EA/UA callout names, e.g. `EA75*75*6` → 6. The code itself carries it, so
+ * this is exact and needs no geometry; returns 0 when the callout omits the thickness (`EA75*75`).
+ */
+function angleCodeThickness(profile: string): number {
+  const n = profile.match(/\d+(?:\.\d+)?/g)?.map(Number) ?? []
+  return n.length >= 3 ? (n[2] as number) : 0
+}
+
+/**
+ * Wall thickness (mm) a hollow callout names — `RHS150*100*9.0` / `SHS100*100*6.0` → 9 / 6 and
+ * `CHS88.9*4.0` → 4. The code carries it (the outer outline alone can't reveal a hollow's wall), so
+ * no geometry is needed; 0 when the wall is omitted.
+ */
+function hollowWallThickness(profile: string): number {
+  const clean = profile.trim().toUpperCase()
+  const n = clean.match(/\d+(?:\.\d+)?/g)?.map(Number) ?? []
+  return /^CHS/.test(clean) ? (n[1] ?? 0) : (n[2] ?? 0)
+}
+
+/**
+ * Leg thickness (mm) of an angle face: the distance from the face plane to the opposite **long flat**
+ * edge of the leg. Measuring to the nearest *vertex* collapses on the toe radius, whose chords sit
+ * ~1 mm inside the leg face; the leg's far surface is instead the long flat opposite edge.
+ */
+function angleFaceThickness(
+  normal: { axis: Axis; sign: 1 | -1 },
+  section: [number, number][],
+  faceCoord: number,
+): number {
+  const axis = normal.axis
+  const ccw = signedArea(section) >= 0
+  const candidates: { distance: number; length: number }[] = []
+  for (let i = 0; i < section.length; i++) {
+    const a = section[i] as [number, number]
+    const b = section[(i + 1) % section.length] as [number, number]
+    const dx = b[0] - a[0]
+    const dy = b[1] - a[1]
+    const length = Math.hypot(dx, dy) || 1
+    // Outward normal of a CCW polygon edge is (dy, -dx); reversed for a CW polygon.
+    const nAxis = (axis === 0 ? (ccw ? dy : -dy) : ccw ? -dx : dx) / length
+    // Parallel to the face and facing back toward it (so a same-side silhouette edge is ignored).
+    if (nAxis * normal.sign > -0.9) continue
+    const distance = Math.abs((a[axis] ?? 0) - faceCoord)
+    if (distance > 0.01) candidates.push({ distance, length })
+  }
+  if (candidates.length > 0) {
+    // A rounded toe yields only short chords, so ignore anything much shorter than the longest
+    // opposite flat — that flat is the leg's far surface.
+    const longest = Math.max(...candidates.map((c) => c.length))
+    let min = Number.POSITIVE_INFINITY
+    for (const c of candidates) if (c.length >= longest * 0.5 && c.distance < min) min = c.distance
+    if (Number.isFinite(min)) return min
+  }
+  return 0
+}
+
 /**
  * Wall thickness (mm) a face cuts through: the distance from the face plane to the nearest opposite
  * edge of the section (the plate the cut passes through) — e.g. the flange/ web thickness.
+ *
+ * A section's wall is named by its callout where the code carries it — an **angle**'s leg thickness
+ * (`EA75*75*6` → 6 mm) and a **hollow**'s wall (`RHS150*100*9.0` → 9, `SHS100*100*6.0` → 6) — so
+ * those are used directly. A short code that omits it falls back to the long flat rule (an angle) or
+ * the nearest opposite vertex (everything else), as before.
  */
 export function faceThickness(
   frame: NcFaceFrame,
@@ -183,6 +256,18 @@ export function faceThickness(
   const normal = faceNormal(frame, face, section)
   const axis = normal.axis
   const faceCoord = normal.sign * faceHalf(frame, axis)
+  if (frame.profile) {
+    const family = profileFamily(frame.profile)
+    if (family === 'angle') {
+      const named = angleCodeThickness(frame.profile)
+      if (named > 0) return named
+      const value = angleFaceThickness(normal, section, faceCoord)
+      if (value > 0) return value
+    } else if (family === 'tube' || family === 'round') {
+      const wall = hollowWallThickness(frame.profile)
+      if (wall > 0) return wall
+    }
+  }
   let min = Number.POSITIVE_INFINITY
   for (const point of section) {
     const distance = Math.abs((point[axis] ?? 0) - faceCoord)

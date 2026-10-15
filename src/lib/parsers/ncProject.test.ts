@@ -1,4 +1,8 @@
+import { readFileSync } from 'node:fs'
+import { nw30Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
+import { partSectionForCode } from '@/lib/sections/stock'
+import { parseDstv } from './dstv'
 import {
   type NcFaceFrame,
   ncAuthoredStancePoints,
@@ -6,7 +10,8 @@ import {
   resolveNcFaceFrame,
 } from './ncFaces'
 import type { NcGeometry } from './ncGeometry'
-import { holeOutline, projectNc } from './ncProject'
+import { parseNcGeometry } from './ncGeometry'
+import { cutThicknesses, faceThickness, holeOutline, projectNc } from './ncProject'
 
 describe('resolveNcFaceFrame', () => {
   it('matches each face pair to the section axis its contour spans', () => {
@@ -99,6 +104,58 @@ describe('channel authored stance', () => {
     const frame = resolveNcFaceFrame(section, nc)
     expect(frame.profile).toBeUndefined()
     expect(placeNcFace(frame, 'o', 0, 0, section).cross[1]).toBeCloseTo(-25, 6)
+  })
+})
+
+describe('faceThickness', () => {
+  const empty: NcGeometry = { contours: [], holes: [], notches: [] }
+  const section = partSectionForCode('EA75*75*6', [75, 75, 6, 6, 8])?.points ?? []
+
+  it('takes an angle leg thickness from the section code', () => {
+    const frame = resolveNcFaceFrame(section, empty, 'EA75*75*6')
+    // The toe radius leaves vertices/chords ~1 mm inside the leg face; the callout names the 6 mm leg.
+    expect(faceThickness(frame, section, 'u')).toBe(6)
+    expect(faceThickness(frame, section, 'h')).toBe(6)
+  })
+
+  it('falls back to the leg geometry when the code omits the thickness', () => {
+    const frame = resolveNcFaceFrame(section, empty, 'EA75')
+    expect(faceThickness(frame, section, 'u')).toBeCloseTo(6, 6)
+  })
+
+  it('reports the real leg thickness in an angle NC legend', () => {
+    const text = readFileSync(nw30Bottom('a2.nc1'), 'utf8')
+    const header = parseDstv(text).header
+    const geo = parseNcGeometry(text)
+    const points = partSectionForCode(header.profile, header.dimensions)?.points
+    expect(points).toBeTruthy()
+    if (!points) return
+    const frame = resolveNcFaceFrame(points, geo, header.profile)
+    expect(cutThicknesses(frame, points, geo)).toEqual([6])
+  })
+
+  it('takes a hollow wall thickness from the section code', () => {
+    // The outer outline alone can't reveal a hollow's wall — the callout names it.
+    const rhs = partSectionForCode('RHS150*100*9.0', [150, 100, 9, 9, 22.5])?.points ?? []
+    expect(faceThickness(resolveNcFaceFrame(rhs, empty, 'RHS150*100*9.0'), rhs, 'h')).toBe(9)
+    const shs = partSectionForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])?.points ?? []
+    expect(faceThickness(resolveNcFaceFrame(shs, empty, 'SHS100*100*6.0'), shs, 'o')).toBe(6)
+  })
+
+  it('reports hollow walls in the NC legend', () => {
+    for (const [path, wall] of [
+      [nw31Top('NC files', 'm117.nc1'), 9], // RHS150*100*9.0
+      [nw30Bottom('m105.nc1'), 6], // SHS100*100*6.0
+    ] as [string, number][]) {
+      const text = readFileSync(path, 'utf8')
+      const header = parseDstv(text).header
+      const geo = parseNcGeometry(text)
+      const points = partSectionForCode(header.profile, header.dimensions)?.points
+      expect(points).toBeTruthy()
+      if (!points) continue
+      const frame = resolveNcFaceFrame(points, geo, header.profile)
+      expect(cutThicknesses(frame, points, geo)).toEqual([wall])
+    }
   })
 })
 
