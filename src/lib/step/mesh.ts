@@ -48,8 +48,6 @@ interface WireLike {
 
 interface FaceLike {
   geomType: string
-  UVBounds: { uMin: number; uMax: number; vMin: number; vMax: number }
-  pointOnSurface(u: number, v: number): VectorLike
   normalAt(location?: VectorLike): VectorLike
   clone(): FaceLike
   outerWire(): WireLike
@@ -76,6 +74,18 @@ export interface BrepEdge {
   curveType: string
   /** Indices (into `MeshedBody.brep`) of the other faces this edge bounds. */
   neighbours: number[]
+  /**
+   * This face's own outward normals at each of `points` (flat XYZ), set only for a **curved**
+   * face (a planar face's normal is constant — use `BrepFace.normal`). Lets a bevel be read
+   * locally along the edge rather than against one representative normal.
+   */
+  selfNormals?: number[]
+  /**
+   * Per neighbour (aligned with `neighbours`): that neighbour's outward normals at each of
+   * `points` (flat XYZ), set only when the neighbour is **curved**; `undefined` for a planar
+   * neighbour (use its `BrepFace.normal`).
+   */
+  neighbourNormals?: (number[] | undefined)[]
 }
 
 /**
@@ -154,6 +164,25 @@ function sampleEdge(edge: EdgeLike): number[] {
   return points
 }
 
+/**
+ * A face's outward **unit** normals at each of `points` (flat XYZ), normalised. Used for a curved
+ * face, whose normal varies along an edge — so a bevel can be read locally instead of against one
+ * representative `normalAt()`.
+ */
+function sampleNormals(face: FaceLike, points: number[]): number[] {
+  const out: number[] = []
+  for (let i = 0; i + 2 < points.length; i += 3) {
+    const n = face.normalAt({
+      x: points[i] as number,
+      y: points[i + 1] as number,
+      z: points[i + 2] as number,
+    })
+    const length = Math.hypot(n.x, n.y, n.z) || 1
+    out.push(n.x / length, n.y / length, n.z / length)
+  }
+  return out
+}
+
 /** Direction-independent identity for an edge, so its adjacent faces map to one key. */
 function edgeKey(edge: EdgeLike, mid: VectorLike): string {
   const quantize = (value: number): number => Math.round(value * 100)
@@ -164,11 +193,11 @@ function edgeKey(edge: EdgeLike, mid: VectorLike): string {
 }
 
 /**
- * The planar B-rep faces of a shape, each with its outward unit normal and its outer/inner wires.
- * Non-planar faces (fillets, copes, hole walls) are skipped as *reported* faces — the cut edges we
- * colour live on planar stock faces — but their edges still join the adjacency map, so an edge on a
- * stock face can be recognised as a cut when the face behind it is a curved cut face (a coped end,
- * a hole wall). Each edge carries the normals of its adjacent faces (native frame): a cut (a
+ * The B-rep faces of a shape, each with its outward unit normal and its outer/inner wires. A
+ * non-planar face (a fillet, a cope, a hole wall) still reports a representative normal, but every
+ * edge also carries the **local** normals along it — its own (`selfNormals`) and each curved
+ * neighbour's (`neighbourNormals`) — so a bevel can be read per point rather than against one
+ * representative normal. Each edge also carries its adjacent face indices (native frame): a cut (a
  * transverse neighbour) is told from a raw-stock silhouette edge (a lengthwise neighbour).
  */
 function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
@@ -176,6 +205,7 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
     points: number[]
     curveType: string
     key: string
+    selfNormals?: number[]
   }
   interface RawWire {
     enclosed: boolean
@@ -197,27 +227,12 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
     kept.push(face)
     let planar = false
     let normal: Vec3 = [0, 0, 0]
-    const surface: number[] = []
     const wires: RawWire[] = []
     try {
       planar = face.geomType === 'PLANE'
       const normalVec = face.normalAt()
       const length = Math.hypot(normalVec.x, normalVec.y, normalVec.z) || 1
       normal = [normalVec.x / length, normalVec.y / length, normalVec.z / length]
-      // Sample a curved face's *surface* (its UV bounds are finite); a plane's UV bounds are
-      // unbounded, so a planar face uses its boundary centroid instead (below).
-      if (!planar) {
-        const uv = face.UVBounds
-        for (const fu of [0.25, 0.5, 0.75]) {
-          for (const fv of [0.25, 0.5, 0.75]) {
-            const point = face.pointOnSurface(
-              uv.uMin + (uv.uMax - uv.uMin) * fu,
-              uv.vMin + (uv.vMax - uv.vMin) * fv,
-            )
-            surface.push(point.x, point.y, point.z)
-          }
-        }
-      }
       const outer = face.clone().outerWire()
       const inner = face.clone().innerWires()
       const wireList: [WireLike, boolean][] = [[outer, false]]
@@ -229,7 +244,11 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
           const owners = edgeOwners.get(key)
           if (owners) owners.push(index)
           else edgeOwners.set(key, [index])
-          edges.push({ points: sampleEdge(edge), curveType: edge.geomType, key })
+          const points = sampleEdge(edge)
+          // A curved face's own normal varies along the edge — sample it, so a bevel on this face
+          // (or between it and a neighbour) can be read locally.
+          const selfNormals = planar ? undefined : sampleNormals(face, points)
+          edges.push({ points, curveType: edge.geomType, key, selfNormals })
           edge.delete()
         }
         wires.push({ enclosed, edges })
@@ -252,11 +271,35 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
         }
       }
     }
+    // Stock/cut sample points. A planar face uses its boundary centroid (inset for a lengthwise
+    // chamfer → a cut). A curved face uses its *boundary* points: a genuine rounded stock corner's
+    // tangent points lie on the outline regardless of its exact radius, while a bore/inner face's
+    // boundary sits inset — robust where sampling the surface is not (the model radius need not
+    // match our ideal section exactly).
+    const samples: number[] = []
+    if (planar && count > 0) {
+      samples.push(cx / count, cy / count, cz / count)
+    } else {
+      for (const wire of wires) {
+        for (const edge of wire.edges) {
+          for (let i = 0; i + 2 < edge.points.length; i += 3) {
+            samples.push(
+              edge.points[i] as number,
+              edge.points[i + 1] as number,
+              edge.points[i + 2] as number,
+            )
+            if (samples.length >= 120) break
+          }
+          if (samples.length >= 120) break
+        }
+        if (samples.length >= 120) break
+      }
+    }
     raw.push({
       normal,
       center: count > 0 ? [cx / count, cy / count, cz / count] : [0, 0, 0],
       planar,
-      samples: planar && count > 0 ? [cx / count, cy / count, cz / count] : surface,
+      samples,
       wires,
     })
   })
@@ -268,11 +311,23 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
     samples: face.samples,
     wires: face.wires.map((wire) => ({
       enclosed: wire.enclosed,
-      edges: wire.edges.map((edge) => ({
-        points: edge.points,
-        curveType: edge.curveType,
-        neighbours: (edgeOwners.get(edge.key) ?? []).filter((owner) => owner !== index),
-      })),
+      edges: wire.edges.map((edge) => {
+        const neighbours = (edgeOwners.get(edge.key) ?? []).filter((owner) => owner !== index)
+        // Each curved neighbour's own normals along this edge (planar neighbours carry none).
+        const neighbourNormals = neighbours.map((owner) => {
+          const neighbour = kept[owner]
+          return neighbour && neighbour.geomType !== 'PLANE'
+            ? sampleNormals(neighbour, edge.points)
+            : undefined
+        })
+        return {
+          points: edge.points,
+          curveType: edge.curveType,
+          neighbours,
+          selfNormals: edge.selfNormals,
+          neighbourNormals,
+        }
+      }),
     })),
   }))
 

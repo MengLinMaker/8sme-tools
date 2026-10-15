@@ -253,6 +253,86 @@ describe('brepCutSegments', () => {
     expect(step[0]?.bevelDir).toBeNull()
   })
 
+  it('keeps a bevel fin where the cut rounds a curved stock corner (fillet)', () => {
+    const degrees = 20
+    const rad = (degrees * Math.PI) / 180
+    // A rounded stock corner (curved face, adjacent to the top target) carries the same transverse
+    // cut edge; the fin must survive there, read against the plane it projects onto.
+    const top: SeatedBrepFace = {
+      normal: [0, 0, 1],
+      center: [50, 0, 25],
+      planar: true,
+      samples: [50, 0, 25],
+      wires: [{ enclosed: false, edges: [{ points: [0, 0, 25, 100, 0, 25], neighbours: [1] }] }],
+    }
+    const fillet: SeatedBrepFace = {
+      normal: [0, 0.7, 0.7],
+      center: [50, 25, 20],
+      planar: false,
+      samples: [50, 0, 25, 50, 50, 25],
+      wires: [
+        {
+          enclosed: false,
+          edges: [
+            { points: [0, 0, 25, 100, 0, 25], neighbours: [0] },
+            { points: [0, -50, 25, 0, 50, 25], neighbours: [2] },
+          ],
+        },
+      ],
+    }
+    const cut: SeatedBrepFace = {
+      normal: [Math.cos(rad), 0, Math.sin(rad)],
+      center: [0, 0, 15],
+      planar: true,
+      samples: [0, 0, 15],
+      wires: [{ enclosed: false, edges: [{ points: [0, -50, 25, 0, 50, 25], neighbours: [1] }] }],
+    }
+    const out = brepCutSegments([top, fillet, cut], SECTION, [], X_AXIS, Y_AXIS, MEMBER, [
+      [0, 0, 1],
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0]?.bevel).toBeCloseTo(degrees, 1)
+    expect(out[0]?.bevelDir?.[0]).toBeCloseTo(-Math.sin(rad), 3)
+  })
+
+  it('reads a bevel per segment from a curved cut face (local neighbour normals)', () => {
+    const n = (deg: number): Vec3 => {
+      const r = (deg * Math.PI) / 180
+      return [Math.cos(r), 0, Math.sin(r)]
+    }
+    // A three-point edge → two segments; the cut face is curved and its local normal tapers 20° → 10°.
+    const top: SeatedBrepFace = {
+      normal: [0, 0, 1],
+      center: [50, 0, 25],
+      planar: true,
+      samples: [50, 0, 25],
+      wires: [
+        {
+          enclosed: false,
+          edges: [
+            {
+              points: [0, -50, 25, 0, 0, 25, 0, 50, 25],
+              neighbours: [1],
+              neighbourNormals: [[...n(20), ...n(10), ...n(10)]],
+            },
+          ],
+        },
+      ],
+    }
+    const cope: SeatedBrepFace = {
+      normal: n(20),
+      center: [0, 0, 15],
+      planar: false,
+      samples: [],
+      wires: [{ enclosed: false, edges: [{ points: [0, -50, 25, 0, 50, 25], neighbours: [0] }] }],
+    }
+    const out = brepCutSegments([top, cope], SECTION, [], X_AXIS, Y_AXIS, MEMBER, [[0, 0, 1]])
+    expect(out).toHaveLength(2)
+    expect(out[0]?.bevel).toBeCloseTo(20, 1)
+    expect(out[1]?.bevel).toBeCloseTo(10, 1)
+    expect(out[0]?.bevelDir).not.toBeNull()
+  })
+
   it('treats a lengthwise chamfer as a cut even though its boundary sits on the outline', () => {
     // A chamfer cut down the corner: its boundary edges touch the outline (top face at z = 25), but
     // its *surface* (sampled by the centroid) is inset → a cut face, so the edge is captured.

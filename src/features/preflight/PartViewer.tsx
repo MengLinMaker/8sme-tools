@@ -672,6 +672,8 @@ function mountScene(
       const groups = new Map<number, number[]>()
       /** Translucent bevel-area triangle soup per thickness (STEP-detected bevels). */
       const bevelGroups = new Map<number, number[]>()
+      // Normals only rotate (no translation), unlike the point transforms.
+      const rotationMatrix = new Matrix4().makeRotationFromQuaternion(rotation)
       for (const body of step.bodies) {
         const seated: SeatedBrepFace[] = (body.brep ?? []).map((face) => {
           const normal = new Vector3(
@@ -692,6 +694,12 @@ function mountScene(
               edges: wire.edges.map((edge) => ({
                 points: transformVertices(edge.points, matrixWorld),
                 neighbours: edge.neighbours,
+                selfNormals: edge.selfNormals
+                  ? transformVertices(edge.selfNormals, rotationMatrix)
+                  : undefined,
+                neighbourNormals: edge.neighbourNormals?.map((normals) =>
+                  normals ? transformVertices(normals, rotationMatrix) : undefined,
+                ),
               })),
             })),
           }

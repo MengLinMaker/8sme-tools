@@ -89,6 +89,8 @@ interface Pipeline {
   faces: number
   /** Bevel angles (deg) detected on the STEP cut edges, ascending. */
   bevelAngles: number[]
+  /** How many cut segments carry a bevel (a curved cope yields many, not just a few planes). */
+  bevelSegments: number
   /** Every edge neighbour index is a valid face index. */
   neighboursValid: boolean
 }
@@ -137,11 +139,13 @@ async function run(mark: string, ncPath: string, stpPath: string): Promise<Pipel
 
   const found = new Set<number>()
   const bevels = new Set<number>()
+  let bevelSegments = 0
   let faces = 0
   let neighboursValid = true
   for (const body of meshed.bodies) {
     const brep = body.brep ?? []
     faces += brep.length
+    const rotationMatrix = new Matrix4().makeRotationFromQuaternion(rotation)
     const seated: SeatedBrepFace[] = brep.map((face) => {
       const normal = new Vector3(...face.normal).applyQuaternion(rotation)
       const center = new Vector3(...face.center).applyMatrix4(placement)
@@ -156,7 +160,16 @@ async function run(mark: string, ncPath: string, stpPath: string): Promise<Pipel
             for (const n of edge.neighbours) {
               if (n < 0 || n >= brep.length) neighboursValid = false
             }
-            return { points: transform(edge.points, placement), neighbours: edge.neighbours }
+            return {
+              points: transform(edge.points, placement),
+              neighbours: edge.neighbours,
+              selfNormals: edge.selfNormals
+                ? transform(edge.selfNormals, rotationMatrix)
+                : undefined,
+              neighbourNormals: edge.neighbourNormals?.map((normals) =>
+                normals ? transform(normals, rotationMatrix) : undefined,
+              ),
+            }
           }),
         })),
       }
@@ -171,7 +184,10 @@ async function run(mark: string, ncPath: string, stpPath: string): Promise<Pipel
       targets,
     )) {
       found.add(cut.thickness)
-      if (cut.bevel > 0) bevels.add(cut.bevel)
+      if (cut.bevel > 0) {
+        bevels.add(cut.bevel)
+        bevelSegments++
+      }
     }
   }
   return {
@@ -179,6 +195,7 @@ async function run(mark: string, ncPath: string, stpPath: string): Promise<Pipel
     legend: cutThicknesses(frame, section.points, geo),
     faces,
     bevelAngles: [...bevels].sort((a, b) => a - b),
+    bevelSegments,
     neighboursValid,
   }
 }
@@ -207,6 +224,12 @@ const PFC_BEVEL = {
   mark: 'm31',
   nc: nw31Top('NC files', 'm31.nc1'),
   stp: nw31Top('STP files', 'm31.stp'),
+}
+/** A PFC whose ~20° bevel rides a **curved** cope (the bevel face is non-planar). */
+const PFC_COPE = {
+  mark: 'm130',
+  nc: nw31Top('NC files', 'm130.nc1'),
+  stp: nw31Top('STP files', 'm130.stp'),
 }
 const HAVE = existsSync(PFC.stp) && existsSync(PFC.nc)
 
@@ -274,6 +297,20 @@ describe.skipIf(!HAVE)('B-rep cut edges', () => {
       expect(bevelAngles.some((angle) => Math.abs(angle - 20) < 1.5)).toBe(true)
       for (const angle of bevelAngles) expect(angle).toBeLessThanOrEqual(45)
     }
+  }, 120000)
+
+  it('follows a bevel along a curved cope (non-planar cut face)', async () => {
+    if (!existsSync(PFC_COPE.stp) || !existsSync(PFC_COPE.nc)) return
+    // m130's ~20° bevel rides a curved cope: before local neighbour normals only a few planar
+    // segments were bevelled; now the whole curved run is.
+    const { bevelAngles, bevelSegments, neighboursValid } = await run(
+      PFC_COPE.mark,
+      PFC_COPE.nc,
+      PFC_COPE.stp,
+    )
+    expect(neighboursValid).toBe(true)
+    expect(bevelAngles.some((angle) => Math.abs(angle - 20) < 2)).toBe(true)
+    expect(bevelSegments).toBeGreaterThan(10)
   }, 120000)
 
   it('projects RHS corner cuts to the wall thickness (no per-point ramp)', async () => {
