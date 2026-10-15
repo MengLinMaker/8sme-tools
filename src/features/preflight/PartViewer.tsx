@@ -1912,6 +1912,7 @@ export default function PartViewer({
           <button
             type="button"
             onClick={toggleGrid}
+            title={t('viewer.gridHint')}
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
             {showGrid ? t('viewer.hideGrid') : t('viewer.showGrid')}

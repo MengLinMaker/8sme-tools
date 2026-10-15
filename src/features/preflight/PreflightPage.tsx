@@ -2371,14 +2371,13 @@ export function PreflightPage() {
                     </div>
                   )}
                   <div className="flex items-center gap-1.5">
-                    <Toggle pressed={showGrid} onPressedChange={setShowGrid}>
+                    <Toggle
+                      pressed={showGrid}
+                      onPressedChange={setShowGrid}
+                      title={t('viewer.gridHint')}
+                    >
                       {t('viewer.grid')}
                     </Toggle>
-                    {showGrid && (
-                      <span className="tabular-nums text-muted-foreground">
-                        {t('viewer.gridScale')}
-                      </span>
-                    )}
                   </div>
                   {paneCount > 1 && (
                     <div

@@ -340,7 +340,8 @@ export const en = {
     showStock: 'Show stock',
     stock: 'Stock',
     grid: 'Grid',
-    gridScale: '1 cm · 10 cm · 1 m',
+    gridHint:
+      'Reference grid on the base plane: 1 cm, 10 cm and 1 m lines — finer lines drop out as you zoom out',
     hideGrid: 'Hide grid',
     showGrid: 'Show grid',
     flip: 'Flip {{label}}',
@@ -734,7 +735,7 @@ export const zh = {
     showStock: '显示原材',
     stock: '原材',
     grid: '网格',
-    gridScale: '1 cm · 10 cm · 1 m',
+    gridHint: '基准面上的参考网格：1 厘米、10 厘米和 1 米线——缩小视图时更细的线会消失',
     hideGrid: '隐藏网格',
     showGrid: '显示网格',
     flip: '翻转 {{label}}',
