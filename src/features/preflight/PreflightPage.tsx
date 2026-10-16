@@ -59,7 +59,13 @@ import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { cutThicknesses } from '@/lib/parsers/ncProject'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
-import { partSectionForCode, resolveStockOutline, type StockOutline } from '@/lib/sections/stock'
+import type { SectionGuess } from '@/lib/sections/detect'
+import {
+  partSectionForCode,
+  resolveStockOutline,
+  type StockOutline,
+  sectionMassPerMetre,
+} from '@/lib/sections/stock'
 import { cleanStep } from '@/lib/step/clean'
 import {
   compareGeometry,
@@ -132,6 +138,12 @@ const MASS_YELLOW_KG = 20
 
 /** The head's bevel range (deg); a unify-bevel angle outside it is rejected. */
 const MAX_BEVEL_DEG = Math.max(Math.abs(MACHINE.bevel.minDeg), Math.abs(MACHINE.bevel.maxDeg))
+
+/**
+ * Confidence a STEP-inferred section must reach before its **real** outline is trusted as the
+ * stock ghost. Below this it is treated as an approximate match and the catalogue outline is used.
+ */
+const SECTION_TRUST_SCORE = 0.9
 
 const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [
   { labelKey: 'preflight.columns.mark', key: 'mark' },
@@ -332,6 +344,10 @@ export function PreflightPage() {
   )
   /** Per-part STEP geometry cross-checked against the drawing's title-block AREA/WEIGHT. */
   const [geometryChecks, setGeometryChecks] = useState<Map<string, GeometryCheck>>(new Map())
+  /** Section read from the STEP geometry for parts the job ships without an NC / drawing profile. */
+  const [sectionGuesses, setSectionGuesses] = useState<Map<string, SectionGuess>>(new Map())
+  /** Member length (mm) read from the STEP bounding box, for parts with no drawing / NC length. */
+  const [stepLengths, setStepLengths] = useState<Map<string, number>>(new Map())
   /** Per-part laser-cut manufacturability issues (sudden thickness steps). */
   const [cutIssues, setCutIssues] = useState<Map<string, Finding[]>>(new Map())
   /** Per-part cut-reach failures (a bevel whose bore exceeds the head's pierce cap). */
@@ -385,7 +401,18 @@ export function PreflightPage() {
     if (!viewing) return
     let cancelled = false
     const pdfBytes = viewing.pdf ? bytesByPath.get(viewing.pdf.path) : undefined
-    void resolveStockOutline(viewing, pdfBytes).then(
+    const guess = sectionGuesses.get(viewing.mark)
+    // Use the **real** measured outline as the ghost only when the geometry confidently matched a
+    // known section (score gate) — otherwise fall back to the catalogue outline.
+    const trustedOutline =
+      guess && guess.outline && guess.score >= SECTION_TRUST_SCORE
+        ? { points: guess.outline.outer, holes: guess.outline.holes }
+        : undefined
+    void resolveStockOutline(
+      viewing,
+      pdfBytes,
+      guess && { code: guess.code, dims: guess.dims, mass: guess.mass, outline: trustedOutline },
+    ).then(
       (outline) => {
         if (!cancelled) setStock(outline)
       },
@@ -396,7 +423,7 @@ export function PreflightPage() {
     return () => {
       cancelled = true
     }
-  }, [viewing, bytesByPath])
+  }, [viewing, bytesByPath, sectionGuesses])
 
   const viewingPdfBytes = viewing?.pdf ? bytesByPath.get(viewing.pdf.path) : undefined
 
@@ -722,6 +749,8 @@ export function PreflightPage() {
     setModelChecks(new Map())
     setManufactureChecks(new Map())
     setGeometryChecks(new Map())
+    setSectionGuesses(new Map())
+    setStepLengths(new Map())
     setCutIssues(new Map())
     setReachChecks(new Map())
     setBevelChanges(new Map())
@@ -847,6 +876,11 @@ export function PreflightPage() {
       // STEP geometry vs the drawing's title-block WEIGHT (derived from the real solid) — a
       // projection-free way to catch geometry that drifted from the drawing.
       const geometries = new Map<string, GeometryCheck>()
+      // Sections read from the STEP cross-section, for parts with neither an NC nor a part-list
+      // profile (the STEP-only job).
+      const sections = new Map<string, SectionGuess>()
+      // Member length from the STEP bounding box (its longest extent), for the same STEP-only case.
+      const lengths = new Map<string, number>()
 
       const stepParts = result.parts.filter(
         (part) => (part.step ? bytesByPath.get(part.step.path) : undefined) != null,
@@ -874,20 +908,33 @@ export function PreflightPage() {
           const length =
             materials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
           const cross = part.nc?.dimensions?.slice(0, 2) ?? []
+          // No NC and no part list? The section can only come from the geometry.
+          const needSection = !part.nc?.profile && !part.expected?.profile
           try {
-            const inspected = await pool.inspect(bytes)
+            const inspected = await pool.inspect(bytes, { detectSection: needSection })
             if (cancelled) return
+            if (inspected.section) {
+              sections.set(part.mark, inspected.section)
+              setSectionGuesses(new Map(sections))
+            }
+            // Record the measured mass whenever the STEP measured, even without NC dims: a
+            // STEP-only part has no `length`/`cross`, yet its volume × steel density is exactly
+            // the display mass (see `pieceMass`). The size check needs dims, so it stays gated.
+            if (inspected.measure) {
+              measures.set(part.mark, inspected.measure)
+              lengths.set(part.mark, Math.max(...inspected.measure.size))
+              setStepLengths(new Map(lengths))
+              geometries.set(
+                part.mark,
+                compareGeometry(inspected.measure, materials.get(part.mark) ?? {}),
+              )
+              setGeometryChecks(new Map(geometries))
+            }
             if (length == null || cross.length < 2) {
               publishInspect(part.mark, { ok: false, error: 'noDims' })
             } else if (!inspected.measure) {
               publishInspect(part.mark, { ok: false, error: 'measureFailed' })
             } else {
-              measures.set(part.mark, inspected.measure)
-              const drawing = materials.get(part.mark)
-              if (drawing) {
-                geometries.set(part.mark, compareGeometry(inspected.measure, drawing))
-                setGeometryChecks(new Map(geometries))
-              }
               publishInspect(
                 part.mark,
                 compareSize(
@@ -1013,12 +1060,22 @@ export function PreflightPage() {
           const pool = getStepWorkerPool()
           let measure: StepMeasure | null = null
           if (stepBytes && (needsInspect || needsRebuild)) {
-            const inspected = await pool.inspect(stepBytes, { priority })
+            const needSection = !part.nc?.profile && !part.expected?.profile
+            const inspected = await pool.inspect(stepBytes, {
+              priority,
+              detectSection: needSection,
+            })
             measure = inspected.measure
-            const drawing = drawingMaterials.get(mark)
-            if (measure && drawing) {
-              const checked = compareGeometry(measure, drawing)
+            if (inspected.section) {
+              setSectionGuesses((prev) =>
+                new Map(prev).set(mark, inspected.section as SectionGuess),
+              )
+            }
+            if (measure) {
+              const checked = compareGeometry(measure, drawingMaterials.get(mark) ?? {})
               setGeometryChecks((prev) => new Map(prev).set(mark, checked))
+              const stepLength = Math.max(...measure.size)
+              setStepLengths((prev) => new Map(prev).set(mark, stepLength))
             }
             if (needsInspect) {
               const length =
@@ -1240,40 +1297,84 @@ export function PreflightPage() {
     return result
   }, [allFindings])
 
+  /**
+   * Pieces for a mark: drawing qty is ground truth, then the part list, then the NC batch qty.
+   * A part with none of those (a bare STEP-only article) is a single piece.
+   */
+  const partQty = useCallback(
+    (part: PartRecord): number =>
+      drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? 1,
+    [drawingMaterials],
+  )
+
+  /**
+   * The part's length (mm): drawing is ground truth, then the part list, then the NC, and finally
+   * the STEP bounding box's longest extent — so a STEP-only job still reports a length.
+   */
+  const partLength = useCallback(
+    (part: PartRecord): number | null =>
+      drawingMaterials.get(part.mark)?.length ??
+      part.expected?.length ??
+      part.nc?.length ??
+      stepLengths.get(part.mark) ??
+      null,
+    [drawingMaterials, stepLengths],
+  )
+
   /** Total pieces across the job (drawing qty is ground truth, then part list, then NC). */
   const totalQty = useMemo(() => {
     if (!result) return 0
     let total = 0
-    for (const part of result.parts) {
-      const qty =
-        drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? 0
-      total += qty
-    }
+    for (const part of result.parts) total += partQty(part)
     return total
-  }, [result, drawingMaterials])
+  }, [result, partQty])
 
   /** Cumulative cut length in mm (qty × length per mark, drawing length is ground truth). */
   const totalLengthMm = useMemo(() => {
     if (!result) return 0
     let total = 0
     for (const part of result.parts) {
-      const qty =
-        drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? 0
-      const length =
-        drawingMaterials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
-      if (length != null) total += qty * length
+      const length = partLength(part)
+      if (length != null) total += partQty(part) * length
     }
     return total
-  }, [result, drawingMaterials])
+  }, [result, partLength, partQty])
 
-  /** Per-piece mass (kg): drawing weight is ground truth, then part list, then the measured STEP. */
+  /**
+   * Per-piece mass (kg) for display. The drawing / part-list WEIGHT is ground truth. When neither
+   * carries one, estimate from the section: nominal mass per metre (from the NC profile, or the
+   * section read off the STEP geometry) × length. This shows mass the moment parsing finishes,
+   * without waiting on the exact STEP volume integration — which is still run per part for the
+   * `GEOMETRY_WEIGHT_MISMATCH` safety check (see `compareGeometry`). The measured mass is only a
+   * last resort when no section is known.
+   */
   const pieceMass = useCallback(
-    (part: PartRecord): number | null =>
-      drawingMaterials.get(part.mark)?.weight ??
-      part.expected?.weight ??
-      geometryChecks.get(part.mark)?.mass ??
-      null,
-    [drawingMaterials, geometryChecks],
+    (part: PartRecord): number | null => {
+      const material = drawingMaterials.get(part.mark)
+      const groundTruth = material?.weight ?? part.expected?.weight
+      if (groundTruth != null) return groundTruth
+
+      const profile = part.nc?.profile ?? part.expected?.profile
+      const perMetre =
+        profile != null
+          ? sectionMassPerMetre(profile, part.nc?.dimensions ?? [])
+          : (sectionGuesses.get(part.mark)?.mass ?? null)
+      const length = material?.length ?? part.expected?.length ?? part.nc?.length ?? null
+      if (perMetre != null && length != null) return (perMetre * length) / 1000
+
+      return geometryChecks.get(part.mark)?.mass ?? null
+    },
+    [drawingMaterials, sectionGuesses, geometryChecks],
+  )
+
+  /**
+   * The part's section label: the NC / part-list profile when present, else the section read from
+   * the STEP geometry (the STEP-only fallback).
+   */
+  const sectionLabel = useCallback(
+    (part: PartRecord): string =>
+      part.nc?.profile ?? part.expected?.profile ?? sectionGuesses.get(part.mark)?.label ?? '—',
+    [sectionGuesses],
   )
 
   /** Total mass (kg) across the job — the pickup load (qty × per-piece mass). */
@@ -1281,13 +1382,11 @@ export function PreflightPage() {
     if (!result) return 0
     let total = 0
     for (const part of result.parts) {
-      const qty =
-        drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? 0
       const mass = pieceMass(part)
-      if (mass != null) total += qty * mass
+      if (mass != null) total += partQty(part) * mass
     }
     return total
-  }, [result, drawingMaterials, pieceMass])
+  }, [result, pieceMass, partQty])
 
   /** Per-profile rollup: pieces, cumulative length and mass, so stock/pickup can be planned. */
   const profileGroups = useMemo(() => {
@@ -1297,7 +1396,7 @@ export function PreflightPage() {
       { marks: Set<string>; pieces: number; lengthMm: number; massKg: number }
     >()
     for (const part of result.parts) {
-      const profile = part.nc?.profile ?? part.expected?.profile ?? '—'
+      const profile = sectionLabel(part)
       const entry = map.get(profile) ?? {
         marks: new Set<string>(),
         pieces: 0,
@@ -1305,10 +1404,8 @@ export function PreflightPage() {
         massKg: 0,
       }
       entry.marks.add(part.mark)
-      const qty =
-        drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? 0
-      const length =
-        drawingMaterials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
+      const qty = partQty(part)
+      const length = partLength(part)
       const mass = pieceMass(part)
       entry.pieces += qty
       if (length != null) entry.lengthMm += qty * length
@@ -1318,7 +1415,7 @@ export function PreflightPage() {
     return [...map.entries()]
       .map(([profile, entry]) => ({ profile, ...entry, markCount: entry.marks.size }))
       .sort((a, b) => b.lengthMm - a.lengthMm || b.pieces - a.pieces)
-  }, [result, drawingMaterials, pieceMass])
+  }, [result, pieceMass, sectionLabel, partQty, partLength])
 
   /** One status pill per distinct finding code, so the parts table carries its own triage. */
   const issuesByMark = useMemo(() => {
@@ -2220,11 +2317,7 @@ export function PreflightPage() {
                       const ncQty = part.nc?.quantity ?? null
                       const qtyMismatch = pdfQty != null && ncQty != null && pdfQty !== ncQty
                       const qtyFallback = pdfQty == null && ncQty != null
-                      const mass =
-                        material?.weight ??
-                        part.expected?.weight ??
-                        geometryChecks.get(part.mark)?.mass ??
-                        null
+                      const mass = pieceMass(part)
                       const massBand: 'red' | 'yellow' | 'green' | null =
                         mass == null
                           ? null
@@ -2319,7 +2412,7 @@ export function PreflightPage() {
                                   : undefined
                             }
                           >
-                            {pdfQty ?? ncQty ?? '—'}
+                            {pdfQty ?? ncQty ?? partQty(part)}
                             {qtyMismatch && <span className="ml-1 text-xs">≠ {ncQty}</span>}
                             {qtyFallback && (
                               <span className="ml-1 text-xs text-muted-foreground">(NC)</span>
@@ -2342,9 +2435,7 @@ export function PreflightPage() {
                           >
                             {mass != null ? `${mass.toFixed(1)} kg` : '—'}
                           </TableCell>
-                          <TableCell className="font-mono text-xs">
-                            {part.nc?.profile ?? part.expected?.profile ?? '—'}
-                          </TableCell>
+                          <TableCell className="font-mono text-xs">{sectionLabel(part)}</TableCell>
                           <TableCell className="text-xs">
                             {overrideFor(part) ? (
                               <Badge variant="success">
@@ -2383,7 +2474,14 @@ export function PreflightPage() {
         title={
           viewing ? (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <PartSummary part={viewing} material={drawingMaterials.get(viewing.mark)} />
+              <PartSummary
+                part={viewing}
+                material={drawingMaterials.get(viewing.mark)}
+                profile={sectionLabel(viewing)}
+                massKg={pieceMass(viewing)}
+                qty={partQty(viewing)}
+                lengthMm={partLength(viewing)}
+              />
               {viewingIndex >= 0 && (
                 <div className="flex items-center gap-1">
                   <Button
@@ -2770,14 +2868,28 @@ export function PreflightPage() {
   )
 }
 
-function PartSummary({ part, material }: { part: PartRecord; material?: DrawingMaterial }) {
+function PartSummary({
+  part,
+  material,
+  profile,
+  massKg,
+  qty: qtyProp,
+  lengthMm,
+}: {
+  part: PartRecord
+  material?: DrawingMaterial
+  profile?: string
+  massKg?: number | null
+  qty?: number | null
+  lengthMm?: number | null
+}) {
   const { t } = useTranslation()
-  const profile = part.nc?.profile ?? part.expected?.profile ?? '—'
-  const qty = material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
-  const length = material?.length ?? part.expected?.length ?? part.nc?.length ?? null
-  const mass = material?.weight ?? part.expected?.weight ?? null
+  const section = profile ?? part.nc?.profile ?? part.expected?.profile ?? '—'
+  const qty = qtyProp ?? material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
+  const length = lengthMm ?? material?.length ?? part.expected?.length ?? part.nc?.length ?? null
+  const mass = massKg ?? material?.weight ?? part.expected?.weight ?? null
   const stats: [string, string][] = [
-    [t('preflight.columns.profile'), profile],
+    [t('preflight.columns.profile'), section],
     [t('preflight.columns.qty'), qty != null ? String(qty) : '—'],
     [t('preflight.meta.length'), length != null ? `${length} mm` : '—'],
     [t('preflight.columns.mass'), mass != null ? `${mass.toFixed(1)} kg` : '—'],
