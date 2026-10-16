@@ -32,3 +32,7 @@ export const nw31Bottom = (...segments: string[]): string => fixture('nw31-botto
 
 /** `11602-03-01 (NW31 Top frames) Shaft part drawings` — `NC files/` + `STP files/` sub-dirs. */
 export const nw31Top = (...segments: string[]): string => fixture('nw31-top', ...segments)
+
+/** `J12095 HEX Module Frames` — STEP-only parts (no NC), flat `item<##>.stp`. */
+export const hexModuleFrames = (...segments: string[]): string =>
+  fixture('hex-module-frames', ...segments)

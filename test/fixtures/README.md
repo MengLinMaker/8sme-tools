@@ -15,6 +15,7 @@ test/fixtures/
   nw31-top/                    # 11602-03-01 (NW31 Top frames) Shaft part drawings
     NC files/
     STP files/
+  hex-module-frames/           # J12095 HEX Module Frames (STEP-only, flat item<##>.stp)
 ```
 
 Marks included per job:
@@ -23,6 +24,7 @@ Marks included per job:
 - **nw31-bottom:** m12 m15 m16 m106 m116 m122 m128 m147 m148 m166
 - **nw31-top:** the 31 `BT100*15` Top-frame tees (m118…m232, see `cutBeam.nw31.test.ts`), plus
   a1 m31 m41 m117 m124 m150
+- **hex-module-frames:** item10 (200UB25.4 mass-variant) item35 (rotated-member SHS75*75*6.0)
 
 To extend: drop `<mark>.nc1` and/or `<mark>.stp` into the matching folder, then add the mark to the
 suite that should use it. Whole-folder "scratch" scans (`scratch-skin-scan`, `scratch-bench-sabre`)
