@@ -100,6 +100,26 @@ export async function readFiles(files: File[]): Promise<InputBundle> {
   return bundleFromDropped(droppedFromFiles(files))
 }
 
+async function walkDirectoryHandle(
+  dir: FileSystemDirectoryHandle,
+  prefix: string,
+  out: DroppedFile[],
+): Promise<void> {
+  for await (const [name, handle] of dir.entries()) {
+    if (handle.kind === 'file') {
+      out.push({ path: prefix + name, file: await handle.getFile() })
+    } else {
+      await walkDirectoryHandle(handle, `${prefix}${name}/`, out)
+    }
+  }
+}
+
+export async function readDirectoryHandle(dir: FileSystemDirectoryHandle): Promise<InputBundle> {
+  const dropped: DroppedFile[] = []
+  await walkDirectoryHandle(dir, `${dir.name}/`, dropped)
+  return bundleFromDropped(dropped)
+}
+
 export async function readDataTransfer(dataTransfer: DataTransfer): Promise<InputBundle> {
   const dataEntries = entriesFromDataTransfer(dataTransfer)
   if (dataEntries.length > 0) {

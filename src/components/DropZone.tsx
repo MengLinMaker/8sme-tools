@@ -1,7 +1,7 @@
 import { type DragEvent, type InputHTMLAttributes, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
-import { type InputBundle, readDataTransfer, readFiles } from '@/lib/readInput'
+import { type InputBundle, readDataTransfer, readDirectoryHandle, readFiles } from '@/lib/readInput'
 import { cn } from '@/lib/utils'
 
 const DIRECTORY_INPUT_PROPS = {
@@ -44,6 +44,21 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
     dragDepth.current = 0
     setDragging(false)
     void ingest(() => readDataTransfer(event.dataTransfer))
+  }
+
+  const chooseFolder = async () => {
+    const picker = window.showDirectoryPicker
+    if (typeof picker !== 'function') {
+      folderRef.current?.click()
+      return
+    }
+    try {
+      const dir = await picker.call(window)
+      await ingest(() => readDirectoryHandle(dir))
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      onError?.(err instanceof Error ? err.message : String(err))
+    }
   }
 
   return (
@@ -107,7 +122,7 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
           variant="outline"
           size="sm"
           disabled={reading}
-          onClick={() => folderRef.current?.click()}
+          onClick={() => void chooseFolder()}
         >
           {t('dropzone.chooseFolder')}
         </Button>
