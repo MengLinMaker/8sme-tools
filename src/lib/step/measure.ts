@@ -99,8 +99,27 @@ export interface SizeCheck {
   measured?: [number, number, number]
   /** expected `[length, crossA, crossB]` (length first) */
   expected?: [number, number, number]
-  /** why the check could not run — the UI localises this */
-  error?: 'noDims' | 'measureFailed'
+  /**
+   * Why the check could not run, or how it ran — the UI localises this. `stepOnly` means there was
+   * no expected size to compare against (no NC / drawing / part list), so the measured STEP size
+   * stands in for the model size on its own.
+   */
+  error?: 'noDims' | 'measureFailed' | 'stepOnly'
+}
+
+/**
+ * The STEP-only size: no expected dims to compare against, so the check just reports what the
+ * STEP measures (extents sorted length-first, matching {@link compareSize}). Drives the "model
+ * size" column for a job that ships no NC / drawing / part-list size.
+ */
+export function stepOnlySizeCheck(measure: StepMeasure): SizeCheck {
+  return {
+    ok: false,
+    error: 'stepOnly',
+    measured: [...measure.size].sort((a, b) => b - a) as [number, number, number],
+    bodies: measure.bodies,
+    stray: measure.extra,
+  }
 }
 
 /**

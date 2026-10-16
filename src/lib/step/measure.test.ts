@@ -5,6 +5,7 @@ import {
   compareSize,
   STEEL_DENSITY_KG_PER_MM3,
   type StepMeasure,
+  stepOnlySizeCheck,
 } from './measure'
 
 function measure(size: [number, number, number], volume: number): StepMeasure {
@@ -52,6 +53,21 @@ describe('compareSize', () => {
     // m118-style: main body matches, but a stray surface body is present.
     const check = compareSize([2590.66, 103, 134], 2591, [134, 103], 2, true)
     expect(check.ok).toBe(true)
+    expect(check.bodies).toBe(2)
+    expect(check.stray).toBe(true)
+  })
+})
+
+describe('stepOnlySizeCheck', () => {
+  it('reports the measured extents length-first when there is no expected size', () => {
+    const check = stepOnlySizeCheck({ size: [134, 2591, 103], bodies: 1, extra: false, volume: 0 })
+    expect(check.error).toBe('stepOnly')
+    expect(check.measured).toEqual([2591, 134, 103])
+    expect(check.ok).toBe(false)
+  })
+
+  it('carries the body count and stray flag through', () => {
+    const check = stepOnlySizeCheck({ size: [100, 100, 100], bodies: 2, extra: true, volume: 0 })
     expect(check.bodies).toBe(2)
     expect(check.stray).toBe(true)
   })

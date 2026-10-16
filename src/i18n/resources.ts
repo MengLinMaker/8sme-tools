@@ -207,11 +207,7 @@ export const en = {
       length: 'Length',
     },
     model: {
-      sizeOk: '{{measured}} ✓',
       sizeMismatch: '{{measured}} vs expected {{expected}}',
-      bodyCount_one: ' · {{count}} body',
-      bodyCount_other: ' · {{count}} bodies',
-      straySuffix: ' + stray',
       ncMatches: 'NC build matches STEP ({{size}})',
       ncMismatch: 'NC build {{size}} vs STEP {{expected}}',
       volume: ' · volume {{delta}}',
@@ -629,10 +625,7 @@ export const zh = {
       length: '长度',
     },
     model: {
-      sizeOk: '{{measured}} ✓',
       sizeMismatch: '{{measured}} 与预期 {{expected}} 不符',
-      bodyCount_other: ' · {{count}} 个实体',
-      straySuffix: ' + 悬浮件',
       ncMatches: 'NC 构建与 STEP 一致（{{size}}）',
       ncMismatch: 'NC 构建 {{size}} 与 STEP {{expected}} 不符',
       volume: ' · 体积 {{delta}}',

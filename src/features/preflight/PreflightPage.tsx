@@ -75,6 +75,7 @@ import {
   type ModelComparison,
   type SizeCheck,
   type StepMeasure,
+  stepOnlySizeCheck,
 } from '@/lib/step/measure'
 import {
   getStepWorkerPool,
@@ -293,20 +294,20 @@ function formatSizeCheck(t: TFunction, check?: SizeCheck): string {
   if (!check) return '—'
   if (check.error === 'noDims') return t('preflight.model.noDims')
   if (check.error === 'measureFailed') return t('preflight.model.measureFailed')
-  if (!check.measured || !check.expected) return '—'
+  if (!check.measured) return '—'
   const [l, a, b] = check.measured.map((value) => value.toFixed(0))
   const measured = `L${l} × ${a} × ${b}`
+  // No expected size to compare against (a STEP-only part) or the check passed: the size stands
+  // alone. A body/stray issue is already a Status warning, so it is not repeated here.
+  if (!check.expected || check.ok) return measured
   const [el, ea, eb] = check.expected.map((value) => value.toFixed(0))
-  const size = check.ok
-    ? t('preflight.model.sizeOk', { measured })
-    : t('preflight.model.sizeMismatch', { measured, expected: `L${el} × ${ea} × ${eb}` })
-  const annotated = check.bodies != null && !(check.bodies === 1 && !check.stray)
-  if (!annotated) return size
-  return (
-    size +
-    t('preflight.model.bodyCount', { count: check.bodies }) +
-    (check.stray ? t('preflight.model.straySuffix') : '')
-  )
+  return t('preflight.model.sizeMismatch', { measured, expected: `L${el} × ${ea} × ${eb}` })
+}
+
+/** Colour for the model-size cell: a STEP-only size is neutral, a real check is pass/fail. */
+function sizeCheckTone(check?: SizeCheck): string {
+  if (check?.error === 'stepOnly') return 'text-muted-foreground'
+  return check?.ok ? 'text-emerald-400' : 'text-amber-400'
 }
 
 /** Formats an NC-vs-STEP model comparison for display (localised). */
@@ -931,7 +932,12 @@ export function PreflightPage() {
               setGeometryChecks(new Map(geometries))
             }
             if (length == null || cross.length < 2) {
-              publishInspect(part.mark, { ok: false, error: 'noDims' })
+              publishInspect(
+                part.mark,
+                inspected.measure
+                  ? stepOnlySizeCheck(inspected.measure)
+                  : { ok: false, error: 'noDims' },
+              )
             } else if (!inspected.measure) {
               publishInspect(part.mark, { ok: false, error: 'measureFailed' })
             } else {
@@ -1083,7 +1089,9 @@ export function PreflightPage() {
               const cross = part.nc?.dimensions?.slice(0, 2) ?? []
               const check: SizeCheck =
                 length == null || cross.length < 2
-                  ? { ok: false, error: 'noDims' }
+                  ? measure
+                    ? stepOnlySizeCheck(measure)
+                    : { ok: false, error: 'noDims' }
                   : !measure
                     ? { ok: false, error: 'measureFailed' }
                     : compareSize(measure.size, length, cross, measure.bodies, measure.extra)
@@ -2444,13 +2452,7 @@ export function PreflightPage() {
                                   : ''}
                               </Badge>
                             ) : modelChecks.has(part.mark) ? (
-                              <span
-                                className={
-                                  modelChecks.get(part.mark)?.ok
-                                    ? 'text-emerald-400'
-                                    : 'text-amber-400'
-                                }
-                              >
+                              <span className={sizeCheckTone(modelChecks.get(part.mark))}>
                                 {formatSizeCheck(t, modelChecks.get(part.mark))}
                               </span>
                             ) : (
