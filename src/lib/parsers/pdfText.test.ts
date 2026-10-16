@@ -20,6 +20,13 @@ describe('findSectionCode', () => {
     expect(findSectionCode('m2 125 TFB C300 2500')).toBe('125TFB')
   })
 
+  it('finds the looser RFQ forms (family, space, x-separated dims)', () => {
+    expect(findSectionCode('12095, item 30, ea 200x200x20, 4 off[c]')).toBe('EA200X200X20')
+    expect(findSectionCode('12095, item 33, ea 50x50x3, 2 off')).toBe('EA50X50X3')
+    expect(findSectionCode('RHS 89x89x5 stock')).toBe('RHS89X89X5')
+    expect(findSectionCode('shs 100x100x6.0')).toBe('SHS100X100X6.0')
+  })
+
   it('does not mistake grades or marks for sections', () => {
     expect(findSectionCode('CO-7255 C300 M80 31A-TF1')).toBeNull()
   })

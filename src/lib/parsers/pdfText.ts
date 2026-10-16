@@ -121,18 +121,19 @@ export function extractDrawingText(bytes: Uint8Array): Promise<string> {
 }
 
 /**
- * Australian section short-forms as they appear on Tekla drawings, e.g.
- * `EA75*75*6`, `UA100*75*6`, `RHS150*100*9.0`, `SHS100*100*6.0`, `PFC100*50`,
- * `BT100*15`, `200UB29.8`, `150PFC`, `310UC158`, `125 TFB`.
+ * Australian section short-forms, as Tekla drawings and RFQ / part lists write them, e.g.
+ * `EA75*75*6`, `RHS150*100*9.0`, `SHS100*100*6.0`, `PFC100*50`, `BT100*15`, `200UB29.8`,
+ * `150PFC`, `310UC158`, `125 TFB` — and the looser `ea 50x50x3`, `RHS 89x89x5` (family, optional
+ * space, then `*`/`x`/`X`-separated dims), which is how the RFQ documents write them.
  */
 const SECTION_PATTERNS = [
   /\b\d+(?:\.\d+)?(?:UB|UC|WB|WC)\d+(?:\.\d+)?/i,
   /\b\d+(?:\.\d+)?\s*TFB\b/i,
-  /\b(?:RHS|SHS|CHS)\d+(?:[*xX]\d+)*(?:\.\d+)?/i,
-  /\b(?:EA|UA)\d+(?:[*xX]\d+)*(?:\.\d+)?/i,
-  /\bBT\d+(?:[*xX]\d+)*(?:\.\d+)?/i,
-  /\b(?:PFC|TFC)\d+(?:[*xX]\d+)*(?:\.\d+)?/i,
-  /\b\d+(?:\.\d+)?(?:PFC|TFC)\b/i,
+  /\b(?:RHS|SHS|CHS)\s*\d+(?:[*xX]\d+)*(?:\.\d+)?/i,
+  /\b(?:EA|UA)\s*\d+(?:[*xX]\d+)*(?:\.\d+)?/i,
+  /\bBT\s*\d+(?:[*xX]\d+)*(?:\.\d+)?/i,
+  /\b(?:PFC|TFC)\s*\d+(?:[*xX]\d+)*(?:\.\d+)?/i,
+  /\b\d+(?:\.\d+)?\s*(?:PFC|TFC)\b/i,
 ]
 
 /** Finds the first section callout in a drawing's text, if any. */
