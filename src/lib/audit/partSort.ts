@@ -6,7 +6,7 @@ export type PartSortKey = 'severity' | 'mark' | 'qty' | 'mass' | 'profile' | 'mo
 export interface PartSortContext {
   findings: Finding[]
   materials: Map<string, DrawingMaterial>
-  /** `error` lets a STEP-only size (`stepOnly`) count as no problem, not a warning. */
+  /** `error` lets a STEP-only (`stepOnly`) or NC-only (`ncOnly`) size count as no problem. */
   modelChecks: Map<string, { ok: boolean; error?: string }>
 }
 
@@ -21,7 +21,7 @@ export function severityRank(part: PartRecord, context: PartSortContext): number
     if (finding.mark === part.mark) rank = Math.min(rank, SEVERITY_RANK[finding.severity])
   }
   const model = context.modelChecks.get(part.mark)
-  if (model && !model.ok && model.error !== 'stepOnly') {
+  if (model && !model.ok && model.error !== 'stepOnly' && model.error !== 'ncOnly') {
     rank = Math.min(rank, SEVERITY_RANK.warning)
   }
   return rank
@@ -49,7 +49,7 @@ function partValue(
     case 'model': {
       const check = context.modelChecks.get(part.mark)
       if (!check) return 2
-      return check.ok || check.error === 'stepOnly' ? 1 : 0
+      return check.ok || check.error === 'stepOnly' || check.error === 'ncOnly' ? 1 : 0
     }
   }
 }

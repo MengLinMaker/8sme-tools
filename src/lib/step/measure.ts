@@ -102,9 +102,10 @@ export interface SizeCheck {
   /**
    * Why the check could not run, or how it ran — the UI localises this. `stepOnly` means there was
    * no expected size to compare against (no NC / drawing / part list), so the measured STEP size
-   * stands in for the model size on its own.
+   * stands in for the model size on its own. `ncOnly` is the mirror: no STEP to measure, so the
+   * nominal size is read from the NC header instead.
    */
-  error?: 'noDims' | 'measureFailed' | 'stepOnly'
+  error?: 'noDims' | 'measureFailed' | 'stepOnly' | 'ncOnly'
 }
 
 /**
@@ -119,6 +120,23 @@ export function stepOnlySizeCheck(measure: StepMeasure): SizeCheck {
     measured: [...measure.size].sort((a, b) => b - a) as [number, number, number],
     bodies: measure.bodies,
     stray: measure.extra,
+  }
+}
+
+/**
+ * The NC-only size: there is no STEP to measure, so the part's nominal size is read straight from
+ * the NC header — the member length plus the two cross-section dimensions (extents sorted
+ * length-first, matching {@link stepOnlySizeCheck}). This is the mirror of {@link stepOnlySizeCheck}
+ * for a job that ships no STEP files, so the "model size" column still shows a size. Returns `null`
+ * when the NC carries no usable dims, so the caller can fall back to "no dims".
+ */
+export function ncOnlySizeCheck(length: number, dims: number[]): SizeCheck | null {
+  const cross = dims.filter((value) => Number.isFinite(value) && value > 0).slice(0, 2)
+  if (!(length > 0) || cross.length < 2) return null
+  return {
+    ok: false,
+    error: 'ncOnly',
+    measured: [length, cross[0], cross[1]].sort((a, b) => b - a) as [number, number, number],
   }
 }
 

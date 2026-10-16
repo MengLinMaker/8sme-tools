@@ -3,6 +3,7 @@ import {
   compareGeometry,
   compareModels,
   compareSize,
+  ncOnlySizeCheck,
   STEEL_DENSITY_KG_PER_MM3,
   type StepMeasure,
   stepOnlySizeCheck,
@@ -70,6 +71,28 @@ describe('stepOnlySizeCheck', () => {
     const check = stepOnlySizeCheck({ size: [100, 100, 100], bodies: 2, extra: true, volume: 0 })
     expect(check.bodies).toBe(2)
     expect(check.stray).toBe(true)
+  })
+})
+
+describe('ncOnlySizeCheck', () => {
+  it('reads the nominal size from the NC header, length first', () => {
+    // Real BT100*15 header: length 2743.66, cross-section 134 × 103 (half a 200UB29.8).
+    const check = ncOnlySizeCheck(2743.66, [134, 103, 9.6, 6.3, 8.9])
+    expect(check?.error).toBe('ncOnly')
+    expect(check?.measured).toEqual([2743.66, 134, 103])
+    expect(check?.ok).toBe(false)
+  })
+
+  it('sorts the extents length-first even when the section is longer than the part', () => {
+    const check = ncOnlySizeCheck(100, [300, 200, 6])
+    expect(check?.measured).toEqual([300, 200, 100])
+  })
+
+  it('returns null when the NC carries no usable cross-section dims', () => {
+    expect(ncOnlySizeCheck(1000, [])).toBeNull()
+    expect(ncOnlySizeCheck(1000, [134])).toBeNull()
+    expect(ncOnlySizeCheck(0, [134, 103])).toBeNull()
+    expect(ncOnlySizeCheck(Number.NaN, [134, 103])).toBeNull()
   })
 })
 

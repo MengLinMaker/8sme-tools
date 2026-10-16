@@ -74,6 +74,7 @@ import {
   compareSize,
   type GeometryCheck,
   type ModelComparison,
+  ncOnlySizeCheck,
   type SizeCheck,
   type StepMeasure,
   stepOnlySizeCheck,
@@ -305,9 +306,9 @@ function formatSizeCheck(t: TFunction, check?: SizeCheck): string {
   return t('preflight.model.sizeMismatch', { measured, expected: `L${el} × ${ea} × ${eb}` })
 }
 
-/** Colour for the model-size cell: a STEP-only size is neutral, a real check is pass/fail. */
+/** Colour for the model-size cell: a STEP-only or NC-only size is neutral, a real check is pass/fail. */
 function sizeCheckTone(check?: SizeCheck): string {
-  if (check?.error === 'stepOnly') return 'text-muted-foreground'
+  if (check?.error === 'stepOnly' || check?.error === 'ncOnly') return 'text-muted-foreground'
   return check?.ok ? 'text-emerald-400' : 'text-amber-400'
 }
 
@@ -903,7 +904,13 @@ export function PreflightPage() {
           const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
           if (!bytes) {
             if (cancelled) return
-            publishInspect(part.mark, { ok: false, error: 'noDims' })
+            // NC-only part (no STEP to measure): the nominal size comes straight from the NC
+            // header — length + cross-section dims — so the model-size column still reads a size.
+            const length =
+              materials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
+            const ncSize =
+              length != null ? ncOnlySizeCheck(length, part.nc?.dimensions ?? []) : null
+            publishInspect(part.mark, ncSize ?? { ok: false, error: 'noDims' })
             return
           }
           // Length is compared against the drawing (ground truth) when available.
