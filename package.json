@@ -5,7 +5,6 @@
   "type": "module",
   "description": "Tools for 8 Star Metal Engineering - CNC tube laser workflow helpers",
   "scripts": {
-    "preinstall": "npx only-allow pnpm",
     "dev": "vite",
     "generate": "tsr generate",
     "build": "tsr generate && tsc --noEmit && vite build",
@@ -53,7 +52,6 @@
     "@types/react-dom": "^19.3.0",
     "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^6.1.2",
-    "only-allow": "^1.2.2",
     "simple-git-hooks": "^2.14.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
