@@ -768,12 +768,23 @@ export function sectionMassPerMetre(code: string, dims: number[]): number | null
 }
 
 /**
- * Resolves a part's stock outline: the section is read from the drawing PDF when
- * available (preferred), else from the part-list / NC profile code.
+ * Resolves a part's stock outline: the section is read from the drawing PDF when available
+ * (preferred), else from the part-list / NC profile code. When neither exists (a STEP-only job) the
+ * inferred `fallback` is used — and if it carries the **real** extracted `outline`, that is drawn
+ * instead of the catalogue ideal, so the ghost sits flush on the part.
+ *
+ * `fallback.outline` is only supplied by the caller when the geometry matched a known section
+ * (confidence-gated), so trusting the real outline is safe.
  */
 export async function resolveStockOutline(
   part: PartRecord,
   pdfBytes: Uint8Array | undefined,
+  fallback?: {
+    code: string
+    dims?: number[]
+    mass?: number | null
+    outline?: { points: [number, number][]; holes?: [number, number][][] }
+  },
 ): Promise<StockOutline | null> {
   let code: string | null = null
   if (pdfBytes) {
@@ -784,6 +795,21 @@ export async function resolveStockOutline(
     }
   }
   code ??= part.expected?.profile.trim() || part.nc?.profile.trim() || null
-  if (!code) return null
-  return stockOutlineForCode(code, part.nc?.dimensions ?? [])
+
+  // STEP-only: the section was inferred from geometry. Draw the real outline when we have it.
+  if (!code) {
+    if (fallback?.outline && fallback.outline.points.length >= 3) {
+      return {
+        points: fallback.outline.points,
+        holes: fallback.outline.holes,
+        label: fallback.code || 'section',
+        mass: fallback.mass ?? undefined,
+      }
+    }
+    code = fallback?.code?.trim() || null
+    if (!code) return null
+  }
+
+  const dims = part.nc?.dimensions?.length ? part.nc.dimensions : (fallback?.dims ?? [])
+  return stockOutlineForCode(code, dims)
 }

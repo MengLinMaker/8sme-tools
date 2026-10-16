@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { partSectionForCode, stockOutlineForCode } from './stock'
+import { partSectionForCode, resolveStockOutline, stockOutlineForCode } from './stock'
 
 function bbox(points: [number, number][]) {
   let minX = Infinity
@@ -171,5 +171,31 @@ describe('stockOutlineForCode', () => {
     const ua = bbox(stockOutlineForCode('UA100*75*6', [])?.points ?? [])
     expect(ua.width).toBeCloseTo(100, 1)
     expect(ua.height).toBeCloseTo(75, 1)
+  })
+
+  describe('resolveStockOutline (STEP-only fallback)', () => {
+    it('draws the real inferred outline, not the catalogue ideal', async () => {
+      // A real angle outline with square toes (unlike the catalogue's rounded toes).
+      const real: [number, number][] = [
+        [0, 0],
+        [80, 0],
+        [80, 8],
+        [8, 8],
+        [8, 80],
+        [0, 80],
+      ]
+      const outline = await resolveStockOutline({ mark: 'x1' }, undefined, {
+        code: 'EA80*80*8',
+        outline: { points: real },
+      })
+      expect(outline?.points).toBe(real)
+      expect(outline?.label).toBe('EA80*80*8')
+    })
+
+    it('falls back to the catalogue outline when no real outline is given', async () => {
+      const outline = await resolveStockOutline({ mark: 'x1' }, undefined, { code: '100 PFC' })
+      expect(outline?.points.length).toBeGreaterThan(3)
+      expect(bbox(outline?.points ?? []).width).toBeCloseTo(100, 0)
+    })
   })
 })

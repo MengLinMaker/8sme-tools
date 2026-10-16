@@ -58,10 +58,13 @@ class StepWorkerPool {
   private nextId = 1
 
   /** Import a STEP and measure it, importing the model only once. */
-  inspect(bytes: Uint8Array, options: { priority?: number } = {}): Promise<InspectResult> {
+  inspect(
+    bytes: Uint8Array,
+    options: { priority?: number; detectSection?: boolean } = {},
+  ): Promise<InspectResult> {
     const copy = new Uint8Array(bytes)
     return this.run<InspectResult>(
-      { id: this.nextId++, kind: 'inspect', step: copy },
+      { id: this.nextId++, kind: 'inspect', step: copy, detectSection: options.detectSection },
       [copy.buffer],
       options.priority ?? PRIORITY_BACKGROUND,
     )

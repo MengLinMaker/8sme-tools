@@ -179,6 +179,134 @@ function polygonArea(points: [number, number][]): number {
   return Math.abs(twice) / 2
 }
 
+function pointInPolygon(x: number, y: number, polygon: [number, number][]): boolean {
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i] as [number, number]
+    const [xj, yj] = polygon[j] as [number, number]
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside
+  }
+  return inside
+}
+
+/** Grid resolution (mm) for the additive merge of slice silhouettes. */
+const UNION_CELL_MM = 1.5
+
+/** Marks every grid cell whose centre lies inside `polygon` as `value`. */
+function fillPolygon(
+  grid: Uint8Array,
+  cols: number,
+  rows: number,
+  originX: number,
+  originY: number,
+  cell: number,
+  polygon: [number, number][],
+  value: number,
+): void {
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const [x, y] of polygon) {
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+  }
+  const i0 = Math.max(0, Math.floor((minX - originX) / cell))
+  const i1 = Math.min(cols - 1, Math.ceil((maxX - originX) / cell))
+  const j0 = Math.max(0, Math.floor((minY - originY) / cell))
+  const j1 = Math.min(rows - 1, Math.ceil((maxY - originY) / cell))
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      if (pointInPolygon(originX + (i + 0.5) * cell, originY + (j + 0.5) * cell, polygon)) {
+        grid[j * cols + i] = value
+      }
+    }
+  }
+}
+
+/** Traces the outer + inner loops of a binary occupancy grid (boundary-edge walk). */
+function occupancyOutline(occupancy: Uint8Array, cols: number, rows: number): [number, number][][] {
+  const occupied = (i: number, j: number): boolean =>
+    i >= 0 && i < cols && j >= 0 && j < rows && occupancy[j * cols + i] === 1
+  // Directed boundary edges (cell-corner coords), CCW around occupied cells (+1 corner in x/y).
+  const edges = new Map<string, [number, number]>()
+  const add = (i1: number, j1: number, i2: number, j2: number): void => {
+    edges.set(`${i1},${j1}`, [i2, j2])
+  }
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      if (!occupied(i, j)) continue
+      if (!occupied(i, j - 1)) add(i, j, i + 1, j)
+      if (!occupied(i, j + 1)) add(i + 1, j + 1, i, j + 1)
+      if (!occupied(i - 1, j)) add(i, j + 1, i, j)
+      if (!occupied(i + 1, j)) add(i + 1, j, i + 1, j + 1)
+    }
+  }
+  const loops: [number, number][][] = []
+  const visited = new Set<string>()
+  for (const start of edges.keys()) {
+    if (visited.has(start)) continue
+    const loop: [number, number][] = []
+    let current: string | undefined = start
+    while (current && !visited.has(current)) {
+      visited.add(current)
+      const [i, j] = current.split(',').map(Number) as [number, number]
+      loop.push([i, j])
+      const next = edges.get(current)
+      current = next ? `${next[0]},${next[1]}` : undefined
+    }
+    if (loop.length >= 4) loops.push(loop)
+  }
+  return loops
+}
+
+/**
+ * Additive merge of several cross-section slices into one **stock silhouette**: each slice's solid
+ * region (outer minus its voids) is rasterised and OR-ed together, then the merged occupancy is
+ * traced back to an outline. So the stock section survives even when no single slice shows all of
+ * it, and a hollow's void is preserved as long as it is open at every station.
+ */
+function unionSections(sections: MeasuredSection[]): MeasuredSection | null {
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const section of sections) {
+    for (const [x, y] of section.outer) {
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+  }
+  if (!Number.isFinite(minX)) return null
+  const cols = Math.max(1, Math.ceil((maxX - minX) / UNION_CELL_MM) + 1)
+  const rows = Math.max(1, Math.ceil((maxY - minY) / UNION_CELL_MM) + 1)
+  const occupancy = new Uint8Array(cols * rows)
+  const slice = new Uint8Array(cols * rows)
+  for (const section of sections) {
+    slice.fill(0)
+    fillPolygon(slice, cols, rows, minX, minY, UNION_CELL_MM, section.outer, 1)
+    for (const hole of section.holes ?? []) {
+      fillPolygon(slice, cols, rows, minX, minY, UNION_CELL_MM, hole, 0)
+    }
+    for (let i = 0; i < occupancy.length; i++) if (slice[i]) occupancy[i] = 1
+  }
+  const loops = occupancyOutline(occupancy, cols, rows)
+    .map((loop) =>
+      loop.map(
+        ([i, j]) => [minX + i * UNION_CELL_MM, minY + j * UNION_CELL_MM] as [number, number],
+      ),
+    )
+    .sort((a, b) => polygonArea(b) - polygonArea(a))
+  const outer = loops[0]
+  if (!outer) return null
+  const holes = loops.slice(1).filter((loop) => pointInPolygon(loop[0][0], loop[0][1], outer))
+  return { outer, holes: holes.length > 0 ? holes : undefined }
+}
+
 /** The largest planar face of a slab's end caps is the cross-section; its wires are the outline. */
 function sectionFromSlab(
   slab: SectionShape,
@@ -252,12 +380,18 @@ function slabSection(
  * short part's member axis need not be its longest bounding-box extent (an angle cut to 60 mm has
  * 75 mm legs), so the axis cannot be read off the bbox alone. Slice along all three axes and return
  * one candidate section per axis; the caller's match (which knows the stocked sections) tells the
- * member axis from a wrong-axis slice, which lines up with no section. Several stations per axis,
- * keeping the largest outer area, so a hole or cutout at any one station cannot distort the stock.
+ * member axis from a wrong-axis slice, which lines up with no section. It returns **every** station's
+ * slice along all three axes — the caller matches them all and keeps the best, so the stock section
+ * is found wherever it survives rather than only at one "representative" station.
+ *
+ * The stations span the **ends** as well as the middle. A cut/gusset piece keeps the raw stock
+ * section only near its square-cut ends while the middle is notched/coped; sampling only the middle
+ * (or only the largest slice) reads the cut, not the stock.
  */
 export function measureSections(
   shape: SectionShape,
   makeBox: (a: number[], b: number[]) => SectionShape,
+  fractions: number[] = [0.5],
 ): MeasuredSection[] {
   const [min, max] = shape.boundingBox.bounds
   const bounds = {
@@ -269,16 +403,47 @@ export function measureSections(
 
   const sections: MeasuredSection[] = []
   for (const axis of [0, 1, 2]) {
-    let best: { area: number; section: MeasuredSection } | null = null
-    for (const fraction of [0.5, 0.3, 0.7]) {
+    const stations: MeasuredSection[] = []
+    for (const fraction of fractions) {
       const measured = slabSection(shape, makeBox, axis, bounds, fraction)
-      if (!measured) continue
-      const area = polygonArea(measured.outer)
-      if (!best || area > best.area) best = { area, section: measured }
+      if (measured) stations.push(measured)
     }
-    if (best) sections.push(normalizeSection(best.section))
+    if (stations.length === 0) continue
+    // The raw stations keep their exact outlines (the merge rasterises, losing ~a cell of accuracy,
+    // which can tip an exact size-variant match). The additive merge of all stations is added on top
+    // so a stock silhouette that no single station shows is still available.
+    for (const station of stations) sections.push(normalizeSection(station))
+    if (stations.length > 1) {
+      const merged = unionSections(stations)
+      if (merged) sections.push(normalizeSection(merged))
+    }
   }
   return sections
+}
+
+/** `{ angle (deg), axis }` for a rotation quaternion, for replicad's `rotate`. */
+function axisAngle(quaternion: Quaternion): { angleDeg: number; axis: [number, number, number] } {
+  const halfSin = Math.sqrt(Math.max(0, 1 - quaternion.w * quaternion.w))
+  return {
+    angleDeg: (2 * Math.acos(Math.min(1, Math.max(-1, quaternion.w))) * 180) / Math.PI,
+    axis:
+      halfSin > 1e-6
+        ? [quaternion.x / halfSin, quaternion.y / halfSin, quaternion.z / halfSin]
+        : [0, 0, 1],
+  }
+}
+
+/** Applies a rotation quaternion to a clone of the shape about `centre`. */
+function alignRotated(
+  shape: SectionShape,
+  quaternion: Quaternion,
+  centre: [number, number, number],
+): SectionShape {
+  const { angleDeg, axis } = axisAngle(quaternion)
+  return shape
+    .clone()
+    .translate(-centre[0], -centre[1], -centre[2])
+    .rotate(angleDeg, [0, 0, 0], axis)
 }
 
 /** Rotates a clone of the shape into its principal-axis frame, so world X/Y/Z slice the section. */
@@ -290,17 +455,8 @@ function alignToPrincipalAxes(shape: SectionShape, vertices: number[]): SectionS
     new Vector3(...frame.axes[1]),
     new Vector3(...frame.axes[2]),
   )
-  const inverse = new Matrix4().copy(basis).invert()
-  const quaternion = new Quaternion().setFromRotationMatrix(inverse)
-  const halfSin = Math.sqrt(Math.max(0, 1 - quaternion.w * quaternion.w))
-  const axis: [number, number, number] =
-    halfSin > 1e-6
-      ? [quaternion.x / halfSin, quaternion.y / halfSin, quaternion.z / halfSin]
-      : [0, 0, 1]
-  const angleDeg = (2 * Math.acos(Math.min(1, Math.max(-1, quaternion.w))) * 180) / Math.PI
-  let aligned = shape.clone().translate(-frame.centre[0], -frame.centre[1], -frame.centre[2])
-  aligned = aligned.rotate(angleDeg, [0, 0, 0], axis)
-  return aligned
+  const quaternion = new Quaternion().setFromRotationMatrix(new Matrix4().copy(basis).invert())
+  return alignRotated(shape, quaternion, frame.centre)
 }
 
 /** The highest-scoring guess among candidate sections. */
@@ -319,36 +475,62 @@ function guessOuterArea(guess: SectionGuess): number {
 }
 
 /**
- * Reads the section out of a part's real geometry: extract the candidate cross-sections (one per
- * axis) and keep the one that best matches a stocked section — the member axis reveals itself as the
- * slice that resolves. World axes are tried first; the part's **principal axes** are always also
- * tried, because an oblique slice of a rotated export can still resolve *wrongly* (a hollow read at
- * an angle reconstructs as an oversized `RHS…` that scores as well as the truth, so an early return
- * on the world result would never fall back). When both score equally, the smaller cut area wins —
- * a prism's perpendicular cross-section is the minimum-area cut, an oblique one is inflated.
- * Returns null when nothing matches.
+ * Slice stations, tried in increasing order. A single mid-slice resolves a straight member (most
+ * parts), so the wider sets — which add the ends for a notched/coped piece — are only paid for when
+ * the minimal set does not resolve.
+ */
+const STATION_LEVELS: number[][] = [[0.5], [0.5, 0.3, 0.7], [0.5, 0.1, 0.9, 0.3, 0.7]]
+
+/**
+ * Confidence a slice must reach to stop widening the search. Kept near-perfect: a *cut* slice (a
+ * cope/notch through the middle) can match a sibling section at a merely-high score, so stopping on
+ * that would misread the stock. Below this the wider, end-inclusive levels decide.
+ */
+const STOP_CONFIDENCE = 0.99
+
+/** The higher-scoring of two guesses; on a tie, the smaller cut area wins. */
+function betterGuess(a: SectionGuess | null, b: SectionGuess | null): SectionGuess | null {
+  if (!a) return b
+  if (!b) return a
+  if (b.score > a.score) return b
+  if (a.score > b.score) return a
+  return guessOuterArea(b) <= guessOuterArea(a) ? b : a
+}
+
+/**
+ * Reads the section out of a part's real geometry: slice each axis (and, when needed, its principal
+ * axes) and keep the cross-section that best matches a stocked section — the member axis reveals
+ * itself as the slice that resolves. Slicing widens only as far as it must: the minimal mid-slice is
+ * tried first, and the ends are added (merged additively) only when nothing resolves, so a
+ * notched/coped piece is still read from the stock section at its square-cut ends. World axes are
+ * tried before the principal axes; ties go to the smaller cut area (a prism's perpendicular section
+ * is its minimum-area cut). Returns null when nothing matches.
  */
 export function inferStepSection(
   shape: SectionShape,
   makeBox: (a: number[], b: number[]) => SectionShape,
 ): SectionGuess | null {
-  const direct = bestGuess(measureSections(shape, makeBox))
-
+  let best: SectionGuess | null = null
   let aligned: SectionShape | null = null
   try {
     aligned = alignToPrincipalAxes(
       shape,
       shape.mesh({ tolerance: 1, angularTolerance: 1 }).vertices,
     )
-    if (!aligned) return direct
-    const rotated = bestGuess(measureSections(aligned, makeBox))
-    if (!direct) return rotated
-    if (!rotated) return direct
-    if (rotated.score > direct.score) return rotated
-    if (direct.score > rotated.score) return direct
-    return guessOuterArea(rotated) <= guessOuterArea(direct) ? rotated : direct
   } catch {
-    return direct
+    aligned = null
+  }
+  try {
+    for (const fractions of STATION_LEVELS) {
+      // Both passes are compared before exiting: an oblique slice of a rotated part can resolve
+      // *wrongly* at full score (a hollow read at an angle reconstructs as an oversized `RHS…`), so
+      // the area tie-break against the principal-axis slice is what tells the true section apart.
+      const world = bestGuess(measureSections(shape, makeBox, fractions))
+      const principal = aligned ? bestGuess(measureSections(aligned, makeBox, fractions)) : null
+      best = betterGuess(best, betterGuess(world, principal))
+      if (best && best.score >= STOP_CONFIDENCE) return best
+    }
+    return best
   } finally {
     aligned?.delete()
   }

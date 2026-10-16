@@ -1,3 +1,4 @@
+import type { SectionGuess } from '@/lib/sections/detect'
 import type { StepMeasure } from './measure'
 import type { MeshedStep } from './mesh'
 import type { DiffPayload } from './occDiff'
@@ -13,6 +14,8 @@ import type { DiffPayload } from './occDiff'
 /** Import a STEP once and run every geometry check that needs it. */
 export interface InspectResult {
   measure: StepMeasure | null
+  /** Section inferred from the cross-section geometry — only when the job carries no NC / drawing. */
+  section: SectionGuess | null
 }
 
 /** Rebuild a solid from its DSTV `.nc1`, optionally measuring the result. */
@@ -22,7 +25,16 @@ export interface ReconstructResult {
 }
 
 export type StepRequest =
-  | { id: number; kind: 'inspect'; step: Uint8Array }
+  | {
+      id: number
+      kind: 'inspect'
+      step: Uint8Array
+      /**
+       * Also read the cross-section and infer the section — the STEP-only fallback when no NC /
+       * drawing carries a profile code. Slower (a slab boolean), so off unless asked.
+       */
+      detectSection?: boolean
+    }
   | {
       id: number
       kind: 'reconstruct'

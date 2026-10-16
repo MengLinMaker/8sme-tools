@@ -3,6 +3,7 @@ import { type MeasurableShape, measureShape, type StepMeasure } from './measure'
 import { meshStepFile } from './mesh'
 import { occFuzzyDiff, serializeDiff } from './occDiff'
 import { ensureOc } from './occInit'
+import { inferStepSection, type SectionShape } from './readSection'
 import { reconstructSolidFromNc } from './reconstructFromNc'
 import type {
   InspectResult,
@@ -31,7 +32,7 @@ scope.onmessage = (event) => {
 async function handle(request: StepRequest): Promise<void> {
   try {
     if (request.kind === 'inspect') {
-      const value = await inspect(request.step)
+      const value = await inspect(request.step, request.detectSection === true)
       scope.postMessage({ id: request.id, kind: 'inspect', ok: true, value })
     } else if (request.kind === 'mesh') {
       const value = await meshStepFile(request.name, request.step)
@@ -63,13 +64,16 @@ async function handle(request: StepRequest): Promise<void> {
   }
 }
 
-/** Import the STEP once, then measure it. Cut-reach is a pure profile check, not OCC. */
-async function inspect(bytes: Uint8Array): Promise<InspectResult> {
+/**
+ * Import the STEP once, then measure it — and, when asked, read its cross-section and infer the
+ * section (the STEP-only fallback). Cut-reach is a pure profile check, not OCC.
+ */
+async function inspect(bytes: Uint8Array, detectSection: boolean): Promise<InspectResult> {
   await ensureOc()
-  const { importSTEP } = await import('replicad')
+  const { importSTEP, makeBox } = await import('replicad')
   const shape = (await importSTEP(
     new Blob([new Uint8Array(bytes)], { type: 'model/step' }),
-  )) as unknown as MeasurableShape & { delete: () => void }
+  )) as unknown as MeasurableShape & SectionShape & { delete: () => void }
   try {
     let measure: StepMeasure | null = null
     try {
@@ -77,7 +81,18 @@ async function inspect(bytes: Uint8Array): Promise<InspectResult> {
     } catch {
       measure = null
     }
-    return { measure }
+    let section: InspectResult['section'] = null
+    if (detectSection) {
+      try {
+        section = inferStepSection(
+          shape,
+          makeBox as unknown as (a: number[], b: number[]) => SectionShape,
+        )
+      } catch {
+        section = null
+      }
+    }
+    return { measure, section }
   } finally {
     shape.delete()
   }

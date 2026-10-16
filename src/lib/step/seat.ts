@@ -1,5 +1,6 @@
 import { Box3, Matrix4, Quaternion, Vector3 } from 'three'
-import { detectOrientation } from '@/lib/sections/orient'
+import { detectOrientation, orientationFit } from '@/lib/sections/orient'
+import { principalAxes } from '@/lib/sections/pca'
 
 /**
  * Canonical seating shared by the viewer and the overlay diff.
@@ -43,37 +44,97 @@ export function transformVertices(vertices: number[], matrix: Matrix4): number[]
   return out
 }
 
+/** The cross-section's 2-D points, projected onto (y, z) and subsampled, in `seated`. */
+function projectedPoints(seated: number[], stride: number): [number, number][] {
+  const points: [number, number][] = []
+  for (let i = 0; i + 2 < seated.length; i += stride) {
+    points.push([seated[i + 1] as number, seated[i + 2] as number])
+  }
+  return points
+}
+
+/** The 2-D principal-axis angle of a point set in the (y, z) plane. */
+function principalAngle2D(points: [number, number][]): number {
+  let meanY = 0
+  let meanZ = 0
+  for (const [y, z] of points) {
+    meanY += y
+    meanZ += z
+  }
+  meanY /= points.length || 1
+  meanZ /= points.length || 1
+  let yy = 0
+  let zz = 0
+  let yz = 0
+  for (const [y, z] of points) {
+    const dy = y - meanY
+    const dz = z - meanZ
+    yy += dy * dy
+    zz += dz * dz
+    yz += dy * dz
+  }
+  return 0.5 * Math.atan2(2 * yz, yy - zz)
+}
+
 /**
- * Seats a model in `profile`'s canonical frame: rotate its length axis to X, then roll about X
- * so the cross-section matches the profile. Manufactured (NC-built) and STEP models therefore
- * land in the *same* orientation.
+ * Seats a model in `profile`'s canonical frame: rotate its member (length) axis to X, roll the
+ * cross-section onto the profile's own principal angle, and settle the 90° multiples. Manufactured
+ * (NC-built) and STEP models land in the *same* orientation.
+ *
+ * The member axis is **not** simply the longest bounding-box extent: a short part (an angle cut to
+ * 20 mm, legs 50 mm) has a cross-section dimension longer than its length, and a rotated STEP export
+ * puts the member on no world axis at all. So the member axis is taken from the part's **principal
+ * axes** (PCA), and the in-plane roll is fixed by matching the cross-section's 2-D principal angle to
+ * the profile's — a free roll sweep is ambiguous (a symmetric section fits many ways), but the
+ * principal angle is a fixed property of the shape.
  */
 export function seatQuaternion(
   vertices: number[],
   profile: [number, number][] | undefined,
 ): Quaternion {
   if (!profile || profile.length < 3 || vertices.length < 9) return new Quaternion()
-  const box = bboxOfVertices(vertices)
-  const size = box.getSize(new Vector3())
-  const centre = box.getCenter(new Vector3())
-  const extents = [size.x, size.y, size.z]
-  const longAxis = extents.indexOf(Math.max(...extents))
+  const frame = principalAxes(vertices)
+  const candidates: [number, number, number][] = frame
+    ? frame.axes
+    : [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+      ]
+  // Subsample for the fit — the mesh can be huge and the fit only needs the shape.
+  const stride = Math.max(3, Math.floor(vertices.length / 3 / 1500) * 3)
+  const profileAngle = principalAngle2D(profile)
 
-  const toX = new Quaternion()
-  if (longAxis !== 0) toX.setFromUnitVectors(unit(longAxis, 1), unit(0, 1))
-
-  const seated = transformVertices(
-    vertices.map((value, index) =>
-      // centre first (every 3rd component set is a point)
-      index % 3 === 0 ? value - centre.x : index % 3 === 1 ? value - centre.y : value - centre.z,
-    ),
-    new Matrix4().makeRotationFromQuaternion(toX),
-  )
-  const roll = new Quaternion().setFromAxisAngle(
-    unit(0, 1),
-    SEAT_ANGLES[detectOrientation(profile, seated, 1, 2, [0, 0, 0])],
-  )
-  return new Quaternion().multiplyQuaternions(roll, toX)
+  let best = new Quaternion()
+  let bestFit = -1
+  for (const axis of candidates) {
+    for (const sign of [1, -1]) {
+      const direction = new Vector3(axis[0] * sign, axis[1] * sign, axis[2] * sign)
+      const toX = new Quaternion().setFromUnitVectors(direction, unit(0, 1))
+      const seated = transformVertices(vertices, new Matrix4().makeRotationFromQuaternion(toX))
+      const points = projectedPoints(seated, stride)
+      // Roll the cross-section so its principal angle meets the profile's.
+      const rollAngle = profileAngle - principalAngle2D(points)
+      const rollQuaternion = new Quaternion().setFromAxisAngle(unit(0, 1), rollAngle)
+      const rolled = transformVertices(
+        seated,
+        new Matrix4().makeRotationFromQuaternion(rollQuaternion),
+      )
+      const seatCentre = bboxOfVertices(rolled).getCenter(new Vector3())
+      const centre: [number, number, number] = [0, seatCentre.y, seatCentre.z]
+      const orientation = detectOrientation(profile, rolled, 1, 2, centre)
+      const fit = orientationFit(profile, orientation, rolled, 1, 2, centre)
+      if (fit > bestFit) {
+        bestFit = fit
+        const finalRoll = new Quaternion().setFromAxisAngle(
+          unit(0, 1),
+          rollAngle + SEAT_ANGLES[orientation],
+        )
+        best = new Quaternion().multiplyQuaternions(finalRoll, toX)
+      }
+    }
+  }
+  return best
 }
 
 interface BaseSeat {
@@ -85,9 +146,26 @@ interface BaseSeat {
 /** The seat before the canonical display roll: length to X, rolled to the section, bbox centred. */
 function baseSeat(vertices: number[], profile: [number, number][] | undefined): BaseSeat {
   const quaternion = seatQuaternion(vertices, profile)
-  const centre = bboxOfVertices(vertices).getCenter(new Vector3())
-  const position = centre.clone().applyQuaternion(quaternion).negate()
+  // Centre on the **seated** bbox: once the member axis is rotated onto X the bbox is the oriented
+  // one, so this is the true centre. Centring the raw AABB and *then* rotating would shift a
+  // rotated part by the AABB-vs-OBB difference.
+  const rotated = transformVertices(vertices, new Matrix4().makeRotationFromQuaternion(quaternion))
+  const position = bboxOfVertices(rotated).getCenter(new Vector3()).negate()
   return { quaternion, position, matrix: new Matrix4().compose(position, quaternion, UNIT) }
+}
+
+/** Seats `vertices` with `primary`'s rotation, centred on its own geometry (compare model). */
+function seatLikePrimary(primary: BaseSeat, vertices: number[]): BaseSeat {
+  const rotated = transformVertices(
+    vertices,
+    new Matrix4().makeRotationFromQuaternion(primary.quaternion),
+  )
+  const position = bboxOfVertices(rotated).getCenter(new Vector3()).negate()
+  return {
+    quaternion: primary.quaternion,
+    position,
+    matrix: new Matrix4().compose(position, primary.quaternion, UNIT),
+  }
 }
 
 /** The seated world matrices and the section display axes (`x` = member, `y` = machine up). */
@@ -111,7 +189,10 @@ export function seatedPair(
   profile: [number, number][] | undefined,
 ): SeatedPair {
   const primary = baseSeat(primaryVertices, profile)
-  const compare = compareVertices ? baseSeat(compareVertices, profile) : null
+  // The compare shares the *primary's* rotation (only its own centre) — seating each model from its
+  // own vertices could pick different member axes for the same part (mesh density differs), leaving
+  // the two models rotated apart in the overlay. One rotation, two centres: they always coincide.
+  const compare = compareVertices ? seatLikePrimary(primary, compareVertices) : null
   if (!profile || profile.length < 3 || primaryVertices.length < 9) {
     return {
       primary: primary.matrix,

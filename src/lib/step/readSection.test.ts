@@ -106,4 +106,71 @@ describe.skipIf(!HAVE)('readSection — detect the section from real STEP geomet
       shape.delete()
     }
   }, 600000)
+
+  /**
+   * A cut/gusset piece keeps the raw stock section only near its square-cut ends; the middle is
+   * notched/coped. The section must be read there, not only at mid-length.
+   */
+  it('reads the stock section near the ends when the middle is notched', async () => {
+    await ensureOc()
+    const section = partSectionForCode('EA200*200*20', [])
+    expect(section).not.toBeNull()
+    if (!section) return
+    let pen = draw(section.points[0] as [number, number])
+    for (const point of section.points.slice(1)) pen = pen.lineTo(point)
+    const solid = pen.close().sketchOnPlane('XY').extrude(200)
+    // Notch a chunk out of the middle (through the web), leaving the ends full.
+    const notch = makeBox([-300, -60, -40], [300, 60, 40])
+    type Cutter = { cut: (tool: unknown) => { blobSTEP: () => Blob } }
+    const cut = (solid as unknown as Cutter).cut(notch)
+    const bytes = new Uint8Array(await cut.blobSTEP().arrayBuffer())
+    const shape = (await importSTEP(
+      new Blob([bytes], { type: 'model/step' }),
+    )) as unknown as SectionShape
+    try {
+      const guess = inferStepSection(
+        shape,
+        makeBox as unknown as (a: number[], b: number[]) => SectionShape,
+      )
+      expect(guess?.family).toBe('angle')
+      expect(guess?.code).toBe('EA200*200*20')
+    } finally {
+      shape.delete()
+    }
+  }, 600000)
+
+  /**
+   * The hard case: a short angle whose length (200) equals its legs (200), set obliquely (here on
+   * the cube diagonal). The bounding box is a ~200³ cube and PCA is degenerate, so neither the
+   * world axes nor the principal axes cut the L — the member axis has to come from the B-rep faces.
+   */
+  it('resolves a near-cubic short angle set obliquely', async () => {
+    await ensureOc()
+    const section = partSectionForCode('EA200*200*20', [])
+    expect(section).not.toBeNull()
+    if (!section) return
+    let pen = draw(section.points[0] as [number, number])
+    for (const point of section.points.slice(1)) pen = pen.lineTo(point)
+    type Rotatable = {
+      rotate: (a: number, p: number[], d: number[]) => Rotatable
+      blobSTEP: () => Blob
+    }
+    let solid = pen.close().sketchOnPlane('XY').extrude(200) as unknown as Rotatable
+    solid = solid.rotate(54.7356, [0, 0, 0], [1, 0, 0])
+    solid = solid.rotate(45, [0, 0, 0], [0, 0, 1])
+    const bytes = new Uint8Array(await solid.blobSTEP().arrayBuffer())
+    const shape = (await importSTEP(
+      new Blob([bytes], { type: 'model/step' }),
+    )) as unknown as SectionShape
+    try {
+      const guess = inferStepSection(
+        shape,
+        makeBox as unknown as (a: number[], b: number[]) => SectionShape,
+      )
+      expect(guess?.family).toBe('angle')
+      expect(guess?.code).toBe('EA200*200*20')
+    } finally {
+      shape.delete()
+    }
+  }, 600000)
 })

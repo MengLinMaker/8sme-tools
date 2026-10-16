@@ -629,9 +629,9 @@ function mountScene(
   let sabreVisible = true
   const extents = [size.x, size.y, size.z]
   const nativeLongAxis = extents.indexOf(Math.max(...extents))
-  const length = extents[nativeLongAxis]
-  // When a profile is present the model is seated with its length along X, so the ghost's
-  // length axis is X too; otherwise fall back to the model's own longest axis.
+  // Member length for the ghost/markers. With a profile the model is seated member-along-X, so it is
+  // the *seated* X extent — a rotated export's longest bbox extent is its diagonal, not the member.
+  let length = extents[nativeLongAxis]
   const longAxis = profile ? 0 : nativeLongAxis
   let xAxis = unit(0, 1)
   let yAxis = unit(1, 1)
@@ -642,6 +642,9 @@ function mountScene(
     // model, the stock ghost and the NC projection all share the canonical frame.
     const seats = seatedPair(primary.raw, compareStep?.vertices ?? null, profile)
     const seatScale = new Vector3()
+    // The seated member extent along X is the true member length (the raw bbox longest extent is a
+    // leg for a short part, or the diagonal for a rotated export).
+    length = bboxOfVertices(transformVertices(primary.raw, seats.primary)).getSize(new Vector3()).x
     seats.primary.decompose(primary.group.position, primary.group.quaternion, seatScale)
     primary.group.updateMatrixWorld(true)
     if (compareGroup && seats.compare) {

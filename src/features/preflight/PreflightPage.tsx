@@ -48,6 +48,7 @@ import {
   MAX_CUT_THICKNESS_MM,
 } from '@/lib/audit/cutReach'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
+import { listedProfile } from '@/lib/audit/partProfile'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
 import { assessUnclosedCuts, type UnclosedCutIssue } from '@/lib/audit/unclosedCuts'
@@ -910,7 +911,7 @@ export function PreflightPage() {
             materials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
           const cross = part.nc?.dimensions?.slice(0, 2) ?? []
           // No NC and no part list? The section can only come from the geometry.
-          const needSection = !part.nc?.profile && !part.expected?.profile
+          const needSection = !listedProfile(part)
           try {
             const inspected = await pool.inspect(bytes, { detectSection: needSection })
             if (cancelled) return
@@ -1066,7 +1067,7 @@ export function PreflightPage() {
           const pool = getStepWorkerPool()
           let measure: StepMeasure | null = null
           if (stepBytes && (needsInspect || needsRebuild)) {
-            const needSection = !part.nc?.profile && !part.expected?.profile
+            const needSection = !listedProfile(part)
             const inspected = await pool.inspect(stepBytes, {
               priority,
               detectSection: needSection,
@@ -1362,7 +1363,7 @@ export function PreflightPage() {
       const groundTruth = material?.weight ?? part.expected?.weight
       if (groundTruth != null) return groundTruth
 
-      const profile = part.nc?.profile ?? part.expected?.profile
+      const profile = listedProfile(part)
       const perMetre =
         profile != null
           ? sectionMassPerMetre(profile, part.nc?.dimensions ?? [])
@@ -1381,7 +1382,8 @@ export function PreflightPage() {
    */
   const sectionLabel = useCallback(
     (part: PartRecord): string =>
-      part.nc?.profile ?? part.expected?.profile ?? sectionGuesses.get(part.mark)?.label ?? '—',
+      // NC / part-list code → section read from STEP geometry.
+      listedProfile(part) ?? sectionGuesses.get(part.mark)?.label ?? '—',
     [sectionGuesses],
   )
 
@@ -2886,7 +2888,7 @@ function PartSummary({
   lengthMm?: number | null
 }) {
   const { t } = useTranslation()
-  const section = profile ?? part.nc?.profile ?? part.expected?.profile ?? '—'
+  const section = profile ?? listedProfile(part) ?? '—'
   const qty = qtyProp ?? material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
   const length = lengthMm ?? material?.length ?? part.expected?.length ?? part.nc?.length ?? null
   const mass = massKg ?? material?.weight ?? part.expected?.weight ?? null
