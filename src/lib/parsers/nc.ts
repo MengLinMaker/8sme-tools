@@ -72,6 +72,12 @@ export function parseNcFile(path: string, text: string): NcFile {
     length = parsed.data.length
   } else {
     problems.push(...issueMessages(parsed.error))
+    // Never discard the rest of the header because one field failed. Recover each numeric field
+    // independently, so e.g. an unusual grade still yields the length and quantity.
+    const qty = ncHeaderSchema.shape.quantity.safeParse(quantityRaw)
+    if (qty.success) quantity = qty.data
+    const len = ncHeaderSchema.shape.length.safeParse(lengthRaw)
+    if (len.success) length = len.data
   }
 
   const dimensions: number[] = []
@@ -91,6 +97,14 @@ export function parseNcFile(path: string, text: string): NcFile {
 
   if (mark !== markAlt) problems.push('duplicate mark fields differ')
 
+  // DSTV header column 15 (the 6th numeric header value, after the 5 profile dims) is the nominal
+  // weight by metre. It is real Tekla data and the most reliable mass source, so keep it.
+  const weightPerMetreRaw = dimensions[5]
+  const weightPerMetre =
+    weightPerMetreRaw != null && Number.isFinite(weightPerMetreRaw) && weightPerMetreRaw > 0
+      ? weightPerMetreRaw
+      : null
+
   return {
     path,
     programCode,
@@ -103,6 +117,7 @@ export function parseNcFile(path: string, text: string): NcFile {
     orientation,
     length,
     dimensions,
+    weightPerMetre,
     valid: problems.length === 0,
     problems,
   }

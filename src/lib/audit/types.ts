@@ -14,6 +14,8 @@ export interface NcFile {
   orientation: string
   length: number | null
   dimensions: number[]
+  /** Nominal mass per metre (kg/m) from the DSTV header (column 15), where present. */
+  weightPerMetre: number | null
   valid: boolean
   problems: string[]
 }

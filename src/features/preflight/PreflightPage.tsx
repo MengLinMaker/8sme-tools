@@ -1371,10 +1371,13 @@ export function PreflightPage() {
       if (groundTruth != null) return groundTruth
 
       const profile = listedProfile(part)
+      // The NC header's own weight by metre (real Tekla data) wins over the catalogue lookup, so a
+      // code the catalogue can't resolve (e.g. `UB360*57` vs `360UB56.7`) still gets a mass.
       const perMetre =
-        profile != null
+        part.nc?.weightPerMetre ??
+        (profile != null
           ? sectionMassPerMetre(profile, part.nc?.dimensions ?? [])
-          : (sectionGuesses.get(part.mark)?.mass ?? null)
+          : (sectionGuesses.get(part.mark)?.mass ?? null))
       const length = material?.length ?? part.expected?.length ?? part.nc?.length ?? null
       if (perMetre != null && length != null) return (perMetre * length) / 1000
 

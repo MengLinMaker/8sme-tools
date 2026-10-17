@@ -32,7 +32,9 @@ export const ncHeaderSchema = z.object({
   mark: z.string().min(1),
   markAlt: z.string().min(1),
   profileCode: z.string().min(1),
-  grade: z.string().regex(/^[A-Za-z]+\d+/, 'grade not recognised'),
+  // Steel grades are free text and may lead with digits (e.g. the Australian `300PLUS`), so
+  // accept either order — only require a real alphanumeric grade, not a shifted column.
+  grade: z.string().regex(/^(?=.*\d)[A-Za-z0-9/+\-. ]+/, 'grade not recognised'),
   quantity: z.coerce.number().int().positive(),
   profile: z.string().min(1),
   orientation: z.string().min(1),
