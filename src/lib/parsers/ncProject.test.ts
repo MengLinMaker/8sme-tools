@@ -1,17 +1,19 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { nw30Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { parseDstv } from './dstv'
 import {
+  faceNormal,
   type NcFaceFrame,
   ncAuthoredStancePoints,
   placeNcFace,
   resolveNcFaceFrame,
 } from './ncFaces'
-import type { NcGeometry } from './ncGeometry'
+import type { NcFace, NcGeometry } from './ncGeometry'
 import { parseNcGeometry } from './ncGeometry'
-import { cutThicknesses, faceThickness, holeOutline, projectNc } from './ncProject'
+import { cutThicknesses, faceThickness, holeOutline, projectNc, type Vec3 } from './ncProject'
+import { MAX_BEVEL_DEG } from './weldingPrep'
 
 describe('resolveNcFaceFrame', () => {
   it('matches each face pair to the section axis its contour spans', () => {
@@ -287,6 +289,45 @@ describe('projectNc', () => {
     const out = projectNc(nc, { frame, section: oneSided, toScene, normal })
     expect(out.cuts).toHaveLength(0)
   })
+})
+
+describe('projectNc welding prep on real RHS parts', () => {
+  // `m119`/`m159` carry a two-sided prep on their long (`v`/`h`) faces — a real 45° chamfer plus a
+  // steep back-side couple (79.4°) the head can't cut. `m24` is a plain 20° mitre.
+  const marks = ['m119', 'm159', 'm24']
+  for (const mark of marks) {
+    const path = nw31Top('NC files', `${mark}.nc1`)
+    it.skipIf(!existsSync(path))(`${mark} never sweeps a bevel fin past the head's range`, () => {
+      const text = readFileSync(path, 'utf8')
+      const header = parseDstv(text).header
+      const geo = parseNcGeometry(text)
+      const section = partSectionForCode(header.profile, header.dimensions)?.points
+      expect(section).toBeTruthy()
+      if (!section) return
+      const frame = resolveNcFaceFrame(section, geo, header.profile)
+      // Seat the member along world X; cross-section x→world Y, y→world Z.
+      const toScene = (along: number, cross: [number, number]): Vec3 => [along, cross[0], cross[1]]
+      const normal = (face: NcFace): Vec3 => {
+        const n = faceNormal(frame, face, section)
+        return n.axis === 0 ? [0, n.sign, 0] : [0, 0, n.sign]
+      }
+      const out = projectNc(geo, { frame, section, toScene, normal })
+      const finTilts: number[] = []
+      for (const area of out.bevelAreas) {
+        const t = area.triangles
+        for (let i = 0; i + 8 < t.length; i += 9) {
+          // Triangle vertices: a, b, b+reach (the second begins a, b+reach, a+reach).
+          const reach = [t[i + 6] - t[i + 3], t[i + 7] - t[i + 4], t[i + 8] - t[i + 5]]
+          const len = Math.hypot(reach[0] as number, reach[1] as number, reach[2] as number) || 1
+          // The fin's along-member component is sin(bevel); a past-range bevel tilts it near-flat.
+          finTilts.push(Math.abs((reach[0] as number) / len))
+        }
+      }
+      expect(finTilts.length).toBeGreaterThan(0)
+      const maxTilt = Math.max(...finTilts)
+      expect(maxTilt).toBeLessThanOrEqual(Math.sin((MAX_BEVEL_DEG * Math.PI) / 180) + 1e-3)
+    })
+  }
 })
 
 describe('holeOutline', () => {

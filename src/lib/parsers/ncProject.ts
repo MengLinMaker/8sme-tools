@@ -25,6 +25,7 @@ import {
   placeNcFace,
 } from './ncFaces'
 import { type NcFace, type NcGeometry, type NcHole, slotOffset } from './ncGeometry'
+import { selectWeldingPrep } from './weldingPrep'
 
 export type Vec3 = [number, number, number]
 
@@ -142,20 +143,19 @@ function arrow(target: number[], at: Vec3, dir: Vec3, spread: Vec3): void {
   push(target, at, [bx - spread[0] * half, by - spread[1] * half, bz - spread[2] * half])
 }
 
-/** Signed bevel angle (degrees) at a vertex — the larger-magnitude of its two angle/distance pairs. */
+/**
+ * Signed bevel angle (deg) at a vertex — the cuttable side of its welding preparation. A vertex may
+ * carry a prep on both sides of the plate; only a couple within the head's range is a cut the head
+ * makes (see `selectWeldingPrep`). `0` = no bevel.
+ */
 function bevelAngle(bevel: number[] | undefined): number {
-  if (!bevel) return 0
-  const a0 = bevel[0] ?? 0
-  const a1 = bevel[2] ?? 0
-  return Math.abs(a0) >= Math.abs(a1) ? a0 : a1
+  return selectWeldingPrep(bevel).angle
 }
 
 /** Bevel distance to draw for a vertex, or 0 when the vertex is a plain cut. */
 function bevelDistance(bevel: number[] | undefined): number {
-  if (!bevel) return 0
-  const distance = Math.max(bevel[1] ?? 0, bevel[3] ?? 0)
+  const { angle, distance } = selectWeldingPrep(bevel)
   if (distance > 0) return distance
-  const angle = Math.max(bevel[0] ?? 0, bevel[2] ?? 0)
   return angle !== 0 ? DEFAULT_BEVEL_SPUR : 0
 }
 
