@@ -42,6 +42,7 @@ interface WireLike {
 
 interface FaceLike {
   geomType: string
+  normalAt(location?: Vec3): Vec3
   clone(): FaceLike
   outerWire(): WireLike
   innerWires(): WireLike[]
@@ -282,24 +283,23 @@ function unionSections(sections: MeasuredSection[]): MeasuredSection | null {
     }
   }
   if (!Number.isFinite(minX)) return null
-  const cols = Math.max(1, Math.ceil((maxX - minX) / UNION_CELL_MM) + 1)
-  const rows = Math.max(1, Math.ceil((maxY - minY) / UNION_CELL_MM) + 1)
+  // Bound the grid: a wrong-axis "section" spans the whole member, so a fixed 1.5 mm cell would
+  // allocate millions of cells. Coarsen the cell so the grid stays ~256 cells on its long side.
+  const cell = Math.max(UNION_CELL_MM, Math.max(maxX - minX, maxY - minY) / 256)
+  const cols = Math.max(1, Math.ceil((maxX - minX) / cell) + 1)
+  const rows = Math.max(1, Math.ceil((maxY - minY) / cell) + 1)
   const occupancy = new Uint8Array(cols * rows)
   const slice = new Uint8Array(cols * rows)
   for (const section of sections) {
     slice.fill(0)
-    fillPolygon(slice, cols, rows, minX, minY, UNION_CELL_MM, section.outer, 1)
+    fillPolygon(slice, cols, rows, minX, minY, cell, section.outer, 1)
     for (const hole of section.holes ?? []) {
-      fillPolygon(slice, cols, rows, minX, minY, UNION_CELL_MM, hole, 0)
+      fillPolygon(slice, cols, rows, minX, minY, cell, hole, 0)
     }
     for (let i = 0; i < occupancy.length; i++) if (slice[i]) occupancy[i] = 1
   }
   const loops = occupancyOutline(occupancy, cols, rows)
-    .map((loop) =>
-      loop.map(
-        ([i, j]) => [minX + i * UNION_CELL_MM, minY + j * UNION_CELL_MM] as [number, number],
-      ),
-    )
+    .map((loop) => loop.map(([i, j]) => [minX + i * cell, minY + j * cell] as [number, number]))
     .sort((a, b) => polygonArea(b) - polygonArea(a))
   const outer = loops[0]
   if (!outer) return null
@@ -392,6 +392,8 @@ export function measureSections(
   shape: SectionShape,
   makeBox: (a: number[], b: number[]) => SectionShape,
   fractions: number[] = [0.5],
+  merge = true,
+  axis?: number,
 ): MeasuredSection[] {
   const [min, max] = shape.boundingBox.bounds
   const bounds = {
@@ -402,23 +404,92 @@ export function measureSections(
   }
 
   const sections: MeasuredSection[] = []
-  for (const axis of [0, 1, 2]) {
+  const seen = new Set<string>()
+  const add = (section: MeasuredSection): void => {
+    const key = sectionKey(section)
+    if (seen.has(key)) return
+    seen.add(key)
+    sections.push(section)
+  }
+  // Longest extent first: for a long member that is the (small, fast) perpendicular cut, so an
+  // early-exiting caller never pays for the two huge wrong-axis slabs.
+  const axes =
+    axis === undefined
+      ? [0, 1, 2].sort((a, b) => (bounds.size[b] as number) - (bounds.size[a] as number))
+      : [axis]
+  for (const axisIndex of axes) {
     const stations: MeasuredSection[] = []
     for (const fraction of fractions) {
-      const measured = slabSection(shape, makeBox, axis, bounds, fraction)
+      const measured = slabSection(shape, makeBox, axisIndex, bounds, fraction)
       if (measured) stations.push(measured)
     }
     if (stations.length === 0) continue
     // The raw stations keep their exact outlines (the merge rasterises, losing ~a cell of accuracy,
     // which can tip an exact size-variant match). The additive merge of all stations is added on top
     // so a stock silhouette that no single station shows is still available.
-    for (const station of stations) sections.push(normalizeSection(station))
-    if (stations.length > 1) {
+    for (const station of stations) add(normalizeSection(station))
+    if (merge && stations.length > 1) {
       const merged = unionSections(stations)
-      if (merged) sections.push(normalizeSection(merged))
+      if (merged) add(normalizeSection(merged))
     }
   }
   return sections
+}
+
+/** A coarse identity for a section, to skip the same slice sampled at several stations. */
+function sectionKey(section: MeasuredSection): string {
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const [x, y] of section.outer) {
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+  }
+  return `${Math.round(maxX - minX)}x${Math.round(maxY - minY)}:${Math.round(polygonArea(section.outer))}:${section.holes?.length ?? 0}`
+}
+
+/**
+ * Whether the part's member runs along a world axis, judged by its **longest edge** — the lengthwise
+ * silhouette edge. Robust to cope/bevel/chamfer faces (which are oblique but don't move the member),
+ * unlike requiring every face square. Such a part needs no principal-axis alignment: a raw slice
+ * perpendicular to the right world axis is the exact section.
+ */
+export function isAxisAligned(shape: SectionShape): boolean {
+  let longest = -1
+  let direction: [number, number, number] = [0, 0, 0]
+  for (const face of shape.faces) {
+    let wire: WireLike
+    try {
+      wire = face.clone().outerWire()
+    } catch {
+      continue
+    }
+    try {
+      for (const edge of wire.edges) {
+        const length = edge.length
+        if (Number.isFinite(length) && length > longest) {
+          longest = length
+          direction = [
+            edge.endPoint.x - edge.startPoint.x,
+            edge.endPoint.y - edge.startPoint.y,
+            edge.endPoint.z - edge.startPoint.z,
+          ]
+        }
+        edge.delete()
+      }
+    } finally {
+      wire.delete()
+    }
+  }
+  const length = Math.hypot(direction[0], direction[1], direction[2])
+  if (!(length > 0)) return true
+  return (
+    Math.max(Math.abs(direction[0]), Math.abs(direction[1]), Math.abs(direction[2])) / length >=
+    Math.cos((3 * Math.PI) / 180)
+  )
 }
 
 /** `{ angle (deg), axis }` for a rotation quaternion, for replicad's `rotate`. */
@@ -488,6 +559,32 @@ const STATION_LEVELS: number[][] = [[0.5], [0.5, 0.3, 0.7], [0.5, 0.1, 0.9, 0.3,
  */
 const STOP_CONFIDENCE = 0.99
 
+/**
+ * Slices the part one axis at a time, **longest bounding-box extent first**, stopping as soon as an
+ * axis resolves. The member axis is the perpendicular cut — small and cheap — so a long part is
+ * answered without ever building the two huge wrong-axis slabs.
+ */
+function bestAcrossAxes(
+  shape: SectionShape,
+  makeBox: (a: number[], b: number[]) => SectionShape,
+  fractions: number[],
+  merge: boolean,
+  stop: number,
+): SectionGuess | null {
+  const [min, max] = shape.boundingBox.bounds
+  const order = [0, 1, 2].sort(
+    (a, b) => (max[b] as number) - (min[b] as number) - ((max[a] as number) - (min[a] as number)),
+  )
+  let best: SectionGuess | null = null
+  for (const axis of order) {
+    // All stations of this axis are matched together, so stopping here can't be fooled by a single
+    // notched mid-slice — the full end-slice wins within the axis.
+    best = betterGuess(best, bestGuess(measureSections(shape, makeBox, fractions, merge, axis)))
+    if (best && best.score >= stop) break
+  }
+  return best
+}
+
 /** The higher-scoring of two guesses; on a tie, the smaller cut area wins. */
 function betterGuess(a: SectionGuess | null, b: SectionGuess | null): SectionGuess | null {
   if (!a) return b
@@ -510,6 +607,16 @@ export function inferStepSection(
   shape: SectionShape,
   makeBox: (a: number[], b: number[]) => SectionShape,
 ): SectionGuess | null {
+  // Fast path: an axis-aligned member is sliced exactly by a world axis, so a few raw slices (no PCA
+  // mesh, no merge) resolve it. The ends are included so a notched/coped piece reads its stock, and
+  // the axes are tried longest-first so a long member is resolved by its (small, fast) slab alone.
+  if (isAxisAligned(shape)) {
+    return bestAcrossAxes(shape, makeBox, [0.5, 0.1, 0.9], false, 0.9)
+  }
+
+  // Oblique member: align to the principal axes and compare both passes (an oblique slice of a
+  // rotated part can resolve *wrongly* at full score — a hollow at an angle reads as an oversized
+  // `RHS…` — so the area tie-break against the aligned slice tells the true section apart).
   let best: SectionGuess | null = null
   let aligned: SectionShape | null = null
   try {
@@ -522,11 +629,10 @@ export function inferStepSection(
   }
   try {
     for (const fractions of STATION_LEVELS) {
-      // Both passes are compared before exiting: an oblique slice of a rotated part can resolve
-      // *wrongly* at full score (a hollow read at an angle reconstructs as an oversized `RHS…`), so
-      // the area tie-break against the principal-axis slice is what tells the true section apart.
-      const world = bestGuess(measureSections(shape, makeBox, fractions))
-      const principal = aligned ? bestGuess(measureSections(aligned, makeBox, fractions)) : null
+      const world = bestAcrossAxes(shape, makeBox, fractions, true, STOP_CONFIDENCE)
+      const principal = aligned
+        ? bestAcrossAxes(aligned, makeBox, fractions, true, STOP_CONFIDENCE)
+        : null
       best = betterGuess(best, betterGuess(world, principal))
       if (best && best.score >= STOP_CONFIDENCE) return best
     }
