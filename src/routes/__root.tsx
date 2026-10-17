@@ -17,11 +17,14 @@ function RootLayout() {
   return (
     <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-5">
       <header className="flex flex-wrap items-center gap-4 border-b border-border py-5">
-        <Link to="/" className="inline-flex items-center gap-2 font-bold tracking-tight">
-          <span className="grid size-7 place-items-center rounded-md bg-primary text-sm font-extrabold text-primary-foreground">
-            8
-          </span>
+        <Link to="/" className="inline-flex flex-col leading-tight font-bold tracking-tight">
           <span className="text-lg">{t('common.appName')}</span>
+          <span
+            title={__COMMIT_ID__}
+            className="font-mono text-[10px] leading-none font-normal text-muted-foreground/60"
+          >
+            {__COMMIT_ID__}
+          </span>
         </Link>
         <div className="ml-auto flex items-center gap-3">
           <nav className="flex items-center gap-1">
