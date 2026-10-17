@@ -1467,21 +1467,28 @@ function mountScene(
   // it always sits on top of the base (never hidden by it) yet still self-occludes and shows its
   // own far side hidden — a solid floating over the part.
   renderer.autoClear = false
-  // Report the on-screen angle of the member's positive axis (project a unit step of `longAxis`),
-  // so the toolbar can show a direction arrow next to the location readout.
-  const axisOrigin = new Vector3()
-  const axisTip = new Vector3()
+  // Report the on-screen angle of the member's positive axis, so the toolbar can show a direction
+  // arrow next to the location readout. The angle comes from the **shared camera orientation** (its
+  // world right/up basis) rather than projecting two scene points: projection scales x and y by the
+  // pane's own frustum aspect, so the angle would drift with the pane's shape — and a hidden pane's
+  // stale aspect — leaving the arrow mismatched against the visible NC/STEP pane when the view
+  // changes. The basis dot product is purely the view orientation, so every pane reports the same
+  // angle no matter which is shown or how it is sized.
+  const memberAxis = new Vector3().setComponent(longAxis, 1)
+  const cameraRight = new Vector3()
+  const cameraUp = new Vector3()
   let lastAxisAngle = Number.NaN
   const updateAxisAngle = (): void => {
     if (!onAxisAngleChange) return
-    axisOrigin.copy(controls.target).project(camera)
-    axisTip.copy(controls.target)
-    axisTip.setComponent(longAxis, axisTip.getComponent(longAxis) + 1)
-    axisTip.project(camera)
-    const dx = axisTip.x - axisOrigin.x
-    const dy = axisTip.y - axisOrigin.y
-    if (dx * dx + dy * dy < 1e-8) return
-    const degrees = (Math.atan2(-dy, dx) * 180) / Math.PI
+    // A camera looks down its local −Z; matrixWorld's X/Y columns are its world right/up.
+    const basis = camera.matrixWorld.elements
+    cameraRight.set(basis[0], basis[1], basis[2])
+    cameraUp.set(basis[4], basis[5], basis[6])
+    const sx = memberAxis.dot(cameraRight)
+    const sy = memberAxis.dot(cameraUp)
+    // Looking straight down the member: no in-plane direction to report.
+    if (sx * sx + sy * sy < 1e-8) return
+    const degrees = (Math.atan2(-sy, sx) * 180) / Math.PI
     if (Math.abs(degrees - lastAxisAngle) < 0.5) return
     lastAxisAngle = degrees
     onAxisAngleChange(degrees)
