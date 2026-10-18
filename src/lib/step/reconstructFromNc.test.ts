@@ -160,16 +160,39 @@ function cleanUbNc(
   tf: number,
   tw: number,
   r: number,
+  opts: {
+    /** Override the `v` (side/web) silhouette, e.g. a web tenon at the far end. */
+    v?: [number, number][]
+    holes?: { face: string; x: number; y: number; d: number }[]
+  } = {},
 ): string {
   const number = (v: number): string => v.toFixed(2)
-  const rect = (face: string, xs: number[], ys: number[]): string => {
-    const first = `  ${face}       0.00s      0.00       0.00       0.00       0.00       0.00       0.00`
-    const rows = xs.map(
-      (x, i) =>
-        `       ${number(x)}       ${number(ys[i] as number)}       0.00       0.00       0.00       0.00       0.00`,
-    )
+  const contour = (face: string, points: [number, number][]): string => {
+    const [p0x, p0y] = points[0] ?? [0, 0]
+    const first = `  ${face}       ${number(p0x)}s      ${number(p0y)}       0.00       0.00       0.00       0.00       0.00`
+    const rows = points
+      .slice(1)
+      .map(
+        ([x, y]) =>
+          `       ${number(x)}       ${number(y)}       0.00       0.00       0.00       0.00       0.00`,
+      )
     return ['AK', first, ...rows].join('\n')
   }
+  const vPoints = opts.v ?? [
+    [0, 0],
+    [length, 0],
+    [length, depth],
+    [0, depth],
+    [0, 0],
+  ]
+  const bo = opts.holes?.length
+    ? [
+        'BO',
+        ...opts.holes.map(
+          (h) => `  ${h.face}       ${number(h.x)}       ${number(h.y)}       ${number(h.d)}`,
+        ),
+      ].join('\n')
+    : null
   return [
     'ST',
     '** clean.nc1',
@@ -193,9 +216,21 @@ function cleanUbNc(
     '      0.000',
     '      0.000',
     '      0.000',
-    rect('v', [0, length, length, 0, 0], [0, 0, depth, depth, 0]),
-    rect('o', [0, 0, length, length, 0], [0, width, width, 0, 0]),
-    rect('u', [length, length, 0, 0], [0, width, width, 0]),
+    contour('v', vPoints),
+    contour('o', [
+      [0, 0],
+      [0, width],
+      [length, width],
+      [length, 0],
+      [0, 0],
+    ]),
+    contour('u', [
+      [length, 0],
+      [length, width],
+      [0, width],
+      [0, 0],
+    ]),
+    ...(bo ? [bo] : []),
     'EN',
     '',
   ].join('\n')
@@ -216,6 +251,62 @@ describe('reconstructFromNc — clean I-section cross-section (synthetic)', () =
     expect(Math.abs((built.size[1] as number) - 359)).toBeLessThan(2)
     // Deeper than 300 mm: the old fixed `400 / −150` trim prism clipped the depth to 329 mm.
     expect(Math.abs((built.size[2] as number) - 172)).toBeLessThan(2)
+  }, 120000)
+})
+
+describe('reconstructFromNc — I-section web tenon + web hole (synthetic)', () => {
+  // A UB whose `v` (side/web) silhouette protrudes at the end over depth 135..334 — the web tenon
+  // m32 has. The flanges stop at L; the web tab reaches L + 80, with a Ø14 hole through the web.
+  const L = 1000
+  const D = 359
+  const W = 172
+  const tw = 8
+  const vTenon: [number, number][] = [
+    [0, 0],
+    [L, 0],
+    [L, 124],
+    [L + 17, 135],
+    [L + 80, 135],
+    [L + 80, 334],
+    [L + 17, 334],
+    [L, 345],
+    [L, D],
+    [0, D],
+    [0, 0],
+  ]
+  const build = (holes?: { face: string; x: number; y: number; d: number }[]): string =>
+    cleanUbNc(L, D, W, 13, tw, 11.4, { v: vTenon, holes })
+
+  it('carves a web tenon at the side-silhouette depth band, flanges cut back', async () => {
+    const step = await reconstructStepFromNc(build())
+    expect(step).toBeTruthy()
+    if (!step) return
+    const built = await measure(step)
+    expect(Math.abs((built.size[0] as number) - (L + 80))).toBeLessThan(2)
+    const m = await meshStepFile('tenon', new TextEncoder().encode(step))
+    let flangeMaxX = -Infinity
+    let webMaxX = -Infinity
+    for (let i = 0; i + 2 < m.vertices.length; i += 3) {
+      const x = m.vertices[i] as number
+      const y = m.vertices[i + 1] as number // post-roll Y = depth (negated)
+      const z = m.vertices[i + 2] as number // post-roll Z = flange width
+      if (Math.abs(z) > 50) flangeMaxX = Math.max(flangeMaxX, x)
+      if (Math.abs(z) < 12 && y > -160 && y < 50) webMaxX = Math.max(webMaxX, x)
+    }
+    // Flanges end at L; only the web tab reaches L + 80.
+    expect(flangeMaxX).toBeLessThan(L + 5)
+    expect(webMaxX).toBeGreaterThan(L + 70)
+  }, 120000)
+
+  it('drills a v-face (web) hole through the web plate', async () => {
+    const plain = await reconstructStepFromNc(build())
+    const holed = await reconstructStepFromNc(build([{ face: 'v', x: 900, y: 200, d: 14 }]))
+    expect(plain && holed).toBeTruthy()
+    if (!plain || !holed) return
+    const a = await measure(plain)
+    const b = await measure(holed)
+    // Ø14 × tw 8 ≈ 1231 mm³; allow the mesh estimate ~20% slack.
+    expect(a.vol - b.vol).toBeGreaterThan(Math.PI * 49 * tw * 0.8)
   }, 120000)
 })
 

@@ -320,6 +320,7 @@ export async function reconstructSolidFromNc(
   // likewise built in its authored (web-vertical) pose and rolled back, but the authored coordinates
   // are the opposite rotation, so no across flip is needed — keep the validated authored maths.
   const family = profileFamily(header.profile)
+  const isI = family === 'i'
   const acrossSign = (face: NcFace): 1 | -1 => {
     if (family === 'tube') return ncAuthoredAcrossSign(frame, face)
     if (family === 'channel' && (face === 'v' || face === 'h')) return -1
@@ -434,10 +435,14 @@ export async function reconstructSolidFromNc(
         [x1, half + 2],
         [x0, half + 2],
       ])
-    if (loopMinX - endMinX > BAND_MIN_GAP && otherSpans(endMinX, loopMinX + 1))
-      fuseIn(band(endMinX, loopMinX + 1))
-    if (endMaxX - loopMaxX > BAND_MIN_GAP && otherSpans(loopMaxX - 1, endMaxX))
-      fuseIn(band(loopMaxX - 1, endMaxX))
+    // An I-section trims each face through its own wall (see below), so the global end band would
+    // wrongly extend the flange outline to the web's end (m32's web tenon). Skip it for `I`.
+    if (!isI) {
+      if (loopMinX - endMinX > BAND_MIN_GAP && otherSpans(endMinX, loopMinX + 1))
+        fuseIn(band(endMinX, loopMinX + 1))
+      if (endMaxX - loopMaxX > BAND_MIN_GAP && otherSpans(loopMaxX - 1, endMaxX))
+        fuseIn(band(loopMaxX - 1, endMaxX))
+    }
     // Simplifying: leave the face flat rather than reproducing a step, or a bevel whose
     // straight-through cut would sever a piece it is meant to keep.
     if (
@@ -448,17 +453,52 @@ export async function reconstructSolidFromNc(
       continue
     }
     if (axis === 0) {
-      // Face plane is (X, width=Y); extrude across the depth and keep the inside.
-      // `sketchOnPlane('XY')` extrudes towards +Z, so start at the section's lower depth bound and
-      // span its full extent. The range must follow the section, not a fixed window: a constant
-      // `400 / -150` prism clipped every section deeper than 300 mm (a 360UB's 359 mm depth came
-      // out 329 mm, with the bottom flange sliced off).
-      const depthHalf = halfOf((1 - axis) as Axis) + 2
-      const prism = (shape as ReturnType<typeof poly>)
-        .sketchOnPlane('XY')
-        .extrude(2 * depthHalf)
-        .translate(0, 0, -depthHalf) as unknown as SolidOps
-      solid = solid.intersect(prism)
+      if (isI) {
+        // `o`/`u` are the flange outer faces at the depth extremes. Trim each flange through its own
+        // thickness; a full-depth intersect would also clip the web and any web tenon at the end.
+        const rect = poly([
+          [endMinX - 2, -half - 2],
+          [maxX + 22, -half - 2],
+          [maxX + 22, half + 2],
+          [endMinX - 2, half + 2],
+        ])
+        const notch = (() => {
+          try {
+            return (rect as unknown as { cut: (other: unknown) => unknown }).cut(shape)
+          } catch {
+            return null
+          }
+        })()
+        if (!notch) continue
+        const depthOut = halfOf(1) + 2
+        const reach = reachFor(1, bevelFactorByAxis[0])
+
+        // `sketchOnPlane('XY')` extrudes towards +Z; start each skin so it sits over the flange.
+        solid = solid.cut(
+          (notch as ReturnType<typeof poly>)
+            .sketchOnPlane('XY')
+            .extrude(reach)
+            .translate(0, 0, depthOut - reach) as unknown as SolidOps,
+        )
+        solid = solid.cut(
+          (notch as ReturnType<typeof poly>)
+            .sketchOnPlane('XY')
+            .extrude(reach)
+            .translate(0, 0, -depthOut) as unknown as SolidOps,
+        )
+      } else {
+        // Face plane is (X, width=Y); extrude across the depth and keep the inside.
+        // `sketchOnPlane('XY')` extrudes towards +Z, so start at the section's lower depth bound and
+        // span its full extent. The range must follow the section, not a fixed window: a constant
+        // `400 / -150` prism clipped every section deeper than 300 mm (a 360UB's 359 mm depth came
+        // out 329 mm, with the bottom flange sliced off).
+        const depthHalf = halfOf((1 - axis) as Axis) + 2
+        const prism = (shape as ReturnType<typeof poly>)
+          .sketchOnPlane('XY')
+          .extrude(2 * depthHalf)
+          .translate(0, 0, -depthHalf) as unknown as SolidOps
+        solid = solid.intersect(prism)
+      }
     } else {
       // Face plane is (X, depth=Z). `intersect` trips an OCC boolean error with the section
       // prism, so remove the complement (bounding rectangle minus the outline) with a cut.
@@ -466,8 +506,8 @@ export async function reconstructSolidFromNc(
       // longer face's end wedge is never left standing past the cut as a stray body.
       const rect = poly([
         [endMinX - 2, -half - 2],
-        [endMaxX + 2, -half - 2],
-        [endMaxX + 2, half + 2],
+        [isI ? maxX + 22 : endMaxX + 2, -half - 2],
+        [isI ? maxX + 22 : endMaxX + 2, half + 2],
         [endMinX - 2, half + 2],
       ])
       const notch = (() => {
@@ -486,15 +526,31 @@ export async function reconstructSolidFromNc(
       // instead of vaporising the whole width. A full-width cut deletes extensions (flange tips
       // past a mitred web) the head physically cannot reach — the manufactured model then runs
       // short and the detached rest shows up as stray bodies.
-      const faceOut = halfOf(0 as Axis)
-      const reach = reachFor(0, bevelFactorByAxis[1])
-      const skin = (topEdge: number): SolidOps =>
-        (notch as ReturnType<typeof poly>)
-          .sketchOnPlane('XZ')
-          .extrude(reach)
-          .translate(0, topEdge, 0) as unknown as SolidOps
-      solid = solid.cut(skin(faceOut + 2))
-      solid = solid.cut(skin(-faceOut - 2 + reach))
+      //
+      // An I-section's `v`/`h` faces are the **web** (interior), so its skin sits at the web
+      // surface (`webHalf`), not the width edge — otherwise the web cuts land on the flange edges.
+      if (isI) {
+        // The side (v/h) silhouette is the part's true profile across the whole width: intersect
+        // it full-width so the web (interior) is shaped too — a limited skin from the width edge
+        // never reaches the web. This is what carves a web tenon at the end without clipping it.
+        const widthHalf = halfOf(0 as Axis) + 2
+        solid = solid.cut(
+          (notch as ReturnType<typeof poly>)
+            .sketchOnPlane('XZ')
+            .extrude(2 * widthHalf + 4)
+            .translate(0, widthHalf + 2, 0) as unknown as SolidOps,
+        )
+      } else {
+        const faceOut = halfOf(0 as Axis)
+        const reach = reachFor(0, bevelFactorByAxis[1])
+        const skin = (topEdge: number): SolidOps =>
+          (notch as ReturnType<typeof poly>)
+            .sketchOnPlane('XZ')
+            .extrude(reach)
+            .translate(0, topEdge, 0) as unknown as SolidOps
+        solid = solid.cut(skin(faceOut + 2))
+        solid = solid.cut(skin(-faceOut - 2 + reach))
+      }
     }
   }
 
@@ -552,6 +608,16 @@ export async function reconstructSolidFromNc(
           .translate(h.x + dx / 2, across * (h.y - half) + sdy / 2)
       }
       return drawCircle(h.diameter / 2).translate(h.x, across * (h.y - half))
+    }
+    if (isI && axis === 1) {
+      // An I-section's `v`/`h` holes are drilled through the **web**, centred on the section's
+      // mid-width. The generic path starts at the bounding-box edge (the flange edge) and only
+      // reaches `tw` deep, so it never meets the interior web.
+      const webHalf = frame.webHalf ?? 0
+      const span = 2 * webHalf + 4
+      const cyl = crossDrawing().sketchOnPlane('XZ').extrude(span)
+      solid = solid.cut(cyl.translate(0, webHalf + 2, 0) as unknown as SolidOps)
+      continue
     }
     if (axis === 0) {
       // Drill along the 3D Z axis (perpendicular to the `v`/`h` faces).
