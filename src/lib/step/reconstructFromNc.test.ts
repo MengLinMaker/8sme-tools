@@ -11,12 +11,17 @@ import {
   Vector3,
 } from 'three'
 import { describe, expect, it } from 'vitest'
+import { parseDstv } from '@/lib/parsers/dstv'
+import { faceNormal, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { projectNc, type Vec3 } from '@/lib/parsers/ncProject'
+import { partSectionForCode } from '@/lib/sections/stock'
 import { measureStep } from './measure'
 import { meshStepFile } from './mesh'
 import { alignedOverlap } from './occDiff'
 import { setOcWasmUrl } from './occInit'
 import { reconstructStepFromNc } from './reconstructFromNc'
+import { CANONICAL_X_AXIS, CANONICAL_Y_AXIS, seatedPair, transformVertices } from './seat'
 
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
@@ -329,4 +334,74 @@ describe.skipIf(!existsSync(M71))('reconstruct slotted holes (NW30)', () => {
     const round = await measure(withCircles)
     expect(round.vol - slotted.vol).toBeGreaterThan(500)
   }, 300000)
+})
+
+describe('reconstructFromNc — I-section NC projection lands on the manufactured solid', () => {
+  it('projects v/o/u cuts onto the seated surface (no left/right mirror)', async () => {
+    const nc = cleanUbNc(1000, 359, 172, 13, 8, 11.4, {
+      holes: [
+        { face: 'v', x: 200, y: 90, d: 14 },
+        { face: 'o', x: 400, y: 40, d: 14 },
+        { face: 'u', x: 600, y: 130, d: 14 },
+      ],
+    })
+    const header = parseDstv(nc).header
+    const section = partSectionForCode(header.profile ?? '', header.dimensions ?? [])
+    expect(section).toBeTruthy()
+    if (!section) return
+    const geo = parseNcGeometry(nc)
+    const frame = resolveNcFaceFrame(section.points, geo, header.profile)
+    const step = await reconstructStepFromNc(nc)
+    expect(step).toBeTruthy()
+    if (!step) return
+    const mesh = await meshStepFile('proj', new TextEncoder().encode(step))
+    const pair = seatedPair(mesh.vertices, null, section.points, true)
+    const seated = transformVertices(mesh.vertices, pair.primary)
+    let minX = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    for (let i = 0; i + 2 < seated.length; i += 3) {
+      minX = Math.min(minX, seated[i] as number)
+      maxX = Math.max(maxX, seated[i] as number)
+    }
+    const length = maxX - minX
+    const OFF = 0.4
+    const toScene = (along: number, cross: [number, number], face: 'v' | 'o' | 'u' | 'h'): Vec3 => {
+      const n = faceNormal(frame, face, section.points)
+      const local: [number, number] = [cross[0], cross[1]]
+      local[n.axis] += n.sign * OFF
+      return [
+        along - length / 2 + local[0] * CANONICAL_X_AXIS.x + local[1] * CANONICAL_Y_AXIS.x,
+        local[0] * CANONICAL_X_AXIS.y + local[1] * CANONICAL_Y_AXIS.y,
+        local[0] * CANONICAL_X_AXIS.z + local[1] * CANONICAL_Y_AXIS.z,
+      ]
+    }
+    const normal = (face: 'v' | 'o' | 'u' | 'h'): Vec3 => {
+      const n = faceNormal(frame, face, section.points)
+      const base = n.axis === 0 ? CANONICAL_X_AXIS : CANONICAL_Y_AXIS
+      return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
+    }
+    const pts = projectNc(geo, { frame, section: section.points, toScene, normal }).cuts.flatMap(
+      (cut) => cut.points,
+    )
+    expect(pts.length).toBeGreaterThan(0)
+    const stride = Math.max(3, Math.floor(seated.length / 3 / 4000) * 3)
+    const distances: number[] = []
+    for (let i = 0; i + 2 < pts.length; i += 3) {
+      const x = pts[i] as number
+      const y = pts[i + 1] as number
+      const z = pts[i + 2] as number
+      let best = Number.POSITIVE_INFINITY
+      for (let j = 0; j + 2 < seated.length; j += stride) {
+        const dx = x - (seated[j] as number)
+        const dy = y - (seated[j + 1] as number)
+        const dz = z - (seated[j + 2] as number)
+        best = Math.min(best, dx * dx + dy * dy + dz * dz)
+      }
+      distances.push(Math.sqrt(best))
+    }
+    distances.sort((a, b) => a - b)
+    const median = distances[Math.floor(distances.length / 2)] as number
+    // The cuts sit on the surface (plus the 0.4 mm overlay nudge); a mirrored projection is 20+ mm off.
+    expect(median).toBeLessThan(2)
+  }, 120000)
 })

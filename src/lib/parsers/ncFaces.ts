@@ -148,6 +148,11 @@ export function ncAuthoredStancePoints(
 export function ncAuthoredAcrossSign(frame: NcFaceFrame, face: NcFace): 1 | -1 {
   const family = frame.profile ? profileFamily(frame.profile) : null
   if (family === 'channel') return -1
+  if (family === 'i') {
+    // Canonical H is the authored reference pose rotated 90° CCW, so the web faces' across
+    // direction (the depth) runs the opposite way in the canonical section. Flange faces keep it.
+    return face === 'v' || face === 'h' ? -1 : 1
+  }
   if (family === 'tube') {
     if (isSquareTube(frame)) return 1
     return face === 'o' || face === 'u' ? -1 : 1
@@ -193,11 +198,13 @@ export function resolveFaceSign(
   if (minus > plus) return -1
   // Symmetric sections tie; the letter's side depends on the family's canonical rotation. An
   // I-section sits in the H stance (`iSectionCanonical` rotated the reference pose 90° CCW): the
-  // flange faces `o`/`u` are the two sides and the web faces `v`/`h` bottom/top, so `v` is + and
-  // `o` is −. A long-side-horizontal tube puts `o` (short right face) and `h` (long top face) on
-  // the +side; a square (SHS) keeps the authored DSTV pairing (no rotation).
+  // flange faces `o`/`u` are the two sides and the web faces `v`/`h` bottom/top. The CCW rotation
+  // swaps which depth side `o` and `u` land on relative to the authored pose, so `o` is + and `u`
+  // is − (matching the manufactured solid); `v` stays +. A long-side-horizontal tube puts `o`
+  // (short right face) and `h` (long top face) on the +side; a square (SHS) keeps the authored
+  // DSTV pairing (no rotation).
   const family = frame.profile ? profileFamily(frame.profile) : null
-  if (family === 'i') return face === 'u' || face === 'v' ? 1 : -1
+  if (family === 'i') return face === 'o' || face === 'v' ? 1 : -1
   if (family === 'tube') {
     if (isSquareTube(frame)) return face === 'u' || face === 'h' ? 1 : -1
     return face === 'o' || face === 'h' ? 1 : -1
