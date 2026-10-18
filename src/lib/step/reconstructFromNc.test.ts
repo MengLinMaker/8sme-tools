@@ -148,6 +148,77 @@ describe.skipIf(!HAVE)('reconstruct parts from NC (experimental)', () => {
   }, 300000)
 })
 
+/**
+ * A clean rectangular I-section (UB) with no features, as DSTV text. The four face outlines are
+ * the full face rectangles, so the rebuild is the bare prism — enough to pin its cross-section
+ * size and orientation.
+ */
+function cleanUbNc(
+  length: number,
+  depth: number,
+  width: number,
+  tf: number,
+  tw: number,
+  r: number,
+): string {
+  const number = (v: number): string => v.toFixed(2)
+  const rect = (face: string, xs: number[], ys: number[]): string => {
+    const first = `  ${face}       0.00s      0.00       0.00       0.00       0.00       0.00       0.00`
+    const rows = xs.map(
+      (x, i) =>
+        `       ${number(x)}       ${number(ys[i] as number)}       0.00       0.00       0.00       0.00       0.00`,
+    )
+    return ['AK', first, ...rows].join('\n')
+  }
+  return [
+    'ST',
+    '** clean.nc1',
+    '  100',
+    '  M30',
+    '  M30',
+    '  1',
+    '  300PLUS',
+    '  1',
+    '  UB360*57',
+    '  I',
+    `    ${number(length)}`,
+    `     ${number(depth)}`,
+    `     ${number(width)}`,
+    `      ${number(tf)}`,
+    `       ${number(tw)}`,
+    `      ${number(r)}`,
+    '     56.700',
+    '      1.370',
+    '      0.000',
+    '      0.000',
+    '      0.000',
+    '      0.000',
+    rect('v', [0, length, length, 0, 0], [0, 0, depth, depth, 0]),
+    rect('o', [0, 0, length, length, 0], [0, width, width, 0, 0]),
+    rect('u', [length, length, 0, 0], [0, width, width, 0]),
+    'EN',
+    '',
+  ].join('\n')
+}
+
+describe('reconstructFromNc — clean I-section cross-section (synthetic)', () => {
+  it('keeps the full depth, flange width on the other axis', async () => {
+    // 360UB56.7: the NC header dims are [depth 359, flange width 172, tf 13, tw 8, r 11.4].
+    // The header order is height-then-width, the *opposite* of a T's, so feeding it straight
+    // into the section builder used to build the beam 90° wrong (359 wide × 172 deep).
+    const nc = cleanUbNc(2000, 359, 172, 13, 8, 11.4)
+    const step = await reconstructStepFromNc(nc)
+    expect(step).toBeTruthy()
+    if (!step) return
+    const built = await measure(step)
+    // Rolled into the canonical H frame: X = member, Y = depth (vertical in display), Z = flange width.
+    expect(Math.abs((built.size[0] as number) - 2000)).toBeLessThan(6)
+    expect(Math.abs((built.size[1] as number) - 359)).toBeLessThan(2)
+    // Deeper than 300 mm: the old fixed `400 / −150` trim prism clipped the depth to 329 mm.
+    expect(Math.abs((built.size[2] as number) - 172)).toBeLessThan(2)
+  }, 120000)
+})
+
 const M71 = nw30Bottom('m71.nc1')
 
 describe.skipIf(!existsSync(M71))('reconstruct slotted holes (NW30)', () => {

@@ -19,7 +19,7 @@ import { getUc, getUcByDepth } from './uc'
  * Every stock beam is cut in one **canonical machine stance**; the section frame is
  * `+x = right, +y = up` and the length runs along the member axis. Target stances:
  *
- *  - UB / UC / TFB (`I`)   → `H`  web vertical, flanges horizontal  → **implemented**
+ *  - UB / WB / UC / WC / TFB (`I`) → `H`  depth horizontal, flanges vertical → **implemented**
  *  - PFC / TFC (`U`, `C`)  → `n`  web on top, both flanges down     → **implemented**
  *  - RHS / SHS (`M`)       → longer cross-section side horizontal   → **implemented**
  *  - angle EA / UA (`L`)   → `L`  longer leg horizontal, open up-right → **implemented**
@@ -387,9 +387,23 @@ function teeOutline(
   return centre(points)
 }
 
-/** Full I-section outline (x = width, y = depth) for UB / UC / TFB, with the root fillets. */
+/**
+ * Canonical **H** stance for an I-section: rotate the DSTV/Tekla reference pose (web vertical,
+ * flanges horizontal; x = flange width, y = depth) 90° CCW, so the **depth runs horizontal and the
+ * flange width vertical** — the flanges become the two vertical strokes (the letter "H") and the
+ * web lies horizontal with its `v` face up. This puts the member's longer cross-section side
+ * horizontal (same principle as RHS/angles) and the web/cut face on top. See
+ * `docs/canonical-orientation.md` §2.
+ */
+function iSectionCanonical(points: [number, number][]): [number, number][] {
+  return points.map(([x, y]): [number, number] => [-y, x])
+}
+
+/** Canonical H-stance I-section outline for UB / UC / TFB, with the root fillets. */
 function iSectionOutline(section: RolledSection): [number, number][] {
-  return ubOutlineFromDims(section.b, section.d, section.tf, section.tw, section.r ?? 0)
+  return iSectionCanonical(
+    ubOutlineFromDims(section.b, section.d, section.tf, section.tw, section.r ?? 0),
+  )
 }
 
 /**
@@ -439,6 +453,21 @@ function ubOutlineFromDims(
     ...arcPoints(-hw - r, -hd + tf + r, r, 0, -Math.PI / 2),
     [-hb, -hd + tf],
   ])
+}
+
+/**
+ * Full I-section (UB / WB / UC / WC / TFB) from a DSTV `ST` header's cross-section fields.
+ *
+ * The header lists **profile height then flange width** (DSTV 87 fields 10/11), i.e.
+ * `[d, b, tf, tw, r]` — the opposite order to {@link ubOutlineFromDims}'s `(b, d, …)`, and to a
+ * `T`'s `[b, d/2, …]` (which Tekla authors flange-vertical). Feeding the header dims straight in
+ * gave the section its depth and flange width swapped (a `360UB` built as a 172 mm-deep, 359 mm
+ * wide beam); read them correctly, then rotate into the canonical H stance.
+ */
+function iSectionFromHeaderDims(dims: number[]): [number, number][] {
+  return iSectionCanonical(
+    ubOutlineFromDims(dims[1] ?? 0, dims[0] ?? 0, dims[2] ?? 0, dims[3] ?? 0, dims[4] ?? 0),
+  )
 }
 
 function detectFamily(clean: string): Family | null {
@@ -574,19 +603,19 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
         points = iSectionOutline(section)
         label = `${section.designation} stock`
       } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
-        // Full UB from an NC header (dims = b, full depth, tf, tw).
-        points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0)
+        // Full UB from an NC header (dims = depth, b, tf, tw).
+        points = iSectionFromHeaderDims(dims)
       }
       break
     }
     case 'uc': {
-      const section = getUc(clean) ?? getUcByDepth(dims[1] ?? n[0] ?? 0)
+      const section = getUc(clean) ?? getUcByDepth(dims[0] ?? n[0] ?? 0)
       if (section) {
         points = iSectionOutline(section)
         label = `${section.designation} stock`
       } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
-        // Full UC from an NC header (dims = b, full depth, tf, tw).
-        points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0)
+        // Full UC from an NC header (dims = depth, b, tf, tw).
+        points = iSectionFromHeaderDims(dims)
       }
       break
     }
@@ -596,7 +625,7 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
         points = iSectionOutline(section)
         label = `${section.designation} stock`
       } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
-        points = ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0)
+        points = iSectionFromHeaderDims(dims)
       }
       break
     }
@@ -693,21 +722,21 @@ export function partSectionForCode(
       const section = getUb(clean)
       if (section) return { points: iSectionOutline(section) }
       if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
-        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0) }
+        return { points: iSectionFromHeaderDims(dims) }
       return null
     }
     case 'uc': {
-      const section = getUc(clean) ?? getUcByDepth(dims[1] ?? n[0] ?? 0)
+      const section = getUc(clean) ?? getUcByDepth(dims[0] ?? n[0] ?? 0)
       if (section) return { points: iSectionOutline(section) }
       if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
-        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0) }
+        return { points: iSectionFromHeaderDims(dims) }
       return null
     }
     case 'tfb': {
       const section = getTfbByDepth(n[0] || dims[0] || dims[1] || 0)
       if (section) return { points: iSectionOutline(section) }
       if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
-        return { points: ubOutlineFromDims(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0) }
+        return { points: iSectionFromHeaderDims(dims) }
       return null
     }
   }

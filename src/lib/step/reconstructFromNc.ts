@@ -316,11 +316,14 @@ export async function reconstructSolidFromNc(
   const halfOf = (axis: Axis): number => faceHalf(frame, axis)
   // Sign applied to a face's across coordinate to bring the authored NC into our canonical stance.
   // A channel is handled by the authored-build `flip`; a tube (RHS/SHS) is seated long-horizontal,
-  // a 90° rotation of the authored long-vertical pose (see `ncAuthoredAcrossSign`).
+  // a 90° rotation of the authored long-vertical pose (see `ncAuthoredAcrossSign`). An I-section is
+  // likewise built in its authored (web-vertical) pose and rolled back, but the authored coordinates
+  // are the opposite rotation, so no across flip is needed — keep the validated authored maths.
   const family = profileFamily(header.profile)
   const acrossSign = (face: NcFace): 1 | -1 => {
     if (family === 'tube') return ncAuthoredAcrossSign(frame, face)
-    return canonicalSectionFlip && (face === 'v' || face === 'h') ? -1 : 1
+    if (family === 'channel' && (face === 'v' || face === 'h')) return -1
+    return 1
   }
   // Cut reach per face normal: through the section's own wall, plus a hair so the tool clears the
   // finished surface. Falls back to BEAM_REACH when the header dims don't carry a thickness.
@@ -446,10 +449,15 @@ export async function reconstructSolidFromNc(
     }
     if (axis === 0) {
       // Face plane is (X, width=Y); extrude across the depth and keep the inside.
+      // `sketchOnPlane('XY')` extrudes towards +Z, so start at the section's lower depth bound and
+      // span its full extent. The range must follow the section, not a fixed window: a constant
+      // `400 / -150` prism clipped every section deeper than 300 mm (a 360UB's 359 mm depth came
+      // out 329 mm, with the bottom flange sliced off).
+      const depthHalf = halfOf((1 - axis) as Axis) + 2
       const prism = (shape as ReturnType<typeof poly>)
         .sketchOnPlane('XY')
-        .extrude(400)
-        .translate(0, 0, -150) as unknown as SolidOps
+        .extrude(2 * depthHalf)
+        .translate(0, 0, -depthHalf) as unknown as SolidOps
       solid = solid.intersect(prism)
     } else {
       // Face plane is (X, depth=Z). `intersect` trips an OCC boolean error with the section
@@ -563,12 +571,14 @@ export async function reconstructSolidFromNc(
   // (centre-of-mass ranking), measure and export all see the manufactured body only.
   solid = (await stripStraySolids(solid as unknown as MeasurableShape)).solid as unknown as SolidOps
 
-  // Roll the internal-stance build back to the canonical stance (web down→up) so the viewer, NC
-  // projection and exported STEP are all canonical. 90° about the member axis (X).
+  // Roll the internal (authored) stance build back to the canonical stance so the viewer, NC
+  // projection and exported STEP are all canonical. 90° about the member axis (X): a channel's
+  // canonical `n` is a 90° CW rotation of the authored pose, an I-section's canonical `H` 90° CCW.
   if (canonicalSectionFlip) {
+    const angle = family === 'channel' ? -90 : 90
     solid = (
       solid as unknown as { rotate: (a: number, p: number[], d: number[]) => SolidOps }
-    ).rotate(-90, [0, 0, 0], [1, 0, 0])
+    ).rotate(angle, [0, 0, 0], [1, 0, 0])
   }
 
   // Measure-only callers (analysis phase 4) compare the live solid and discard

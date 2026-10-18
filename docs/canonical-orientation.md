@@ -30,7 +30,7 @@ the member axis that lands the section's **+y on machine-top**.
 
 | Family (DSTV type) | Canonical stance | Sketch | Why |
 |---|---|---|---|
-| UB / UC / TFB (`I`) | **H** — web vertical, flanges horizontal | `H` | Stable, flat top and bottom flange; the natural I stance. |
+| UB / WB / UC / WC / TFB (`I`) | **H** — depth horizontal, flanges vertical (web horizontal) | `H` | Longer cross-section side horizontal (matches the machine's 800×300 I-beam opening); the flange faces `o`/`u` sit on the sides (where their holes are cut — side-first), the web face `v` on top. |
 | PFC / TFC (`U`, `C`) | **n** — web horizontal on top, both flanges pointing straight down | `n` | Web face upward (easy to stamp/cut); sits on the two flange tips. |
 | RHS / SHS (`M`) | **long side horizontal** — the longer cross-section side runs in x, the shorter in y | `▭` | Lower profile, wider bearing; square sections unaffected. |
 | Angle EA / UA (`L`) | **L** — longer leg horizontal (+x), shorter leg vertical (+y), open corner up-right | `L` | Matches the machine's reference for `o`/`u` (vertical leg). |
@@ -42,11 +42,12 @@ These are the poses the viewer draws and the poses the STEP output is built in. 
 the tests in `stock.test.ts`.
 
 > **DSTV vs machine stance.** DSTV/Tekla have their *own* reference orientation for each
-> profile type (e.g. Tekla exports a channel with the web **vertical**, per the DSTV profile
-> diagram). Our canonical stance for a PFC (`n`) is therefore a **90° rotation** of Tekla's
-> export stance. When we ingest a real part STEP we seat it into our stance with the
-> rotation/mirror search in `reconstructFromNc.orientToReference` — it does not need to match
-> Tekla's.
+> profile type (e.g. Tekla exports an I-section with the web **vertical** and a channel with the web
+> **vertical**, per the DSTV profile diagram). Our canonical stance for an I-section (`H`) and for a
+> PFC (`n`) is therefore a **90° rotation** of Tekla's export stance. When we ingest a real part STEP
+> we seat it into our stance with the rotation/mirror search in `reconstructFromNc.orientToReference`
+> — it does not need to match Tekla's. `reconstructFromNc` also builds NC parts in the authored
+> (web-vertical) pose and rolls the finished solid back to canonical (`ncAuthoredStancePoints`).
 
 ## 3. DSTV faces and their machine role
 
@@ -96,12 +97,11 @@ stamp face* per profile (Tekla Structures → NC files):
 | `RO`/`RU` (round) | `v` (tube) / `u` (bar) |
 
 The machine role of a face in **our** canonical stance is then the direction its outward
-normal points: **+y = top, −y = bottom, ±x = side**. Working that through for the two
-non-ambiguous families:
+normal points: **+y = top, −y = bottom, ±x = side**. Working that through for each family:
 
 | Family | `o` | `u` | `v` | `h` |
 |---|---|---|---|---|
-| `I` (H stance) | **top** | **bottom** | **side** | **side** |
+| `I` (H stance) | **side** | **side** | **top** | **bottom** |
 | `U`/`C` (n stance) | **side** | **side** | **bottom** | **top** |
 | `M` (tube, long-horizontal) | **side** | **side** | **bottom** | **top** |
 | `T` (flange-down) | side | bottom | side | side |
@@ -144,7 +144,7 @@ it becomes in the canonical stance (`figures/`):
 
 ![DSTV/Tekla reference: o=Topview, u=Bottomview, v=Frontview (right face), h=Rearview (left face)](figures/faces-reference-views.svg)
 
-![200UB29.8 I-section — H stance: o top, u bottom, v the right side, h the left side](figures/faces-ub.svg)
+![200UB29.8 I-section — H stance: o/u the two sides (flanges), v top (web), h bottom](figures/faces-ub.svg)
 
 ![BT100*15 tee in the DSTV reference pose (flange vertical, web +v): o top, u bottom, h left, v right; our job stance is this rotated 90° CCW](figures/faces-tee.svg)
 
@@ -198,7 +198,7 @@ Unchanged and re-stated for completeness (see `AGENTS.md`):
 
 | Concern | Where |
 |---|---|
-| Stock stances (the drawn cross-section) | `src/lib/sections/stock.ts` — `channel` (n), `hollowRect`/`rectangle` (long-horizontal), `ubOutlineFromDims` (H), `angleL` (L), `teeOutline` (flange-down) |
+| Stock stances (the drawn cross-section) | `src/lib/sections/stock.ts` — `channel` (n), `hollowRect`/`rectangle` (long-horizontal), `iSectionOutline`/`iSectionCanonical` (H), `angleL` (L), `teeOutline` (flange-down) |
 | Face → machine role, cut priority, mass guard | `src/lib/sections/canonical.ts` (pure, unit-tested) |
 | Runtime face frame / normals | `src/lib/parsers/ncFaces.ts` |
 | Seating a real part into the stance | `src/lib/step/reconstructFromNc.ts` (`orientToReference`) |

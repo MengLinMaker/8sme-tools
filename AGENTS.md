@@ -37,14 +37,14 @@ Full spec: **`docs/canonical-orientation.md`**. Every stock beam is cut in one c
 the profile builders in `src/lib/sections/stock.ts` draw it, and `src/lib/sections/canonical.ts`
 maps DSTV faces to machine roles + enforces the cut-side rules.
 
-- **Stances:** UB/UC/TFB = **`H`** (web vertical, flanges horizontal). PFC/TFC = **`n`** (web on
+- **Stances:** UB/WB/UC/WC/TFB = **`H`** (depth horizontal, flanges vertical — the letter H). PFC/TFC = **`n`** (web on
   top, both flanges pointing down). RHS/SHS = **longer cross-section side horizontal**. Angle =
   **`L`** (longer leg horizontal, opening up-right). T = **flange down, web up**. These may be a
   rotation of Tekla's DSTV export stance — seat real parts into ours, don't match Tekla's.
 - **DSTV faces are profile-relative**, not machine-relative: `v` front/web, `o` top, `u` bottom,
   `h` behind. In our stance the machine role is the face's outward normal (`+y` top, `−y` bottom,
-  `±x` side). E.g. UB → `o`=top, `u`=bottom, `v`/`h`=sides; PFC (`n`) → `o`/`u`=sides (the
-  flanges), `h`=top (web), `v`=bottom.
+  `±x` side). E.g. UB (`H`) → `o`/`u`=sides (the flanges), `v`=top (web), `h`=bottom; PFC (`n`) →
+  `o`/`u`=sides (the flanges), `h`=top (web), `v`=bottom.
 - **The DSTV standard orientation is authoritative for the face letters / reference poses — always
   stick to it.** Per DSTV 87 + the Klietsch profile scheme, looking along the member (beam into the
   page): `o` = Topview (↓), `u` = Bottomview (↑), `v` = Frontview (view ←, the **right** face),

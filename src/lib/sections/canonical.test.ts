@@ -32,11 +32,13 @@ describe('profileFamily', () => {
 })
 
 describe('faceRole', () => {
-  it('an I in H stance has top/bottom flanges and side webs', () => {
-    expect(faceRole('i', 'o')).toBe('top')
-    expect(faceRole('i', 'u')).toBe('bottom')
-    expect(faceRole('i', 'v')).toBe('side')
-    expect(faceRole('i', 'h')).toBe('side')
+  it('an I in H stance puts the flange faces (o/u) on the sides and the web faces (v/h) bottom/top', () => {
+    // Canonical H: depth horizontal, flanges vertical — the accessible flange faces `o`/`u` are the
+    // two sides (where their holes are cut, side-priority), the web faces `v`/`h` bottom/top (`v` up).
+    expect(faceRole('i', 'o')).toBe('side')
+    expect(faceRole('i', 'u')).toBe('side')
+    expect(faceRole('i', 'v')).toBe('top')
+    expect(faceRole('i', 'h')).toBe('bottom')
   })
 
   it('a channel in n stance puts the flange faces on the sides and the web (h) on top', () => {
@@ -56,9 +58,9 @@ describe('faceRole', () => {
   })
 
   it('ranks side cuts ahead of top, and top ahead of bottom', () => {
-    // I: o = top (1), v = side (0), u = bottom (2).
-    expect(cutPriority('i', 'v')).toBeLessThan(cutPriority('i', 'o'))
-    expect(cutPriority('i', 'o')).toBeLessThan(cutPriority('i', 'u'))
+    // I: o = side (0), v = top (1), h = bottom (2).
+    expect(cutPriority('i', 'o')).toBeLessThan(cutPriority('i', 'v'))
+    expect(cutPriority('i', 'v')).toBeLessThan(cutPriority('i', 'h'))
     // Channel: both flanges are sides — the preferred cut.
     expect(cutPriority('channel', 'o')).toBe(0)
     expect(cutPriority('channel', 'u')).toBe(0)
@@ -67,7 +69,7 @@ describe('faceRole', () => {
 
 describe('CUT_FACES', () => {
   it('extracts the sides + top by default', () => {
-    expect(CUT_FACES.i).toEqual(['o', 'u', 'h'])
+    expect(CUT_FACES.i).toEqual(['o', 'u', 'v'])
     expect(CUT_FACES.channel).toEqual(['o', 'u', 'h'])
     expect(CUT_FACES.tee).toEqual(['o', 'u', 'h'])
   })

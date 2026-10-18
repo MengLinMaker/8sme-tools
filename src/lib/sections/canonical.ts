@@ -49,13 +49,16 @@ export const CANONICAL_STANCE: Record<ProfileFamily, StockStance> = {
  * horizontal pointing `+v`.
  *
  * A family's row below is that reference pose rotated onto machine-up (+y = top, −y = bottom,
- * ±x = side). `I` and `U`/`C` reproduce the standard exactly (cross-checked against Tekla's
- * default hard-stamp faces). The angle's `o`/`u` vs `v`/`h` split depends on which leg is
- * vertical on the machine.
+ * ±x = side). `U`/`C` reproduce the standard exactly (cross-checked against Tekla's default
+ * hard-stamp faces).
  *
- * The `M` (tube) row is the reference pose rotated 90° CW into our long-side-horizontal stance:
- * Tekla authors an RHS with the longer side **vertical**, so its `o`/`u` (short faces) become the
- * two sides and its `v`/`h` (long faces) become bottom/top — `v` flat down, `h` up.
+ * The `I` row is the reference pose rotated **90° CCW** into our canonical `H` stance (depth
+ * horizontal, flanges vertical — the longer cross-section side horizontal, matching the machine's
+ * 800×300 I-beam opening). The web faces `v`/`h` become top/bottom (`v` up) and the flange faces
+ * `o`/`u` the two sides — where the flange holes are cut, so side-priority still holds. `M` (tube)
+ * is its own 90° rotation (`v` down / `h` up); its row is unchanged.
+ *
+ * The angle's `o`/`u` vs `v`/`h` split depends on which leg is vertical on the machine.
  *
  * NOTE: the `tee` row does **not** fall out of the T reference pose — rotating a
  * flange-vertical T 90° CCW into our flange-down/web-up stance gives `h`=bottom, `v`=top,
@@ -63,7 +66,7 @@ export const CANONICAL_STANCE: Record<ProfileFamily, StockStance> = {
  * geometry at runtime regardless (only cut-priority is affected).
  */
 const FACE_ROLES: Record<ProfileFamily, Record<NcFace, MachineRole>> = {
-  i: { o: 'top', u: 'bottom', v: 'side', h: 'side' },
+  i: { o: 'side', u: 'side', v: 'top', h: 'bottom' },
   channel: { o: 'side', u: 'side', v: 'bottom', h: 'top' },
   angle: { o: 'top', u: 'bottom', v: 'side', h: 'side' },
   tube: { o: 'side', u: 'side', v: 'bottom', h: 'top' },
@@ -110,7 +113,7 @@ export function faceRole(family: ProfileFamily, face: NcFace): MachineRole {
  * plus the top; an **angle** drops `o` and `v` (those legs aren't cut / aren't extracted).
  */
 export const CUT_FACES: Record<ProfileFamily, NcFace[]> = {
-  i: ['o', 'u', 'h'],
+  i: ['o', 'u', 'v'],
   channel: ['o', 'u', 'h'],
   tee: ['o', 'u', 'h'],
   tube: ['o', 'u', 'h'],

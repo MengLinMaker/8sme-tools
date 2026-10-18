@@ -86,9 +86,13 @@ describe('channel authored stance', () => {
     notches: [],
   }
 
-  it('maps a channel section into the authored (web-vertical) stance', () => {
+  it('maps a channel / I-section into the authored (web-vertical) stance', () => {
+    // Channel canonical `n` is a 90° CW rotation of the authored pose.
     expect(ncAuthoredStancePoints('PFC100*50', [[1, 2]])).toEqual([[-2, 1]])
-    expect(ncAuthoredStancePoints('200UB29.8', [[1, 2]])).toEqual([[1, 2]])
+    // I canonical `H` is a 90° CCW rotation, so the inverse is CW.
+    expect(ncAuthoredStancePoints('200UB29.8', [[1, 2]])).toEqual([[2, -1]])
+    // Everything else shares the authored stance.
+    expect(ncAuthoredStancePoints('RHS100*50*3.0', [[1, 2]])).toEqual([[1, 2]])
   })
 
   it('reverses both across directions for a channel (flanges and web)', () => {

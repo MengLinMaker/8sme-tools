@@ -17,7 +17,10 @@ function bbox(points: [number, number][]) {
 
 /** Real section codes + NC dimensions from the NW31 / NW30 jobs. */
 const JOB_SECTIONS: [string, number[], { w: number; h: number }][] = [
-  ['200UB29.8', [134, 207, 9.6, 6.3], { w: 134, h: 207 }], // full UB, orientation I
+  // NC header dims for an I-profile are [depth, flange width, tf, tw, r] (DSTV fields 10/11);
+  // the code is catalogue-matched here, so the dims are just carried for realism. Canonical H:
+  // depth horizontal (w), flange width vertical (h).
+  ['200UB29.8', [207, 134, 9.6, 6.3], { w: 207, h: 134 }], // full UB, canonical H stance
   ['BT100*15', [134, 103, 9.6, 6.3, 8.9], { w: 134, h: 103 }], // halved UB (T)
   ['SHS100*100*6.0', [100, 100, 6, 6, 15], { w: 100, h: 100 }],
   ['SHS100*100*9.0', [100, 100, 9, 9, 22.5], { w: 100, h: 100 }],
@@ -45,7 +48,21 @@ describe('stockOutlineForCode', () => {
   }
 
   it('labels a full UB by its designation', () => {
-    expect(stockOutlineForCode('200UB29.8', [134, 207, 9.6, 6.3])?.label).toBe('200UB29.8 stock')
+    expect(stockOutlineForCode('200UB29.8', [207, 134, 9.6, 6.3])?.label).toBe('200UB29.8 stock')
+  })
+
+  it('reads an NC-header I-section as height-then-flange-width, not swapped', () => {
+    // A non-catalogue callout like `UB360*57` has no table entry, so the section is built from the
+    // NC header dims [depth, flange width, tf, tw, r]. Interpreting them in the wrong order built
+    // the beam rotated 90° from reality. Canonical H then puts the depth (359) horizontal and the
+    // flange width (172) vertical.
+    const dims = [359, 172, 13, 8, 11.4] // 360UB56.7
+    const part = bbox(partSectionForCode('UB360*57', dims)?.points ?? [])
+    expect(part.width).toBeCloseTo(359, 0)
+    expect(part.height).toBeCloseTo(172, 0)
+    const stock = bbox(stockOutlineForCode('UB360*57', dims)?.points ?? [])
+    expect(stock.width).toBeCloseTo(359, 0)
+    expect(stock.height).toBeCloseTo(172, 0)
   })
 
   it('labels a tee by its parent UB', () => {
@@ -133,15 +150,17 @@ describe('stockOutlineForCode', () => {
     const uc = stockOutlineForCode('310UC158', [311, 327, 25.0, 15.7])
     expect(uc?.label).toBe('310UC158 stock')
     const { width, height } = bbox(uc?.points ?? [])
-    expect(width).toBeGreaterThanOrEqual(311)
-    expect(height).toBeGreaterThanOrEqual(327)
+    // Canonical H: depth (327) horizontal, flange width (311) vertical.
+    expect(width).toBeGreaterThanOrEqual(327)
+    expect(height).toBeGreaterThanOrEqual(311)
   })
 
   it('builds a TFB I-section from its short code', () => {
     const tfb = stockOutlineForCode('125TFB', [65, 125, 8.5, 5.0])
     expect(tfb?.label).toBe('125 TFB stock')
-    const { height } = bbox(tfb?.points ?? [])
-    expect(height).toBeGreaterThanOrEqual(125)
+    // Canonical H: depth (125) horizontal, flange width (65) vertical.
+    const { width } = bbox(tfb?.points ?? [])
+    expect(width).toBeGreaterThanOrEqual(125)
   })
 
   it('returns null for a non-section code', () => {

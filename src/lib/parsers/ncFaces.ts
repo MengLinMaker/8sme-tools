@@ -84,16 +84,22 @@ export function faceHalf(frame: NcFaceFrame, axis: Axis): number {
 
 /**
  * Rotates a canonical section outline into the DSTV/Tekla **authored stance** the NC face coordinates
- * live in. Only channels differ: Tekla exports a PFC/TFC web-vertical, a 90° rotation of our canonical
- * `n` stance (`stock.ts:channel`), so `reconstructFromNc` builds in this stance and rolls the finished
- * solid back. Returns the points unchanged for every other family (authored = canonical).
+ * live in. Two families differ: a `PFC`/`TFC` channel is authored web-vertical, a 90° rotation of our
+ * canonical `n` stance (`stock.ts:channel`); and an I-section (UB/WB/UC/WC/TFB) is authored
+ * web-vertical, a 90° rotation of our canonical `H` stance (`stock.ts:iSectionOutline`). Either way
+ * `reconstructFromNc` builds in this authored stance and rolls the finished solid back — the axis and
+ * sign maths below stay the web-vertical ones they were validated on. Returns the points unchanged
+ * for every other family (authored = canonical).
  */
 export function ncAuthoredStancePoints(
   profile: string | undefined,
   points: [number, number][],
 ): [number, number][] {
-  if (!profile || profileFamily(profile) !== 'channel') return points
-  return points.map(([x, y]) => [-y, x] as [number, number])
+  const family = profile ? profileFamily(profile) : null
+  if (family === 'channel') return points.map(([x, y]) => [-y, x] as [number, number])
+  // Canonical H is the authored pose rotated 90° CCW (`iSectionCanonical`), so the inverse is CW.
+  if (family === 'i') return points.map(([x, y]) => [y, -x] as [number, number])
+  return points
 }
 
 /**
@@ -157,10 +163,13 @@ export function resolveFaceSign(
   }
   if (plus > minus) return 1
   if (minus > plus) return -1
-  // Symmetric sections tie; the letter's side depends on the family's canonical rotation. A
-  // long-side-horizontal tube puts `o` (short right face) and `h` (long top face) on the +side; a
-  // square (SHS) keeps the authored DSTV pairing (no rotation).
+  // Symmetric sections tie; the letter's side depends on the family's canonical rotation. An
+  // I-section sits in the H stance (`iSectionCanonical` rotated the reference pose 90° CCW): the
+  // flange faces `o`/`u` are the two sides and the web faces `v`/`h` bottom/top, so `v` is + and
+  // `o` is −. A long-side-horizontal tube puts `o` (short right face) and `h` (long top face) on
+  // the +side; a square (SHS) keeps the authored DSTV pairing (no rotation).
   const family = frame.profile ? profileFamily(frame.profile) : null
+  if (family === 'i') return face === 'u' || face === 'v' ? 1 : -1
   if (family === 'tube') {
     if (isSquareTube(frame)) return face === 'u' || face === 'h' ? 1 : -1
     return face === 'o' || face === 'h' ? 1 : -1
