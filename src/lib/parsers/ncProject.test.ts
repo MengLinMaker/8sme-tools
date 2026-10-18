@@ -380,3 +380,58 @@ describe('holeOutline', () => {
     expect(Math.min(...xs)).toBeLessThan(-8)
   })
 })
+
+describe('I-section web face plane', () => {
+  // Canonical H stance for a 200UB29.8: depth 207 along the section x, flange width 134 along y,
+  // web thickness 6.3. The web's `v`/`h` faces are interior — their plane is the web half-thickness,
+  // not the flange-width edge.
+  const section = partSectionForCode('200UB29.8', [207, 134, 9.6, 6.3])?.points ?? []
+  const nc: NcGeometry = {
+    contours: [
+      {
+        face: 'v',
+        kind: 'outer',
+        points: [
+          [0, 0],
+          [10, 207],
+          [0, 207],
+        ],
+        bevels: [],
+      },
+      {
+        face: 'o',
+        kind: 'outer',
+        points: [
+          [0, 0],
+          [10, 134],
+          [0, 134],
+        ],
+        bevels: [],
+      },
+    ],
+    holes: [],
+    notches: [],
+  }
+
+  it('places v/h cuts on the web surface, not the width edge', () => {
+    const frame = resolveNcFaceFrame(section, nc, '200UB29.8')
+    expect(frame.webHalf).toBeCloseTo(6.3 / 2, 1)
+    // `v` spans the depth (axis 0); its normal is the width (axis 1). A cut sits at ±webHalf.
+    const v = placeNcFace(frame, 'v', 0, 100, section).cross
+    expect(Math.abs(v[1] as number)).toBeCloseTo(6.3 / 2, 1)
+    expect(Math.abs(v[0] as number)).toBeCloseTo(207 / 2 - 100, 1)
+    // `o`/`u` remain on the flange outer faces (depth extremes).
+    const o = placeNcFace(frame, 'o', 0, 0, section).cross
+    expect(Math.abs(o[0] as number)).toBeCloseTo(207 / 2, 1)
+    expect(Math.abs(o[1] as number)).toBeCloseTo(134 / 2, 1)
+  })
+
+  it('reports the web wall (tw) for v/h, not the flange width', () => {
+    const frame = resolveNcFaceFrame(section, nc, '200UB29.8')
+    // 200UB29.8: tf 9.6, tw 6.3. The web faces must measure ~6.3 mm, not ~67 mm.
+    expect(faceThickness(frame, section, 'v')).toBeCloseTo(6.3, 1)
+    expect(faceThickness(frame, section, 'h')).toBeCloseTo(6.3, 1)
+    expect(faceThickness(frame, section, 'o')).toBeCloseTo(9.6, 1)
+    expect(faceThickness(frame, section, 'u')).toBeCloseTo(9.6, 1)
+  })
+})

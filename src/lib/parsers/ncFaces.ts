@@ -35,6 +35,12 @@ export interface NcFaceFrame {
    * — so its across direction is reversed on one axis. See {@link ncAuthoredAcrossSign}.
    */
   profile?: string
+  /**
+   * Half-thickness of an I-section's web, measured on the axis its `v`/`h` faces are normal to.
+   * The web is **interior** (near the section's mid-width), so `v`/`h` cuts sit on the web's
+   * surface rather than the bounding-box edge. Absent for every other family.
+   */
+  webHalf?: number
 }
 
 function extentOf(points: [number, number][], axis: Axis): number {
@@ -69,6 +75,18 @@ export function resolveNcFaceFrame(
   const axisVH: Axis = vh ? match(maxAcross(vh)) : ou ? ((1 - match(maxAcross(ou))) as Axis) : 0
   const frame: NcFaceFrame = { extent: [ex, ey], axisVH, axisOU: (1 - axisVH) as Axis }
   if (profile) frame.profile = profile
+  // An I-section's `v`/`h` faces are the **web** (interior), not the width edges. Its surface sits
+  // at the smallest |cross coordinate| in the section (the web half-thickness); the outline's width
+  // extremes are the flange edges.
+  if (profile && profileFamily(profile) === 'i') {
+    const widthAxis = (1 - axisVH) as Axis
+    let min = Number.POSITIVE_INFINITY
+    for (const p of section) {
+      const value = Math.abs(p[widthAxis] ?? 0)
+      if (value > 1e-6 && value < min) min = value
+    }
+    if (Number.isFinite(min)) frame.webHalf = min
+  }
   return frame
 }
 
@@ -80,6 +98,17 @@ export function faceSpanAxis(frame: NcFaceFrame, face: NcFace): Axis {
 /** Half the section extent along an axis. */
 export function faceHalf(frame: NcFaceFrame, axis: Axis): number {
   return frame.extent[axis] / 2
+}
+
+/**
+ * Half-distance from the section centre to the surface a face's cuts sit on. For every family but
+ * `I` this is the bounding-box half-extent (the face is on the silhouette). An I-section's `v`/`h`
+ * web faces are **interior**, so their plane is the web half-thickness (`frame.webHalf`) — a cut on
+ * `v` touches the web's top surface, near the middle of the section, not the top edge.
+ */
+export function facePlaneHalf(frame: NcFaceFrame, face: NcFace): number {
+  if (frame.webHalf !== undefined && (face === 'v' || face === 'h')) return frame.webHalf
+  return faceHalf(frame, (1 - faceSpanAxis(frame, face)) as Axis)
 }
 
 /**
@@ -144,8 +173,7 @@ export function resolveFaceSign(
   face: NcFace,
 ): 1 | -1 {
   const span = faceSpanAxis(frame, face)
-  const axis = (1 - span) as Axis
-  const half = faceHalf(frame, axis)
+  const half = facePlaneHalf(frame, face)
   let min = Number.POSITIVE_INFINITY
   let max = Number.NEGATIVE_INFINITY
   for (const p of section) {
@@ -213,7 +241,7 @@ export function placeNcFace(
       : -1
   const cross: [number, number] = [0, 0]
   cross[span] = ncAuthoredAcrossSign(frame, face) * (y - faceHalf(frame, span))
-  cross[other] = sign * faceHalf(frame, other)
+  cross[other] = sign * facePlaneHalf(frame, face)
   return { along: x, cross }
 }
 
@@ -258,6 +286,6 @@ export function materialReaches(
   const span = faceSpanAxis(frame, face)
   const normal = faceNormal(frame, face, section)
   const [lo, hi] = sectionSpanAt(section, span, cross[span])
-  const half = faceHalf(frame, normal.axis)
+  const half = facePlaneHalf(frame, face)
   return normal.sign > 0 ? hi >= half - 2 : lo <= -half + 2
 }

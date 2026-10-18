@@ -18,6 +18,7 @@ import {
   type Axis,
   faceHalf,
   faceNormal,
+  facePlaneHalf,
   faceSpanAxis,
   materialReaches,
   type NcFaceFrame,
@@ -256,7 +257,13 @@ export function faceThickness(
 ): number {
   const normal = faceNormal(frame, face, section)
   const axis = normal.axis
-  const faceCoord = normal.sign * faceHalf(frame, axis)
+  // An I-section's web faces are milled through the web plate: its wall is the web thickness, i.e.
+  // both halves of `webHalf`. The nearest-vertex rule below measures across the width edge and
+  // picks up a root-fillet vertex instead, so report `2·webHalf` directly.
+  if (frame.webHalf !== undefined && (face === 'v' || face === 'h')) return 2 * frame.webHalf
+  // The face's own surface (for every other family this is the bounding-box edge; for an I-section's
+  // `o`/`u` flange faces it is the depth extreme).
+  const faceCoord = normal.sign * facePlaneHalf(frame, face)
   if (frame.profile) {
     const family = profileFamily(frame.profile)
     if (family === 'angle') {
