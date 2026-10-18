@@ -52,6 +52,16 @@ export interface SectionGuess {
    * section (the caller gates on `score`). Absent when the outline was not available.
    */
   outline?: MeasuredSection
+  /**
+   * The frame that seats the part, from section detection: rotate by `rotation`, the member then runs
+   * along world axis `memberAxis` (sliced longest-first). Lets a STEP-only part seat to the
+   * canonical section even when its member is **oblique** (the bbox-longest guess fails there).
+   */
+  seat?: {
+    memberAxis: 0 | 1 | 2
+    rotation: [number, number, number, number]
+    centre: [number, number, number]
+  }
 }
 
 const GRID = 32

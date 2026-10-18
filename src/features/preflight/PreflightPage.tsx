@@ -460,6 +460,30 @@ export function PreflightPage() {
     if (!viewing?.nc) return null
     return partSectionForCode(viewing.nc.profile, viewing.nc.dimensions ?? [])?.points ?? null
   }, [viewing])
+  // STEP-only: the section **detector's** catalogue section is the canonical stance. The stock ghost
+  // must always be canonical — it is the manufacturing benchmark — so a STEP-only part uses the
+  // catalogue section (from the detected code), never the measured outline (the STEP's own stance).
+  const viewingStepSection = useMemo(() => {
+    if (viewing?.nc) return null
+    const guess = viewing ? sectionGuesses.get(viewing.mark) : undefined
+    if (!guess) return null
+    return partSectionForCode(guess.code, guess.dims ?? [])
+  }, [viewing, sectionGuesses])
+  const viewerStock = useMemo(() => {
+    if (!viewingStepSection || viewingStepSection.points.length < 3) return stock
+    return {
+      points: viewingStepSection.points,
+      holes: viewingStepSection.holes,
+      label: stock?.label ?? 'section',
+      mass: stock?.mass,
+    }
+  }, [viewingStepSection, stock])
+  const viewingSeatProfile = viewingStepSection?.points ?? null
+  /** STEP-only: the detector's seating frame (handles an oblique member). */
+  const viewingStepSeat = useMemo(
+    () => (viewing && !viewing.nc ? (sectionGuesses.get(viewing.mark)?.seat ?? null) : null),
+    [viewing, sectionGuesses],
+  )
   // The section face frame, resolved once here so cut markers project on every pane even without
   // the NC toolpath (only the manufactured pane projects the toolpath itself).
   const viewingNcFrame = useMemo(() => {
@@ -2698,11 +2722,13 @@ export function PreflightPage() {
                           <PartViewer
                             name={viewing.step?.path ?? t('preflight.viewer.stepPath')}
                             bytes={stepBytes}
-                            stock={stock}
+                            stock={viewerStock}
                             bus={orbitBus}
                             highlightStray
                             smoothLines
                             alignReference={manufactured}
+                            seatProfile={viewingSeatProfile}
+                            stepSeat={viewingStepSeat}
                             focus={findingFocus}
                             // Marks project on every pane (via the shared face frame); only
                             // the manufactured pane also projects the NC toolpath.
@@ -2734,7 +2760,7 @@ export function PreflightPage() {
                           <PartViewer
                             name={`${viewing.mark} · manufactured`}
                             bytes={manufactured}
-                            stock={stock}
+                            stock={viewerStock}
                             bus={orbitBus}
                             ncPrimary
                             // The rebuild is oriented to the STEP frame, so the guilty-cut
@@ -2774,7 +2800,7 @@ export function PreflightPage() {
                             bytes={manufactured}
                             compareBytes={stepBytes}
                             compareLabel={t('preflight.viewer.step')}
-                            stock={stock}
+                            stock={viewerStock}
                             bus={orbitBus}
                             ncPrimary
                             focus={findingFocus}

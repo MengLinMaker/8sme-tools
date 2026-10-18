@@ -287,27 +287,59 @@ function alignToPrimary(primaryWorld: number[], compareVertices: number[]): Matr
   return new Matrix4().compose(bestPosition, best, UNIT)
 }
 
-/** A synthetic canonical-frame cloud of the section outline extruded along the member. */
-function profilePrismCloud(profile: [number, number][], length: number): number[] {
-  const out: number[] = []
-  const slices = 8
-  for (let s = 0; s <= slices; s++) {
-    const x = -length / 2 + (length * s) / slices
-    for (const [px, py] of profile) out.push(x, py, -px)
-  }
-  return out
+/**
+ * The seating frame from section detection (`SectionGuess.seat`): rotate by `rotation`, then the
+ * member runs along world axis `memberAxis`.
+ */
+export interface SectionSeat {
+  memberAxis: 0 | 1 | 2
+  rotation: [number, number, number, number]
+  centre: [number, number, number]
 }
 
 /**
- * Seats an arbitrary STEP into the canonical frame on its own: register it to a synthetic prism of
- * the stock profile (member along +X, section +y→+Y) by the 24 cubic orientations. Lands a STEP
- * primary in the same frame as the NC panes and the stock ghost.
+ * Seats a STEP **on its own** using the section detector's frame (handles an **oblique** member,
+ * which a bbox-longest guess cannot). Applies the detector's alignment, maps the member axis to +X,
+ * then rolls the section to the profile and re-centres.
+ */
+export function seatedFromSeat(
+  vertices: number[],
+  seat: SectionSeat,
+  profile: [number, number][] | undefined,
+): SeatedPair {
+  const align = new Quaternion(
+    seat.rotation[0],
+    seat.rotation[1],
+    seat.rotation[2],
+    seat.rotation[3],
+  )
+  const aligned = transformVertices(vertices, new Matrix4().makeRotationFromQuaternion(align))
+  const toX = new Quaternion().setFromUnitVectors(unit(seat.memberAxis, 1), unit(0, 1))
+  const memberAlign = new Matrix4().makeRotationFromQuaternion(toX)
+  const inner = seatedPair(transformVertices(aligned, memberAlign), null, profile)
+  return {
+    primary: new Matrix4().multiplyMatrices(
+      inner.primary,
+      new Matrix4().multiplyMatrices(memberAlign, new Matrix4().makeRotationFromQuaternion(align)),
+    ),
+    compare: null,
+    xAxis: inner.xAxis,
+    yAxis: inner.yAxis,
+    rollAngle: inner.rollAngle,
+  }
+}
+
+/**
+ * Seats a STEP **on its own** (no NC reference). The member axis is the longest bounding-box extent
+ * — the same criterion the STEP section detector uses when it slices longest-first — mapped to +X,
+ * then the section is rolled to the profile (or a stable principal axis when there is none) by the
+ * standard seat. One deterministic rotation, no search.
  */
 export function seatedStepProfile(
   vertices: number[],
   profile: [number, number][] | undefined,
 ): SeatedPair {
-  if (!profile || profile.length < 3 || vertices.length < 9) {
+  if (vertices.length < 9) {
     return {
       primary: new Matrix4(),
       compare: null,
@@ -317,14 +349,19 @@ export function seatedStepProfile(
     }
   }
   const size = bboxOfVertices(vertices).getSize(new Vector3())
-  const length = Math.max(size.x, size.y, size.z)
-  const matrix = alignToPrimary(profilePrismCloud(profile, length), vertices)
+  const extents = [size.x, size.y, size.z]
+  let member = 0
+  if ((extents[1] as number) > (extents[member] as number)) member = 1
+  if ((extents[2] as number) > (extents[member] as number)) member = 2
+  const toX = new Quaternion().setFromUnitVectors(unit(member, 1), unit(0, 1))
+  const align = new Matrix4().makeRotationFromQuaternion(toX)
+  const inner = seatedPair(transformVertices(vertices, align), null, profile)
   return {
-    primary: matrix,
+    primary: new Matrix4().multiplyMatrices(inner.primary, align),
     compare: null,
-    xAxis: CANONICAL_X_AXIS.clone(),
-    yAxis: CANONICAL_Y_AXIS.clone(),
-    rollAngle: 0,
+    xAxis: inner.xAxis,
+    yAxis: inner.yAxis,
+    rollAngle: inner.rollAngle,
   }
 }
 
@@ -405,15 +442,19 @@ export function seatedPair(
     return { primary: primary.matrix, compare: compare?.matrix ?? null, xAxis, yAxis, rollAngle }
   }
   const roll = new Quaternion().setFromAxisAngle(about, rollAngle)
-  const rolled = (seat: BaseSeat): Matrix4 =>
-    new Matrix4().compose(
-      seat.position,
-      new Quaternion().multiplyQuaternions(roll, seat.quaternion),
-      UNIT,
-    )
+  // Re-centre **after** the display roll: the roll is about X through the origin, and the base seat
+  // had centred the *pre-roll* model, so a section whose rotated bbox-centre is off the member axis
+  // (an asymmetric section, or a raw part exported off-origin) would otherwise be translated by the
+  // stale pre-roll centre — an offset. Centre on the rolled model itself.
+  const rolled = (seat: BaseSeat, verts: number[]): Matrix4 => {
+    const quaternion = new Quaternion().multiplyQuaternions(roll, seat.quaternion)
+    const rotated = transformVertices(verts, new Matrix4().makeRotationFromQuaternion(quaternion))
+    const position = bboxOfVertices(rotated).getCenter(new Vector3()).negate()
+    return new Matrix4().compose(position, quaternion, UNIT)
+  }
   return {
-    primary: rolled(primary),
-    compare: compare ? rolled(compare) : null,
+    primary: rolled(primary, primaryVertices),
+    compare: compare && compareVertices ? rolled(compare, compareVertices) : null,
     xAxis,
     yAxis,
     rollAngle,

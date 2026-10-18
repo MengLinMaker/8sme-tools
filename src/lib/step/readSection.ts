@@ -518,7 +518,14 @@ function alignRotated(
 }
 
 /** Rotates a clone of the shape into its principal-axis frame, so world X/Y/Z slice the section. */
-function alignToPrincipalAxes(shape: SectionShape, vertices: number[]): SectionShape | null {
+function alignToPrincipalAxes(
+  shape: SectionShape,
+  vertices: number[],
+): {
+  shape: SectionShape
+  rotation: [number, number, number, number]
+  centre: [number, number, number]
+} | null {
   const frame = principalAxes(vertices)
   if (!frame) return null
   const basis = new Matrix4().makeBasis(
@@ -527,7 +534,11 @@ function alignToPrincipalAxes(shape: SectionShape, vertices: number[]): SectionS
     new Vector3(...frame.axes[2]),
   )
   const quaternion = new Quaternion().setFromRotationMatrix(new Matrix4().copy(basis).invert())
-  return alignRotated(shape, quaternion, frame.centre)
+  return {
+    shape: alignRotated(shape, quaternion, frame.centre),
+    rotation: [quaternion.x, quaternion.y, quaternion.z, quaternion.w],
+    centre: frame.centre,
+  }
 }
 
 /** The highest-scoring guess among candidate sections. */
@@ -570,6 +581,8 @@ function bestAcrossAxes(
   fractions: number[],
   merge: boolean,
   stop: number,
+  rotation: [number, number, number, number],
+  centre: [number, number, number],
 ): SectionGuess | null {
   const [min, max] = shape.boundingBox.bounds
   const order = [0, 1, 2].sort(
@@ -579,7 +592,9 @@ function bestAcrossAxes(
   for (const axis of order) {
     // All stations of this axis are matched together, so stopping here can't be fooled by a single
     // notched mid-slice — the full end-slice wins within the axis.
-    best = betterGuess(best, bestGuess(measureSections(shape, makeBox, fractions, merge, axis)))
+    const guess = bestGuess(measureSections(shape, makeBox, fractions, merge, axis))
+    if (guess) guess.seat = { memberAxis: axis as 0 | 1 | 2, rotation, centre }
+    best = betterGuess(best, guess)
     if (best && best.score >= stop) break
   }
   return best
@@ -611,14 +626,20 @@ export function inferStepSection(
   // mesh, no merge) resolve it. The ends are included so a notched/coped piece reads its stock, and
   // the axes are tried longest-first so a long member is resolved by its (small, fast) slab alone.
   if (isAxisAligned(shape)) {
-    return bestAcrossAxes(shape, makeBox, [0.5, 0.1, 0.9], false, 0.9)
+    const [min, max] = shape.boundingBox.bounds
+    const centre: [number, number, number] = [
+      ((min[0] as number) + (max[0] as number)) / 2,
+      ((min[1] as number) + (max[1] as number)) / 2,
+      ((min[2] as number) + (max[2] as number)) / 2,
+    ]
+    return bestAcrossAxes(shape, makeBox, [0.5, 0.1, 0.9], false, 0.9, [0, 0, 0, 1], centre)
   }
 
   // Oblique member: align to the principal axes and compare both passes (an oblique slice of a
   // rotated part can resolve *wrongly* at full score — a hollow at an angle reads as an oversized
   // `RHS…` — so the area tie-break against the aligned slice tells the true section apart).
   let best: SectionGuess | null = null
-  let aligned: SectionShape | null = null
+  let aligned: ReturnType<typeof alignToPrincipalAxes> = null
   try {
     aligned = alignToPrincipalAxes(
       shape,
@@ -627,18 +648,40 @@ export function inferStepSection(
   } catch {
     aligned = null
   }
+  const [min, max] = shape.boundingBox.bounds
+  const centre: [number, number, number] = [
+    ((min[0] as number) + (max[0] as number)) / 2,
+    ((min[1] as number) + (max[1] as number)) / 2,
+    ((min[2] as number) + (max[2] as number)) / 2,
+  ]
   try {
     for (const fractions of STATION_LEVELS) {
-      const world = bestAcrossAxes(shape, makeBox, fractions, true, STOP_CONFIDENCE)
+      const world = bestAcrossAxes(
+        shape,
+        makeBox,
+        fractions,
+        true,
+        STOP_CONFIDENCE,
+        [0, 0, 0, 1],
+        centre,
+      )
       const principal = aligned
-        ? bestAcrossAxes(aligned, makeBox, fractions, true, STOP_CONFIDENCE)
+        ? bestAcrossAxes(
+            aligned.shape,
+            makeBox,
+            fractions,
+            true,
+            STOP_CONFIDENCE,
+            aligned.rotation,
+            aligned.centre,
+          )
         : null
       best = betterGuess(best, betterGuess(world, principal))
       if (best && best.score >= STOP_CONFIDENCE) return best
     }
     return best
   } finally {
-    aligned?.delete()
+    aligned?.shape.delete()
   }
 }
 

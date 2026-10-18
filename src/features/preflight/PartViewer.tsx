@@ -61,6 +61,8 @@ import type { MeshedStep } from '@/lib/step/mesh'
 import { type DiffPayload, type DiffSolidPayload, OCC_FUZZY_MM } from '@/lib/step/occDiff'
 import {
   bboxOfVertices,
+  type SectionSeat,
+  seatedFromSeat,
   seatedPair,
   seatedStepProfile,
   seatQuaternion,
@@ -476,6 +478,8 @@ function mountScene(
   faceFrame?: NcFaceFrame | null,
   ncPrimary = false,
   alignRef: MeshedStep | null = null,
+  seatProfile: [number, number][] | null = null,
+  stepSeat: SectionSeat | null = null,
   bevelStyle: BevelStyle = 'arrow',
   onLocationChange?: (locationMm: number, lengthMm: number) => void,
   onAxisAngleChange?: (degrees: number) => void,
@@ -670,7 +674,9 @@ function mountScene(
               }
             })()
           : profile
-            ? seatedStepProfile(primary.raw, profile)
+            ? stepSeat
+              ? seatedFromSeat(primary.raw, stepSeat, seatProfile ?? profile)
+              : seatedStepProfile(primary.raw, seatProfile ?? profile)
             : seatedPair(primary.raw, null, profile)
     const seatScale = new Vector3()
     // The seated member extent along X is the true member length (the raw bbox longest extent is a
@@ -1754,6 +1760,14 @@ export interface PartViewerProps {
    * the same frame as the overlay. The STEP-only part (no NC) leaves this null.
    */
   alignReference?: Uint8Array | null
+  /**
+   * STEP-only: the **canonical** section to seat a STEP-only primary to (the detector's catalogue
+   * code), where `stock.points` is the measured outline in the STEP's own stance. Null → fall back
+   * to `stock.points`.
+   */
+  seatProfile?: [number, number][] | null
+  /** STEP-only: the detector's seating frame (member axis + alignment), for oblique members. */
+  stepSeat?: SectionSeat | null
   /** Pre-resolved section face frame, so markers project without needing the NC geometry. */
   faceFrame?: NcFaceFrame | null
   /** Clicked-finding focus: bump `token` to pull every viewport to `code`'s geometry (optionally a
@@ -1806,6 +1820,8 @@ export default function PartViewer({
   ncSection = null,
   ncPrimary = false,
   alignReference = null,
+  seatProfile = null,
+  stepSeat = null,
   faceFrame = null,
   focus = null,
   visibleSpans = null,
@@ -1918,6 +1934,8 @@ export default function PartViewer({
           faceFrame,
           ncPrimary,
           alignRef,
+          seatProfile,
+          stepSeat,
           'area',
           (mm, mmLength) => onLocationRef.current?.(mm, mmLength),
           (degrees) => onAxisAngleRef.current?.(degrees),
@@ -1967,6 +1985,8 @@ export default function PartViewer({
     faceFrame,
     ncPrimary,
     alignReference,
+    seatProfile,
+    stepSeat,
     cutEdges,
     t,
   ])
