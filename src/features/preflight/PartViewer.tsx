@@ -62,6 +62,7 @@ import { type DiffPayload, type DiffSolidPayload, OCC_FUZZY_MM } from '@/lib/ste
 import {
   bboxOfVertices,
   seatedPair,
+  seatedStepProfile,
   seatQuaternion,
   transformVertices,
   unit,
@@ -473,6 +474,7 @@ function mountScene(
   nc?: NcGeometry | null,
   ncSection?: [number, number][] | null,
   faceFrame?: NcFaceFrame | null,
+  ncPrimary = false,
   bevelStyle: BevelStyle = 'arrow',
   onLocationChange?: (locationMm: number, lengthMm: number) => void,
   onAxisAngleChange?: (degrees: number) => void,
@@ -495,8 +497,15 @@ function mountScene(
   for (const light of [ambient, hemisphere, key, fill]) light.layers.enable(1)
   scene.add(ambient, hemisphere, key, fill)
 
+  // The NC section is the single reference when there is one: the STEP is registered to it, and the
+  // ghost + projected cuts use it, so the STEP, the ghost and the NC lines all share one frame. The
+  // PDF/STEP-derived `stock.points` is only a fallback for a part with no NC.
   const profile =
-    Array.isArray(stock?.points) && stock.points.length >= 3 ? stock.points : undefined
+    Array.isArray(ncSection) && ncSection.length >= 3
+      ? ncSection
+      : Array.isArray(stock?.points) && stock.points.length >= 3
+        ? stock.points
+        : undefined
 
   const buildGroup = (
     meshed: MeshedStep,
@@ -640,7 +649,16 @@ function mountScene(
     // two never reorient independently. `seatedPair` rolls the whole display about the member axis
     // so section `+y` (the machine "up", see canonical-orientation.md) points world +Y — then the
     // model, the stock ghost and the NC projection all share the canonical frame.
-    const seats = seatedPair(primary.raw, compareStep?.vertices ?? null, profile)
+    // An NC-built primary seats analytically; a STEP primary (no compare) is registered to a
+    // synthetic prism of the stock profile so it lands in the same canonical frame; a STEP primary
+    // with a compare inherits the compare handling via the normal path.
+    const seats = ncPrimary
+      ? seatedPair(primary.raw, compareStep?.vertices ?? null, profile, true)
+      : compareStep
+        ? seatedPair(primary.raw, compareStep.vertices, profile)
+        : profile
+          ? seatedStepProfile(primary.raw, profile)
+          : seatedPair(primary.raw, null, profile)
     const seatScale = new Vector3()
     // The seated member extent along X is the true member length (the raw bbox longest extent is a
     // leg for a short part, or the diagonal for a rotated export).
@@ -1711,6 +1729,12 @@ export interface PartViewerProps {
   nc?: NcGeometry | null
   /** Exact (un-inflated) section outline the NC was matched against, for the projection */
   ncSection?: [number, number][] | null
+  /**
+   * The primary (`bytes`) is an NC-built model: seat it analytically in the canonical display frame
+   * (its build frame is known) instead of the heuristic seat, so it aligns with the stock ghost and
+   * the projected cuts exactly. False for a STEP primary.
+   */
+  ncPrimary?: boolean
   /** Pre-resolved section face frame, so markers project without needing the NC geometry. */
   faceFrame?: NcFaceFrame | null
   /** Clicked-finding focus: bump `token` to pull every viewport to `code`'s geometry (optionally a
@@ -1761,6 +1785,7 @@ export default function PartViewer({
   sabreFailures = null,
   nc = null,
   ncSection = null,
+  ncPrimary = false,
   faceFrame = null,
   focus = null,
   visibleSpans = null,
@@ -1868,6 +1893,7 @@ export default function PartViewer({
           nc,
           ncSection,
           faceFrame,
+          ncPrimary,
           'area',
           (mm, mmLength) => onLocationRef.current?.(mm, mmLength),
           (degrees) => onAxisAngleRef.current?.(degrees),
@@ -1915,6 +1941,7 @@ export default function PartViewer({
     nc,
     ncSection,
     faceFrame,
+    ncPrimary,
     cutEdges,
     t,
   ])

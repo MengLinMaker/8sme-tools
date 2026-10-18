@@ -168,6 +168,166 @@ function seatLikePrimary(primary: BaseSeat, vertices: number[]): BaseSeat {
   }
 }
 
+/**
+ * Rotation from the NC build frame (section on Y,Z — `reconstructFromNc` extrudes the section this
+ * way) to the viewer's canonical display frame: member stays +X, section +x → −Z, section +y → +Y
+ * (machine up). A negative quarter-turn about the member.
+ */
+const CANONICAL_ROLL = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), -Math.PI / 2)
+/** The display axes that go with {@link CANONICAL_ROLL}. */
+export const CANONICAL_X_AXIS = new Vector3(0, 0, -1)
+export const CANONICAL_Y_AXIS = new Vector3(0, 1, 0)
+
+/**
+ * The analytic seat for an **NC-built** model: the build frame is known, so this is exact — no PCA
+ * or profile guess that can tilt/flip it against the stock and the projected cuts.
+ */
+function canonicalSeat(vertices: number[]): BaseSeat {
+  const rotated = transformVertices(
+    vertices,
+    new Matrix4().makeRotationFromQuaternion(CANONICAL_ROLL),
+  )
+  const position = bboxOfVertices(rotated).getCenter(new Vector3()).negate()
+  return {
+    quaternion: CANONICAL_ROLL,
+    position,
+    matrix: new Matrix4().compose(position, CANONICAL_ROLL, UNIT),
+  }
+}
+
+/** Grid cell size (mm) for the coarse registration score. */
+const SEAT_GRID = 3
+
+function gridKey(x: number, y: number, z: number): string {
+  return `${Math.round(x / SEAT_GRID)},${Math.round(y / SEAT_GRID)},${Math.round(z / SEAT_GRID)}`
+}
+
+/** A coarse occupancy grid of a vertex cloud. */
+function nearSurfaceGrid(vertices: number[]): Set<string> {
+  const set = new Set<string>()
+  const stride = Math.max(3, Math.floor(vertices.length / 3 / 4000) * 3)
+  for (let i = 0; i + 2 < vertices.length; i += stride) {
+    set.add(gridKey(vertices[i] as number, vertices[i + 1] as number, vertices[i + 2] as number))
+  }
+  return set
+}
+
+/** Fraction of `vertices` sitting within a cell of `grid` (neighbourhood check). */
+function nearSurfaceHit(vertices: number[], grid: Set<string>): number {
+  let hit = 0
+  let n = 0
+  const stride = Math.max(3, Math.floor(vertices.length / 3 / 4000) * 3)
+  for (let i = 0; i + 2 < vertices.length; i += stride) {
+    n++
+    const cx = Math.round((vertices[i] as number) / SEAT_GRID)
+    const cy = Math.round((vertices[i + 1] as number) / SEAT_GRID)
+    const cz = Math.round((vertices[i + 2] as number) / SEAT_GRID)
+    let found = false
+    for (let dx = -1; dx <= 1 && !found; dx++) {
+      for (let dy = -1; dy <= 1 && !found; dy++) {
+        for (let dz = -1; dz <= 1 && !found; dz++) {
+          if (grid.has(`${cx + dx},${cy + dy},${cz + dz}`)) found = true
+        }
+      }
+    }
+    if (found) hit++
+  }
+  return n > 0 ? hit / n : 0
+}
+
+/** The 24 proper rotations of a cube (quarter-turn products about the world axes), deduped. */
+const CUBE_ROTATIONS: Quaternion[] = (() => {
+  const ex = new Vector3(1, 0, 0)
+  const ey = new Vector3(0, 1, 0)
+  const ez = new Vector3(0, 0, 1)
+  const angles = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]
+  const out: Quaternion[] = []
+  const seen = new Set<string>()
+  for (const ax of angles) {
+    for (const ay of angles) {
+      for (const az of angles) {
+        const q = new Quaternion()
+          .multiply(new Quaternion().setFromAxisAngle(ex, ax))
+          .multiply(new Quaternion().setFromAxisAngle(ey, ay))
+          .multiply(new Quaternion().setFromAxisAngle(ez, az))
+        const sign = q.w < 0 ? -1 : 1
+        const key = `${(q.x * sign).toFixed(3)},${(q.y * sign).toFixed(3)},${(q.z * sign).toFixed(3)},${(q.w * sign).toFixed(3)}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(q)
+      }
+    }
+  }
+  return out
+})()
+
+/** Registers `compareVertices` onto the seated primary by the best of the 24 cubic orientations. */
+function alignToPrimary(primaryWorld: number[], compareVertices: number[]): Matrix4 {
+  const grid = nearSurfaceGrid(primaryWorld)
+  let best = CUBE_ROTATIONS[0] as Quaternion
+  let bestPosition = new Vector3()
+  let bestHit = -1
+  for (const quaternion of CUBE_ROTATIONS) {
+    const rotated = transformVertices(
+      compareVertices,
+      new Matrix4().makeRotationFromQuaternion(quaternion),
+    )
+    const position = bboxOfVertices(rotated).getCenter(new Vector3()).negate()
+    const moved = transformVertices(
+      rotated,
+      new Matrix4().makeTranslation(position.x, position.y, position.z),
+    )
+    const hit = nearSurfaceHit(moved, grid)
+    if (hit > bestHit) {
+      bestHit = hit
+      best = quaternion
+      bestPosition = position
+    }
+  }
+  return new Matrix4().compose(bestPosition, best, UNIT)
+}
+
+/** A synthetic canonical-frame cloud of the section outline extruded along the member. */
+function profilePrismCloud(profile: [number, number][], length: number): number[] {
+  const out: number[] = []
+  const slices = 8
+  for (let s = 0; s <= slices; s++) {
+    const x = -length / 2 + (length * s) / slices
+    for (const [px, py] of profile) out.push(x, py, -px)
+  }
+  return out
+}
+
+/**
+ * Seats an arbitrary STEP into the canonical frame on its own: register it to a synthetic prism of
+ * the stock profile (member along +X, section +y→+Y) by the 24 cubic orientations. Lands a STEP
+ * primary in the same frame as the NC panes and the stock ghost.
+ */
+export function seatedStepProfile(
+  vertices: number[],
+  profile: [number, number][] | undefined,
+): SeatedPair {
+  if (!profile || profile.length < 3 || vertices.length < 9) {
+    return {
+      primary: new Matrix4(),
+      compare: null,
+      xAxis: CANONICAL_X_AXIS.clone(),
+      yAxis: CANONICAL_Y_AXIS.clone(),
+      rollAngle: 0,
+    }
+  }
+  const size = bboxOfVertices(vertices).getSize(new Vector3())
+  const length = Math.max(size.x, size.y, size.z)
+  const matrix = alignToPrimary(profilePrismCloud(profile, length), vertices)
+  return {
+    primary: matrix,
+    compare: null,
+    xAxis: CANONICAL_X_AXIS.clone(),
+    yAxis: CANONICAL_Y_AXIS.clone(),
+    rollAngle: 0,
+  }
+}
+
 /** The seated world matrices and the section display axes (`x` = member, `y` = machine up). */
 export interface SeatedPair {
   primary: Matrix4
@@ -187,12 +347,32 @@ export function seatedPair(
   primaryVertices: number[],
   compareVertices: number[] | null,
   profile: [number, number][] | undefined,
+  primaryCanonical = false,
 ): SeatedPair {
-  const primary = baseSeat(primaryVertices, profile)
+  // An NC-built primary is placed analytically (its frame is known) — exact against the stock ghost
+  // and the projected cuts. A STEP primary still needs the heuristic seat.
+  const primary = primaryCanonical
+    ? canonicalSeat(primaryVertices)
+    : baseSeat(primaryVertices, profile)
   // The compare shares the *primary's* rotation (only its own centre) — seating each model from its
   // own vertices could pick different member axes for the same part (mesh density differs), leaving
   // the two models rotated apart in the overlay. One rotation, two centres: they always coincide.
   const compare = compareVertices ? seatLikePrimary(primary, compareVertices) : null
+  if (primaryCanonical) {
+    // The primary (NC) is exact. The STEP comes in whatever frame Tekla exported (per family it
+    // differs: tubes are pre-roll, the tee is already display-oriented), so register it to the
+    // primary by the best of the 24 cubic orientations rather than assuming one.
+    const compareMatrix = compareVertices
+      ? alignToPrimary(transformVertices(primaryVertices, primary.matrix), compareVertices)
+      : null
+    return {
+      primary: primary.matrix,
+      compare: compareMatrix,
+      xAxis: CANONICAL_X_AXIS.clone(),
+      yAxis: CANONICAL_Y_AXIS.clone(),
+      rollAngle: 0,
+    }
+  }
   if (!profile || profile.length < 3 || primaryVertices.length < 9) {
     return {
       primary: primary.matrix,
@@ -245,8 +425,9 @@ export function relativeSeat(
   primaryVertices: number[],
   compareVertices: number[],
   profile: [number, number][] | undefined,
+  primaryCanonical = false,
 ): Matrix4 {
-  const pair = seatedPair(primaryVertices, compareVertices, profile)
+  const pair = seatedPair(primaryVertices, compareVertices, profile, primaryCanonical)
   if (!pair.compare) return new Matrix4()
   return new Matrix4().copy(pair.primary).invert().multiply(pair.compare)
 }

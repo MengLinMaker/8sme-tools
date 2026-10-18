@@ -147,6 +147,6 @@ async function buildDiff(
     meshForViewer('overlay · manufactured', primary, { priority }),
     meshForViewer('overlay · step', compare, { priority }),
   ])
-  const compareMatrix = relativeSeat(manufactured.vertices, step.vertices, profile)
+  const compareMatrix = relativeSeat(manufactured.vertices, step.vertices, profile, true)
   return getStepWorkerPool().diff(primary, compare, { compareMatrix, priority })
 }

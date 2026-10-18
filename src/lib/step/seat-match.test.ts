@@ -59,7 +59,7 @@ describe.skipIf(!existsSync(nw31Top('NC files', 'm117.nc1')))(
 
         const made = await meshStepFile(`${mark}·nc`, new TextEncoder().encode(built.step))
         const step = await meshStepFile(`${mark}·step`, new Uint8Array(readFileSync(stpPath)))
-        const pair = seatedPair(made.vertices, step.vertices, section)
+        const pair = seatedPair(made.vertices, step.vertices, section, true)
         const presence = probeDiffPresence(
           soups(made),
           soups(step),

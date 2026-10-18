@@ -2735,6 +2735,7 @@ export function PreflightPage() {
                             bytes={manufactured}
                             stock={stock}
                             bus={orbitBus}
+                            ncPrimary
                             // The rebuild is oriented to the STEP frame, so the guilty-cut
                             // marks land on what the laser will actually cut — not the ideal.
                             sabreFailures={viewerSabreFailures}
@@ -2774,6 +2775,7 @@ export function PreflightPage() {
                             compareLabel={t('preflight.viewer.step')}
                             stock={stock}
                             bus={orbitBus}
+                            ncPrimary
                             focus={findingFocus}
                             sabreFailures={viewerSabreFailures}
                             ncSection={viewingNcSection}
