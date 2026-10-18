@@ -2702,6 +2702,7 @@ export function PreflightPage() {
                             bus={orbitBus}
                             highlightStray
                             smoothLines
+                            alignReference={manufactured}
                             focus={findingFocus}
                             // Marks project on every pane (via the shared face frame); only
                             // the manufactured pane also projects the NC toolpath.

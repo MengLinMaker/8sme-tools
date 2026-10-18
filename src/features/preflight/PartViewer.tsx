@@ -475,6 +475,7 @@ function mountScene(
   ncSection?: [number, number][] | null,
   faceFrame?: NcFaceFrame | null,
   ncPrimary = false,
+  alignRef: MeshedStep | null = null,
   bevelStyle: BevelStyle = 'arrow',
   onLocationChange?: (locationMm: number, lengthMm: number) => void,
   onAxisAngleChange?: (degrees: number) => void,
@@ -649,16 +650,28 @@ function mountScene(
     // two never reorient independently. `seatedPair` rolls the whole display about the member axis
     // so section `+y` (the machine "up", see canonical-orientation.md) points world +Y — then the
     // model, the stock ghost and the NC projection all share the canonical frame.
-    // An NC-built primary seats analytically; a STEP primary (no compare) is registered to a
-    // synthetic prism of the stock profile so it lands in the same canonical frame; a STEP primary
-    // with a compare inherits the compare handling via the normal path.
+    // An NC-built primary seats analytically; a STEP primary (no compare) is registered to the NC
+    // build when one is supplied (its asymmetric features disambiguate a symmetric section, e.g. an
+    // RHS 0°/180°), else to a synthetic prism of the stock profile; a STEP primary with a compare
+    // inherits the compare handling via the normal path.
     const seats = ncPrimary
       ? seatedPair(primary.raw, compareStep?.vertices ?? null, profile, true)
       : compareStep
         ? seatedPair(primary.raw, compareStep.vertices, profile)
-        : profile
-          ? seatedStepProfile(primary.raw, profile)
-          : seatedPair(primary.raw, null, profile)
+        : alignRef
+          ? (() => {
+              const registered = seatedPair(alignRef.vertices, primary.raw, profile, true)
+              return {
+                primary: registered.compare ?? registered.primary,
+                compare: null,
+                xAxis: registered.xAxis,
+                yAxis: registered.yAxis,
+                rollAngle: registered.rollAngle,
+              }
+            })()
+          : profile
+            ? seatedStepProfile(primary.raw, profile)
+            : seatedPair(primary.raw, null, profile)
     const seatScale = new Vector3()
     // The seated member extent along X is the true member length (the raw bbox longest extent is a
     // leg for a short part, or the diagonal for a rotated export).
@@ -1735,6 +1748,12 @@ export interface PartViewerProps {
    * the projected cuts exactly. False for a STEP primary.
    */
   ncPrimary?: boolean
+  /**
+   * A model to register a STEP primary onto when the section alone can't orient it (a symmetric
+   * section fits 0°/180° equally). Pass the NC-built manufactured bytes so the STEP pane lands in
+   * the same frame as the overlay. The STEP-only part (no NC) leaves this null.
+   */
+  alignReference?: Uint8Array | null
   /** Pre-resolved section face frame, so markers project without needing the NC geometry. */
   faceFrame?: NcFaceFrame | null
   /** Clicked-finding focus: bump `token` to pull every viewport to `code`'s geometry (optionally a
@@ -1786,6 +1805,7 @@ export default function PartViewer({
   nc = null,
   ncSection = null,
   ncPrimary = false,
+  alignReference = null,
   faceFrame = null,
   focus = null,
   visibleSpans = null,
@@ -1868,9 +1888,12 @@ export default function PartViewer({
     meshForViewer(name, bytes)
       .then(async (step) => {
         const compare = compareBytes ? await meshForViewer(`${name}·compare`, compareBytes) : null
-        return { step, compare }
+        const alignRef = alignReference
+          ? await meshForViewer(`${name}·alignref`, alignReference)
+          : null
+        return { step, compare, alignRef }
       })
-      .then(async ({ step, compare }) => {
+      .then(async ({ step, compare, alignRef }) => {
         if (disposed || !containerRef.current) return
         if (step.bodies[0]?.mesh.faces.triangles.length === 0) {
           setStatus('error')
@@ -1894,6 +1917,7 @@ export default function PartViewer({
           ncSection,
           faceFrame,
           ncPrimary,
+          alignRef,
           'area',
           (mm, mmLength) => onLocationRef.current?.(mm, mmLength),
           (degrees) => onAxisAngleRef.current?.(degrees),
@@ -1942,6 +1966,7 @@ export default function PartViewer({
     ncSection,
     faceFrame,
     ncPrimary,
+    alignReference,
     cutEdges,
     t,
   ])

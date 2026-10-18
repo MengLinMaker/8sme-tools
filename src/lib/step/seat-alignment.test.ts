@@ -41,9 +41,25 @@ const NC_ONLY = [
   'm117',
   'm123',
   'm154',
+  'm24',
+  'm172',
+  'm173',
+  'm211',
 ]
 /** Scenario 2 — NC + STEP (the overlay): the STEP must land on the NC build. */
-const NC_AND_STEP = ['m119', 'm124', 'm125', 'm126', 'm149', 'm28', 'm29']
+const NC_AND_STEP = [
+  'm119',
+  'm124',
+  'm125',
+  'm126',
+  'm149',
+  'm28',
+  'm29',
+  'm24',
+  'm172',
+  'm173',
+  'm211',
+]
 
 /**
  * Known-bad marks from the operator's pass — logged, not asserted, so a regression is visible but
