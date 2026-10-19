@@ -1859,11 +1859,12 @@ export function PreflightPage() {
     [bytesByPath, setOverride],
   )
 
-  /** Rebuilds a part's STEP from its NC, so the export matches what will be manufactured. */
+  /** Rebuilds a part's STEP from its NC, so the viewer + export match what will be manufactured. */
   const regeneratePart = useCallback(
     async (part: PartRecord) => {
       const ncPath = part.nc?.path
-      const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
+      const ncBytes =
+        ncOverrides.get(part.mark)?.bytes ?? (ncPath ? bytesByPath.get(ncPath) : undefined)
       if (!ncBytes) return
       setFixingMark(part.mark)
       try {
@@ -1875,7 +1876,7 @@ export function PreflightPage() {
         setFixingMark(null)
       }
     },
-    [bytesByPath, setOverride],
+    [bytesByPath, ncOverrides, setOverride],
   )
 
   /**
@@ -2702,6 +2703,20 @@ export function PreflightPage() {
                           {t('viewer.grid')}
                         </Toggle>
                       </div>
+                      {viewing.nc && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          disabled={!ncBytes || fixingMark === viewing.mark}
+                          onClick={() => void regeneratePart(viewing)}
+                          title={t('preflight.viewer.ncToStepHint')}
+                        >
+                          {fixingMark === viewing.mark
+                            ? t('common.actions.working')
+                            : t('preflight.viewer.ncToStep')}
+                        </Button>
+                      )}
                       {paneCount > 1 && (
                         <TabBar
                           options={PANE_LAYOUTS.map((o) => ({ id: o.id, label: t(o.labelKey) }))}

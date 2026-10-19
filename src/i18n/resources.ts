@@ -193,6 +193,9 @@ export const en = {
       right: 'Right',
       drawing: 'Drawing',
       nc1: 'NC1',
+      ncToStep: 'NC to STEP',
+      ncToStepHint:
+        'Rebuild this part’s STEP from its NC, show it side by side with the manufactured model, and include it in the export.',
       noDrawing: 'No drawing.',
       zoomIn: 'Zoom in',
       zoomOut: 'Zoom out',
@@ -614,6 +617,8 @@ export const zh = {
       right: '右视',
       drawing: '图纸',
       nc1: 'NC1',
+      ncToStep: 'NC 转 STEP',
+      ncToStepHint: '根据该零件的 NC 重建 STEP，与制造件并排显示，并包含在导出中。',
       noDrawing: '无图纸。',
       zoomIn: '放大',
       zoomOut: '缩小',
