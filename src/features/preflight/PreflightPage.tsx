@@ -2110,6 +2110,36 @@ export function PreflightPage() {
   }, [result, bundle, stepOverrides, ncOverrides, exportStepBytes, exportNcBytes])
 
   /**
+   * Rebuilds each ticked part's STEP from its NC (the manufactured part) and records it as the
+   * part's override, so the next "Export selected" ships the NC-derived STEP.
+   */
+  const ncToStepSelected = useCallback(async () => {
+    if (!result || selectedMarks.size === 0) return
+    const selected = result.parts.filter((part) => selectedMarks.has(part.mark))
+    if (!selected.some((part) => part.nc?.path || ncOverrides.has(part.mark))) {
+      setError(t('preflight.findings.ncToStepNone'))
+      return
+    }
+    setExporting(true)
+    try {
+      for (const part of selected) {
+        const ncPath = part.nc?.path
+        const nc =
+          ncOverrides.get(part.mark)?.bytes ?? (ncPath ? bytesByPath.get(ncPath) : undefined)
+        if (!nc) continue
+        try {
+          const step = await reconstructForViewer(new TextDecoder().decode(nc))
+          if (step) setOverride(part.mark, step, 'regenerated')
+        } catch {
+          // Skip a part whose NC can't be rebuilt; the others still convert.
+        }
+      }
+    } finally {
+      setExporting(false)
+    }
+  }, [result, selectedMarks, ncOverrides, bytesByPath, setOverride, t])
+
+  /**
    * Exports the ticked parts' PDF drawing + STEP + NC together in one flattened zip, with the fix
    * overrides applied and the STEP/NC written in the canonical manufacturing orientation.
    */
@@ -2379,6 +2409,15 @@ export function PreflightPage() {
                   onClick={() => downloadText(`parts-${result.sourceName}.csv`, partsToCsv(result))}
                 >
                   {t('preflight.findings.exportParts')}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void ncToStepSelected()}
+                  disabled={selectedMarks.size === 0 || exporting}
+                  title={t('preflight.findings.ncToStepHint')}
+                >
+                  {t('preflight.findings.ncToStep', { count: selectedMarks.size })}
                 </Button>
                 <Button
                   size="sm"

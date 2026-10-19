@@ -115,6 +115,10 @@ export const en = {
       exportParts: 'Export parts',
       exportFixed: 'Export fixed ({{count}})',
       exportSelected: 'Export selected ({{count}})',
+      ncToStep: 'NC to STEP ({{count}})',
+      ncToStepHint:
+        'Rebuild the selected parts’ STEP from their NC, so Export selected ships the manufactured geometry.',
+      ncToStepNone: 'None of the selected parts have an NC to convert.',
       nothingSelected: 'No exportable files for the selected parts.',
     },
     filters: {
@@ -311,8 +315,6 @@ export const en = {
       cutsTab: 'Cuts',
       ncEmpty: 'No NC for this beam.',
       downloadNc: 'Download .nc1',
-      downloadNcStep: 'NC to STEP (.step)',
-      ncStepEmpty: 'The NC could not be rebuilt into a STEP for this beam.',
       side: 'Side',
       mark: 'Mark',
       cutAt: 'Cut at',
@@ -536,6 +538,9 @@ export const zh = {
       exportParts: '导出零件',
       exportFixed: '导出已修复 ({{count}})',
       exportSelected: '导出所选 ({{count}})',
+      ncToStep: 'NC 转 STEP ({{count}})',
+      ncToStepHint: '根据所选零件的 NC 重建 STEP，使“导出所选”输出实际制造几何。',
+      ncToStepNone: '所选零件中没有可转换的 NC。',
       nothingSelected: '所选零件没有可导出的文件。',
     },
     filters: {
@@ -710,8 +715,6 @@ export const zh = {
       cutsTab: '切割',
       ncEmpty: '该钢梁无 NC。',
       downloadNc: '下载 .nc1',
-      downloadNcStep: 'NC 转 STEP (.step)',
-      ncStepEmpty: '无法将该钢梁的 NC 重建为 STEP。',
       side: '侧',
       mark: '标记',
       cutAt: '切割位置',
