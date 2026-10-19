@@ -24,6 +24,11 @@ export interface ReconstructResult {
   measure: StepMeasure | null
 }
 
+/** A real part STEP re-seated into the canonical manufacturing orientation. */
+export interface SeatResult {
+  step: string
+}
+
 export type StepRequest =
   | {
       id: number
@@ -47,6 +52,13 @@ export type StepRequest =
        */
       measureOnly?: boolean
     }
+  | {
+      id: number
+      kind: 'seat'
+      step: Uint8Array
+      /** Canonical cross-section points to seat the real part against. */
+      profile: [number, number][]
+    }
   | { id: number; kind: 'mesh'; step: Uint8Array; name: string }
   | {
       id: number
@@ -64,6 +76,7 @@ export type StepRequest =
 export type StepResponse =
   | { id: number; kind: 'inspect'; ok: true; value: InspectResult }
   | { id: number; kind: 'reconstruct'; ok: true; value: ReconstructResult }
+  | { id: number; kind: 'seat'; ok: true; value: SeatResult }
   | { id: number; kind: 'mesh'; ok: true; value: MeshedStep }
   | { id: number; kind: 'diff'; ok: true; value: DiffPayload | null }
   | { id: number; kind: 'warm'; ok: true; value: null }

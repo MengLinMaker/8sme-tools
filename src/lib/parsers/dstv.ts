@@ -148,12 +148,12 @@ export const dstvFileSchema = z.object({
 })
 export type DstvFile = z.infer<typeof dstvFileSchema>
 
-interface Block {
+export interface Block {
   code: string
   lines: string[]
 }
 
-function splitBlocks(text: string): Block[] {
+export function splitDstvBlocks(text: string): Block[] {
   const blocks: Block[] = []
   let current: Block | null = null
   for (const raw of text.split(/\r?\n/)) {
@@ -309,7 +309,7 @@ function parseMarks(lines: string[]): DstvMark[] {
 }
 
 export function parseDstv(text: string): DstvFile {
-  const blocks = splitBlocks(text)
+  const blocks = splitDstvBlocks(text)
   const byCode = new Map<string, string[]>()
   for (const block of blocks) {
     const existing = byCode.get(block.code) ?? []

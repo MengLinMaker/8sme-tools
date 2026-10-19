@@ -4,6 +4,7 @@ import type { DiffPayload } from './occDiff'
 import type {
   InspectResult,
   ReconstructResult,
+  SeatResult,
   StepRequest,
   StepResponse,
 } from './stepWorkerProtocol'
@@ -90,6 +91,23 @@ class StepWorkerPool {
         measureOnly: options.measureOnly,
       },
       [],
+      options.priority ?? PRIORITY_BACKGROUND,
+    )
+  }
+
+  /**
+   * Re-seat a real part STEP into the canonical manufacturing orientation, in the OCC worker so the
+   * import/mesh/export never blocks the main thread.
+   */
+  seat(
+    bytes: Uint8Array,
+    profile: [number, number][],
+    options: { priority?: number } = {},
+  ): Promise<SeatResult> {
+    const copy = new Uint8Array(bytes)
+    return this.run<SeatResult>(
+      { id: this.nextId++, kind: 'seat', step: copy, profile },
+      [copy.buffer],
       options.priority ?? PRIORITY_BACKGROUND,
     )
   }

@@ -58,6 +58,7 @@ import { removeCutFromNc, setBevelInNc } from '@/lib/parsers/ncEdit'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { cutThicknesses } from '@/lib/parsers/ncProject'
+import { reemitPartNc } from '@/lib/parsers/ncReemit'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
 import type { SectionGuess } from '@/lib/sections/detect'
@@ -340,6 +341,8 @@ export function PreflightPage() {
   const [error, setError] = useState<string | null>(null)
   /** Marks ticked in the parts table for the selective PDF/STEP/NC export. */
   const [selectedMarks, setSelectedMarks] = useState<Set<string>>(new Set())
+  /** True while an export is re-seating STEPs / re-emitting NCs in the OCC workers. */
+  const [exporting, setExporting] = useState(false)
   const selectAnchor = useRef<string | null>(null)
   const [modelChecks, setModelChecks] = useState<Map<string, SizeCheck>>(new Map())
   const [manufactureChecks, setManufactureChecks] = useState<Map<string, ModelComparison>>(
@@ -2021,60 +2024,129 @@ export function PreflightPage() {
     [bevelEdit, changeBevel],
   )
 
-  /**
-   * Exports the job with every STEP the user fixed (cleaned/regenerated) substituted in.
-   * The archive is flattened to basenames so the operator gets a folderless drop into WiseCAM.
-   */
-  const exportFixed = useCallback(() => {
-    if (!result || !bundle || (stepOverrides.size === 0 && ncOverrides.size === 0)) return
-    const files = new Map<string, Uint8Array>()
-    for (const entry of bundle.entries) files.set(entry.path, entry.bytes)
-    for (const [mark, override] of stepOverrides) {
-      const path = result.parts.find((part) => part.mark === mark)?.step?.path
-      if (path) files.set(path, override.bytes)
-    }
-    for (const [mark, override] of ncOverrides) {
-      const path = result.parts.find((part) => part.mark === mark)?.nc?.path
-      if (path) files.set(path, override.bytes)
-    }
-    const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
-    downloadBlob(
-      `fixed-${safeName || 'job'}.zip`,
-      new Blob([zipSync(flattenZipEntries(files))], { type: 'application/zip' }),
-    )
-  }, [result, bundle, stepOverrides, ncOverrides])
+  /** The canonical cross-section to seat / rewrite a part's export against, or null when unknown. */
+  const exportProfile = useCallback(
+    (part: PartRecord): [number, number][] | null => {
+      const code = part.nc?.profile ?? listedProfile(part) ?? sectionGuesses.get(part.mark)?.code
+      if (!code) return null
+      const dims = part.nc?.dimensions ?? sectionGuesses.get(part.mark)?.dims ?? []
+      return partSectionForCode(code, dims)?.points ?? null
+    },
+    [sectionGuesses],
+  )
 
   /**
-   * Exports the ticked parts' PDF drawing + STEP + NC together in one flattened zip
-   * (STEP overrides applied).
+   * The STEP bytes to ship: the part's fix override (cleaned / regenerated / simplified) or its real
+   * STEP, seated into the canonical manufacturing orientation. Regenerated / simplified overrides
+   * already come out of the NC rebuild in that frame, so only raw / cleaned geometry is re-seated.
    */
-  const exportSelected = useCallback(() => {
-    if (!result || !bundle || selectedMarks.size === 0) return
-    const files = new Map<string, Uint8Array>()
-    for (const part of result.parts) {
-      if (!selectedMarks.has(part.mark)) continue
-      for (const path of [part.pdf?.path, part.nc?.path, part.step?.path]) {
-        if (!path) continue
-        const override =
-          part.step?.path === path
-            ? stepOverrides.get(part.mark)?.bytes
-            : part.nc?.path === path
-              ? ncOverrides.get(part.mark)?.bytes
-              : undefined
-        const bytes = override ?? bytesByPath.get(path)
-        if (bytes) files.set(path, bytes)
+  const exportStepBytes = useCallback(
+    async (part: PartRecord): Promise<Uint8Array | undefined> => {
+      const override = stepOverrides.get(part.mark)
+      const path = part.step?.path
+      const base = override?.bytes ?? (path ? bytesByPath.get(path) : undefined)
+      if (!base) return undefined
+      if (override?.kind === 'regenerated' || override?.kind === 'simplified') return base
+      const profile = exportProfile(part)
+      if (!profile) return base
+      try {
+        const { step } = await getStepWorkerPool().seat(base, profile, {
+          priority: PRIORITY_FOREGROUND,
+        })
+        return new TextEncoder().encode(step)
+      } catch {
+        return base
       }
+    },
+    [bytesByPath, stepOverrides, exportProfile],
+  )
+
+  /** The NC bytes to ship: the (edited) NC re-emitted by our own writer rather than copied raw. */
+  const exportNcBytes = useCallback(
+    (part: PartRecord): Uint8Array | undefined => {
+      const override = ncOverrides.get(part.mark)
+      const path = part.nc?.path
+      const base = override?.bytes ?? (path ? bytesByPath.get(path) : undefined)
+      if (!base) return undefined
+      try {
+        return new TextEncoder().encode(reemitPartNc(new TextDecoder().decode(base)))
+      } catch {
+        return base
+      }
+    },
+    [bytesByPath, ncOverrides],
+  )
+
+  /**
+   * Exports the job with every fix substituted in, each STEP re-seated into the canonical
+   * manufacturing orientation and each NC re-emitted by our writer.
+   * The archive is flattened to basenames so the operator gets a folderless drop into WiseCAM.
+   */
+  const exportFixed = useCallback(async () => {
+    if (!result || !bundle || (stepOverrides.size === 0 && ncOverrides.size === 0)) return
+    setExporting(true)
+    try {
+      const files = new Map<string, Uint8Array>()
+      for (const entry of bundle.entries) files.set(entry.path, entry.bytes)
+      const resolved = await Promise.all(
+        result.parts.map(async (part) => ({
+          part,
+          step: part.step?.path ? await exportStepBytes(part) : undefined,
+          nc: part.nc?.path ? exportNcBytes(part) : undefined,
+        })),
+      )
+      for (const { part, step, nc } of resolved) {
+        if (step && part.step?.path) files.set(part.step.path, step)
+        if (nc && part.nc?.path) files.set(part.nc.path, nc)
+      }
+      const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
+      downloadBlob(
+        `fixed-${safeName || 'job'}.zip`,
+        new Blob([zipSync(flattenZipEntries(files))], { type: 'application/zip' }),
+      )
+    } finally {
+      setExporting(false)
     }
-    if (files.size === 0) {
-      setError(t('preflight.findings.nothingSelected'))
-      return
+  }, [result, bundle, stepOverrides, ncOverrides, exportStepBytes, exportNcBytes])
+
+  /**
+   * Exports the ticked parts' PDF drawing + STEP + NC together in one flattened zip, with the fix
+   * overrides applied and the STEP/NC written in the canonical manufacturing orientation.
+   */
+  const exportSelected = useCallback(async () => {
+    if (!result || !bundle || selectedMarks.size === 0) return
+    setExporting(true)
+    try {
+      const files = new Map<string, Uint8Array>()
+      const selected = result.parts.filter((part) => selectedMarks.has(part.mark))
+      const resolved = await Promise.all(
+        selected.map(async (part) => ({
+          part,
+          step: part.step?.path ? await exportStepBytes(part) : undefined,
+          nc: part.nc?.path ? exportNcBytes(part) : undefined,
+        })),
+      )
+      for (const { part, step, nc } of resolved) {
+        if (part.pdf?.path) {
+          const bytes = bytesByPath.get(part.pdf.path)
+          if (bytes) files.set(part.pdf.path, bytes)
+        }
+        if (step && part.step?.path) files.set(part.step.path, step)
+        if (nc && part.nc?.path) files.set(part.nc.path, nc)
+      }
+      if (files.size === 0) {
+        setError(t('preflight.findings.nothingSelected'))
+        return
+      }
+      const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
+      downloadBlob(
+        `selected-${safeName || 'job'}.zip`,
+        new Blob([zipSync(flattenZipEntries(files))], { type: 'application/zip' }),
+      )
+    } finally {
+      setExporting(false)
     }
-    const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
-    downloadBlob(
-      `selected-${safeName || 'job'}.zip`,
-      new Blob([zipSync(flattenZipEntries(files))], { type: 'application/zip' }),
-    )
-  }, [result, bundle, selectedMarks, bytesByPath, stepOverrides, ncOverrides, t])
+  }, [result, bundle, selectedMarks, bytesByPath, exportStepBytes, exportNcBytes, t])
 
   return (
     <div className="flex flex-col gap-6">
@@ -2308,11 +2380,20 @@ export function PreflightPage() {
                 >
                   {t('preflight.findings.exportParts')}
                 </Button>
-                <Button size="sm" onClick={exportSelected} disabled={selectedMarks.size === 0}>
+                <Button
+                  size="sm"
+                  onClick={() => void exportSelected()}
+                  disabled={selectedMarks.size === 0 || exporting}
+                >
                   {t('preflight.findings.exportSelected', { count: selectedMarks.size })}
                 </Button>
                 {stepOverrides.size + ncOverrides.size > 0 && (
-                  <Button variant="outline" size="sm" onClick={exportFixed}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void exportFixed()}
+                    disabled={exporting}
+                  >
                     {t('preflight.findings.exportFixed', {
                       count: stepOverrides.size + ncOverrides.size,
                     })}

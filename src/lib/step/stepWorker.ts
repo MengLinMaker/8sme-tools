@@ -1,13 +1,17 @@
+import type { AnyShape } from 'replicad'
 import { Matrix4 } from 'three'
 import { type MeasurableShape, measureShape, type StepMeasure } from './measure'
 import { meshStepFile } from './mesh'
+import { applyRigid, writeStep } from './occ'
 import { occFuzzyDiff, serializeDiff } from './occDiff'
 import { ensureOc } from './occInit'
 import { inferStepSection, type SectionShape } from './readSection'
 import { reconstructSolidFromNc } from './reconstructFromNc'
+import { rigidFromMatrix, seatedStepProfile } from './seat'
 import type {
   InspectResult,
   ReconstructResult,
+  SeatResult,
   StepRequest,
   StepResponse,
 } from './stepWorkerProtocol'
@@ -37,6 +41,9 @@ async function handle(request: StepRequest): Promise<void> {
     } else if (request.kind === 'mesh') {
       const value = await meshStepFile(request.name, request.step)
       scope.postMessage({ id: request.id, kind: 'mesh', ok: true, value })
+    } else if (request.kind === 'seat') {
+      const value = await seat(request.step, request.profile)
+      scope.postMessage({ id: request.id, kind: 'seat', ok: true, value })
     } else if (request.kind === 'warm') {
       await ensureOc()
       scope.postMessage({ id: request.id, kind: 'warm', ok: true, value: null })
@@ -119,4 +126,33 @@ async function reconstruct(request: {
     }
   }
   return { step: request.measureOnly ? null : (built?.step ?? null), measure }
+}
+
+/** The subset of an imported OCC shape the canonical seat needs. */
+interface TransformOps {
+  rotate: (angle: number, position?: number[], direction?: number[]) => TransformOps
+  translate: (x: number, y: number, z: number) => TransformOps
+  mesh: () => { vertices: number[] }
+  delete: () => void
+}
+
+/**
+ * Re-seats a real part STEP into the canonical manufacturing orientation: import it, mesh it for
+ * the same canonical seat the viewer applies (`seatedStepProfile`), then rotate+translate the real
+ * B-rep (holes/curves preserved) and write it back out.
+ */
+async function seat(bytes: Uint8Array, profile: [number, number][]): Promise<SeatResult> {
+  await ensureOc()
+  const { importSTEP } = await import('replicad')
+  const shape = (await importSTEP(
+    new Blob([new Uint8Array(bytes)], { type: 'model/step' }),
+  )) as unknown as TransformOps
+  try {
+    const { vertices } = shape.mesh()
+    const rigid = rigidFromMatrix(seatedStepProfile(vertices, profile).primary)
+    const placed = applyRigid(shape as unknown as AnyShape, rigid)
+    return { step: await writeStep(placed, 'seated.stp') }
+  } finally {
+    shape.delete()
+  }
 }

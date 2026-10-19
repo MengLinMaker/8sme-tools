@@ -137,6 +137,36 @@ export function seatQuaternion(
   return best
 }
 
+/** A rigid transform split into the rotate+translate calls replicad/OCC shapes expose. */
+export interface RigidTransform {
+  /** Rotation angle (deg) about `axis` through the origin, applied before the translation. */
+  angleDeg: number
+  axis: [number, number, number]
+  position: [number, number, number]
+}
+
+/**
+ * Splits a rigid {@link Matrix4} (rotation + translation, unit scale) into an axis/angle rotation
+ * plus a translation. OCC shapes have no arbitrary-matrix transform, but `rotate` then `translate`
+ * reproduces `T · R` exactly — which is what a canonical seat matrix is.
+ */
+export function rigidFromMatrix(matrix: Matrix4): RigidTransform {
+  const position = new Vector3()
+  const quaternion = new Quaternion()
+  const scale = new Vector3()
+  matrix.decompose(position, quaternion, scale)
+  const { x, y, z, w } = quaternion
+  const sinHalf = Math.hypot(x, y, z)
+  const angle = 2 * Math.atan2(sinHalf, w)
+  const axis: [number, number, number] =
+    sinHalf < 1e-9 ? [0, 0, 1] : [x / sinHalf, y / sinHalf, z / sinHalf]
+  return {
+    angleDeg: (angle * 180) / Math.PI,
+    axis,
+    position: [position.x, position.y, position.z],
+  }
+}
+
 interface BaseSeat {
   quaternion: Quaternion
   position: Vector3

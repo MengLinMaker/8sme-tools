@@ -1,6 +1,7 @@
 import type { AnyShape, DrawingPen } from 'replicad'
 import type { RolledSection } from '@/lib/sections/types'
 import { ensureOc } from './occInit'
+import type { RigidTransform } from './seat'
 
 /**
  * Nested-UB STEP generation using the real OpenCASCADE kernel (via `replicad`).
@@ -343,6 +344,24 @@ export async function writeStep(shape: AnyShape, path: string): Promise<string> 
   writer.Write(path)
   const content = occ.FS.readFile(path, { encoding: 'utf8' })
   return typeof content === 'string' ? content : new TextDecoder().decode(content)
+}
+
+/**
+ * Applies a {@link RigidTransform} (as produced by `rigidFromMatrix`) to a shape. OCC exposes no
+ * arbitrary-matrix transform, so a rigid transform is a rotation about the origin then a
+ * translation — exactly the `T · R` a canonical seat matrix is.
+ */
+export function applyRigid(shape: AnyShape, rigid: RigidTransform): AnyShape {
+  interface TransformOps {
+    rotate: (angle: number, position?: number[], direction?: number[]) => TransformOps
+    translate: (x: number, y: number, z: number) => TransformOps
+  }
+  let placed = shape as unknown as TransformOps
+  if (Math.abs(rigid.angleDeg) > 1e-9) {
+    placed = placed.rotate(rigid.angleDeg, [0, 0, 0], rigid.axis)
+  }
+  placed = placed.translate(rigid.position[0], rigid.position[1], rigid.position[2])
+  return placed as unknown as AnyShape
 }
 
 export async function buildUbBarStep(
