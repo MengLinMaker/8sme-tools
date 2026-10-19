@@ -324,7 +324,14 @@ Whichever variant flips `LoadData`→success isolates the rule.
 
 ## 9. Supported formats & what to generate
 
+> Full capability matrix (orientation / cut lines / bevels / quantity / marking) and the
+> manual-confirmed import flow: **`docs/wisecam-formats.md`**. Short version: **3D formats
+> (STEP/IGES/N3DPRT) carry orientation; NC1 does not; NCEXA carries it explicitly via
+> `RotateStyle`/`RotateAngle`/`Invert`.**
+
 From `StringResources.en-US.resx` + the `*ToCad` translators present in the install.
+The official manual (§5.1) lists: `.step .stp .igs .iges .ncep .ncex .n3dpart .nc1`
+(the resource filter spells the native part `.n3dprt`; accept both).
 
 ### Tube-part import
 
@@ -370,6 +377,10 @@ variant — note it drops `.nc1` *and* `.t2w`**):
    sample from WiseCAM and inspect its container before investing.
 4. Do **not** depend on `.nc1`/`.t2w` in the automated pipeline until the steel-structure
    licence is present.
+5. **Orientation:** export STEP in our canonical stance; STEP's coordinates are the stance.
+   NC1 has no stance field, so re-emitting it cannot rotate a part. If per-part stance must be
+   dictated, emit an `.ncexa` with `RotateAngle`/`Invert` set, or use WiseCAM's
+   **工艺 → 截面工艺 → 旋转截面 / 镜像截面**. See `docs/wisecam-formats.md` §3.
 
 ## Sources / cross-refs
 

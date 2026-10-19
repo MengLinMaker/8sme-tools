@@ -130,6 +130,13 @@ part* (`docs/wisecam-debugging.md` §9) and will re-compute the toolpath itself.
   (what STEP loses), and `ResultName` is human-readable (`…300x90 D8 T16 L10500 R0`).
   The `_0.svg` alongside it holds the placed instances.
 - `params` throughout is a flat `key=value;` string (not nested XML).
+- **Stance likely lives on `Part`:** `RotateStyle` / `RotateAngle` / `Invert` match WiseCAM's
+  **截面工艺** — *旋转截面* (rotate section; auto 90°/45°, or custom for special sections)
+  and *镜像截面* (mirror about the YOZ plane). **Unverified:** apply a section rotation in
+  WiseCAM, re-export, and diff `CadRoot.xml` to confirm which field changes. Every sample on
+  disk has `RotateStyle=0;RotateAngle=0;Invert=0` (no section rotation applied). The placed
+  result SVG also carries `matrixinfo3d` (identity in all samples), and the toolpath carries
+  `B=` tube rotation. See `docs/wisecam-formats.md` §3.3.
 
 > **Gotcha**: `CadRoot.xml` in some exports contains **mis-encoded bytes** in `ResultName`
 > (Chinese text). Strict XML parsers (`ElementTree`, DOMParser) throw. Parse it tolerantly
