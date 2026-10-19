@@ -59,6 +59,8 @@ interface ViewFile {
   manufactured: Uint8Array | null
   /** Generated Weihong .nc1 text for this beam. */
   ncText: string | null
+  /** Stitched real-part NC, the source for the manufactured STEP export. */
+  manufacturedNc: string | null
   /** Piece spans per side along the beam, driving the NC preview + cuts tab. */
   slots: BeamSlot[]
   /** Each nested piece's real NC at its slot: the stitched NC 3D view. */
@@ -133,6 +135,7 @@ export function NestingPage() {
   const [exporting, setExporting] = useState<'step' | 'nc' | 'cut' | null>(null)
   const [viewing, setViewing] = useState<ViewFile | null>(null)
   const [viewBusy, setViewBusy] = useState(false)
+  const [ncStepBusy, setNcStepBusy] = useState(false)
   // Preflight principles in the nesting viewer: one orbit bus shared by both 3D panes so the
   // nested STEP and the manufactured (cut-beam) model rotate together, plus split/overlay modes
   // with the boolean red/blue diff. The manufactured pane shows a placeholder until the cut-beam
@@ -327,11 +330,24 @@ export function NestingPage() {
         geometry,
       })
     }
+    let manufacturedNc: string | null = null
+    try {
+      manufacturedNc = buildStitchedBeamNc({
+        section: ub,
+        name: base,
+        stockLength: layout.ubBar.stockLength,
+        items: ncItems,
+        grade,
+      })
+    } catch {
+      manufacturedNc = null
+    }
     return {
       name,
       bytes,
       manufactured: null,
       ncText,
+      manufacturedNc,
       slots,
       ncItems,
       ncMissing,
@@ -354,18 +370,9 @@ export function NestingPage() {
     file: ViewFile,
   ): Promise<Uint8Array | null> => {
     const ub = getUb(result.parentUb)
-    if (!ub) return null
-    const grade = result.parts[0]?.grade
-    const stitched = buildStitchedBeamNc({
-      section: ub,
-      name: file.name.replace(/\.step$/, ''),
-      stockLength: file.stockLength,
-      items: file.ncItems,
-      grade,
-    })
-    if (!stitched) return null
+    if (!ub || !file.manufacturedNc) return null
     try {
-      return await reconstructForViewer(stitched)
+      return await reconstructForViewer(file.manufacturedNc)
     } catch (error) {
       // Best-effort: a null/failed rebuild falls back to the STEP view.
       // eslint-disable-next-line no-console
@@ -495,6 +502,38 @@ export function NestingPage() {
       )
     } finally {
       setExporting(null)
+    }
+  }
+
+  /**
+   * The manufactured NC as a STEP: rebuild the stitched NC into a solid and export it. This is the
+   * exact beam the NC program cuts, not the ideal nested parts.
+   */
+  const downloadNcStep = async () => {
+    if (!viewing) return
+    setNcStepBusy(true)
+    setError(null)
+    try {
+      const step =
+        viewing.manufactured ??
+        (viewing.manufacturedNc ? await reconstructForViewer(viewing.manufacturedNc) : null)
+      if (!step) {
+        setError(t('nesting.viewer.ncStepEmpty'))
+        return
+      }
+      if (!viewing.manufactured) {
+        setViewing((current) => (current ? { ...current, manufactured: step } : current))
+      }
+      downloadBlob(
+        viewing.name.replace(/\.step$/, '-nc.step'),
+        new Blob([new Uint8Array(step)], { type: 'model/step' }),
+      )
+    } catch (err) {
+      setError(
+        t('nesting.stepExportFailed', { error: err instanceof Error ? err.message : String(err) }),
+      )
+    } finally {
+      setNcStepBusy(false)
     }
   }
 
@@ -942,11 +981,22 @@ export function NestingPage() {
                       {t(tab.labelKey)}
                     </button>
                   ))}
-                  {viewing.ncText && (
+                  {(viewing.manufacturedNc || viewing.manufactured) && (
                     <Button
                       variant="ghost"
                       size="sm"
                       className="ml-auto"
+                      disabled={ncStepBusy}
+                      onClick={() => void downloadNcStep()}
+                    >
+                      {ncStepBusy ? t('nesting.generating') : t('nesting.viewer.downloadNcStep')}
+                    </Button>
+                  )}
+                  {viewing.ncText && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={viewing.manufacturedNc || viewing.manufactured ? '' : 'ml-auto'}
                       onClick={() =>
                         downloadBlob(
                           viewing.name.replace(/\.step$/, '.nc1'),
