@@ -227,3 +227,10 @@ Notes:
 - **Quantity** comes from the `ST` header / part list, never from STEP.
 - The DSTV ST header already encodes the **profile type `T`** and the fingerprint dims, which
   is exactly what `inferParentUb` reconstructs.
+
+## See also
+
+- **`docs/ncexa-format.md`** — WiseCAM's own native `.ncexa` exchange format (OPC/ZIP +
+  `CAD/CadRoot.xml` + SVGs + `.zua` toolpath). It carries **quantity + marking** natively; its
+  layer-6 `打标` mark text is the native counterpart of the DSTV `SI` block, and
+  `Result.PartInfo` the counterpart of the `ST` quantity.

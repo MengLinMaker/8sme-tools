@@ -317,7 +317,9 @@ Whichever variant flips `LoadData`→success isolates the rule.
       `NC1FieldSettingParame*` values.
 - [ ] Run `tools\wisecam-import.ps1` over a folder of STEP files — this is the automated
       "import + detect why" loop.
-- [ ] Reverse a WiseCAM-exported `*.ncex`/`*.n3dprt` sample to see if it is authorable (§9).
+- [x] Reverse WiseCAM-exported `*.ncexa` samples — container/CAD/CNC documented in
+      **`docs/ncexa-format.md`**; authoring still needs an import test.
+- [ ] Reverse an `.n3dprt` sample (§9).
 - [ ] Remember: **our generator currently emits `.nc1` per stock beam** — switch it to STEP.
 
 ## 9. Supported formats & what to generate
@@ -345,7 +347,7 @@ variant — note it drops `.nc1` *and* `.t2w`**):
 | IGES `.igs/.iges` | ✅ | surfaces/curves (solids less reliable) | ✅ | fallback |
 | DXF/DWG/PLT/G/NC | ✅ (2D) | flat/2D geometry, wrapped parts | ✅ | for flat/wrap only |
 | NCEP `.ncep` | ✅ | WiseCAM part package (proprietary) | ❓ unknown | can't author yet |
-| NCEX/NCEXA/NCEXB | ✅ | WiseCAM exchange / machining parts | ❓ | reverse-engineer maybe |
+| NCEX/NCEXA/NCEXB | ✅ | WiseCAM exchange / machining parts | ❓ (container + CAD documented) | see `docs/ncexa-format.md` |
 | N3DPRT `.n3dprt` | ✅ | WiseCAM 3D part (native) | ❓ | reverse-engineer maybe |
 | **NC1** `.nc1` | ❌ **gated** | DSTV geometry **+ quantity + `SI` mark** | ✅ (we have a writer) | blocked |
 | **T2W** `.t2w` | ❌ **gated** | Tekla→WiseCAM tube (3D) | ❌ | blocked |
