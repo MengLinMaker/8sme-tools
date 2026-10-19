@@ -247,6 +247,21 @@ interface NcOverride {
   angle?: number
 }
 
+/**
+ * Where a part's exported STEP ships. Normally its own path. A part with no STEP but a generated
+ * (NC-derived) STEP takes the NC's filename with a `.step` extension, so it drops into WiseCAM
+ * beside the NC it replaces.
+ */
+function exportStepPath(part: PartRecord): string {
+  if (part.step?.path) return part.step.path
+  if (part.nc?.path) {
+    return /\.[^./\\]+$/.test(part.nc.path)
+      ? part.nc.path.replace(/\.[^./\\]+$/, '.step')
+      : `${part.nc.path}.step`
+  }
+  return `${part.mark.replace(/[^\w.-]+/g, '-')}.step`
+}
+
 /** A finding an override resolves — greyed out in the list, with an undo. */
 function resolvedFindings(kind: StepFixKind): string[] {
   if (kind === 'regenerated')
@@ -2092,12 +2107,15 @@ export function PreflightPage() {
       const resolved = await Promise.all(
         result.parts.map(async (part) => ({
           part,
-          step: part.step?.path ? await exportStepBytes(part) : undefined,
+          step:
+            part.step?.path || stepOverrides.has(part.mark)
+              ? await exportStepBytes(part)
+              : undefined,
           nc: part.nc?.path ? exportNcBytes(part) : undefined,
         })),
       )
       for (const { part, step, nc } of resolved) {
-        if (step && part.step?.path) files.set(part.step.path, step)
+        if (step) files.set(exportStepPath(part), step)
         if (nc && part.nc?.path) files.set(part.nc.path, nc)
       }
       const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
@@ -2153,7 +2171,10 @@ export function PreflightPage() {
       const resolved = await Promise.all(
         selected.map(async (part) => ({
           part,
-          step: part.step?.path ? await exportStepBytes(part) : undefined,
+          step:
+            part.step?.path || stepOverrides.has(part.mark)
+              ? await exportStepBytes(part)
+              : undefined,
           nc: part.nc?.path ? exportNcBytes(part) : undefined,
         })),
       )
@@ -2162,7 +2183,7 @@ export function PreflightPage() {
           const bytes = bytesByPath.get(part.pdf.path)
           if (bytes) files.set(part.pdf.path, bytes)
         }
-        if (step && part.step?.path) files.set(part.step.path, step)
+        if (step) files.set(exportStepPath(part), step)
         if (nc && part.nc?.path) files.set(part.nc.path, nc)
       }
       if (files.size === 0) {
@@ -2177,7 +2198,7 @@ export function PreflightPage() {
     } finally {
       setExporting(false)
     }
-  }, [result, bundle, selectedMarks, bytesByPath, exportStepBytes, exportNcBytes, t])
+  }, [result, bundle, selectedMarks, stepOverrides, bytesByPath, exportStepBytes, exportNcBytes, t])
 
   return (
     <div className="flex flex-col gap-6">
