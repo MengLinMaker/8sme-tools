@@ -18,7 +18,9 @@ import { buildNcex, type NcexHole, type NcexPalette, type NcexPart, ncexPartSvg 
  * - mirrored (`o`/`u`) parts may need `flipFlanges` (handedness is not in the NC header).
  */
 export interface FromNcOptions {
-  /** Draw this stock length on the adobe (defaults to the part length). */
+  /** Part mark. Pass it explicitly — DSTV marks like `M-1` are not parsed reliably. */
+  mark?: string
+  /** Draw this stock length on the adobe (defaults to 3000). */
   stockLength?: number
   rotateAngle?: number
   invert?: boolean
@@ -61,7 +63,7 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
 
   const [, , legThickness, thickness] = header.dimensions
   return {
-    mark: header.mark,
+    mark: options.mark ?? header.mark,
     profile: header.profile,
     profileType: header.profileType,
     typeCode: TYPE_CODE[header.profileType.trim().toUpperCase()] ?? 8195,
@@ -77,6 +79,8 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
     rotateAngle: options.rotateAngle,
     invert: options.invert,
     stockLength: options.stockLength,
+    rCornerMaxRadius:
+      header.profileType.trim().toUpperCase() === 'M' ? (header.dimensions[4] ?? 0) : 5,
   }
 }
 

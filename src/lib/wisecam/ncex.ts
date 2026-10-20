@@ -81,8 +81,10 @@ export interface NcexPart {
   rotateAngle?: number
   /** Mirror the section about YOZ (WiseCAM `Invert`). */
   invert?: boolean
-  /** Stock beam length to draw on the adobe (default = part length). */
+  /** Stock beam length to draw on the adobe (default 3000, matching WiseCAM's export). */
   stockLength?: number
+  /** `RCornerMaxRadius` in the Adobe params: 5 for I/U, the section radius for tubes. */
+  rCornerMaxRadius?: number
 }
 
 export interface NcexOptions {
@@ -241,7 +243,9 @@ function adobeSvg(part: NcexPart, stockLength: number, refId: number): string {
 
 /** Stable-ish GUID text for `technologyID`; WiseCAM does not appear to validate it. */
 function techId(seed: number): string {
-  const hex = (n: number, width: number): string => (n >>> 0).toString(16).padStart(width, '0')
+  // WiseCAM parses this as a GUID, so each group must be exactly 8-4-4-4-12 hex digits.
+  const hex = (n: number, width: number): string =>
+    (n >>> 0).toString(16).padStart(width, '0').slice(-width)
   const a = hex(seed * 2654435761, 8)
   const b = hex(seed * 40503 + 1, 4)
   const c = hex(seed * 7919 + 2, 4)
@@ -261,8 +265,9 @@ function cadRoot(parts: NcexPart[], partIds: number[], adobeIds: number[]): stri
       'OuterLeadLength=2',
       'OuterLeadOutLength=2',
       'OuterLeadDir=0',
-      `Length=${mm(part.stockLength ?? part.length)}`,
-      'RCornerMaxRadius=999',
+      // WiseCAM's own NCEP exports use the 3000 mm base-stock template length.
+      `Length=${mm(part.stockLength ?? 3000)}`,
+      `RCornerMaxRadius=${mm(part.rCornerMaxRadius ?? 5)}`,
       'Area=0',
       `TotalCount=${part.quantity}`,
       'NestedCount=0',

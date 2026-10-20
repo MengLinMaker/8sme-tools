@@ -57,7 +57,7 @@ import { MACHINE } from '@/lib/machine/profile'
 import { removeCutFromNc, setBevelInNc } from '@/lib/parsers/ncEdit'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
-import { cutThicknesses } from '@/lib/parsers/ncProject'
+import { cutThicknesses, MARKING_COLOR, THICKNESS_COLORS } from '@/lib/parsers/ncProject'
 import { reemitPartNc } from '@/lib/parsers/ncReemit'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
@@ -94,7 +94,7 @@ import {
 } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { buildNcepFromNc, buildNcepSvgFromNc } from '@/lib/wisecam/fromNc'
-import type { NcexPart } from '@/lib/wisecam/ncex'
+import type { NcexHole, NcexPart } from '@/lib/wisecam/ncex'
 import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
@@ -474,15 +474,6 @@ export function PreflightPage() {
     () => (ncBytes ? parseNcGeometry(new TextDecoder().decode(ncBytes)) : null),
     [ncBytes],
   )
-  // The NCEP part we would export for this mark: the unrolled surface WiseCAM imports.
-  const viewingNcep = useMemo(() => {
-    if (!ncBytes) return null
-    try {
-      return buildNcepSvgFromNc(new TextDecoder().decode(ncBytes))
-    } catch {
-      return null
-    }
-  }, [ncBytes])
   // The exact (un-inflated) section the NC was matched against, so the projected toolpath lands
   // on the real manufactured surface rather than the inflated ghost outline.
   const viewingNcSection = useMemo(() => {
@@ -529,6 +520,30 @@ export function PreflightPage() {
     const frame = resolveNcFaceFrame(section, viewingNcGeom, viewing?.nc?.profile)
     return cutThicknesses(frame, section, viewingNcGeom)
   }, [viewingNcGeom, viewingNcSection, stock, viewing])
+  // The NCEP part we would export for this mark — coloured with the same thickness palette as the
+  // cut-line legend, plus the marking colour for the etch, so the unroll reads like the viewer.
+  const viewingNcep = useMemo(() => {
+    if (!ncBytes) return null
+    const palette =
+      viewingNcProfiles.length > 0
+        ? {
+            hole: (hole: NcexHole) => {
+              if (hole.thickness == null) return undefined
+              const index = viewingNcProfiles.indexOf(Math.round(hole.thickness * 10) / 10)
+              return index >= 0
+                ? cssColor(THICKNESS_COLORS[index % THICKNESS_COLORS.length] as number)
+                : undefined
+            },
+            mark: cssColor(MARKING_COLOR),
+            outline: '#94a3b8',
+          }
+        : undefined
+    try {
+      return buildNcepSvgFromNc(new TextDecoder().decode(ncBytes), { mark: viewing?.mark }, palette)
+    } catch {
+      return null
+    }
+  }, [ncBytes, viewingNcProfiles])
   // STEP cut-edge colouring: the ideal model's cut edges on the side/top faces, keyed to the same
   // thickness legend. `profile` lets the viewer resolve the target faces for the right family.
   const viewingProfileCode = viewing?.nc?.profile ?? null
@@ -2115,7 +2130,7 @@ export function PreflightPage() {
       const base = override?.bytes ?? (path ? bytesByPath.get(path) : undefined)
       if (!base) return undefined
       try {
-        return buildNcepFromNc(new TextDecoder().decode(base)) ?? undefined
+        return buildNcepFromNc(new TextDecoder().decode(base), { mark: part.mark }) ?? undefined
       } catch {
         return undefined
       }
@@ -2126,7 +2141,9 @@ export function PreflightPage() {
   /** Direct download of the viewed part's generated NCEP (the importable CAD-only package). */
   const downloadViewingNcep = useCallback(() => {
     if (!viewing) return
-    const bytes = ncBytes ? buildNcepFromNc(new TextDecoder().decode(ncBytes)) : null
+    const bytes = ncBytes
+      ? buildNcepFromNc(new TextDecoder().decode(ncBytes), { mark: viewing.mark })
+      : null
     if (!bytes) return
     downloadBlob(
       `${viewing.mark}.ncep`,
@@ -3688,12 +3705,81 @@ function UnrolledDrawing({
           </Button>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto bg-white p-2">
-        <img src={url} alt="" className="h-full w-full object-contain" />
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <PanZoomImage key={url} src={url} alt={`${part.mark} NCEP`} />
       </div>
       <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
         {t('preflight.viewer.ncepHint')}
       </p>
+    </div>
+  )
+}
+
+/** Numeric viewer colour (`0xRRGGBB`) → CSS hex string. */
+const cssColor = (value: number): string => `#${value.toString(16).padStart(6, '0')}`
+
+/** Drag to pan, wheel to zoom, double-click to reset — for inspecting the unrolled NCEP. */
+function PanZoomImage({ src, alt }: { src: string; alt?: string }) {
+  const [view, setView] = useState({ x: 0, y: 0, k: 1 })
+  const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+  return (
+    <div
+      role="application"
+      aria-label={alt ?? 'NCEP unrolled'}
+      className={cn(
+        'relative h-full w-full touch-none overflow-hidden bg-[#0b0f14] outline-none',
+        dragging ? 'cursor-grabbing' : 'cursor-grab',
+      )}
+      onPointerDown={(event) => {
+        event.currentTarget.setPointerCapture(event.pointerId)
+        drag.current = { x: event.clientX, y: event.clientY, vx: view.x, vy: view.y }
+        setDragging(true)
+      }}
+      onPointerMove={(event) => {
+        const start = drag.current
+        if (!start) return
+        setView((current) => ({
+          ...current,
+          x: start.vx + event.clientX - start.x,
+          y: start.vy + event.clientY - start.y,
+        }))
+      }}
+      onPointerUp={() => {
+        drag.current = null
+        setDragging(false)
+      }}
+      onPointerCancel={() => {
+        drag.current = null
+        setDragging(false)
+      }}
+      onWheel={(event) => {
+        event.preventDefault()
+        const rect = event.currentTarget.getBoundingClientRect()
+        const mx = event.clientX - rect.left
+        const my = event.clientY - rect.top
+        setView((current) => {
+          const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
+          const k = Math.min(20, Math.max(0.2, current.k * factor))
+          const scale = k / current.k
+          return { k, x: mx - (mx - current.x) * scale, y: my - (my - current.y) * scale }
+        })
+      }}
+      onDoubleClick={() => setView({ x: 0, y: 0, k: 1 })}
+    >
+      <img
+        src={src}
+        alt={alt ?? ''}
+        draggable={false}
+        className="absolute left-0 top-0 h-full w-full select-none object-contain"
+        style={{
+          transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`,
+          transformOrigin: '0 0',
+        }}
+      />
+      <div className="pointer-events-none absolute bottom-2 right-2 rounded bg-card/80 px-2 py-0.5 text-[10px] text-muted-foreground">
+        drag to pan · wheel to zoom · double-click to reset
+      </div>
     </div>
   )
 }
