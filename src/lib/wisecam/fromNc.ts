@@ -2,7 +2,7 @@ import { parseDstv } from '@/lib/parsers/dstv'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stationFor, unrolledLayout } from './layout'
-import { buildNcex, type NcexHole, type NcexPart } from './ncex'
+import { buildNcex, type NcexHole, type NcexPart, ncexPartSvg } from './ncex'
 
 /**
  * Turns a DSTV `.nc1` into the geometry WiseCAM expects in an NCEP part.
@@ -75,4 +75,13 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
 export function buildNcepFromNc(ncText: string, options: FromNcOptions = {}): Uint8Array | null {
   const part = partFromNc(ncText, options)
   return part ? buildNcex([part], { flavour: 'ncep' }) : null
+}
+
+/** The developed part + its SVG text, for the in-app unrolled preview. */
+export function buildNcepSvgFromNc(
+  ncText: string,
+  options: FromNcOptions = {},
+): { part: NcexPart; svg: string } | null {
+  const part = partFromNc(ncText, options)
+  return part ? { part, svg: ncexPartSvg(part) } : null
 }

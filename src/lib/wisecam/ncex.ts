@@ -176,6 +176,11 @@ function partSvg(part: NcexPart, refId: number): string {
   ].join('\n')
 }
 
+/** The part SVG text embedded in an NCEP package, exposed for the in-app unrolled preview. */
+export function ncexPartSvg(part: NcexPart, refId = 1000): string {
+  return partSvg(part, refId)
+}
+
 function adobeSvg(part: NcexPart, stockLength: number, refId: number): string {
   const half = seamHalf(part)
   let seq = refId * 10

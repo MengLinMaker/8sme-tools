@@ -93,7 +93,8 @@ import {
   reconstructForViewer,
 } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
-import { buildNcepFromNc } from '@/lib/wisecam/fromNc'
+import { buildNcepFromNc, buildNcepSvgFromNc } from '@/lib/wisecam/fromNc'
+import type { NcexPart } from '@/lib/wisecam/ncex'
 import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
@@ -473,6 +474,15 @@ export function PreflightPage() {
     () => (ncBytes ? parseNcGeometry(new TextDecoder().decode(ncBytes)) : null),
     [ncBytes],
   )
+  // The NCEP part we would export for this mark: the unrolled surface WiseCAM imports.
+  const viewingNcep = useMemo(() => {
+    if (!ncBytes) return null
+    try {
+      return buildNcepSvgFromNc(new TextDecoder().decode(ncBytes))
+    } catch {
+      return null
+    }
+  }, [ncBytes])
   // The exact (un-inflated) section the NC was matched against, so the projected toolpath lands
   // on the real manufactured surface rather than the inflated ghost outline.
   const viewingNcSection = useMemo(() => {
@@ -1514,9 +1524,9 @@ export function PreflightPage() {
     [viewing, allFindings],
   )
 
-  // The right pane swaps between the drawing and the issues list; default to issues when there
-  // are any, since that's what needs attention.
-  const [rightTab, setRightTab] = useState<'drawing' | 'issues'>('drawing')
+  // The right pane swaps between the drawing, the issues list and the generated NCEP unroll;
+  // default to issues when there are any, since that's what needs attention.
+  const [rightTab, setRightTab] = useState<'drawing' | 'issues' | 'ncep'>('drawing')
   useEffect(() => {
     setRightTab(
       viewing && allFindings.some((finding) => finding.mark === viewing.mark)
@@ -3038,13 +3048,24 @@ export function PreflightPage() {
                         id: 'issues' as const,
                         label: t('preflight.warnings.issues', { count: viewerFindings.length }),
                       },
+                      { id: 'ncep' as const, label: t('preflight.viewer.ncep') },
                     ]}
                     value={rightTab}
                     onChange={setRightTab}
                   />
                 </div>
                 <div className="min-h-0 flex-1 overflow-hidden">
-                  {rightTab === 'issues' ? (
+                  {rightTab === 'ncep' ? (
+                    viewingNcep ? (
+                      <UnrolledDrawing part={viewingNcep.part} svg={viewingNcep.svg} />
+                    ) : (
+                      <div className="grid h-full place-items-center px-4 text-center text-sm text-muted-foreground">
+                        {viewing.nc
+                          ? t('preflight.viewer.ncepUnsupported')
+                          : t('preflight.viewer.ncepNoNc')}
+                      </div>
+                    )
+                  ) : rightTab === 'issues' ? (
                     <ViewerWarnings
                       findings={viewerFindings}
                       step={viewing.step}
@@ -3592,6 +3613,60 @@ function DiffLegend({ info }: { info: DiffStats }) {
         <span className="text-blue-300">{t('viewer.undercut')}</span>
       </span>
     </span>
+  )
+}
+
+/**
+ * The generated NCEP part as WiseCAM sees it: the unrolled surface (x = perimeter station,
+ * y = along the member), with the section profile drawn at the origin. Rendered from the same
+ * SVG text the exporter embeds, so this is exactly what gets imported.
+ */
+function UnrolledDrawing({ part, svg }: { part: NcexPart; svg: string }) {
+  const { t } = useTranslation()
+  const url = useMemo(() => {
+    const seam = part.unrolledPerimeter ?? 0
+    const half = seam / 2
+    const zeroOrigin = part.profileType.trim().toUpperCase() === 'M'
+    let minX = zeroOrigin ? 0 : -half
+    let maxX = zeroOrigin ? seam : half
+    let minY = 0
+    let maxY = part.length
+    for (const [x, y] of part.section) {
+      minX = Math.min(minX, x)
+      maxX = Math.max(maxX, x)
+      minY = Math.min(minY, y)
+      maxY = Math.max(maxY, y)
+    }
+    const pad = Math.max(20, (maxX - minX) * 0.03)
+    const viewBox = [minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2]
+      .map((value) => value.toFixed(2))
+      .join(' ')
+    const display = svg.replace(
+      '<svg ',
+      `<svg viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet" `,
+    )
+    return URL.createObjectURL(new Blob([display], { type: 'image/svg+xml' }))
+  }, [part, svg])
+  useEffect(() => () => URL.revokeObjectURL(url), [url])
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">{part.mark}</span>
+        <span>{part.profile}</span>
+        <span>
+          {t('preflight.viewer.ncepSeam', {
+            seam: (part.unrolledPerimeter ?? 0).toFixed(2),
+          })}
+        </span>
+        <span>{t('preflight.viewer.ncepHoles', { count: part.holes?.length ?? 0 })}</span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto bg-white p-2">
+        <img src={url} alt="" className="h-full w-full object-contain" />
+      </div>
+      <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+        {t('preflight.viewer.ncepHint')}
+      </p>
+    </div>
   )
 }
 

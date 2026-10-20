@@ -192,6 +192,14 @@ export const en = {
       left: 'Left',
       right: 'Right',
       drawing: 'Drawing',
+      ncep: 'NCEP (unrolled)',
+      ncepHint:
+        'Generated NCEP part: the unrolled surface WiseCAM imports (x = perimeter station, y = along the member).',
+      ncepUnsupported:
+        'NCEP generation is not implemented for this profile family (T/angle/round) yet.',
+      ncepNoNc: 'This part has no NC to develop into NCEP.',
+      ncepSeam: 'seam {{seam}} mm',
+      ncepHoles: '{{count}} holes',
       nc1: 'NC1',
       ncToStep: 'NC to STEP',
       ncToStepHint:
@@ -616,6 +624,12 @@ export const zh = {
       left: '左视',
       right: '右视',
       drawing: '图纸',
+      ncep: 'NCEP（展开）',
+      ncepHint: '生成的 NCEP 零件：WiseCAM 导入的展开面（x = 周长位置，y = 沿构件方向）。',
+      ncepUnsupported: '尚未实现该截面类型（T/角钢/圆管）的 NCEP 生成。',
+      ncepNoNc: '该零件没有可展开的 NC。',
+      ncepSeam: '展开周长 {{seam}} mm',
+      ncepHoles: '{{count}} 个孔',
       nc1: 'NC1',
       ncToStep: 'NC 转 STEP',
       ncToStepHint: '根据该零件的 NC 重建 STEP，与制造件并排显示，并包含在导出中。',
