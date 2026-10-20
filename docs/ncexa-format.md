@@ -330,6 +330,8 @@ Author a **CAD-exchange** `.ncexa`:
 
 ## Sources / cross-refs
 
+- **`docs/ncep-format.md`** — the CAD-only `.ncep` package (same container, no `CNC/`): real
+  excerpts, unrolled station formulas, and the explicit known/unknown list.
 - `docs/wisecam-debugging.md` §9 — supported import formats, and "reverse a WiseCAM-exported
   `*.ncex`/`*.n3dprt` sample" (this doc answers that TODO).
 - `docs/nc1-dstv-format.md` — DSTV `AK`/`IK`/`BO`/`SI` blocks (the analogous marking/quantity).

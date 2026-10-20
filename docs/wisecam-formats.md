@@ -68,6 +68,8 @@ The unlicensed "no-NC" filter (`SUPPORT_FORMAT_IMPORT_TUBEPART_NC`) drops `.nc1`
 
 ## 1b. NCEP is the importable CAD-only NCEX package (ground truth)
 
+> Full format notes, real excerpts and the known/unknown list: **`docs/ncep-format.md`**.
+
 We now have 17 real **`.ncep`** exports (`~/Downloads/NCEP samples 2 Hidden Grove`, e.g.
 `M-1.ncep`, `M-3.ncep`, `M-42.ncep`). They are the same `application/ncex+zip` container as
 NCEX, and they are the **CAD-only** flavour WiseCAM's Add-from-File importer accepts.

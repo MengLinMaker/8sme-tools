@@ -219,7 +219,7 @@ describe.skipIf(!outDir)('write NCEX probes', () => {
     // Real NC1-derived NCEP packages: ground-truth geometry, our writer.
     for (const mark of ['M-1', 'M-3', 'M-35', 'M-42']) {
       const nc = readFileSync(fixture('ncep', `${mark}.nc1`), 'utf8')
-      const bytes = buildNcepFromNc(nc)
+      const bytes = buildNcepFromNc(nc, { mark })
       if (bytes) write(`20-ncep-${mark}.ncep`, bytes)
     }
 
