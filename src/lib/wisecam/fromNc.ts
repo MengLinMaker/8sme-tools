@@ -1,16 +1,10 @@
 import { parseDstv } from '@/lib/parsers/dstv'
-import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
+import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { faceThickness } from '@/lib/parsers/ncProject'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stationFor, unrolledLayout } from './layout'
-import {
-  buildNcex,
-  type NcexHole,
-  type NcexPalette,
-  type NcexPart,
-  ncexPartSvg,
-} from './ncex'
+import { buildNcex, type NcexHole, type NcexPalette, type NcexPart, ncexPartSvg } from './ncex'
 
 /**
  * Turns a DSTV `.nc1` into the geometry WiseCAM expects in an NCEP part.
