@@ -98,8 +98,8 @@ import {
   reconstructForViewer,
 } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
-import { buildNcepFromNc, buildNcepSvgFromNc } from '@/lib/wisecam/fromNc'
-import type { NcexHole, NcexPart } from '@/lib/wisecam/ncex'
+import { buildNcepFromNc, partFromNc } from '@/lib/wisecam/fromNc'
+import type { NcexHole, NcexPalette, NcexPart } from '@/lib/wisecam/ncex'
 import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
@@ -529,7 +529,7 @@ export function PreflightPage() {
   // cut-line legend, plus the marking colour for the etch, so the unroll reads like the viewer.
   const viewingNcep = useMemo(() => {
     if (!ncBytes) return null
-    const palette =
+    const palette: NcexPalette | undefined =
       viewingNcProfiles.length > 0
         ? {
             hole: (hole: NcexHole) => {
@@ -544,7 +544,8 @@ export function PreflightPage() {
           }
         : undefined
     try {
-      return buildNcepSvgFromNc(new TextDecoder().decode(ncBytes), { mark: viewing?.mark }, palette)
+      const part = partFromNc(new TextDecoder().decode(ncBytes), { mark: viewing?.mark })
+      return part ? { part, palette } : null
     } catch {
       return null
     }
@@ -3093,7 +3094,7 @@ export function PreflightPage() {
                     viewingNcep ? (
                       <UnrolledDrawing
                         part={viewingNcep.part}
-                        svg={viewingNcep.svg}
+                        palette={viewingNcep.palette}
                         onExport={downloadViewingNcep}
                       />
                     ) : (
@@ -3656,25 +3657,27 @@ function DiffLegend({ info }: { info: DiffStats }) {
 
 /**
  * The generated NCEP part as WiseCAM sees it: the unrolled surface (x = perimeter station,
- * y = along the member), with the section profile drawn at the origin. Rendered from the same
- * SVG text the exporter embeds, so this is exactly what gets imported.
+ * y = along the member), with the section profile drawn at the origin. Drawn natively rather
+ * than from the package SVG, whose black millimetre-scale line classes are invisible on this
+ * dark, fitted view (and outrank any presentation attributes we set).
  */
 function UnrolledDrawing({
   part,
-  svg,
+  palette,
   onExport,
 }: {
   part: NcexPart
-  svg: string
+  palette?: NcexPalette
   onExport?: () => void
 }) {
   const { t } = useTranslation()
-  const url = useMemo(() => {
+  const geometry = useMemo(() => {
     const seam = part.unrolledPerimeter ?? 0
     const half = seam / 2
-    const zeroOrigin = part.profileType.trim().toUpperCase() === 'M'
-    let minX = zeroOrigin ? 0 : -half
-    let maxX = zeroOrigin ? seam : half
+    const left = part.profileType.trim().toUpperCase() === 'M' ? 0 : -half
+    const right = left + seam
+    let minX = left
+    let maxX = right
     let minY = 0
     let maxY = part.length
     for (const [x, y] of part.section) {
@@ -3687,13 +3690,72 @@ function UnrolledDrawing({
     const viewBox = [minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2]
       .map((value) => value.toFixed(2))
       .join(' ')
-    const display = svg.replace(
-      '<svg ',
-      `<svg viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet" `,
-    )
-    return URL.createObjectURL(new Blob([display], { type: 'image/svg+xml' }))
-  }, [part, svg])
-  useEffect(() => () => URL.revokeObjectURL(url), [url])
+    const extent = Math.max(maxX - minX, maxY - minY)
+    return {
+      left,
+      right,
+      seam,
+      // Weights are in millimetres like the package, so scale them with the part: a 0.5 mm
+      // stroke on a 5 m part fitted into the pane is far below a pixel.
+      stroke: Math.max(0.75, extent / 400),
+      fontSize: Math.max(40, extent / 60),
+      viewBox,
+    }
+  }, [part])
+  const outline = palette?.outline ?? '#94a3b8'
+  const markColor = (kind: 'etch' | 'marking'): string =>
+    cssColor(kind === 'etch' ? ETCH_COLOR : MARKING_COLOR)
+  const markKinds = new Set((part.marks ?? []).map((mark) => mark.kind))
+  const points = (section: [number, number][]): string =>
+    section.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(' ')
+  // The developed faces cover most of the seam; the leftover strips are the flange/web corner
+  // zones WiseCAM shades as non-machined faces. Show them grey so the unroll reads like WiseCAM.
+  const nonMachinedZones = useMemo(() => {
+    const layout = part.unrolled
+    if (!layout || geometry.seam <= 0) return []
+    const right = geometry.left + geometry.seam
+    const spans: [number, number][] = []
+    for (const region of Object.values(layout.faces)) {
+      if (!region) continue
+      const start =
+        layout.origin === 'zero'
+          ? geometry.left + (((region.start % geometry.seam) + geometry.seam) % geometry.seam)
+          : region.start
+      const end = start + region.length
+      if (end > right) {
+        spans.push([start, right], [geometry.left, geometry.left + (end - right)])
+      } else {
+        spans.push([Math.max(geometry.left, start), Math.min(right, end)])
+      }
+    }
+    spans.sort((a, b) => a[0] - b[0])
+    const zones: [number, number][] = []
+    let cursor = geometry.left
+    for (const [start, end] of spans) {
+      if (start > cursor + 0.5) zones.push([cursor, Math.min(start, right)])
+      cursor = Math.max(cursor, end)
+    }
+    if (cursor < right - 0.5) zones.push([cursor, right])
+    return zones.filter(([start, end]) => end - start > 0.5)
+  }, [part.unrolled, geometry])
+  const faceDividers = useMemo(() => {
+    const layout = part.unrolled
+    if (!layout || geometry.seam <= 0) return []
+    const xs = new Set<number>()
+    for (const region of Object.values(layout.faces)) {
+      if (!region) continue
+      for (const edge of [region.start, region.start + region.length]) {
+        const wrapped =
+          layout.origin === 'zero'
+            ? geometry.left + (((edge % geometry.seam) + geometry.seam) % geometry.seam)
+            : edge
+        if (wrapped > geometry.left + 0.5 && wrapped < geometry.left + geometry.seam - 0.5) {
+          xs.add(Math.round(wrapped * 100) / 100)
+        }
+      }
+    }
+    return [...xs]
+  }, [part.unrolled, geometry])
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-xs text-muted-foreground">
@@ -3705,6 +3767,24 @@ function UnrolledDrawing({
           })}
         </span>
         <span>{t('preflight.viewer.ncepHoles', { count: part.holes?.length ?? 0 })}</span>
+        {nonMachinedZones.length > 0 && (
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-sm bg-slate-400/40" />
+            {t('preflight.viewer.ncepNonMachined')}
+          </span>
+        )}
+        {markKinds.has('etch') && (
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-sm" style={{ background: cssColor(ETCH_COLOR) }} />
+            {t('viewer.profileEtch')}
+          </span>
+        )}
+        {markKinds.has('marking') && (
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-sm" style={{ background: cssColor(MARKING_COLOR) }} />
+            {t('viewer.profileMarking')}
+          </span>
+        )}
         {onExport && (
           <Button variant="outline" size="sm" className="ml-auto" onClick={onExport}>
             {t('preflight.viewer.downloadNcep')}
@@ -3712,7 +3792,130 @@ function UnrolledDrawing({
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">
-        <PanZoomImage key={url} src={url} alt={`${part.mark} NCEP`} />
+        <PanZoomSvg viewBox={geometry.viewBox} label={`${part.mark} NCEP`}>
+          <rect
+            x={geometry.left}
+            y={0}
+            width={geometry.seam}
+            height={part.length}
+            fill="#e2e8f0"
+            fillOpacity={0.05}
+            stroke="#e2e8f0"
+            strokeOpacity={0.3}
+            strokeWidth={geometry.stroke}
+          />
+          {nonMachinedZones.map(([x0, x1]) => (
+            <rect
+              key={`zone-${x0}-${x1}`}
+              x={x0}
+              y={0}
+              width={x1 - x0}
+              height={part.length}
+              fill="#94a3b8"
+              fillOpacity={0.22}
+            />
+          ))}
+          {faceDividers.map((x) => (
+            <line
+              key={`face-${x}`}
+              x1={x}
+              y1={0}
+              x2={x}
+              y2={part.length}
+              stroke="#e2e8f0"
+              strokeOpacity={0.22}
+              strokeWidth={geometry.stroke * 0.5}
+              strokeDasharray={`${geometry.stroke * 3} ${geometry.stroke * 4}`}
+            />
+          ))}
+          <line
+            x1={geometry.left}
+            y1={0}
+            x2={geometry.right}
+            y2={0}
+            stroke={outline}
+            strokeWidth={geometry.stroke}
+          />
+          <line
+            x1={geometry.right}
+            y1={part.length}
+            x2={geometry.left}
+            y2={part.length}
+            stroke={outline}
+            strokeWidth={geometry.stroke}
+          />
+          <polygon
+            points={points(part.section)}
+            fill="none"
+            stroke={outline}
+            strokeWidth={geometry.stroke}
+            strokeLinejoin="round"
+          />
+          {part.innerSection && (
+            <polygon
+              points={points(part.innerSection)}
+              fill="none"
+              stroke={outline}
+              strokeWidth={geometry.stroke}
+              strokeLinejoin="round"
+            />
+          )}
+          {(part.holes ?? []).map((hole) => (
+            <circle
+              key={`${hole.face ?? ''}-${hole.station}-${hole.along}-${hole.radius}`}
+              cx={hole.station}
+              cy={hole.along}
+              r={Math.max(hole.radius, geometry.stroke * 0.75)}
+              fill={palette?.hole?.(hole) ?? '#e2e8f0'}
+            />
+          ))}
+          {(part.marks ?? []).map((mark) => {
+            const color = markColor(mark.kind)
+            const [mx, my] = mark.points[0] ?? [0, 0]
+            const key = `${mark.kind}-${mx.toFixed(2)}-${my.toFixed(2)}-${mark.points.length}`
+            if (mark.text) {
+              const [x, y] = mark.points[0] ?? [0, 0]
+              // The NC angle is in the face plane; the unrolled drawing swaps the face axes
+              // (station across, along down), so a nc-0° baseline lies along the member.
+              const angle = mark.text.reversed ? 90 + mark.text.angle : 90 - mark.text.angle
+              return (
+                <text
+                  key={key}
+                  x={x}
+                  y={y}
+                  transform={`rotate(${angle} ${x} ${y})`}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fontSize={Math.max(mark.text.height, geometry.fontSize * 0.5)}
+                  fill={color}
+                >
+                  {mark.text.value}
+                </text>
+              )
+            }
+            if (mark.points.length < 2) return null
+            return (
+              <polyline
+                key={key}
+                points={points(mark.points)}
+                fill="none"
+                stroke={color}
+                strokeWidth={geometry.stroke * 0.5}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+            )
+          })}
+          <text
+            x={(geometry.left + geometry.right) / 2}
+            y={part.length / 2}
+            textAnchor="middle"
+            fontSize={geometry.fontSize}
+            fill={palette?.mark ?? '#e2e8f0'}
+          >
+            {part.mark}
+          </text>
+        </PanZoomSvg>
       </div>
       <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
         {t('preflight.viewer.ncepHint')}
@@ -3725,14 +3928,22 @@ function UnrolledDrawing({
 const cssColor = (value: number): string => `#${value.toString(16).padStart(6, '0')}`
 
 /** Drag to pan, wheel to zoom, double-click to reset — for inspecting the unrolled NCEP. */
-function PanZoomImage({ src, alt }: { src: string; alt?: string }) {
+function PanZoomSvg({
+  viewBox,
+  label,
+  children,
+}: {
+  viewBox: string
+  label: string
+  children: ReactNode
+}) {
   const [view, setView] = useState({ x: 0, y: 0, k: 1 })
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null)
   const [dragging, setDragging] = useState(false)
   return (
     <div
       role="application"
-      aria-label={alt ?? 'NCEP unrolled'}
+      aria-label={label}
       className={cn(
         'relative h-full w-full touch-none overflow-hidden bg-[#0b0f14] outline-none',
         dragging ? 'cursor-grabbing' : 'cursor-grab',
@@ -3773,16 +3984,18 @@ function PanZoomImage({ src, alt }: { src: string; alt?: string }) {
       }}
       onDoubleClick={() => setView({ x: 0, y: 0, k: 1 })}
     >
-      <img
-        src={src}
-        alt={alt ?? ''}
-        draggable={false}
-        className="absolute left-0 top-0 h-full w-full select-none object-contain"
+      <svg
+        viewBox={viewBox}
+        preserveAspectRatio="xMidYMid meet"
+        className="absolute inset-0 h-full w-full select-none"
         style={{
           transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`,
           transformOrigin: '0 0',
         }}
-      />
+      >
+        <title>{label}</title>
+        {children}
+      </svg>
       <div className="pointer-events-none absolute bottom-2 right-2 rounded bg-card/80 px-2 py-0.5 text-[10px] text-muted-foreground">
         drag to pan · wheel to zoom · double-click to reset
       </div>

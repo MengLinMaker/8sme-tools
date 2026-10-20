@@ -195,6 +195,7 @@ export const en = {
       ncep: 'NCEP (unrolled)',
       ncepHint:
         'Generated NCEP part: the unrolled surface WiseCAM imports (x = perimeter station, y = along the member).',
+      ncepNonMachined: 'grey = non-machined face zone',
       ncepUnsupported:
         'NCEP generation is not implemented for this profile family (T/angle/round) yet.',
       ncepNoNc: 'This part has no NC to develop into NCEP.',
@@ -627,6 +628,7 @@ export const zh = {
       drawing: '图纸',
       ncep: 'NCEP（展开）',
       ncepHint: '生成的 NCEP 零件：WiseCAM 导入的展开面（x = 周长位置，y = 沿构件方向）。',
+      ncepNonMachined: '灰色 = 非加工面区域',
       ncepUnsupported: '尚未实现该截面类型（T/角钢/圆管）的 NCEP 生成。',
       ncepNoNc: '该零件没有可展开的 NC。',
       ncepSeam: '展开周长 {{seam}} mm',

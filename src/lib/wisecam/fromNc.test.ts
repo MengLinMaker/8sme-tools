@@ -52,6 +52,35 @@ describe('partFromNc / NCEP', () => {
     )
   }
 
+  it('starts the unrolled surface at 0 for zero-origin tubes', () => {
+    const ncText = readFileSync(fixture('ncep', 'M-35.nc1'), 'utf8')
+    const part = partFromNc(ncText)
+    if (!part) throw new Error('no part')
+    const bytes = buildNcepFromNc(ncText)
+    if (!bytes) throw new Error('no package')
+    const seam = part.unrolledPerimeter ?? 0
+    expect(ncepPartSvg(bytes)).toContain(`M0.00,0.00 L${seam.toFixed(2)},0.00`)
+  })
+
+  it('develops layout markings onto the unrolled surface', () => {
+    const ncText = readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8').replace(
+      /EN(\r?\n)?$/,
+      'SI\n  v 100.00u 25.00 0.00 10.00 TEST\nEN\n',
+    )
+    const part = partFromNc(ncText)
+    if (!part) throw new Error('no part')
+    const marks = part.marks ?? []
+    expect(marks.length).toBeGreaterThan(0)
+    const points = marks.flatMap((mark) => mark.points)
+    expect(points).toContainEqual([145, 90])
+    expect(points).toContainEqual([-165, 100])
+    const etch = marks.find((mark) => mark.text)
+    expect(etch?.text?.value).toBe('TEST')
+    expect(etch?.text?.angle).toBe(0)
+    expect(etch?.text?.reversed).toBe(false)
+    expect(etch?.points[0]).toEqual([-165, 100])
+  })
+
   it('emits the NCEP file set (no CNC payload)', () => {
     const part = partFromNc(readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8'))
     expect(part).not.toBeNull()

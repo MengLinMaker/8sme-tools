@@ -1,5 +1,6 @@
 import { strToU8, zipSync } from 'fflate'
 import type { NcFace } from '@/lib/parsers/ncGeometry'
+import type { UnrolledLayout } from './layout'
 import technologyXml from './templates/Technology.xml?raw'
 
 /**
@@ -39,6 +40,23 @@ export interface NcexHole {
   thickness?: number
 }
 
+/** A non-cutting layout mark on the unrolled surface (preview only). */
+export interface NcexMark {
+  /** `etch` = `SI` text, `marking` = `PU`/`KO` scribe lines. */
+  kind: 'etch' | 'marking'
+  /** Unrolled polyline: `[perimeter station, along the member]` (one point for text). */
+  points: [number, number][]
+  text?: {
+    value: string
+    /** Text height in the NC (mm). */
+    height: number
+    /** Text angle in the NC face plane (deg, CCW). */
+    angle: number
+    /** Whether the face's station axis runs against the NC Y axis (flips the drawn angle). */
+    reversed: boolean
+  }
+}
+
 /** Optional display colours for the unrolled SVG; the exported file never uses these. */
 export interface NcexPalette {
   hole?: (hole: NcexHole) => string | undefined
@@ -75,8 +93,15 @@ export interface NcexPart {
    * outline perimeter when omitted (correct for closed hollows).
    */
   unrolledPerimeter?: number
+  /**
+   * Developed face regions (preview only). The gaps between them are the zones WiseCAM
+   * shades as non-machined faces; they are not written into the package.
+   */
+  unrolled?: UnrolledLayout
   /** Holes in unrolled coordinates. */
   holes?: NcexHole[]
+  /** Layout marks (`SI` etch text / `PU`-`KO` scribe lines) in unrolled coordinates. */
+  marks?: NcexMark[]
   /** Rotate the section into the machining stance (WiseCAM `RotateAngle`). */
   rotateAngle?: number
   /** Mirror the section about YOZ (WiseCAM `Invert`). */
@@ -166,15 +191,21 @@ function seamHalf(part: NcexPart): number {
   return perimeter / 2
 }
 
-function partSvg(part: NcexPart, refId: number, palette?: NcexPalette): string {
+/** The unrolled seam span: centred on 0 for `I`/`U`, but `M` tubes start at 0. */
+function seamBounds(part: NcexPart): [number, number] {
   const half = seamHalf(part)
+  return part.profileType.trim().toUpperCase() === 'M' ? [0, half * 2] : [-half, half]
+}
+
+function partSvg(part: NcexPart, refId: number, palette?: NcexPalette): string {
+  const [left, right] = seamBounds(part)
   const start: [number, number][] = [
-    [-half, 0],
-    [half, 0],
+    [left, 0],
+    [right, 0],
   ]
   const end: [number, number][] = [
-    [half, part.length],
-    [-half, part.length],
+    [right, part.length],
+    [left, part.length],
   ]
   let seq = refId * 10
   const next = (): number => ++seq
@@ -205,7 +236,7 @@ export function ncexPartSvg(part: NcexPart, refId = 1000, palette?: NcexPalette)
 }
 
 function adobeSvg(part: NcexPart, stockLength: number, refId: number): string {
-  const half = seamHalf(part)
+  const [left, right] = seamBounds(part)
   let seq = refId * 10
   const next = (): number => ++seq
   const body: string[] = []
@@ -213,8 +244,8 @@ function adobeSvg(part: NcexPart, stockLength: number, refId: number): string {
     truncatePath(
       next(),
       [
-        [-half, 0],
-        [half, 0],
+        [left, 0],
+        [right, 0],
       ],
       0,
     ),
@@ -223,8 +254,8 @@ function adobeSvg(part: NcexPart, stockLength: number, refId: number): string {
     truncatePath(
       next(),
       [
-        [half, stockLength],
-        [-half, stockLength],
+        [right, stockLength],
+        [left, stockLength],
       ],
       1,
     ),

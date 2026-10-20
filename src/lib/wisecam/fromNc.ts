@@ -4,7 +4,14 @@ import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { faceThickness } from '@/lib/parsers/ncProject'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stationFor, unrolledLayout } from './layout'
-import { buildNcex, type NcexHole, type NcexPalette, type NcexPart, ncexPartSvg } from './ncex'
+import {
+  buildNcex,
+  type NcexHole,
+  type NcexMark,
+  type NcexPalette,
+  type NcexPart,
+  ncexPartSvg,
+} from './ncex'
 
 /**
  * Turns a DSTV `.nc1` into the geometry WiseCAM expects in an NCEP part.
@@ -62,6 +69,34 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
   }
 
   const [, , legThickness, thickness] = header.dimensions
+  const marks: NcexMark[] = []
+  const seenMarks = new Set<string>()
+  for (const mark of geometry.marks) {
+    const region = layout.faces[mark.face]
+    if (!region) continue
+    const points: [number, number][] = []
+    let developed = true
+    for (const [x, y] of mark.points) {
+      const station = stationFor(layout, mark.face, y)
+      if (station == null) {
+        developed = false
+        break
+      }
+      points.push([station, x])
+    }
+    if (!developed || points.length === 0) continue
+    // DSTV often carries the same mark twice (KO punch + PU scribe); keep one.
+    const signature = `${mark.kind}|${mark.text?.value ?? ''}|${points
+      .map(([station, along]) => `${station.toFixed(3)},${along.toFixed(3)}`)
+      .join(';')}`
+    if (seenMarks.has(signature)) continue
+    seenMarks.add(signature)
+    marks.push({
+      kind: mark.kind,
+      points,
+      text: mark.text ? { ...mark.text, reversed: region.reversed } : undefined,
+    })
+  }
   return {
     mark: options.mark ?? header.mark,
     profile: header.profile,
@@ -75,7 +110,9 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
     section: section.points,
     innerSection: section.holes?.[0],
     holes,
+    marks,
     unrolledPerimeter: layout.seam,
+    unrolled: layout,
     rotateAngle: options.rotateAngle,
     invert: options.invert,
     stockLength: options.stockLength,
