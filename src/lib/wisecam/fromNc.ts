@@ -1,8 +1,16 @@
 import { parseDstv } from '@/lib/parsers/dstv'
-import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
+import { faceThickness } from '@/lib/parsers/ncProject'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stationFor, unrolledLayout } from './layout'
-import { buildNcex, type NcexHole, type NcexPart, ncexPartSvg } from './ncex'
+import {
+  buildNcex,
+  type NcexHole,
+  type NcexPalette,
+  type NcexPart,
+  ncexPartSvg,
+} from './ncex'
 
 /**
  * Turns a DSTV `.nc1` into the geometry WiseCAM expects in an NCEP part.
@@ -42,12 +50,19 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
   if (!section || section.points.length < 3) return null
 
   const geometry = parseNcGeometry(ncText)
+  const frame = resolveNcFaceFrame(section.points, geometry, header.profile)
+  const thicknessByFace = new Map<NcFace, number>()
   const holes: NcexHole[] = []
   for (const hole of geometry.holes) {
     if (!(hole.diameter > 0)) continue
     const station = stationFor(layout, hole.face, hole.y)
     if (station == null) continue
-    holes.push({ station, along: hole.x, radius: hole.diameter / 2 })
+    let thickness = thicknessByFace.get(hole.face)
+    if (thickness == null) {
+      thickness = faceThickness(frame, section.points, hole.face)
+      thicknessByFace.set(hole.face, thickness)
+    }
+    holes.push({ station, along: hole.x, radius: hole.diameter / 2, face: hole.face, thickness })
   }
 
   const [, , legThickness, thickness] = header.dimensions
@@ -81,7 +96,8 @@ export function buildNcepFromNc(ncText: string, options: FromNcOptions = {}): Ui
 export function buildNcepSvgFromNc(
   ncText: string,
   options: FromNcOptions = {},
+  palette?: NcexPalette,
 ): { part: NcexPart; svg: string } | null {
   const part = partFromNc(ncText, options)
-  return part ? { part, svg: ncexPartSvg(part) } : null
+  return part ? { part, svg: ncexPartSvg(part, 1000, palette) } : null
 }

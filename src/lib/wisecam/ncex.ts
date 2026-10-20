@@ -1,4 +1,5 @@
 import { strToU8, zipSync } from 'fflate'
+import type { NcFace } from '@/lib/parsers/ncGeometry'
 import technologyXml from './templates/Technology.xml?raw'
 
 /**
@@ -32,6 +33,17 @@ export interface NcexHole {
   along: number
   /** Hole radius (mm). */
   radius: number
+  /** DSTV face the hole was authored on (preview colouring only). */
+  face?: NcFace
+  /** Wall thickness of that face (mm), for preview colouring. */
+  thickness?: number
+}
+
+/** Optional display colours for the unrolled SVG; the exported file never uses these. */
+export interface NcexPalette {
+  hole?: (hole: NcexHole) => string | undefined
+  mark?: string
+  outline?: string
 }
 
 export interface NcexPart {
@@ -115,20 +127,27 @@ function svgHeader(): string {
   ].join('\n')
 }
 
-function truncatePath(id: number, points: [number, number][], type: 0 | 1): string {
-  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="1" wh:machining="1" d="${pathFromPoints(points, false)}" wh:params="IsTrucate=1;TrucateType=${type};" class="layer0"/>`
+const paint = (stroke?: string): string => (stroke ? ` stroke="${stroke}"` : '')
+
+function truncatePath(
+  id: number,
+  points: [number, number][],
+  type: 0 | 1,
+  stroke?: string,
+): string {
+  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="1" wh:machining="1" d="${pathFromPoints(points, false)}" wh:params="IsTrucate=1;TrucateType=${type};" class="layer0"${paint(stroke)}/>`
 }
 
-function profilePath(id: number, points: [number, number][]): string {
-  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="0" wh:machining="1" d="${pathFromPoints(points)}" class="layer0"/>`
+function profilePath(id: number, points: [number, number][], stroke?: string): string {
+  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="0" wh:machining="1" d="${pathFromPoints(points)}" class="layer0"${paint(stroke)}/>`
 }
 
-function holeCircle(id: number, hole: NcexHole): string {
-  return `<circle wh:id="${id}" wh:class="cadcircle" wh:layer="0" wh:isfill="0" wh:machining="1" cx="${mm(hole.station)}" cy="${mm(hole.along)}" r="${mm(hole.radius)}" wh:direction="1" class="layer0"/>`
+function holeCircle(id: number, hole: NcexHole, stroke?: string): string {
+  return `<circle wh:id="${id}" wh:class="cadcircle" wh:layer="0" wh:isfill="0" wh:machining="1" cx="${mm(hole.station)}" cy="${mm(hole.along)}" r="${mm(hole.radius)}" wh:direction="1" class="layer0"${paint(stroke)}/>`
 }
 
-function markText(id: number, part: NcexPart): string {
-  return `<text wh:id="${id}" wh:class="cadtext" wh:layer="6" wh:isfill="0" wh:machining="1" x="${mm(0)}" y="${mm(part.length / 2)}" font-family="Arial" font-size="40" font-size-adjust="1" letter-spacing="0" word-spacing="0" font-weight="normal" font-style="normal" wh:params="IsLabel=true;LabelType=0;LabelContent=${xml(part.mark)};LabelWidth=1.000000;LabelHeight=40.000000;LabelRotate=90.0;LabelSource=1;" wh:technical="T={};" class="layer6">${xml(part.mark)}</text>`
+function markText(id: number, part: NcexPart, stroke?: string): string {
+  return `<text wh:id="${id}" wh:class="cadtext" wh:layer="6" wh:isfill="0" wh:machining="1" x="${mm(0)}" y="${mm(part.length / 2)}" font-family="Arial" font-size="40" font-size-adjust="1" letter-spacing="0" word-spacing="0" font-weight="normal" font-style="normal" wh:params="IsLabel=true;LabelType=0;LabelContent=${xml(part.mark)};LabelWidth=1.000000;LabelHeight=40.000000;LabelRotate=90.0;LabelSource=1;" wh:technical="T={};" class="layer6"${paint(stroke)} fill="${stroke ?? 'none'}">${xml(part.mark)}</text>`
 }
 
 /** The unrolled seam half-width: stations are centred on 0 like WiseCAM's own SVGs. */
@@ -145,7 +164,7 @@ function seamHalf(part: NcexPart): number {
   return perimeter / 2
 }
 
-function partSvg(part: NcexPart, refId: number): string {
+function partSvg(part: NcexPart, refId: number, palette?: NcexPalette): string {
   const half = seamHalf(part)
   const start: [number, number][] = [
     [-half, 0],
@@ -158,12 +177,14 @@ function partSvg(part: NcexPart, refId: number): string {
   let seq = refId * 10
   const next = (): number => ++seq
   const body: string[] = []
-  body.push(truncatePath(next(), start, 0))
-  body.push(truncatePath(next(), end, 1))
-  body.push(profilePath(next(), part.section))
-  if (part.innerSection) body.push(profilePath(next(), part.innerSection))
-  for (const hole of part.holes ?? []) body.push(holeCircle(next(), hole))
-  body.push(markText(next(), part))
+  body.push(truncatePath(next(), start, 0, palette?.outline))
+  body.push(truncatePath(next(), end, 1, palette?.outline))
+  body.push(profilePath(next(), part.section, palette?.outline))
+  if (part.innerSection) body.push(profilePath(next(), part.innerSection, palette?.outline))
+  for (const hole of part.holes ?? []) {
+    body.push(holeCircle(next(), hole, palette?.hole?.(hole)))
+  }
+  body.push(markText(next(), part, palette?.mark))
   return [
     svgHeader(),
     ` <g wh:id="${refId}" wh:class="cadpart" wh:layer="-1" wh:isfill="0" wh:machining="1" wh:refid="${refId}" wh:matrixinfo3d="1,0,0,0 0,1,0,0 0,0,1,0" class="layer-1">`,
@@ -177,8 +198,8 @@ function partSvg(part: NcexPart, refId: number): string {
 }
 
 /** The part SVG text embedded in an NCEP package, exposed for the in-app unrolled preview. */
-export function ncexPartSvg(part: NcexPart, refId = 1000): string {
-  return partSvg(part, refId)
+export function ncexPartSvg(part: NcexPart, refId = 1000, palette?: NcexPalette): string {
+  return partSvg(part, refId, palette)
 }
 
 function adobeSvg(part: NcexPart, stockLength: number, refId: number): string {

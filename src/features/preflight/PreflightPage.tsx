@@ -2123,6 +2123,17 @@ export function PreflightPage() {
     [bytesByPath, ncOverrides],
   )
 
+  /** Direct download of the viewed part's generated NCEP (the importable CAD-only package). */
+  const downloadViewingNcep = useCallback(() => {
+    if (!viewing) return
+    const bytes = ncBytes ? buildNcepFromNc(new TextDecoder().decode(ncBytes)) : null
+    if (!bytes) return
+    downloadBlob(
+      `${viewing.mark}.ncep`,
+      new Blob([new Uint8Array(bytes)], { type: 'application/zip' }),
+    )
+  }, [viewing, ncBytes])
+
   /**
    * Exports the job with every fix substituted in, each STEP re-seated into the canonical
    * manufacturing orientation and each NC re-emitted by our writer.
@@ -3057,7 +3068,11 @@ export function PreflightPage() {
                 <div className="min-h-0 flex-1 overflow-hidden">
                   {rightTab === 'ncep' ? (
                     viewingNcep ? (
-                      <UnrolledDrawing part={viewingNcep.part} svg={viewingNcep.svg} />
+                      <UnrolledDrawing
+                        part={viewingNcep.part}
+                        svg={viewingNcep.svg}
+                        onExport={downloadViewingNcep}
+                      />
                     ) : (
                       <div className="grid h-full place-items-center px-4 text-center text-sm text-muted-foreground">
                         {viewing.nc
@@ -3621,7 +3636,15 @@ function DiffLegend({ info }: { info: DiffStats }) {
  * y = along the member), with the section profile drawn at the origin. Rendered from the same
  * SVG text the exporter embeds, so this is exactly what gets imported.
  */
-function UnrolledDrawing({ part, svg }: { part: NcexPart; svg: string }) {
+function UnrolledDrawing({
+  part,
+  svg,
+  onExport,
+}: {
+  part: NcexPart
+  svg: string
+  onExport?: () => void
+}) {
   const { t } = useTranslation()
   const url = useMemo(() => {
     const seam = part.unrolledPerimeter ?? 0
@@ -3659,6 +3682,11 @@ function UnrolledDrawing({ part, svg }: { part: NcexPart; svg: string }) {
           })}
         </span>
         <span>{t('preflight.viewer.ncepHoles', { count: part.holes?.length ?? 0 })}</span>
+        {onExport && (
+          <Button variant="outline" size="sm" className="ml-auto" onClick={onExport}>
+            {t('preflight.viewer.downloadNcep')}
+          </Button>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-auto bg-white p-2">
         <img src={url} alt="" className="h-full w-full object-contain" />

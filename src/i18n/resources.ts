@@ -200,6 +200,7 @@ export const en = {
       ncepNoNc: 'This part has no NC to develop into NCEP.',
       ncepSeam: 'seam {{seam}} mm',
       ncepHoles: '{{count}} holes',
+      downloadNcep: 'Download NCEP',
       nc1: 'NC1',
       ncToStep: 'NC to STEP',
       ncToStepHint:
@@ -630,6 +631,7 @@ export const zh = {
       ncepNoNc: '该零件没有可展开的 NC。',
       ncepSeam: '展开周长 {{seam}} mm',
       ncepHoles: '{{count}} 个孔',
+      downloadNcep: '下载 NCEP',
       nc1: 'NC1',
       ncToStep: 'NC 转 STEP',
       ncToStepHint: '根据该零件的 NC 重建 STEP，与制造件并排显示，并包含在导出中。',
