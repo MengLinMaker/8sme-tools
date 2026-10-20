@@ -26,6 +26,7 @@ const piece = (start: number) => ({
     ],
     holes: [{ face: 'o' as const, x: 500, y: 50, diameter: 14 }],
     notches: [{ face: 'o' as const, x: 10, y: 0, type: 'w' as const }],
+    marks: [],
   },
 })
 
@@ -95,6 +96,7 @@ describe('buildStitchedBeamNc', () => {
             },
           ],
           notches: [],
+          marks: [],
         },
       },
     ]

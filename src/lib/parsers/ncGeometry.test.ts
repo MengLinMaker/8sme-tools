@@ -90,6 +90,48 @@ EN`
     expect(Math.hypot(x, y)).toBeCloseTo(10, 6)
   })
 
+  it('parses `SI` etch text and `KO`/`PU` scribe marks', () => {
+    // DSTV order is `face X Y angle height text`. The KO/PU blocks are contour-like lines.
+    const text = `ST
+  m-2
+SI
+  v     152.40o    201.93       0.00       76         B_1
+KO
+  v     2886.01o   455.93       0.00
+  v     2886.01o   481.33       0.00
+  v     2895.53o   481.33       0.00
+PU
+  v     2895.53o   481.33       0.00
+  v     2895.53o   455.93       0.00
+EN`
+    const geometry = parseNcGeometry(text)
+    expect(geometry.marks).toEqual([
+      {
+        face: 'v',
+        kind: 'etch',
+        points: [[152.4, 201.93]],
+        text: { value: 'B_1', height: 76, angle: 0 },
+      },
+      {
+        face: 'v',
+        kind: 'marking',
+        points: [
+          [2886.01, 455.93],
+          [2886.01, 481.33],
+          [2895.53, 481.33],
+        ],
+      },
+      {
+        face: 'v',
+        kind: 'marking',
+        points: [
+          [2895.53, 481.33],
+          [2895.53, 455.93],
+        ],
+      },
+    ])
+  })
+
   it('separates DSTV notch lines (t/w) from contour vertices', () => {
     // A notched corner adds an extra AK line — the corner coords carrying `w` — that must not be
     // mistaken for a (duplicate) contour vertex.

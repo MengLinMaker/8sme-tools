@@ -57,7 +57,12 @@ import { MACHINE } from '@/lib/machine/profile'
 import { removeCutFromNc, setBevelInNc } from '@/lib/parsers/ncEdit'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
-import { cutThicknesses, MARKING_COLOR, THICKNESS_COLORS } from '@/lib/parsers/ncProject'
+import {
+  cutThicknesses,
+  ETCH_COLOR,
+  MARKING_COLOR,
+  THICKNESS_COLORS,
+} from '@/lib/parsers/ncProject'
 import { reemitPartNc } from '@/lib/parsers/ncReemit'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
@@ -543,7 +548,7 @@ export function PreflightPage() {
     } catch {
       return null
     }
-  }, [ncBytes, viewingNcProfiles])
+  }, [ncBytes, viewingNcProfiles, viewing?.mark])
   // STEP cut-edge colouring: the ideal model's cut edges on the side/top faces, keyed to the same
   // thickness legend. `profile` lets the viewer resolve the target faces for the right family.
   const viewingProfileCode = viewing?.nc?.profile ?? null
@@ -555,11 +560,13 @@ export function PreflightPage() {
     }),
     [viewingNcProfiles, viewingProfileCode, viewing],
   )
-  // The NC only carries etch (`SI`) / marking (`PU`/`KO`) data when those blocks are present.
-  const viewingHasMarkings = useMemo(() => {
-    if (!ncBytes) return false
-    return /(?:^|\n)\s*(?:SI|PU|KO)\s*(?:\n|$)/.test(new TextDecoder().decode(ncBytes))
-  }, [ncBytes])
+  // Legend chips only for the mark channels the parsed NC actually carries (`SI` etch,
+  // `PU`/`KO` scribe), so the key never promises lines the viewer cannot draw.
+  const viewingMarkKinds = useMemo(() => {
+    const kinds = new Set<'etch' | 'marking'>()
+    for (const mark of viewingNcGeom?.marks ?? []) kinds.add(mark.kind)
+    return [...kinds]
+  }, [viewingNcGeom])
   // The viewed member's total length (mm), reported by the 3D viewer, so the direction arrow can
   // carry a marker showing where along the body the orbit pivot currently sits.
   const [viewingLength, setViewingLength] = useState<number | null>(null)
@@ -2876,10 +2883,7 @@ export function PreflightPage() {
                     {(viewingNcGeom || (overlayShown && mfgDiff)) && (
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border bg-card/50 px-3 py-1 text-[11px] font-medium text-muted-foreground">
                         {viewingNcGeom && (
-                          <NcLegend
-                            thicknesses={viewingNcProfiles}
-                            showMarkings={viewingHasMarkings}
-                          />
+                          <NcLegend thicknesses={viewingNcProfiles} markings={viewingMarkKinds} />
                         )}
                         {overlayShown && mfgDiff && <DiffLegend info={mfgDiff} />}
                       </div>
@@ -2961,6 +2965,7 @@ export function PreflightPage() {
                             // Marks project on every pane (via the shared face frame); only
                             // the manufactured pane also projects the NC toolpath.
                             sabreFailures={viewerSabreFailures}
+                            ncMarks={viewingNcGeom?.marks ?? null}
                             ncSection={viewingNcSection}
                             faceFrame={viewingNcFrame}
                             cutEdges={viewingCutEdgeOptions}
@@ -3033,6 +3038,7 @@ export function PreflightPage() {
                             ncPrimary
                             focus={findingFocus}
                             sabreFailures={viewerSabreFailures}
+                            ncMarks={viewingNcGeom?.marks ?? null}
                             ncSection={viewingNcSection}
                             faceFrame={viewingNcFrame}
                             visibleSpans={visibleSpans}

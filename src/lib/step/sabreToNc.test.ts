@@ -57,6 +57,7 @@ function ncBeam(endInset = 0): NcGeometry {
     ],
     holes: [],
     notches: [],
+    marks: [],
   }
 }
 
@@ -144,6 +145,7 @@ describe('locateSabreStations', () => {
       ],
       holes: [],
       notches: [],
+      marks: [],
     }
     const stations = locateSabreStations(beamVertices(), [failureAt(980)], slantedStart)
     expect(stations).toHaveLength(1)
@@ -165,6 +167,7 @@ describe('locateSabreStations', () => {
         contours: [],
         holes: [],
         notches: [],
+        marks: [],
       }),
     ).toEqual([])
   })
@@ -214,6 +217,7 @@ function ncBeamWithBevel(angle: number): NcGeometry {
     ],
     holes: [],
     notches: [],
+    marks: [],
   }
 }
 

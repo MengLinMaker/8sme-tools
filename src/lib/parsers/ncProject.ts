@@ -25,7 +25,7 @@ import {
   ncAuthoredAcrossSign,
   placeNcFace,
 } from './ncFaces'
-import { type NcFace, type NcGeometry, type NcHole, slotOffset } from './ncGeometry'
+import { type NcFace, type NcGeometry, type NcHole, type NcMark, slotOffset } from './ncGeometry'
 import { selectWeldingPrep } from './weldingPrep'
 
 export type Vec3 = [number, number, number]
@@ -62,6 +62,20 @@ export interface NcLineSets {
    * a thicket of arrows. Coloured like their cut thickness.
    */
   bevelAreas: { thickness: number; triangles: number[] }[]
+  /**
+   * Non-cutting layout marks (`PU`/`KO` scribe lines and `SI` etch text), kept separate from the
+   * cut lines because they use their own legend colours and are not part of the cut path.
+   */
+  marks: NcMarkSet[]
+}
+
+/** One mark channel (`etch` / `marking`) projected into scene coordinates. */
+export interface NcMarkSet {
+  kind: NcMark['kind']
+  /** Flat XYZ pair list for scribe/marking polylines. */
+  points: number[]
+  /** Etch text placements; empty for scribe lines. */
+  texts: { at: Vec3; value: string; height: number; angle: number }[]
 }
 
 /** Segments around each hole ring — enough to read as a circle at part scale. */
@@ -428,6 +442,38 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     for (let i = 0; i < ring.length - 1; i++) push(byFace[hole.face], ring[i], ring[i + 1])
   }
 
+  // Layout marks (`PU`/`KO` scribe lines, `SI` etch text) are not cuts: project them without the
+  // material-reach test, because they deliberately sit on faces that may be almost fully removed.
+  const marksByKind = new Map<NcMark['kind'], NcMarkSet>()
+  for (const mark of nc.marks) {
+    let bucket = marksByKind.get(mark.kind)
+    if (!bucket) {
+      bucket = { kind: mark.kind, points: [], texts: [] }
+      marksByKind.set(mark.kind, bucket)
+    }
+    if (mark.text) {
+      const [mx, my] = mark.points[0] ?? [0, 0]
+      const placed = place(mark.face, mx, my)
+      bucket.texts.push({
+        at: placed.world,
+        value: mark.text.value,
+        height: mark.text.height,
+        angle: mark.text.angle,
+      })
+      continue
+    }
+    for (let i = 0; i < mark.points.length - 1; i++) {
+      const [x0, y0] = mark.points[i] as [number, number]
+      const [x1, y1] = mark.points[i + 1] as [number, number]
+      const a = place(mark.face, x0, y0)
+      const b = place(mark.face, x1, y1)
+      push(bucket.points, a.world, b.world)
+    }
+  }
+  const marks = [...marksByKind.values()].filter(
+    (mark) => mark.points.length > 0 || mark.texts.length > 0,
+  )
+
   // Group each buffer by the wall thickness of the face it cuts (same thickness ⇒ same colour).
   const groupByThickness = (
     buffers: Record<NcFace, number[]>,
@@ -451,7 +497,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     thickness,
     triangles: points,
   }))
-  return { cuts, bevelArrows, bevelAreas }
+  return { cuts, bevelArrows, bevelAreas, marks }
 }
 
 /** Distinct cut thicknesses (mm) present in an NC, sorted ascending — for the viewer legend. */

@@ -78,6 +78,7 @@ export function stitchBeamGeometry(items: StitchedNcPiece[]): NcGeometry | null 
   const contours: NcGeometry['contours'] = []
   const holes: NcGeometry['holes'] = []
   const notches: NcGeometry['notches'] = []
+  const marks: NcGeometry['marks'] = []
   for (const item of items) {
     for (const contour of item.geometry.contours) {
       contours.push({
@@ -87,8 +88,16 @@ export function stitchBeamGeometry(items: StitchedNcPiece[]): NcGeometry | null 
     }
     for (const hole of item.geometry.holes) holes.push({ ...hole, x: hole.x + item.start })
     for (const notch of item.geometry.notches) notches.push({ ...notch, x: notch.x + item.start })
+    for (const mark of item.geometry.marks) {
+      marks.push({
+        ...mark,
+        points: mark.points.map(([x, y]) => [x + item.start, y] as [number, number]),
+      })
+    }
   }
-  return contours.length > 0 || holes.length > 0 ? { contours, holes, notches } : null
+  return contours.length > 0 || holes.length > 0 || marks.length > 0
+    ? { contours, holes, notches, marks }
+    : null
 }
 
 const mm = (value: number): string => value.toFixed(2)

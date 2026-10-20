@@ -78,10 +78,35 @@ export interface NcNotch {
   type: 't' | 'w'
 }
 
+/** `SI` numbering/marking text: the etch that identifies the piece. */
+export interface NcMarkText {
+  /** The text to etch (e.g. the part mark). */
+  value: string
+  /** Text height (mm); `0` when the NC omits it. */
+  height: number
+  /** Text rotation in the face plane (deg, counter-clockwise); `0` when omitted. */
+  angle: number
+}
+
+/**
+ * A non-cutting layout mark. `PU` (powder/scribe) and `KO` (centre/punch) hold polylines that
+ * follow the mark on the surface; `SI` holds etch text at a single point.
+ */
+export interface NcMark {
+  face: NcFace
+  /** `etch` = `SI` text, `marking` = `PU`/`KO` scribe lines. */
+  kind: 'etch' | 'marking'
+  /** Scribe polyline in face coordinates (a single point for `SI` text). */
+  points: [number, number][]
+  /** Present for `SI` text marks. */
+  text?: NcMarkText
+}
+
 export interface NcGeometry {
   contours: NcContour[]
   holes: NcHole[]
   notches: NcNotch[]
+  marks: NcMark[]
 }
 
 const BLOCK_CODES = new Set([
@@ -121,6 +146,7 @@ export function parseNcGeometry(text: string): NcGeometry {
   const contours: NcContour[] = []
   const holes: NcHole[] = []
   const notches: NcNotch[] = []
+  const marks: NcMark[] = []
 
   let block = ''
   let face: NcFace | null = null
@@ -128,6 +154,14 @@ export function parseNcGeometry(text: string): NcGeometry {
   let currentBevels: number[][] = []
   let currentRadii: number[] = []
   let currentRefs: (string | null)[] = []
+  let currentMark: { face: NcFace; kind: 'marking'; points: [number, number][] } | null = null
+
+  const flushMark = () => {
+    if (currentMark && currentMark.points.length >= 2) {
+      marks.push({ face: currentMark.face, kind: currentMark.kind, points: currentMark.points })
+    }
+    currentMark = null
+  }
 
   const flush = () => {
     if ((block === 'AK' || block === 'IK') && face && current.length >= 2) {
@@ -140,6 +174,7 @@ export function parseNcGeometry(text: string): NcGeometry {
         refs: currentRefs,
       })
     }
+    flushMark()
     current = []
     currentBevels = []
     currentRadii = []
@@ -154,7 +189,7 @@ export function parseNcGeometry(text: string): NcGeometry {
       face = null
       continue
     }
-    if (block !== 'AK' && block !== 'IK' && block !== 'BO') continue
+    if (block !== 'AK' && block !== 'IK' && block !== 'BO' && block !== 'SI' && block !== 'PU' && block !== 'KO') continue
 
     const tokens = line.split(/\s+/)
     let index = 0
@@ -167,6 +202,35 @@ export function parseNcGeometry(text: string): NcGeometry {
     const x = num(tokens[index])
     const y = num(tokens[index + 1])
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+
+    if (block === 'SI') {
+      // DSTV order: `face X Y angle height text` (the angle precedes the text height).
+      const angle = num(tokens[index + 2])
+      const height = num(tokens[index + 3])
+      const value = tokens
+        .slice(index + 4)
+        .join(' ')
+        .replace(/\s+$/, '')
+      marks.push({
+        face,
+        kind: 'etch',
+        points: [[x, y]],
+        text: {
+          value,
+          height: Number.isFinite(height) ? height : 0,
+          angle: Number.isFinite(angle) ? angle : 0,
+        },
+      })
+      continue
+    }
+    if (block === 'PU' || block === 'KO') {
+      if (!currentMark || currentMark.face !== face) {
+        flushMark()
+        currentMark = { face, kind: 'marking', points: [] }
+      }
+      currentMark.points.push([x, y])
+      continue
+    }
 
     if (block === 'BO') {
       const diameter = num(tokens[index + 2])
@@ -209,5 +273,5 @@ export function parseNcGeometry(text: string): NcGeometry {
   }
   flush()
 
-  return { contours, holes, notches }
+  return { contours, holes, notches, marks }
 }

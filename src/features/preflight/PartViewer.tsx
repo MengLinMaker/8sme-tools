@@ -6,6 +6,7 @@ import {
   AmbientLight,
   Box3,
   BufferGeometry,
+  CanvasTexture,
   DirectionalLight,
   DoubleSide,
   EdgesGeometry,
@@ -26,6 +27,8 @@ import {
   Quaternion,
   Scene,
   Shape,
+  Sprite,
+  SpriteMaterial,
   Vector2,
   Vector3,
   WebGLRenderer,
@@ -45,6 +48,8 @@ import {
 } from '@/lib/parsers/ncFaces'
 import type { NcFace, NcGeometry } from '@/lib/parsers/ncGeometry'
 import {
+  ETCH_COLOR,
+  MARKING_COLOR,
   type NcLineSets,
   type NcProjection,
   projectNc,
@@ -242,7 +247,7 @@ function targetFaceNormals(
   return normals
 }
 
-/** The three objects `addNcLines` produces for a projected NC. */
+/** The objects `addNcLines` produces for a projected NC. */
 interface NcProjectedObjects {
   /** Plain cut lines + hole rings (always drawn). */
   cutLines: LineSegments2[]
@@ -250,9 +255,55 @@ interface NcProjectedObjects {
   bevelArrows: LineSegments2[]
   /** Translucent welding-bevel area fins. */
   bevelAreas: Mesh[]
+  /** Scribe/punch marking lines (`PU`/`KO`). */
+  markLines: LineSegments2[]
+  /** Etch text labels (`SI`). */
+  markSprites: Sprite[]
 }
 
-/** Builds the NC line sets as coloured fat lines (cut lines + hole rings + bevel indications). */
+/**
+ * A camera-facing label for an `SI` etch mark, sized from the NC's text height (mm). The text is
+ * drawn white and tinted by the sprite material so it matches the legend chip.
+ */
+function markTextSprite(
+  text: { at: Vec3; value: string; height: number; angle: number },
+  color: number,
+): Sprite | null {
+  const value = text.value.trim()
+  if (!value) return null
+  const canvas = document.createElement('canvas')
+  const context = canvas.getContext('2d')
+  if (!context) return null
+  const fontSize = 64
+  const padding = 12
+  const font = `600 ${fontSize}px sans-serif`
+  context.font = font
+  const width = Math.ceil(context.measureText(value).width) + padding * 2
+  const height = fontSize + padding * 2
+  canvas.width = width
+  canvas.height = height
+  // Resizing the canvas resets its context, so set the font again.
+  context.font = font
+  context.textAlign = 'center'
+  context.textBaseline = 'middle'
+  context.fillStyle = '#fff'
+  context.fillText(value, width / 2, height / 2)
+  const material = new SpriteMaterial({
+    map: new CanvasTexture(canvas),
+    color,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  })
+  const sprite = new Sprite(material)
+  const markHeight = text.height > 0 ? text.height : 20
+  sprite.scale.set((markHeight * width) / height, markHeight, 1)
+  sprite.position.set(...text.at)
+  material.rotation = (text.angle * Math.PI) / 180
+  return sprite
+}
+
+/** Builds the NC line sets as coloured fat lines (cut lines + holes + bevels + layout marks). */
 function addNcLines(
   nc: NcGeometry,
   projection: NcProjection,
@@ -263,6 +314,8 @@ function addNcLines(
   const cutLines: LineSegments2[] = []
   const bevelArrows: LineSegments2[] = []
   const bevelAreas: Mesh[] = []
+  const markLines: LineSegments2[] = []
+  const markSprites: Sprite[] = []
   const colorAt = (index: number): number =>
     THICKNESS_COLORS[index % THICKNESS_COLORS.length] ?? FALLBACK_COLOR
   const lineInto = (target: LineSegments2[], points: number[], color: number): void => {
@@ -272,6 +325,14 @@ function addNcLines(
   sets.cuts.forEach((cut, index) => {
     lineInto(cutLines, cut.points, colorAt(index))
   })
+  for (const mark of sets.marks) {
+    const color = mark.kind === 'etch' ? ETCH_COLOR : MARKING_COLOR
+    lineInto(markLines, mark.points, color)
+    for (const text of mark.texts) {
+      const sprite = markTextSprite(text, color)
+      if (sprite) markSprites.push(sprite)
+    }
+  }
   sets.bevelArrows.forEach((bevel, index) => {
     lineInto(bevelArrows, bevel.points, colorAt(index))
   })
@@ -292,7 +353,7 @@ function addNcLines(
     )
     bevelAreas.push(area)
   })
-  return { cutLines, bevelArrows, bevelAreas }
+  return { cutLines, bevelArrows, bevelAreas, markLines, markSprites }
 }
 
 /** Colours a cut thickness by its nearest entry in `scale` (the NC legend's thickness order). */
@@ -474,6 +535,7 @@ function mountScene(
   deferDiff?: boolean,
   sabre?: CutMarker[] | null,
   nc?: NcGeometry | null,
+  ncMarks?: NcGeometry['marks'] | null,
   ncSection?: [number, number][] | null,
   faceFrame?: NcFaceFrame | null,
   ncPrimary = false,
@@ -609,6 +671,8 @@ function mountScene(
   // Projected NC toolpath lines (only on the manufactured pane), parented to the scene in the
   // same seated frame as the model so they land on the surfaces the laser actually cut.
   const ncObjects: LineSegments2[] = []
+  /** Etch text labels (sprites) for `SI` marks. */
+  const ncMarkSprites: Sprite[] = []
   const ncMaterials: LineMaterial[] = []
   /** STEP cut edges (non-stock edges), coloured by wall thickness — drawn when `cutEdges` is set. */
   const cutEdgeObjects: LineSegments2[] = []
@@ -954,25 +1018,38 @@ function mountScene(
         return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
       }
       // The NC toolpath (cut lines, holes) — only on panes that pass `nc`. Issue markers are
-      // drawn separately (toggle-driven), not as toolpath danger marks.
-      if (nc) {
+      // drawn separately (toggle-driven), not as toolpath danger marks. Panes without the toolpath
+      // can still show the layout marks via `ncMarks` (the STEP pane), so etch/marking is never
+      // hidden just because the manufactured model is unavailable.
+      const marks = nc ? nc.marks : (ncMarks ?? [])
+      if (nc || marks.length > 0) {
         const projected = addNcLines(
-          nc,
+          nc ?? { contours: [], holes: [], notches: [], marks },
           { frame, section, toScene, normal },
           ncResolution,
           ncMaterials,
         )
-        for (const line of projected.cutLines) {
+        if (nc) {
+          for (const line of projected.cutLines) {
+            scene.add(line)
+            ncObjects.push(line)
+          }
+          for (const line of projected.bevelArrows) {
+            scene.add(line)
+            ncArrowObjects.push(line)
+          }
+          for (const area of projected.bevelAreas) {
+            scene.add(area)
+            ncAreaObjects.push(area)
+          }
+        }
+        for (const line of projected.markLines) {
           scene.add(line)
           ncObjects.push(line)
         }
-        for (const line of projected.bevelArrows) {
-          scene.add(line)
-          ncArrowObjects.push(line)
-        }
-        for (const area of projected.bevelAreas) {
-          scene.add(area)
-          ncAreaObjects.push(area)
+        for (const sprite of projected.markSprites) {
+          scene.add(sprite)
+          ncMarkSprites.push(sprite)
         }
       }
       // The guilty cut drawn as a red marker, projected with the shared `toScene`. A marker may
@@ -1081,6 +1158,14 @@ function mountScene(
       for (const area of projected.bevelAreas) {
         scene.add(area)
         ncAreaObjects.push(area)
+      }
+      for (const line of projected.markLines) {
+        scene.add(line)
+        ncObjects.push(line)
+      }
+      for (const sprite of projected.markSprites) {
+        scene.add(sprite)
+        ncMarkSprites.push(sprite)
       }
     }
   }
@@ -1674,6 +1759,11 @@ function mountScene(
         line.geometry.dispose()
         ;(line.material as LineMaterial).dispose()
       }
+      for (const sprite of ncMarkSprites) {
+        scene.remove(sprite)
+        sprite.material.map?.dispose()
+        sprite.material.dispose()
+      }
       for (const line of cutEdgeObjects) {
         scene.remove(line)
         line.geometry.dispose()
@@ -1746,6 +1836,8 @@ export interface PartViewerProps {
   sabreFailures?: CutMarker[] | null
   /** NC toolpath geometry to project onto this (manufactured) model */
   nc?: NcGeometry | null
+  /** Layout marks (`SI` etch / `PU`/`KO` scribe) to project even when `nc` is not passed. */
+  ncMarks?: NcGeometry['marks'] | null
   /** Exact (un-inflated) section outline the NC was matched against, for the projection */
   ncSection?: [number, number][] | null
   /**
@@ -1817,6 +1909,7 @@ export default function PartViewer({
   smoothLines: smoothModelLines = false,
   sabreFailures = null,
   nc = null,
+  ncMarks = null,
   ncSection = null,
   ncPrimary = false,
   alignReference = null,
@@ -1930,6 +2023,7 @@ export default function PartViewer({
           true,
           sabreFailures,
           nc,
+          ncMarks,
           ncSection,
           faceFrame,
           ncPrimary,
@@ -1981,6 +2075,7 @@ export default function PartViewer({
     smoothModelLines,
     sabreFailures,
     nc,
+    ncMarks,
     ncSection,
     faceFrame,
     ncPrimary,

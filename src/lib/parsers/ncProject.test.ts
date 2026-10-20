@@ -48,6 +48,7 @@ describe('resolveNcFaceFrame', () => {
       ],
       holes: [],
       notches: [],
+      marks: [],
     }
     expect(resolveNcFaceFrame(section, nc)).toEqual({ extent: [200, 100], axisVH: 1, axisOU: 0 })
   })
@@ -84,6 +85,7 @@ describe('channel authored stance', () => {
     ],
     holes: [],
     notches: [],
+    marks: [],
   }
 
   it('maps a channel / I-section into the authored (web-vertical) stance', () => {
@@ -148,7 +150,7 @@ describe('tube canonical stance (RHS150*100*9.0)', () => {
 })
 
 describe('faceThickness', () => {
-  const empty: NcGeometry = { contours: [], holes: [], notches: [] }
+  const empty: NcGeometry = { contours: [], holes: [], notches: [], marks: [] }
   const section = partSectionForCode('EA75*75*6', [75, 75, 6, 6, 8])?.points ?? []
 
   it('takes an angle leg thickness from the section code', () => {
@@ -250,6 +252,7 @@ describe('projectNc', () => {
       ],
       holes: [{ face: 'v', x: 5, y: 5, diameter: 10 }],
       notches: [],
+      marks: [],
     }
     const out = projectNc(nc, { frame, section, toScene, normal })
     // Cut lines are grouped by wall thickness: the `o` face (100 mm) and the `v` hole (200 mm).
@@ -264,6 +267,39 @@ describe('projectNc', () => {
     expect(out.bevelAreas).toHaveLength(1)
     expect(out.bevelAreas[0]?.thickness).toBe(100)
     expect(out.bevelAreas[0]?.triangles).toHaveLength(2 * 3 * 3)
+  })
+
+  it('projects etch text and scribe lines as their own mark sets', () => {
+    const nc: NcGeometry = {
+      contours: [],
+      holes: [],
+      notches: [],
+      marks: [
+        {
+          face: 'o',
+          kind: 'etch',
+          points: [[10, 0]],
+          text: { value: 'M-2', height: 20, angle: 0 },
+        },
+        {
+          face: 'o',
+          kind: 'marking',
+          points: [
+            [0, 0],
+            [10, 0],
+          ],
+        },
+      ],
+    }
+    const out = projectNc(nc, { frame, section, toScene, normal })
+    const etch = out.marks.find((mark) => mark.kind === 'etch')
+    const marking = out.marks.find((mark) => mark.kind === 'marking')
+    expect(etch?.texts).toHaveLength(1)
+    expect(etch?.texts[0]).toMatchObject({ value: 'M-2', height: 20 })
+    expect(etch?.points).toHaveLength(0)
+    expect(marking?.texts).toHaveLength(0)
+    expect(marking?.points).toHaveLength(2 * 3)
+    expect(out.cuts).toHaveLength(0)
   })
 
   it('drops a cut that has no material on its face', () => {
@@ -289,6 +325,7 @@ describe('projectNc', () => {
       ],
       holes: [],
       notches: [],
+      marks: [],
     }
     const out = projectNc(nc, { frame, section: oneSided, toScene, normal })
     expect(out.cuts).toHaveLength(0)
@@ -411,6 +448,7 @@ describe('I-section web face plane', () => {
     ],
     holes: [],
     notches: [],
+    marks: [],
   }
 
   it('places v/h cuts on the web surface, not the width edge', () => {

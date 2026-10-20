@@ -88,7 +88,12 @@ describe('edge diag', () => {
 
       for (const face of ['v', 'o', 'u', 'h'] as const) {
         const single = projectNc(
-          { contours: geo.contours.filter((c) => c.face === face), holes: [], notches: [] },
+          {
+            contours: geo.contours.filter((c) => c.face === face),
+            holes: [],
+            notches: [],
+            marks: [],
+          },
           { frame, section: section.points, toScene, normal },
         )
         const pts: number[] = []
