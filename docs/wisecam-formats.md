@@ -51,15 +51,56 @@ The unlicensed "no-NC" filter (`SUPPORT_FORMAT_IMPORT_TUBEPART_NC`) drops `.nc1`
 | Export nest result | `.ncex` / `.ncexa` | project / machining package |
 | Save / Save As | `.ncex` | project file (re-importable) |
 
-> **Licensing:** export (`Export part` `.ncep`, `Export machining part` `.ncexa`, and Save As
-> `.ncex`) is **gated in the free/trial install** — the `.ncexa` samples in this repo were
-> produced on a licensed machine. This does **not** block validation: an import test needs
-> WiseCAM to *read* our file, not write one. For a ground-truth `.ncex`, the **CAD-only**
-> `.ncexa` samples are the same `application/ncex+zip` container — try renaming one to `.ncex`
-> and Add from File. (Whether `.ncex` *import* is also gated is unconfirmed; NC1 import is, STEP
-> import is not.)
+> **Licensing (confirmed 2026-10-19): NCEX import is gated too.** On the free/trial install,
+> **every** `.ncex` probe — including WiseCAM's own CAD-only `.ncexa` renamed to `.ncex`, and a
+> one-part minimal container — fails to generate a preview. So this is the steel-structure
+> licence gate, not a malformed container. Only **neutral CAD (STEP/IGES)** imports unlicensed.
+>
+> Consequences:
+> - We **cannot validate an NCEX import on the free install**. It must be tested on the
+>   licensed shop machine — which is also where the 17 real `.ncep` samples came from.
+> - `Export part` (`.ncep`), `Export machining part` (`.ncexa`) and Save As (`.ncex`) are also
+>   gated on the free install.
+> - The probe set (`~/Downloads/ncex-probes`) is staged for the licensed machine. Until it is
+>   run, **STEP remains the only production-validated import path**; NCEX is structural only.
 
 ---
+
+## 1b. NCEP is the importable CAD-only NCEX package (ground truth)
+
+We now have 17 real **`.ncep`** exports (`~/Downloads/NCEP samples 2 Hidden Grove`, e.g.
+`M-1.ncep`, `M-3.ncep`, `M-42.ncep`). They are the same `application/ncex+zip` container as
+NCEX, and they are the **CAD-only** flavour WiseCAM's Add-from-File importer accepts.
+
+A `.ncep` contains exactly **9 files — no `CNC/` directory at all**:
+
+```
+mimetype                    application/ncex+zip (first, stored)
+META-INF/container.xml      still lists CAD + CNC + ncex rootfiles (CNC payload simply absent)
+ncex.opf                    manifest: CAD files only
+CAD/cad.opf
+CAD/CadRoot.xml             one <Adobe> + one <Part> + <BaseZone>
+CAD/Technology.xml          32 KB, byte-identical to the base `.ncexa` copy
+CAD/CustomizeData.xml       <ZoneBlock idref=…> with 8 empty <customize> stubs
+CAD/adobe<id>.svg
+CAD/part<id>.svg
+```
+
+Key confirmations from the NCEP samples:
+
+- **No `CNC/` payload** is required for import.
+- `Technology.xml` **is** included (copy it as a template).
+- The part SVG wraps everything in `<g class="cadpart" … wh:matrixinfo3d="1,0,0,0 0,1,0,0 0,0,1,0">`
+  → inner `<g class="cadgroup" layer="0">`.
+- **PFC stations are unchanged**: M-1's 24 holes are at `u=-240`, `v=-75/+75`, `o=+240`.
+- **UB is clean**: M-3 has **22** circles (correct `o` at `-336.92/-236.92`, `v` at `-50/+50`) —
+  **the spurious gap circle (`-185.42`) is absent**. So the bug is specific to the NC1-import
+  path, not to NCEX/NCEP authoring.
+- Marks are layer-6 `<text class="cadtext">` (`IsLabel=true;LabelContent=…;LabelHeight=40;
+  LabelRotate=90;LabelSource=1`) plus layer-6 `<rect>` elements for mark lines.
+
+`src/lib/wisecam/ncex.ts` now defaults to this **NCEP-style** package (`flavour: 'ncep'`,
+CAD-only); `flavour: 'machining'` adds the `CNC/` scaffold for `.ncexa`.
 
 ## 2. Capability matrix
 
@@ -208,15 +249,20 @@ imported you must change the format (STEP/NCEXA), not the NC bytes.
    - tick **识别坡口** when the part has weld prep.
 2. **Do not try to encode stance in `.nc1`.** It has no field for it; a "rotated" NC1 is a
    different part. Our faithful re-emit is correct.
-3. **If per-part stance must be dictated**, target the importable **`.ncex`** (not `.ncexa`,
-   which is export-only to the cutting software): a CAD-only NCEX container with
-   `RotateAngle` / `Invert` on each `<Part>`, and quantity in `TotalCount`. An experimental
-   writer exists at **`src/lib/wisecam/ncex.ts`** (`buildNcex`); it emits the OPC/ZIP
-   container, `CadRoot.xml`, an unrolled part SVG (section + straight end cuts + holes at
-   perimeter stations) and the minimal CNC root. The unrolled seam/hole convention is
-   validated against WiseCAM's own PFC `part230.svg`; I/T/angle stations and bevelled end
-   contours still need samples, and the whole thing needs a real WiseCAM Add-from-File test
-   before trusting it.
+3. **The NCEP writer is implemented and wired into preflight export.**
+   - `src/lib/wisecam/layout.ts` — unrolled layouts validated against 17 real `.ncep` files:
+     PFC `d+2b`, UB `2b+d+2·gap`, tube rounded-rect; face station + corner-aware Y mapping.
+   - `src/lib/wisecam/ncex.ts` — `buildNcex(parts, { flavour: 'ncep' })`: the CAD-only
+     9-file package (no `CNC/`), `Technology.xml` + `CustomizeData.xml`, `CadRoot.xml`, and
+     the unrolled part/adobe SVGs.
+   - `src/lib/wisecam/fromNc.ts` — `partFromNc` / `buildNcepFromNc`: develops a DSTV `.nc1`
+     into NCEP (holes at the validated stations, quantity, profile, grade).
+   - `PreflightPage` `exportFixed` / `exportSelected` now adds `<mark>.ncep` per part.
+   - Tests against the real NCEP fixtures (`test/fixtures/ncep/`) reproduce the hole sets
+     exactly (PFC M-1, UB M-3, SHS M-35, RHS M-42).
+   - **Still open:** `T`/angle/round layouts (no samples), bevelled/mitred end contours,
+     `o`/`u` handedness for mirrored parts (`flipFlanges` option exists), and a live
+     Add-from-File test on the licensed machine.
 4. **Bevels** survive in STEP as geometry, but only if **识别坡口** is enabled on import. In
    NC1 they are the explicit vertex bevel columns; in NCEXA they need the bevel machine mode /
    `machinetype=bevel` and `B`-axis toolpath.
@@ -227,7 +273,33 @@ imported you must change the format (STEP/NCEXA), not the NC bytes.
 
 ---
 
-## 6. Sources
+## 6. Validating NCEX on the licensed machine
+
+The free install cannot import `.ncex`, so this runs on the shop's licensed WiseCAM. A probe
+set is generated by `src/lib/wisecam/probes.test.ts`:
+
+```
+WRITE_NCEX_PROBES=~/Downloads/ncex-probes pnpm exec vitest run src/lib/wisecam/probes.test.ts
+```
+
+| Probe | Isolates |
+|---|---|
+| `01-real-renamed.ncex` | crash baseline (WiseCAM's own CAD-only export, renamed) |
+| `02-real-no-cnc.ncex` / `03-real-no-cnc-no-tech.ncex` | is the `CNC/` root / `Technology.xml` required? |
+| `04-real-one-part.ncex` / `05-…-no-cnc.ncex` | is the multi-part CadRoot the problem? |
+| `06-real-add-base-frame.ncex` | `cnc.opf` references `Base_Frame.xml`, which the archive omits |
+| `10-gen-rhs-empty` / `11-gen-rhs-hole` | our writer, section and one hole |
+| `12-gen-pfc` / `13-gen-ub` | verified PFC/UB hole stations |
+| `14-gen-rhs-empty.ncexa` | does extension matter? |
+| `15-gen-pfc-rot90` / `16-gen-pfc-invert` | does `RotateAngle` / `Invert` move the section? |
+| `17-gen-pfc-with-tech` | is `Technology.xml` required? |
+
+Record for each: **imported / preview-only / crashed**, plus the on-screen Log-panel text.
+Decision: if `01` fails but `02`/`04` pass → CNC/multi-part is the cause. If `10`–`13` import →
+the writer core is right and `15`/`16` decode orientation. If `17` passes but `12` fails →
+`Technology.xml` is required.
+
+## 7. Sources
 
 - Bundled manual: `Resources\UserManualRes_en-US.chm` — *WiseCAM-Tube 管切独立套料版软件用户手册
   （管切、钢构、坡口三合一）R3*, 2024-10-18. §5.1 (import formats, assembly/extrusion/bevel),

@@ -93,6 +93,7 @@ import {
   reconstructForViewer,
 } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
+import { buildNcepFromNc } from '@/lib/wisecam/fromNc'
 import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
@@ -2094,6 +2095,25 @@ export function PreflightPage() {
   )
 
   /**
+   * The NCEP bytes to ship: develop the effective NC into WiseCAM's CAD-only `.ncep`
+   * package. Unsupported families (T/angle/round) return undefined.
+   */
+  const exportNcepBytes = useCallback(
+    (part: PartRecord): Uint8Array | undefined => {
+      const override = ncOverrides.get(part.mark)
+      const path = part.nc?.path
+      const base = override?.bytes ?? (path ? bytesByPath.get(path) : undefined)
+      if (!base) return undefined
+      try {
+        return buildNcepFromNc(new TextDecoder().decode(base)) ?? undefined
+      } catch {
+        return undefined
+      }
+    },
+    [bytesByPath, ncOverrides],
+  )
+
+  /**
    * Exports the job with every fix substituted in, each STEP re-seated into the canonical
    * manufacturing orientation and each NC re-emitted by our writer.
    * The archive is flattened to basenames so the operator gets a folderless drop into WiseCAM.
@@ -2112,11 +2132,13 @@ export function PreflightPage() {
               ? await exportStepBytes(part)
               : undefined,
           nc: part.nc?.path ? exportNcBytes(part) : undefined,
+          ncep: part.nc?.path ? exportNcepBytes(part) : undefined,
         })),
       )
-      for (const { part, step, nc } of resolved) {
+      for (const { part, step, nc, ncep } of resolved) {
         if (step) files.set(exportStepPath(part), step)
         if (nc && part.nc?.path) files.set(part.nc.path, nc)
+        if (ncep) files.set(`${part.mark}.ncep`, ncep)
       }
       const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
       downloadBlob(
@@ -2126,7 +2148,7 @@ export function PreflightPage() {
     } finally {
       setExporting(false)
     }
-  }, [result, bundle, stepOverrides, ncOverrides, exportStepBytes, exportNcBytes])
+  }, [result, bundle, stepOverrides, ncOverrides, exportStepBytes, exportNcBytes, exportNcepBytes])
 
   /**
    * Rebuilds each ticked part's STEP from its NC (the manufactured part) and records it as the
@@ -2176,15 +2198,17 @@ export function PreflightPage() {
               ? await exportStepBytes(part)
               : undefined,
           nc: part.nc?.path ? exportNcBytes(part) : undefined,
+          ncep: part.nc?.path ? exportNcepBytes(part) : undefined,
         })),
       )
-      for (const { part, step, nc } of resolved) {
+      for (const { part, step, nc, ncep } of resolved) {
         if (part.pdf?.path) {
           const bytes = bytesByPath.get(part.pdf.path)
           if (bytes) files.set(part.pdf.path, bytes)
         }
         if (step) files.set(exportStepPath(part), step)
         if (nc && part.nc?.path) files.set(part.nc.path, nc)
+        if (ncep) files.set(`${part.mark}.ncep`, ncep)
       }
       if (files.size === 0) {
         setError(t('preflight.findings.nothingSelected'))
@@ -2198,7 +2222,17 @@ export function PreflightPage() {
     } finally {
       setExporting(false)
     }
-  }, [result, bundle, selectedMarks, stepOverrides, bytesByPath, exportStepBytes, exportNcBytes, t])
+  }, [
+    result,
+    bundle,
+    selectedMarks,
+    stepOverrides,
+    bytesByPath,
+    exportStepBytes,
+    exportNcBytes,
+    exportNcepBytes,
+    t,
+  ])
 
   return (
     <div className="flex flex-col gap-6">

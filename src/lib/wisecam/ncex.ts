@@ -1,4 +1,5 @@
 import { strToU8, zipSync } from 'fflate'
+import technologyXml from './templates/Technology.xml?raw'
 
 /**
  * EXPERIMENTAL WiseCAM NCEX (`.ncex`) writer.
@@ -77,6 +78,12 @@ export interface NcexOptions {
   identifier?: string
   /** WiseCAM laser-kernel version written into the OPF metadata. */
   laserZuaVersion?: string
+  /**
+   * `ncep` (default) = the CAD-only part package WiseCAM exports from *Export part* /
+   * *Save As* — this is the importable flavour, with **no `CNC/` payload**.
+   * `machining` also emits the `CNC/` scaffold (for `.ncexa`).
+   */
+  flavour?: 'ncep' | 'machining'
 }
 
 const DEFAULT_IDENTIFIER = '2.0.0.0'
@@ -121,7 +128,7 @@ function holeCircle(id: number, hole: NcexHole): string {
 }
 
 function markText(id: number, part: NcexPart): string {
-  return `<text wh:id="${id}" wh:class="cadtext" wh:layer="6" wh:isfill="0" wh:machining="1" x="${mm(0)}" y="${mm(part.length / 2)}" font-size="8" class="layer6" wh:params="IsLabel=true;LabelType=0;LabelContent=${xml(part.mark)};LabelWidth=1;LabelHeight=8;LabelRotate=0;LabelSource=1">${xml(part.mark)}</text>`
+  return `<text wh:id="${id}" wh:class="cadtext" wh:layer="6" wh:isfill="0" wh:machining="1" x="${mm(0)}" y="${mm(part.length / 2)}" font-family="Arial" font-size="40" font-size-adjust="1" letter-spacing="0" word-spacing="0" font-weight="normal" font-style="normal" wh:params="IsLabel=true;LabelType=0;LabelContent=${xml(part.mark)};LabelWidth=1.000000;LabelHeight=40.000000;LabelRotate=90.0;LabelSource=1;" wh:technical="T={};" class="layer6">${xml(part.mark)}</text>`
 }
 
 /** The unrolled seam half-width: stations are centred on 0 like WiseCAM's own SVGs. */
@@ -159,8 +166,10 @@ function partSvg(part: NcexPart, refId: number): string {
   body.push(markText(next(), part))
   return [
     svgHeader(),
-    ` <g wh:id="${refId}" wh:class="cadpart" wh:layer="-1" wh:isfill="0" wh:machining="1" wh:refid="${refId}" class="layer-1">`,
-    ...body.map((line) => `  ${line}`),
+    ` <g wh:id="${refId}" wh:class="cadpart" wh:layer="-1" wh:isfill="0" wh:machining="1" wh:refid="${refId}" wh:matrixinfo3d="1,0,0,0 0,1,0,0 0,0,1,0" class="layer-1">`,
+    `  <g wh:id="${refId + 1}" wh:class="cadgroup" wh:layer="0" wh:isfill="0" wh:machining="1" class="layer0">`,
+    ...body.map((line) => `   ${line}`),
+    '  </g>',
     ' </g>',
     '</svg>',
     '',
@@ -196,7 +205,7 @@ function adobeSvg(part: NcexPart, stockLength: number, refId: number): string {
   if (part.innerSection) body.push(profilePath(next(), part.innerSection))
   return [
     svgHeader(),
-    ` <g wh:id="${refId}" wh:class="cadadobe" wh:layer="-1" wh:isfill="0" wh:machining="1" class="layer-1">`,
+    ` <g wh:id="${refId}" wh:class="cadgroup" wh:layer="0" wh:isfill="0" wh:machining="1" class="layer0">`,
     ...body.map((line) => `  ${line}`),
     ' </g>',
     '</svg>',
@@ -315,14 +324,26 @@ const CNC_CNC_PARAM = `GlobalParam={Cad={OpfExtendMetaData=[[machinetype=straigh
 `
 const CNC_CUSTOM_PARAM = 'Customize = {\n};\n'
 
+/** `CAD/CustomizeData.xml` as WiseCAM writes it — one empty stub per zone layer. */
+const CUSTOMIZE_DATA_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<root xmlns="${NS_CADCAM}">
+ <ZoneBlock idref="52">
+${Array.from({ length: 8 }, (_, id) => `  <customize id="${id}" params=""/>`).join('\n')}
+ </ZoneBlock>
+</root>
+`
+
 /**
- * Builds an NCEX (`.ncex`) package from one or more parts.
+ * Builds an NCEX package from one or more parts.
  *
- * The archive is a valid OPC/ZIP with `mimetype` first and uncompressed; WiseCAM
- * regenerates the toolpath on import, so no `CNC/Plate*.zua` is emitted.
+ * Default flavour is **`ncep`** — the CAD-only part package WiseCAM produces from
+ * *Export part* / *Save As*, which is the one its Add-from-File importer accepts. It has
+ * **no `CNC/` payload** (the container still lists the CNC rootfile, exactly as WiseCAM's
+ * own `.ncep` does). `machining` adds the `CNC/` scaffold for `.ncexa`.
  */
 export function buildNcex(parts: NcexPart[], options: NcexOptions = {}): Uint8Array {
   if (parts.length === 0) throw new Error('buildNcex: no parts')
+  const flavour = options.flavour ?? 'ncep'
   const partIds = parts.map((_, index) => 1000 + index)
   const adobeIds = parts.map((_, index) => 500 + index)
   const files: Record<string, Uint8Array> = {}
@@ -330,6 +351,11 @@ export function buildNcex(parts: NcexPart[], options: NcexOptions = {}): Uint8Ar
   files.mimetype = strToU8(MIMETYPE)
   files['META-INF/container.xml'] = strToU8(CONTAINER_XML)
   files['CAD/CadRoot.xml'] = strToU8(cadRoot(parts, partIds, adobeIds))
+  files['CAD/cad.opf'] = strToU8(
+    `<?xml version="1.0" encoding="UTF-8" ?>\n<package>\n${metadataBlock(options)}\n<cad>\n\t<item href="CAD/CadRoot.xml"/>\n</cad>\n</package>\n`,
+  )
+  files['CAD/Technology.xml'] = strToU8(technologyXml)
+  files['CAD/CustomizeData.xml'] = strToU8(CUSTOMIZE_DATA_XML)
   parts.forEach((part, index) => {
     const partId = partIds[index] as number
     const adobeId = adobeIds[index] as number
@@ -338,19 +364,39 @@ export function buildNcex(parts: NcexPart[], options: NcexOptions = {}): Uint8Ar
       adobeSvg(part, part.stockLength ?? part.length, adobeId),
     )
   })
-  files['CAD/cad.opf'] = strToU8(
-    `<?xml version="1.0" encoding="UTF-8" ?>\n<package>\n${metadataBlock(options)}\n<cad>\n\t<item href="CAD/CadRoot.xml"/>\n</cad>\n</package>\n`,
-  )
-  files['CNC/cnc.opf'] = strToU8(
-    '<?xml version = "1.0" encoding="UTF-8" ?>\n<cnc>\n\t<item href="CNC/Base.xml"/>\n</cnc>\n',
-  )
-  files['CNC/Base.xml'] = strToU8(CNC_BASE_XML)
-  files['CNC/GlobalParam.zua'] = strToU8(CNC_GLOBAL_ZUA)
-  files['CNC/CncParam.zua'] = strToU8(CNC_CNC_PARAM)
-  files['CNC/CustomParam.zua'] = strToU8(CNC_CUSTOM_PARAM)
 
-  const manifest = Object.keys(files)
-    .filter((path) => path !== 'mimetype' && path !== 'ncex.opf')
+  if (flavour === 'machining') {
+    files['CNC/cnc.opf'] = strToU8(
+      '<?xml version = "1.0" encoding="UTF-8" ?>\n<cnc>\n\t<item href="CNC/Base.xml"/>\n</cnc>\n',
+    )
+    files['CNC/Base.xml'] = strToU8(CNC_BASE_XML)
+    files['CNC/GlobalParam.zua'] = strToU8(CNC_GLOBAL_ZUA)
+    files['CNC/CncParam.zua'] = strToU8(CNC_CNC_PARAM)
+    files['CNC/CustomParam.zua'] = strToU8(CNC_CUSTOM_PARAM)
+  }
+
+  // WiseCAM's own `.ncep` lists the CAD payload in this order (no CNC items).
+  const cadManifest = [
+    'CAD/CadRoot.xml',
+    'CAD/cad.opf',
+    'CAD/Technology.xml',
+    'CAD/CustomizeData.xml',
+    ...parts.flatMap((_, index) => [
+      `CAD/adobe${adobeIds[index]}.svg`,
+      `CAD/part${partIds[index]}.svg`,
+    ]),
+  ]
+  const cncManifest =
+    flavour === 'machining'
+      ? [
+          'CNC/cnc.opf',
+          'CNC/Base.xml',
+          'CNC/GlobalParam.zua',
+          'CNC/CncParam.zua',
+          'CNC/CustomParam.zua',
+        ]
+      : []
+  const manifest = [...cadManifest, ...cncManifest]
     .map((path) => `        <item href="${path}" />`)
     .join('\n')
   files['ncex.opf'] = strToU8(
