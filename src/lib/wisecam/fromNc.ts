@@ -6,6 +6,7 @@ import { partSectionForCode } from '@/lib/sections/stock'
 import { stationFor, unrolledLayout } from './layout'
 import {
   buildNcex,
+  type NcexCut,
   type NcexHole,
   type NcexMark,
   type NcexPalette,
@@ -97,6 +98,23 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
       text: mark.text ? { ...mark.text, reversed: region.reversed } : undefined,
     })
   }
+
+  const cuts: NcexCut[] = []
+  for (const contour of geometry.contours) {
+    if (!layout.faces[contour.face]) continue
+    const points: [number, number][] = []
+    let developed = true
+    for (const [x, y] of contour.points) {
+      const station = stationFor(layout, contour.face, y)
+      if (station == null) {
+        developed = false
+        break
+      }
+      points.push([station, x])
+    }
+    if (!developed || points.length < 2) continue
+    cuts.push({ kind: contour.kind, points })
+  }
   return {
     mark: options.mark ?? header.mark,
     profile: header.profile,
@@ -111,6 +129,7 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
     innerSection: section.innerSection ?? section.holes?.[0],
     holes,
     marks,
+    cuts,
     unrolledPerimeter: layout.seam,
     unrolled: layout,
     rotateAngle: options.rotateAngle,

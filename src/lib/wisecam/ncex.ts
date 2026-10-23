@@ -60,6 +60,13 @@ export interface NcexMark {
   }
 }
 
+/** A developed NC cut contour on the unrolled surface (preview only). */
+export interface NcexCut {
+  kind: 'outer' | 'inner'
+  /** Unrolled polyline: `[perimeter station, along the member]`. */
+  points: [number, number][]
+}
+
 /** Optional display colours for the unrolled SVG; the exported file never uses these. */
 export interface NcexPalette {
   hole?: (hole: NcexHole) => string | undefined
@@ -105,6 +112,8 @@ export interface NcexPart {
   holes?: NcexHole[]
   /** Layout marks (`SI` etch text / `PU`-`KO` scribe lines) in unrolled coordinates. */
   marks?: NcexMark[]
+  /** Developed cut contours (`AK`/`IK`) in unrolled coordinates (preview only). */
+  cuts?: NcexCut[]
   /** Rotate the section into the machining stance (WiseCAM `RotateAngle`). */
   rotateAngle?: number
   /** Mirror the section about YOZ (WiseCAM `Invert`). */

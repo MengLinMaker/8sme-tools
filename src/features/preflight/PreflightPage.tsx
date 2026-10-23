@@ -3681,7 +3681,9 @@ function UnrolledDrawing({
     const width = right - left
     const height = part.length
     const pad = Math.max(20, width * 0.03)
-    const viewBox = [left - pad, -pad, width + pad * 2, height + pad * 2]
+    // Extra room above the net for the beam-direction arrow.
+    const beamPad = Math.max(80, height * 0.03)
+    const viewBox = [left - pad, -beamPad, width + pad * 2, height + beamPad + pad]
       .map((value) => value.toFixed(2))
       .join(' ')
     const extent = Math.max(width, height)
@@ -3689,6 +3691,7 @@ function UnrolledDrawing({
       left,
       right,
       seam,
+      beamPad,
       // Weights are in millimetres like the package, so scale them with the part: a 0.5 mm
       // stroke on a 5 m part fitted into the pane is far below a pixel.
       stroke: Math.max(0.35, extent / 1000),
@@ -3702,6 +3705,11 @@ function UnrolledDrawing({
   const markKinds = new Set((part.marks ?? []).map((mark) => mark.kind))
   const points = (section: [number, number][]): string =>
     section.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(' ')
+  // WiseCAM's unrolled view is mirrored relative to the station axis; flip the net on display.
+  const mirror = `translate(${(geometry.left + geometry.right).toFixed(2)} 0) scale(-1 1)`
+  const mirrorX = (x: number): number => geometry.left + geometry.right - x
+  const mirroredPoints = (line: [number, number][]): string =>
+    points(line.map(([x, y]) => [mirrorX(x), y]))
   // The developed faces cover most of the seam; the leftover strips are the flange/web corner
   // zones WiseCAM shades as non-machined faces. Show them grey so the unroll reads like WiseCAM.
   const nonMachinedZones = useMemo(() => {
@@ -3794,78 +3802,122 @@ function UnrolledDrawing({
             height={part.length}
             fill="#e2e8f0"
             fillOpacity={0.05}
-            stroke="#e2e8f0"
-            strokeOpacity={0.3}
-            strokeWidth={geometry.stroke}
           />
-          {nonMachinedZones.map(([x0, x1]) => (
-            <rect
-              key={`zone-${x0}-${x1}`}
-              x={x0}
-              y={0}
-              width={x1 - x0}
-              height={part.length}
-              fill="#94a3b8"
-              fillOpacity={0.22}
-            />
-          ))}
-          {faceDividers.map((x) => (
+          <g transform={mirror}>
+            {nonMachinedZones.map(([x0, x1]) => (
+              <rect
+                key={`zone-${x0}-${x1}`}
+                x={x0}
+                y={0}
+                width={x1 - x0}
+                height={part.length}
+                fill="#94a3b8"
+                fillOpacity={0.22}
+              />
+            ))}
+            {faceDividers.map((x) => (
+              <line
+                key={`face-${x}`}
+                x1={x}
+                y1={0}
+                x2={x}
+                y2={part.length}
+                stroke="#e2e8f0"
+                strokeOpacity={0.22}
+                strokeWidth={geometry.stroke * 0.5}
+                strokeDasharray={`${geometry.stroke * 3} ${geometry.stroke * 4}`}
+              />
+            ))}
+            <g stroke={outline} fill="none" strokeWidth={geometry.stroke} strokeLinejoin="round">
+              {(part.cuts ?? []).map((cut) => (
+                <polyline
+                  key={`${cut.kind}-${cut.points.length}-${cut.points[0]?.[0]}-${cut.points[0]?.[1]}`}
+                  points={points(cut.points)}
+                />
+              ))}
+            </g>
+            {part.cuts?.length === 0 && (
+              <>
+                <line
+                  x1={geometry.left}
+                  y1={0}
+                  x2={geometry.right}
+                  y2={0}
+                  stroke={outline}
+                  strokeWidth={geometry.stroke}
+                />
+                <line
+                  x1={geometry.right}
+                  y1={part.length}
+                  x2={geometry.left}
+                  y2={part.length}
+                  stroke={outline}
+                  strokeWidth={geometry.stroke}
+                />
+              </>
+            )}
+            {(part.holes ?? []).map((hole) => (
+              <circle
+                key={`${hole.face ?? ''}-${hole.station}-${hole.along}-${hole.radius}`}
+                cx={hole.station}
+                cy={hole.along}
+                r={hole.radius}
+                fill="none"
+                stroke={palette?.hole?.(hole) ?? '#e2e8f0'}
+                // Keep the ring thin relative to the hole; using the part stroke width here makes
+                // a small hole read as a solid disc.
+                strokeWidth={Math.min(geometry.stroke, Math.max(0.25, hole.radius * 0.3))}
+              />
+            ))}
+          </g>
+          <g
+            stroke={outline}
+            fill={outline}
+            strokeWidth={geometry.stroke * 1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <text
+              x={(geometry.left + geometry.right) / 2}
+              y={-geometry.beamPad * 0.72}
+              textAnchor="middle"
+              fontSize={geometry.beamPad * 0.4}
+              stroke="none"
+              opacity={0.8}
+            >
+              {t('preflight.viewer.ncepBeam')}
+            </text>
             <line
-              key={`face-${x}`}
-              x1={x}
-              y1={0}
-              x2={x}
-              y2={part.length}
-              stroke="#e2e8f0"
-              strokeOpacity={0.22}
-              strokeWidth={geometry.stroke * 0.5}
-              strokeDasharray={`${geometry.stroke * 3} ${geometry.stroke * 4}`}
+              x1={(geometry.left + geometry.right) / 2}
+              y1={-geometry.beamPad * 0.55}
+              x2={(geometry.left + geometry.right) / 2}
+              y2={-geometry.beamPad * 0.2}
             />
-          ))}
-          <line
-            x1={geometry.left}
-            y1={0}
-            x2={geometry.right}
-            y2={0}
-            stroke={outline}
-            strokeWidth={geometry.stroke}
-          />
-          <line
-            x1={geometry.right}
-            y1={part.length}
-            x2={geometry.left}
-            y2={part.length}
-            stroke={outline}
-            strokeWidth={geometry.stroke}
-          />
-          {(part.holes ?? []).map((hole) => (
-            <circle
-              key={`${hole.face ?? ''}-${hole.station}-${hole.along}-${hole.radius}`}
-              cx={hole.station}
-              cy={hole.along}
-              r={hole.radius}
-              fill="none"
-              stroke={palette?.hole?.(hole) ?? '#e2e8f0'}
-              // Keep the ring thin relative to the hole; using the part stroke width here makes
-              // a small hole read as a solid disc.
-              strokeWidth={Math.min(geometry.stroke, Math.max(0.25, hole.radius * 0.3))}
+            <polygon
+              points={[
+                `${(geometry.left + geometry.right) / 2 - geometry.beamPad * 0.14},${-geometry.beamPad * 0.25}`,
+                `${(geometry.left + geometry.right) / 2 + geometry.beamPad * 0.14},${-geometry.beamPad * 0.25}`,
+                `${(geometry.left + geometry.right) / 2},${-geometry.beamPad * 0.05}`,
+              ].join(' ')}
+              stroke="none"
             />
-          ))}
+          </g>
           {(part.marks ?? []).map((mark) => {
             const color = markColor(mark.kind)
             const [mx, my] = mark.points[0] ?? [0, 0]
             const key = `${mark.kind}-${mx.toFixed(2)}-${my.toFixed(2)}-${mark.points.length}`
             if (mark.text) {
               const [x, y] = mark.points[0] ?? [0, 0]
+              const tx = mirrorX(x)
               // The NC angle is in the face plane; the unrolled drawing swaps the face axes
               // (station across, along down), so a nc-0° baseline lies along the member.
               const angle = mark.text.reversed ? 90 + mark.text.angle : 90 - mark.text.angle
               return (
                 <text
                   key={key}
-                  x={x}
+                  x={tx}
                   y={y}
-                  transform={`rotate(${angle} ${x} ${y})`}
+                  transform={`rotate(${angle} ${tx} ${y})`}
                   textAnchor="middle"
                   dominantBaseline="central"
                   fontSize={Math.max(mark.text.height, geometry.fontSize * 0.5)}
@@ -3879,7 +3931,7 @@ function UnrolledDrawing({
             return (
               <polyline
                 key={key}
-                points={points(mark.points)}
+                points={mirroredPoints(mark.points)}
                 fill="none"
                 stroke={color}
                 strokeWidth={geometry.stroke * 0.5}

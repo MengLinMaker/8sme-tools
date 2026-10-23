@@ -93,6 +93,13 @@ describe('partFromNc / NCEP', () => {
     expect(etch?.points[0]).toEqual([-165, 100])
   })
 
+  it('develops the NC cut contours onto the net', () => {
+    const part = partFromNc(readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8'))
+    if (!part) throw new Error('no part')
+    expect(part.cuts?.length).toBe(3)
+    expect(part.cuts?.every((cut) => cut.points.length >= 4)).toBe(true)
+  })
+
   it('emits the NCEP file set (no CNC payload)', () => {
     const part = partFromNc(readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8'))
     expect(part).not.toBeNull()
