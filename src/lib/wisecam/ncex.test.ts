@@ -35,6 +35,7 @@ function pfcPart(): NcexPart {
     thickness: 10,
     legThickness: 17.5,
     section: section.points,
+    innerSection: section.innerSection,
     // A PFC's unrolled surface is web + two flange backs only: 380 + 100 + 100.
     unrolledPerimeter: 580,
     holes,
@@ -92,6 +93,42 @@ describe('buildNcex', () => {
     expect(svg).toContain('M290.00,5084.20 L-290.00,5084.20')
     // Section outline is present.
     expect(svg).toContain('-190.00,50.00')
+  })
+
+  it('writes the PFC inner cavity as the second section path', () => {
+    const files = unzipSync(buildNcex([pfcPart()]))
+    const svg = strFromU8(files['CAD/part1000.svg'] as Uint8Array)
+    const group = svg.slice(svg.indexOf('wh:class="cadgroup"'))
+    // Outer section + inner cavity, unlike an I-section which has only the outer path.
+    expect(group.match(/<path\b/g)).toHaveLength(2)
+    expect(group).toContain('M-172.50,-50.00')
+    expect(group).toContain('-172.50,26.00')
+    expect(group).toContain('-158.50,40.00')
+    expect(group).toContain('172.50,26.00')
+    expect(group).toContain('172.50,-50.00')
+  })
+
+  it('puts the section cadgroup beside cadpart, not nested inside it', () => {
+    const files = unzipSync(buildNcex([pfcPart()]))
+    const svg = strFromU8(files['CAD/part1000.svg'] as Uint8Array)
+    const cadgroupAt = svg.indexOf('wh:class="cadgroup"')
+    expect(cadgroupAt).toBeGreaterThan(-1)
+    expect(svg.indexOf('</g>')).toBeLessThan(cadgroupAt)
+  })
+
+  it('emits a fresh, valid technologyID for every part and build', () => {
+    const ids = (bytes: Uint8Array): string[] => {
+      const cad = strFromU8(unzipSync(bytes)['CAD/CadRoot.xml'] as Uint8Array)
+      return [...cad.matchAll(/technologyID="([^"]+)"/g)].map((match) => match[1] as string)
+    }
+    const first = ids(buildNcex([pfcPart()]))
+    const second = ids(buildNcex([pfcPart()]))
+    const all = [...first, ...second]
+    expect(first.length).toBeGreaterThan(0)
+    for (const id of all) {
+      expect(id).toMatch(/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/)
+    }
+    expect(new Set(all).size).toBe(all.length)
   })
 
   it('rejects an empty part list', () => {

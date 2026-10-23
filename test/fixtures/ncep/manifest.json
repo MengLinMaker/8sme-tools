@@ -1,0 +1,115 @@
+{
+  "note": "Do not delete or rewrite these files. Zipped with the real WiseCAM dialect; used as import ground truth. The guard test fails if a file disappears or changes.",
+  "files": [
+    {
+      "path": "M-1.ncep",
+      "sha256": "7ef5340ad023db86caebdf24e53c4c8909f95c110818e8379edd380bdf77018b",
+      "bytes": 66658
+    },
+    {
+      "path": "M-26.ncep",
+      "sha256": "6bfd068b28dc4a7936887f0a247c119695ff6a406910470af4b23126f14e52e0",
+      "bytes": 13303
+    },
+    {
+      "path": "M-3.ncep",
+      "sha256": "f29a0226a0c8921b10f815751a7258c469b3b7ae2f6d372aedc36ac9d8fa725d",
+      "bytes": 16950
+    },
+    {
+      "path": "M-30.ncep",
+      "sha256": "e2613de950b6032c1719d982e0c759065e85a1041f19d910b07968923e2144db",
+      "bytes": 16794
+    },
+    {
+      "path": "M-31.ncep",
+      "sha256": "d3bbe3e15c47fe3c018172520ef4f2f361b2494f6d626510008d4d51f0960aa5",
+      "bytes": 13215
+    },
+    {
+      "path": "M-34.ncep",
+      "sha256": "797a6807a8ff4f3c7fcb814d7f4fb979edb6f4d5115730e58360f97dfda71a53",
+      "bytes": 63900
+    },
+    {
+      "path": "M-35.ncep",
+      "sha256": "b0a95aab8953fe36a46dbfa58ece8bdda1e9db350489034bf8500967dec4cdc8",
+      "bytes": 29901
+    },
+    {
+      "path": "M-39.ncep",
+      "sha256": "b2b10eb0ef028c70241b624453b27bdf230b0003abfe828286799a9932bdad82",
+      "bytes": 9191
+    },
+    {
+      "path": "M-4.ncep",
+      "sha256": "a82418c2a5e98544b989e01d17f9489320acef9c3b5c2595c412a2c9f432f1fa",
+      "bytes": 9133
+    },
+    {
+      "path": "M-40.ncep",
+      "sha256": "f85b1cb4d87ad0fddddd0159f9d4a63c79fce663a2988ea9739216cafed32536",
+      "bytes": 79451
+    },
+    {
+      "path": "M-42.ncep",
+      "sha256": "a6f5bf02e7e34ce27d96e1059fd38c624c410936f744dce1e3e7d718d704aa07",
+      "bytes": 23837
+    },
+    {
+      "path": "M-43.ncep",
+      "sha256": "b7d5b86f097eab0cd47404c6d4e88f85aad0e7c5319c9556ceec9ee510b00a88",
+      "bytes": 31836
+    },
+    {
+      "path": "M-5.ncep",
+      "sha256": "201c25fcf8d5edd9878b9289216a15e373e07d20e9ce89ed00d497bf84a80cd1",
+      "bytes": 15779
+    },
+    {
+      "path": "M-51.ncep",
+      "sha256": "be888363ac34834321163366dfc657d261bb122780554efa3b08f0e52afafb0f",
+      "bytes": 27566
+    },
+    {
+      "path": "M-52.ncep",
+      "sha256": "e8decacd37bb2fdd94da9b6964d8d749d2851e02123668d63541a9ac66b81fbd",
+      "bytes": 13070
+    },
+    {
+      "path": "M-8.ncep",
+      "sha256": "c88d2575f28d9e68578789bd7f5b06e6f5758c2307557400d1f4e187efa0d48b",
+      "bytes": 38432
+    },
+    {
+      "path": "M-9.ncep",
+      "sha256": "51b8a849b95bff6c5d42383de8f71a310189defa956c8e9ab4b9396f04984f29",
+      "bytes": 8550
+    },
+    {
+      "path": "working/30-real-M1.ncep",
+      "sha256": "7ef5340ad023db86caebdf24e53c4c8909f95c110818e8379edd380bdf77018b",
+      "bytes": 66658
+    },
+    {
+      "path": "working/30b-real-M1-rezipped.ncep",
+      "sha256": "4c8b89ede30a0b9522dddebb9c6dd79dc4d89823a03a009ef495dcc5555c5f4f",
+      "bytes": 46185
+    },
+    {
+      "path": "working/31-real-M1-badguid.ncep",
+      "sha256": "a0d4f797514c0420f44c43a64881dc8a7f52d2d2119d6cb1335e45902286c2c3",
+      "bytes": 46160
+    },
+    {
+      "path": "working/32-real-M1-randomguid.ncep",
+      "sha256": "e9ea14b8284085a54215f9e0f1060840ad1f48697b800935aa512da3681cd1c0",
+      "bytes": 46165
+    },
+    {
+      "path": "working/77-raw-our-package-qtmeta.ncep",
+      "sha256": "de3e05537e6047360d666e5492ad62ac38e0269da0d4f6533f0150af11664594",
+      "bytes": 19935
+    }
+  ]
+}

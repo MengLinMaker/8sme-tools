@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fixture } from '@test/fixtures'
@@ -123,15 +123,114 @@ function write(name: string, bytes: Uint8Array): void {
   writeFileSync(join(outDir as string, name), bytes)
 }
 
+function unzip(path: string): Files {
+  return unzipSync(new Uint8Array(readFileSync(path))) as Files
+}
+
+function cadEntry(files: Files, kind: 'Adobe' | 'Part'): { idref: string; svgname: string } {
+  const root = strFromU8(files['CAD/CadRoot.xml'] as Uint8Array)
+  const tag = root.match(new RegExp(`<${kind}\\b[^>]*/>`))?.[0] ?? ''
+  const idref = /idref="([^"]+)"/.exec(tag)?.[1] ?? ''
+  const svgname = /svgname="([^"]+)"/.exec(tag)?.[1] ?? ''
+  return { idref, svgname }
+}
+
+/** Rebuild `ncex.opf` in WiseCAM's order (CAD first, then any CNC entries). */
+function rebuildManifest(files: Files): void {
+  const cad = ['CAD/CadRoot.xml', 'CAD/cad.opf', 'CAD/Technology.xml', 'CAD/CustomizeData.xml']
+  const adobe = Object.keys(files)
+    .filter((path) => /^CAD\/adobe.*\.svg$/.test(path))
+    .sort()
+  const parts = Object.keys(files)
+    .filter((path) => /^CAD\/part.*\.svg$/.test(path))
+    .sort()
+  const cnc = Object.keys(files)
+    .filter((path) => path.startsWith('CNC/'))
+    .sort()
+  const items = [...cad, ...adobe, ...parts, ...cnc]
+    .filter((path) => files[path])
+    .map((path) => `        <item href="${path}" />`)
+    .join('\n')
+  const metadata = strFromU8(files['CAD/cad.opf'] as Uint8Array).match(
+    /<metadata[\s\S]*?<\/metadata>/,
+  )?.[0]
+  files['ncex.opf'] = strToU8(
+    `<?xml version="1.0" encoding="UTF-8" ?>\n<package>\n${metadata ?? ''}\n    <manifest>\n${items}\n    </manifest>\n</package>\n`,
+  )
+}
+
+function withCadFiles(files: Files, replacements: Record<string, Uint8Array>, drop: string[] = []) {
+  const out: Files = { ...files }
+  for (const path of drop) delete out[path]
+  for (const [path, data] of Object.entries(replacements)) out[path] = data
+  rebuildManifest(out)
+  return out
+}
+
+const stripInnerCad = (svg: string): string => svg.replace(/InnerCad=[^;"]*;/g, '')
+const stripTechnical = (svg: string): string => svg.replace(/ wh:technical="[^"]*"/g, '')
+const stripTextTransform = (svg: string): string => svg.replace(/ transform="rotate\([^"]*\)"/g, '')
+
+/** Old writer layout: everything (cuts, holes, mark, section) inside one `cadgroup`. */
+function legacyStructure(svg: string): string {
+  const cad = svg.match(/(<g\b[^>]*wh:class="cadpart"[^>]*>)([\s\S]*?)(<\/g>\s*<\/svg>)/)
+  if (!cad) return svg
+  const body = cad[2] as string
+  const group = body.match(/(<g\b[^>]*wh:class="cadgroup"[^>]*>)([\s\S]*?)(<\/g>)/)
+  if (!group) return svg
+  const inner = body.replace(group[0], '')
+  const wrapped = `<g wh:id="999001" wh:class="cadgroup" wh:layer="0" wh:isfill="0" wh:machining="1" class="layer0">\n${inner}${group[2]}</g>`
+  return svg.replace(body, wrapped)
+}
+
+/** WiseCAM's own adobe has an applied-cut-path (`USERPATH`) group; ours does not. */
+function adobeWithoutUserPath(svg: string): string {
+  return svg.replace(/<g\b[^>]*USERPATH=USERPATH;[^>]*>[\s\S]*?<\/g>/g, '')
+}
+
+/** Swap one class of element from our part SVG for WiseCAM's real one (same M-1 part). */
+function swapHoles(ours: string, real: string): string {
+  const block = real.match(/(?:<circle\b[^>]*\/>\s*)+/)?.[0]
+  const own = ours.match(/(?:<circle\b[^>]*\/>\s*)+/)?.[0]
+  return block && own ? ours.replace(own, block) : ours
+}
+
+function swapSection(ours: string, real: string): string {
+  const groupRe = /<g\b[^>]*wh:class="cadgroup"[^>]*>[\s\S]*?<\/g>/
+  const block = real.match(groupRe)?.[0]
+  return block ? ours.replace(groupRe, block) : ours
+}
+
+function swapText(ours: string, real: string): string {
+  const textRe = /<text\b[\s\S]*?<\/text>/
+  const block = real.match(textRe)?.[0]
+  return block ? ours.replace(textRe, block) : ours
+}
+
+function swapTruncates(ours: string, real: string): string {
+  let out = ours
+  for (const type of [0, 1]) {
+    const re = new RegExp(`<path\\b[^>]*IsTrucate=1;TrucateType=${type};[^>]*/>`)
+    const block = real.match(re)?.[0]
+    if (block) out = out.replace(re, block)
+  }
+  return out
+}
+
+function swapAll(ours: string, real: string): string {
+  return swapTruncates(swapText(swapSection(swapHoles(ours, real), real), real), real)
+}
+
 describe.skipIf(!outDir)('write NCEX probes', () => {
   it('writes the probe set', () => {
     mkdirSync(outDir as string, { recursive: true })
-    const samplePath = join(
+    const downloadsSample = join(
       homedir(),
       'Downloads',
       'Base 2 Hidden Grove',
       'Base 2 Hidden Grove.ncexa',
     )
+    const samplePath = existsSync(downloadsSample) ? downloadsSample : fixture('ncep', 'M-1.ncep')
     const real = unzipSync(new Uint8Array(readFileSync(samplePath)))
 
     // Baselines derived from WiseCAM's own CAD-only export.
@@ -227,5 +326,133 @@ describe.skipIf(!outDir)('write NCEX probes', () => {
     const withTech = unzipSync(buildNcex([pfc]))
     withTech['CAD/Technology.xml'] = new Uint8Array(real['CAD/Technology.xml'] as Uint8Array)
     write('17-gen-pfc-with-tech.ncex', rezip(withTech))
+
+    // ---------------------------------------------------------------------------------------
+    // Differential NCEP probes: start from WiseCAM's real M-1 and swap in ONE of our files, or
+    // degrade the real part one attribute at a time. Run these in order; the first failure names
+    // the component/attribute the importer needs.
+    // ---------------------------------------------------------------------------------------
+    const realM1 = unzip(fixture('ncep', 'M-1.ncep'))
+    const realCad = strFromU8(realM1['CAD/CadRoot.xml'] as Uint8Array)
+    const realPartEntry = cadEntry(realM1, 'Part')
+    const realAdobeEntry = cadEntry(realM1, 'Adobe')
+    const realPartSvg = strFromU8(realM1[`CAD/${realPartEntry.svgname}`] as Uint8Array)
+    const realAdobeSvg = strFromU8(realM1[`CAD/${realAdobeEntry.svgname}`] as Uint8Array)
+
+    const ncM1 = readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8')
+    const ourM1 = unzipSync(buildNcepFromNc(ncM1, { mark: 'M-1' }) as Uint8Array) as Files
+    const ourPartEntry = cadEntry(ourM1, 'Part')
+    const ourAdobeEntry = cadEntry(ourM1, 'Adobe')
+    const ourPartSvg = strFromU8(ourM1[`CAD/${ourPartEntry.svgname}`] as Uint8Array)
+    const ourAdobeSvg = strFromU8(ourM1[`CAD/${ourAdobeEntry.svgname}`] as Uint8Array)
+
+    // Point our part at the real Part id so only its grammar/geometry differs.
+    const ourPartForReal = strToU8(
+      ourPartSvg.replace(`wh:refid="${ourPartEntry.idref}"`, `wh:refid="${realPartEntry.idref}"`),
+    )
+    const realPartPath = `CAD/${realPartEntry.svgname}`
+    const realAdobePath = `CAD/${realAdobeEntry.svgname}`
+
+    // 30 = byte-for-byte control, 30b = same contents re-zipped by our writer.
+    write('30-real-M1.ncep', new Uint8Array(readFileSync(fixture('ncep', 'M-1.ncep'))))
+    write('30b-real-M1-rezipped.ncep', rezip(realM1))
+
+    // Package docs: bad/invalid technologyID must not matter (both were verified as working).
+    const badGuid: Files = { ...realM1 }
+    badGuid['CAD/CadRoot.xml'] = strToU8(
+      (realCad as string).replace(/technologyID="[^"]*"/, 'technologyID="not-a-guid"'),
+    )
+    write('31-real-M1-badguid.ncep', rezip(badGuid))
+    const randomGuid: Files = { ...realM1 }
+    randomGuid['CAD/CadRoot.xml'] = strToU8(
+      (realCad as string).replace(
+        /technologyID="[^"]*"/,
+        'technologyID="11111111-2222-3333-4444-555555555555"',
+      ),
+    )
+    write('32-real-M1-randomguid.ncep', rezip(randomGuid))
+
+    // Real package, our part / our adobe / both.
+    write(
+      '33b-real-M1-ourpart-fixed.ncep',
+      rezip(withCadFiles(realM1, { [realPartPath]: ourPartForReal })),
+    )
+    write(
+      '34-real-M1-our-adobe.ncep',
+      rezip(withCadFiles(realM1, { [realAdobePath]: strToU8(ourAdobeSvg) })),
+    )
+    write(
+      '35-real-M1-our-part-and-adobe.ncep',
+      rezip(
+        withCadFiles(realM1, {
+          [realPartPath]: ourPartForReal,
+          [realAdobePath]: strToU8(ourAdobeSvg),
+        }),
+      ),
+    )
+    // Our whole CAD payload (CadRoot + SVGs) inside WiseCAM's real package documents.
+    write(
+      '36-real-docs-our-cad.ncep',
+      rezip(
+        withCadFiles(
+          realM1,
+          {
+            'CAD/CadRoot.xml': ourM1['CAD/CadRoot.xml'] as Uint8Array,
+            'CAD/part1000.svg': strToU8(ourPartSvg),
+            'CAD/adobe500.svg': strToU8(ourAdobeSvg),
+          },
+          [realPartPath, realAdobePath],
+        ),
+      ),
+    )
+
+    // If 33b still fails, these degrade the fixed part one feature at a time.
+    write(
+      '37-real-M1-ourpart-no-innercad.ncep',
+      rezip(withCadFiles(realM1, { [realPartPath]: strToU8(stripInnerCad(ourPartSvg)) })),
+    )
+    write(
+      '38-real-M1-ourpart-no-technical.ncep',
+      rezip(withCadFiles(realM1, { [realPartPath]: strToU8(stripTechnical(ourPartSvg)) })),
+    )
+    write(
+      '39-real-M1-ourpart-no-text-transform.ncep',
+      rezip(withCadFiles(realM1, { [realPartPath]: strToU8(stripTextTransform(ourPartSvg)) })),
+    )
+    write(
+      '40-real-M1-ourpart-old-structure.ncep',
+      rezip(withCadFiles(realM1, { [realPartPath]: strToU8(legacyStructure(ourPartSvg)) })),
+    )
+    write(
+      '41-real-M1-adobe-no-userpath.ncep',
+      rezip(withCadFiles(realM1, { [realAdobePath]: strToU8(adobeWithoutUserPath(realAdobeSvg)) })),
+    )
+
+    // If 33b still fails: keep our part but swap one element class at a time for WiseCAM's real
+    // one (same M-1 geometry). The first file that works names the offending element.
+    write(
+      '42-real-M1-ourpart-real-holes.ncep',
+      rezip(withCadFiles(realM1, { [realPartPath]: strToU8(swapHoles(ourPartSvg, realPartSvg)) })),
+    )
+    write(
+      '43-real-M1-ourpart-real-section.ncep',
+      rezip(
+        withCadFiles(realM1, { [realPartPath]: strToU8(swapSection(ourPartSvg, realPartSvg)) }),
+      ),
+    )
+    write(
+      '44-real-M1-ourpart-real-text.ncep',
+      rezip(withCadFiles(realM1, { [realPartPath]: strToU8(swapText(ourPartSvg, realPartSvg)) })),
+    )
+    write(
+      '45-real-M1-ourpart-real-truncates.ncep',
+      rezip(
+        withCadFiles(realM1, { [realPartPath]: strToU8(swapTruncates(ourPartSvg, realPartSvg)) }),
+      ),
+    )
+    write(
+      '46-real-M1-ourpart-real-elements.ncep',
+      rezip(withCadFiles(realM1, { [realPartPath]: strToU8(swapAll(ourPartSvg, realPartSvg)) })),
+    )
   }, 120_000)
 })
