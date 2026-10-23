@@ -3676,28 +3676,22 @@ function UnrolledDrawing({
     const half = seam / 2
     const left = part.profileType.trim().toUpperCase() === 'M' ? 0 : -half
     const right = left + seam
-    let minX = left
-    let maxX = right
-    let minY = 0
-    let maxY = part.length
-    for (const [x, y] of part.section) {
-      minX = Math.min(minX, x)
-      maxX = Math.max(maxX, x)
-      minY = Math.min(minY, y)
-      maxY = Math.max(maxY, y)
-    }
-    const pad = Math.max(20, (maxX - minX) * 0.03)
-    const viewBox = [minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2]
+    // A net, not the package drawing: the developed surface alone, without the cross-section
+    // reference profile that WiseCAM overlays (and which intersects this rectangle).
+    const width = right - left
+    const height = part.length
+    const pad = Math.max(20, width * 0.03)
+    const viewBox = [left - pad, -pad, width + pad * 2, height + pad * 2]
       .map((value) => value.toFixed(2))
       .join(' ')
-    const extent = Math.max(maxX - minX, maxY - minY)
+    const extent = Math.max(width, height)
     return {
       left,
       right,
       seam,
       // Weights are in millimetres like the package, so scale them with the part: a 0.5 mm
       // stroke on a 5 m part fitted into the pane is far below a pixel.
-      stroke: Math.max(0.75, extent / 400),
+      stroke: Math.max(0.35, extent / 1000),
       fontSize: Math.max(40, extent / 60),
       viewBox,
     }
@@ -3844,29 +3838,17 @@ function UnrolledDrawing({
             stroke={outline}
             strokeWidth={geometry.stroke}
           />
-          <polygon
-            points={points(part.section)}
-            fill="none"
-            stroke={outline}
-            strokeWidth={geometry.stroke}
-            strokeLinejoin="round"
-          />
-          {part.innerSection && (
-            <polygon
-              points={points(part.innerSection)}
-              fill="none"
-              stroke={outline}
-              strokeWidth={geometry.stroke}
-              strokeLinejoin="round"
-            />
-          )}
           {(part.holes ?? []).map((hole) => (
             <circle
               key={`${hole.face ?? ''}-${hole.station}-${hole.along}-${hole.radius}`}
               cx={hole.station}
               cy={hole.along}
-              r={Math.max(hole.radius, geometry.stroke * 0.75)}
-              fill={palette?.hole?.(hole) ?? '#e2e8f0'}
+              r={hole.radius}
+              fill="none"
+              stroke={palette?.hole?.(hole) ?? '#e2e8f0'}
+              // Keep the ring thin relative to the hole; using the part stroke width here makes
+              // a small hole read as a solid disc.
+              strokeWidth={Math.min(geometry.stroke, Math.max(0.25, hole.radius * 0.3))}
             />
           ))}
           {(part.marks ?? []).map((mark) => {
