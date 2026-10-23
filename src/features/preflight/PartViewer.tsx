@@ -12,6 +12,7 @@ import {
   EdgesGeometry,
   ExtrudeGeometry,
   Float32BufferAttribute,
+  FrontSide,
   Group,
   HemisphereLight,
   LineBasicMaterial,
@@ -24,11 +25,10 @@ import {
   type Object3D,
   OrthographicCamera,
   Path,
+  PlaneGeometry,
   Quaternion,
   Scene,
   Shape,
-  Sprite,
-  SpriteMaterial,
   Vector2,
   Vector3,
   WebGLRenderer,
@@ -257,18 +257,28 @@ interface NcProjectedObjects {
   bevelAreas: Mesh[]
   /** Scribe/punch marking lines (`PU`/`KO`). */
   markLines: LineSegments2[]
-  /** Etch text labels (`SI`). */
-  markSprites: Sprite[]
+  /** Etch text labels (`SI`), laid flat on their face. */
+  markTexts: Mesh[]
 }
 
 /**
- * A camera-facing label for an `SI` etch mark, sized from the NC's text height (mm). The text is
- * drawn white and tinted by the sprite material so it matches the legend chip.
+ * An `SI` etch label laid flat on its face, sized from the NC's text height (mm). It is a
+ * single-sided plane with depth testing, so the solid occludes it from behind and it cannot leak
+ * through or around the silhouette like a camera-facing sprite did. The text is drawn white and
+ * tinted by the material so it matches the legend chip.
  */
-function markTextSprite(
-  text: { at: Vec3; value: string; height: number; angle: number },
+function markTextObject(
+  text: {
+    at: Vec3
+    normal: Vec3
+    along: Vec3
+    across: Vec3
+    value: string
+    height: number
+    angle: number
+  },
   color: number,
-): Sprite | null {
+): Mesh | null {
   const value = text.value.trim()
   if (!value) return null
   const canvas = document.createElement('canvas')
@@ -288,19 +298,36 @@ function markTextSprite(
   context.textBaseline = 'middle'
   context.fillStyle = '#fff'
   context.fillText(value, width / 2, height / 2)
-  const material = new SpriteMaterial({
+  const material = new MeshBasicMaterial({
     map: new CanvasTexture(canvas),
     color,
     transparent: true,
-    depthTest: false,
+    depthTest: true,
     depthWrite: false,
+    side: FrontSide,
+    // The label sits 0.4 mm off the surface; bias it forward so it never z-fights the model.
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
   })
-  const sprite = new Sprite(material)
   const markHeight = text.height > 0 ? text.height : 20
-  sprite.scale.set((markHeight * width) / height, markHeight, 1)
-  sprite.position.set(...text.at)
-  material.rotation = (text.angle * Math.PI) / 180
-  return sprite
+  const mesh = new Mesh(new PlaneGeometry((markHeight * width) / height, markHeight), material)
+  const normal = new Vector3(...text.normal).normalize()
+  const along = new Vector3(...text.along).normalize()
+  const across = new Vector3(...text.across).normalize()
+  // In-face "up", chosen to agree with the NC's across direction so the text is not mirrored.
+  const up0 = new Vector3().crossVectors(normal, along).normalize()
+  if (up0.dot(across) < 0) up0.negate()
+  const angle = (text.angle * Math.PI) / 180
+  const right = along
+    .clone()
+    .multiplyScalar(Math.cos(angle))
+    .addScaledVector(up0, Math.sin(angle))
+    .normalize()
+  const up = new Vector3().crossVectors(normal, right).normalize()
+  mesh.quaternion.setFromRotationMatrix(new Matrix4().makeBasis(right, up, normal))
+  mesh.position.set(...text.at)
+  return mesh
 }
 
 /** Builds the NC line sets as coloured fat lines (cut lines + holes + bevels + layout marks). */
@@ -315,7 +342,7 @@ function addNcLines(
   const bevelArrows: LineSegments2[] = []
   const bevelAreas: Mesh[] = []
   const markLines: LineSegments2[] = []
-  const markSprites: Sprite[] = []
+  const markTexts: Mesh[] = []
   const colorAt = (index: number): number =>
     THICKNESS_COLORS[index % THICKNESS_COLORS.length] ?? FALLBACK_COLOR
   const lineInto = (target: LineSegments2[], points: number[], color: number): void => {
@@ -329,8 +356,8 @@ function addNcLines(
     const color = mark.kind === 'etch' ? ETCH_COLOR : MARKING_COLOR
     lineInto(markLines, mark.points, color)
     for (const text of mark.texts) {
-      const sprite = markTextSprite(text, color)
-      if (sprite) markSprites.push(sprite)
+      const mesh = markTextObject(text, color)
+      if (mesh) markTexts.push(mesh)
     }
   }
   sets.bevelArrows.forEach((bevel, index) => {
@@ -353,7 +380,7 @@ function addNcLines(
     )
     bevelAreas.push(area)
   })
-  return { cutLines, bevelArrows, bevelAreas, markLines, markSprites }
+  return { cutLines, bevelArrows, bevelAreas, markLines, markTexts }
 }
 
 /** Colours a cut thickness by its nearest entry in `scale` (the NC legend's thickness order). */
@@ -672,7 +699,7 @@ function mountScene(
   // same seated frame as the model so they land on the surfaces the laser actually cut.
   const ncObjects: LineSegments2[] = []
   /** Etch text labels (sprites) for `SI` marks. */
-  const ncMarkSprites: Sprite[] = []
+  const ncMarkTexts: Mesh[] = []
   const ncMaterials: LineMaterial[] = []
   /** STEP cut edges (non-stock edges), coloured by wall thickness — drawn when `cutEdges` is set. */
   const cutEdgeObjects: LineSegments2[] = []
@@ -1047,9 +1074,9 @@ function mountScene(
           scene.add(line)
           ncObjects.push(line)
         }
-        for (const sprite of projected.markSprites) {
-          scene.add(sprite)
-          ncMarkSprites.push(sprite)
+        for (const mesh of projected.markTexts) {
+          scene.add(mesh)
+          ncMarkTexts.push(mesh)
         }
       }
       // The guilty cut drawn as a red marker, projected with the shared `toScene`. A marker may
@@ -1163,9 +1190,9 @@ function mountScene(
         scene.add(line)
         ncObjects.push(line)
       }
-      for (const sprite of projected.markSprites) {
-        scene.add(sprite)
-        ncMarkSprites.push(sprite)
+      for (const mesh of projected.markTexts) {
+        scene.add(mesh)
+        ncMarkTexts.push(mesh)
       }
     }
   }
@@ -1759,10 +1786,13 @@ function mountScene(
         line.geometry.dispose()
         ;(line.material as LineMaterial).dispose()
       }
-      for (const sprite of ncMarkSprites) {
-        scene.remove(sprite)
-        sprite.material.map?.dispose()
-        sprite.material.dispose()
+      for (const mesh of ncMarkTexts) {
+        scene.remove(mesh)
+        mesh.geometry.dispose()
+        if (mesh.material instanceof MeshBasicMaterial) {
+          mesh.material.map?.dispose()
+          mesh.material.dispose()
+        }
       }
       for (const line of cutEdgeObjects) {
         scene.remove(line)

@@ -296,6 +296,16 @@ describe('projectNc', () => {
     const marking = out.marks.find((mark) => mark.kind === 'marking')
     expect(etch?.texts).toHaveLength(1)
     expect(etch?.texts[0]).toMatchObject({ value: 'M-2', height: 20 })
+    // The label lies in the face plane: a unit normal plus a unit along/across basis.
+    const text = etch?.texts[0]
+    expect(text).toBeDefined()
+    if (text) {
+      expect(Math.hypot(...text.normal)).toBeCloseTo(1, 6)
+      expect(Math.hypot(...text.along)).toBeCloseTo(1, 6)
+      expect(Math.hypot(...text.across)).toBeCloseTo(1, 6)
+      const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+      expect(dot(text.along, text.across)).toBeCloseTo(0, 6)
+    }
     expect(etch?.points).toHaveLength(0)
     expect(marking?.texts).toHaveLength(0)
     expect(marking?.points).toHaveLength(2 * 3)
