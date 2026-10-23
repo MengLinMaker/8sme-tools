@@ -109,7 +109,9 @@ const FACE_MATERIAL = { color: 0x9aa3ad, metalness: 0.15, roughness: 0.75 }
 /** Fallback colour for a cut-thickness bucket when there are more buckets than palette colours. */
 const FALLBACK_COLOR = 0x9ca3af
 
-/** NC toolpath line width in screen pixels (fat lines, so they read clearly over the model). */
+/** Projected NC toolpath / STEP cut-edge line width in screen pixels. */
+const PROJECTION_LINE_WIDTH = 2
+/** Base width for sabre failure markers, which stay a little heavier than the projection lines. */
 const NC_LINE_WIDTH = 3
 /**
  * Opacity of the translucent bevel-area fins. Low enough that overlapping bevels near one another
@@ -138,7 +140,7 @@ function ncLineObject(
   resolution: Vector2,
   materials: LineMaterial[],
   onTop = false,
-  linewidth = NC_LINE_WIDTH,
+  linewidth = PROJECTION_LINE_WIDTH,
 ): LineSegments2 | null {
   if (points.length === 0) return null
   const geometry = new LineSegmentsGeometry()
