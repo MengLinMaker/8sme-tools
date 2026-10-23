@@ -3906,15 +3906,6 @@ function UnrolledDrawing({
               />
             )
           })}
-          <text
-            x={(geometry.left + geometry.right) / 2}
-            y={part.length / 2}
-            textAnchor="middle"
-            fontSize={geometry.fontSize}
-            fill={palette?.mark ?? '#e2e8f0'}
-          >
-            {part.mark}
-          </text>
         </PanZoomSvg>
       </div>
       <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
