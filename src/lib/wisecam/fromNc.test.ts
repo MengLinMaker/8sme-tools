@@ -52,6 +52,18 @@ describe('partFromNc / NCEP', () => {
     )
   }
 
+  it('puts the PFC inner cavity in the section group', () => {
+    const part = partFromNc(readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8'))
+    expect(part?.innerSection?.length).toBeGreaterThan(4)
+    const bytes = buildNcepFromNc(readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8'))
+    if (!bytes) throw new Error('no package')
+    const svg = ncepPartSvg(bytes)
+    const group = svg.slice(svg.indexOf('wh:class="cadgroup"'))
+    expect(group.match(/<path\b/g)).toHaveLength(2)
+    expect(group).toContain('M-172.50,-50.00')
+    expect(group).toContain('-158.50,40.00')
+  })
+
   it('starts the unrolled surface at 0 for zero-origin tubes', () => {
     const ncText = readFileSync(fixture('ncep', 'M-35.nc1'), 'utf8')
     const part = partFromNc(ncText)

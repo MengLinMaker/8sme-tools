@@ -12,7 +12,8 @@
     "format": "biome check --write",
     "lint": "tsr generate && tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "nc-to-ncep": "node tools/nc-to-ncep.mjs"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm run format",

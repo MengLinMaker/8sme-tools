@@ -261,6 +261,42 @@ function channel(
   return centre(webVertical).map(([x, y]) => [y, -x] as [number, number])
 }
 
+/**
+ * Inner cavity outline for a parallel-flange channel, in the same canonical `n` stance as
+ * {@link channel}. It is **open at the flange toes** (the channel mouth), unlike a hollow's
+ * closed void: WiseCAM's real PFC exports carry it as the second path in the section
+ * `cadgroup`, and a PFC part with only the outer path fails to import.
+ */
+function channelInner(
+  depth: number,
+  flange: number,
+  web: number,
+  tf: number,
+  radius = 0,
+): [number, number][] {
+  const hb = flange / 2
+  const hd = depth / 2
+  const xInner = hd - tf
+  const yWeb = hb - web
+  const r = Math.max(0, Math.min(radius, flange - web, hd - tf))
+  if (!(xInner > 0) || !(yWeb > 0)) return []
+  if (r <= 0) {
+    return [
+      [-xInner, -hb],
+      [-xInner, yWeb],
+      [xInner, yWeb],
+      [xInner, -hb],
+    ]
+  }
+  return dedupe([
+    [-xInner, -hb],
+    ...arcPoints(-xInner + r, yWeb - r, r, Math.PI, Math.PI / 2),
+    [xInner - r, yWeb],
+    ...arcPoints(xInner - r, yWeb - r, r, Math.PI / 2, 0).slice(1),
+    [xInner, -hb],
+  ])
+}
+
 function circle(od: number): [number, number][] {
   const r = od / 2
   const points: [number, number][] = []
@@ -648,7 +684,12 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
 export function partSectionForCode(
   code: string,
   dims: number[],
-): { points: [number, number][]; holes?: [number, number][][] } | null {
+): {
+  points: [number, number][]
+  holes?: [number, number][][]
+  /** Inner/back contour for open sections (currently PFC); hollow voids use `holes`. */
+  innerSection?: [number, number][]
+} | null {
   const clean = code.trim().replace(/\s+/g, '').toUpperCase()
   const family = detectFamily(clean)
   if (!family) return null
@@ -712,11 +753,19 @@ export function partSectionForCode(
       const depth = n[0] || dims[0]
       const flange = n[1] || dims[1] || depth / 2
       const pfc = /PFC/i.test(clean) ? getPfcByDepth(depth) : undefined
-      if (pfc) return { points: channel(pfc.d, pfc.b, pfc.tw, pfc.tf, pfc.r ?? 0) }
+      if (pfc) {
+        return {
+          points: channel(pfc.d, pfc.b, pfc.tw, pfc.tf, pfc.r ?? 0),
+          innerSection: channelInner(pfc.d, pfc.b, pfc.tw, pfc.tf, pfc.r ?? 0),
+        }
+      }
       if (!(depth > 0 && flange > 0)) return null
       const tf = dims[2] ?? depth * 0.05
       const web = dims[3] ?? depth * 0.08
-      return { points: channel(depth, flange, web, tf, dims[4] ?? 0) }
+      return {
+        points: channel(depth, flange, web, tf, dims[4] ?? 0),
+        innerSection: channelInner(depth, flange, web, tf, dims[4] ?? 0),
+      }
     }
     case 'ub': {
       const section = getUb(clean)

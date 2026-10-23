@@ -108,7 +108,7 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
     legThickness: legThickness ?? 0,
     grade: header.grade,
     section: section.points,
-    innerSection: section.holes?.[0],
+    innerSection: section.innerSection ?? section.holes?.[0],
     holes,
     marks,
     unrolledPerimeter: layout.seam,
