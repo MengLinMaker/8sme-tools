@@ -75,7 +75,18 @@ export interface NcMarkSet {
   /** Flat XYZ pair list for scribe/marking polylines. */
   points: number[]
   /** Etch text placements; empty for scribe lines. */
-  texts: { at: Vec3; value: string; height: number; angle: number }[]
+  texts: {
+    at: Vec3
+    /** Outward face normal in scene coordinates, so the label can lie on the face. */
+    normal: Vec3
+    /** Unit vector along the member (the text baseline at angle 0). */
+    along: Vec3
+    /** Unit vector across the face, to keep the label upright. */
+    across: Vec3
+    value: string
+    height: number
+    angle: number
+  }[]
 }
 
 /** Segments around each hole ring — enough to read as a circle at part scale. */
@@ -454,8 +465,27 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     if (mark.text) {
       const [mx, my] = mark.points[0] ?? [0, 0]
       const placed = place(mark.face, mx, my)
+      // Face-plane basis so the text can be laid flat instead of billboarded (a billboard shows
+      // through the solid from behind and leaks around the silhouette).
+      const alongPoint = place(mark.face, mx + 1, my)
+      const acrossPoint = place(mark.face, mx, my + 1)
+      const unit = (dx: number, dy: number, dz: number): Vec3 => {
+        const length = Math.hypot(dx, dy, dz) || 1
+        return [dx / length, dy / length, dz / length]
+      }
       bucket.texts.push({
         at: placed.world,
+        normal: normal(mark.face),
+        along: unit(
+          alongPoint.world[0] - placed.world[0],
+          alongPoint.world[1] - placed.world[1],
+          alongPoint.world[2] - placed.world[2],
+        ),
+        across: unit(
+          acrossPoint.world[0] - placed.world[0],
+          acrossPoint.world[1] - placed.world[1],
+          acrossPoint.world[2] - placed.world[2],
+        ),
         value: mark.text.value,
         height: mark.text.height,
         angle: mark.text.angle,

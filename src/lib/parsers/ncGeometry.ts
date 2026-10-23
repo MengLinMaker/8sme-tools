@@ -189,7 +189,15 @@ export function parseNcGeometry(text: string): NcGeometry {
       face = null
       continue
     }
-    if (block !== 'AK' && block !== 'IK' && block !== 'BO' && block !== 'SI' && block !== 'PU' && block !== 'KO') continue
+    if (
+      block !== 'AK' &&
+      block !== 'IK' &&
+      block !== 'BO' &&
+      block !== 'SI' &&
+      block !== 'PU' &&
+      block !== 'KO'
+    )
+      continue
 
     const tokens = line.split(/\s+/)
     let index = 0
