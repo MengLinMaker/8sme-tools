@@ -392,6 +392,17 @@ export function attachOrbit(
   }
 }
 
+/**
+ * Keeps free orbit a fraction of a degree off the poles. OrbitControls is a turntable: exactly at a
+ * pole the view direction is parallel to `camera.up`, so `lookAt`'s right vector degenerates and the
+ * roll flips/jitters. Named face presets still land exactly on top/bottom — they roll `camera.up`
+ * perpendicular to the view, which OrbitControls reads as a 90° polar angle, far from this clamp.
+ */
+export function limitPolar(controls: OrbitControls): void {
+  controls.minPolarAngle = 0.01
+  controls.maxPolarAngle = Math.PI - 0.01
+}
+
 /** The grabbed viewport's visible height in scene units, so a wheel notch pans a fixed fraction. */
 function visibleHeight(camera: ZoomableCamera, controls: OrbitControls): number {
   if ((camera as OrthographicCamera).isOrthographicCamera) {

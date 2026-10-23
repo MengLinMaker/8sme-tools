@@ -76,7 +76,7 @@ import {
 } from '@/lib/step/seat'
 import { diffForViewer, meshForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
-import { attachOrbit, attachWheelPan, type OrbitBus, requestFocus } from './orbitSync'
+import { attachOrbit, attachWheelPan, limitPolar, type OrbitBus, requestFocus } from './orbitSync'
 import { SMOOTH_LINE_THRESHOLD_DEG, smoothLines } from './smoothLines'
 
 const GHOST_COLOR = 0x3ddc84
@@ -1544,6 +1544,7 @@ function mountScene(
   applyFrustum(container.clientWidth || 1, container.clientHeight || 1)
 
   const controls = new OrbitControls(camera, renderer.domElement)
+  limitPolar(controls)
   controls.enableDamping = true
   controls.dampingFactor = 0.08
   // Zoom where the pointer is, not always toward the centre — far handier for inspecting a part.

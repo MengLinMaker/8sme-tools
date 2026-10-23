@@ -13,7 +13,12 @@ import {
   WebGLRenderer,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { attachOrbit, attachWheelPan, type OrbitBus } from '@/features/preflight/orbitSync'
+import {
+  attachOrbit,
+  attachWheelPan,
+  limitPolar,
+  type OrbitBus,
+} from '@/features/preflight/orbitSync'
 
 /** One nested piece span along the beam, per side. */
 export interface BeamSlot {
@@ -181,6 +186,7 @@ function mountScene(
   camera.lookAt(centre)
 
   const controls = new OrbitControls(camera, renderer.domElement)
+  limitPolar(controls)
   controls.enableDamping = true
   controls.dampingFactor = 0.08
   controls.zoomToCursor = true
