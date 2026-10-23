@@ -190,6 +190,11 @@ be drawn there** (features may spill onto the edge). The part is still manufactu
 the 3D viewer simply does not draw the hidden side — and the 2D lines run to the seam edge as if
 continuing onto the back of the flanges/corners.
 
+**Consequence for markings:** `KO`/`PU` marks on `h` are silently **dropped** by WiseCAM for
+I/U sections (no `h` region in the development). M‑2 (`UB530*92`) carries mirrored `v`/`h` mark
+rectangles, but its NCEP has only the `v` copy. M‑26 (`SHS89*89*5`) keeps both `o` and `u`
+because the tube layout develops all four faces. Do not assume an `h` mark will be machined.
+
 Holes are `<circle cx=station cy=along>` on the outer development. How a feature that exists
 **only** on the hidden/inner side (`h`, inner wall) should be encoded is still open: every `h`
 `BO` line in the 2 Hidden Grove job is a Ø0 mark (`m`), not a hole, so there is no worked

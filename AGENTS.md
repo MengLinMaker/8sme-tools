@@ -85,6 +85,9 @@ maps DSTV faces to machine roles + enforces the cut-side rules.
   never substitute a clean/simplified prism.
 - **Etch the part mark** on each piece — it identifies which piece is which (must be in the
   NC/STEP, not only the viewer).
+- **WiseCAM NCEP drops `h` marks on I/U sections.** The development has no `h` region, so
+  `KO`/`PU`/`SI` on the rear web are silently not machined even when the NC carries them (M‑2
+  `UB530*92`). Don't treat an `h` mark as produced — see `docs/ncep-format.md`.
 - The 3D viewer must show the **real parts**, not simplified geometry.
 
 ## Toolchain

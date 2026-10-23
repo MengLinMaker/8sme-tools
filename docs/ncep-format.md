@@ -111,14 +111,14 @@ Observed conventions:
 | Field | Real value | Notes |
 |---|---|---|
 | `Type` | `8195` tube · `8199` channel · `8200` I | enum not documented |
-| `Name` | the **mark** (`M-1`) | not the profile |
+| `Name` (Part) | the **mark** (`M-1`) | not the profile; authoritative over `LabelContent`/`<text>` |
 | `Length` (Adobe) | `3000` in every sample | base-stock template, not the part length |
 | `RCornerMaxRadius` | `5` for I/U; the section radius for tubes | |
 | `technologyID` | a **valid GUID**, unique per part, **not** present in `Technology.xml` | format matters; meaning unknown |
 | `BaseZone idref` | same value as `CustomizeData`'s `ZoneBlock idref` | |
 | `adobeid` | the Adobe `idref` | |
-| `TotalCount` | quantity | all samples = 1 |
-| `RotateStyle/RotateAngle/Invert` | stance knobs | all samples = 0/0/0 |
+| `TotalCount` | quantity | real samples = 1; probe `Part.TotalCount=2` survives re-export |
+| `RotateStyle/RotateAngle/Invert` | stance knobs | real samples = 0/0/0; probes keep the flags but do not bake them into the part SVG |
 
 ### `CAD/CustomizeData.xml`
 
@@ -207,6 +207,15 @@ u: x = +half - flange + y
 Real M‑3 holes: `o y=27.25 → -336.92`, `v y=99 → -50`. The `gap` regions are the flange/web
 corners and should normally be empty.
 
+**Markings on the hidden face are silently dropped (`I`/`U`).** The NC can carry `KO`/`PU`
+marks on `h` as well as `v`, but the I/U layout above has **no `h` region**. WiseCAM imports
+only the `v` copy, so the rear-web marks are never machined. This is a WiseCAM limitation, not
+a bad NC: M‑2 (`UB530*92`) has mirrored `v`/`h` marking rectangles (e.g. `v x=252.75…262.75`,
+`h x=262.75…252.75`) and the exported NCEP contains the `v` mark only. Contrast M‑26
+(`SHS89*89*5`, `M`): the tube layout develops **all four** faces, so its `o` **and** `u` marks
+both survive. The preflight viewer draws the `h` marks faithfully; filter them to the developed
+faces when checking what WiseCAM will actually produce.
+
 **Tube (`M`, e.g. `RHS200*100*9`, `SHS89*89*5`)** — stations `0 … seam`, seam starts at the
 **`v` face centre**; developed face = `side - r·(2 - π/2)`:
 
@@ -246,18 +255,22 @@ For SHS89×89×5: `seam=334.54`, `o/u` centre at `83.63 / 250.90` — matches th
 4. **Adobe `USERPATH` group.** The real adobe has three `cadgroup`s, one
    `wh:params="USERPATH=USERPATH;"` carrying the applied cut paths. Ours emits a single group.
    Whether import requires it is untested.
-5. **`technologyID`.** A valid GUID is required (we previously emitted invalid groups). Whether
-   the *value* must reference something (registry/technology set) is unknown — it does not appear
-   in `Technology.xml`.
+5. **`technologyID`.** Real exports use a fresh GUID per part/adobe, so we emit one. It is not
+   validated (`not-a-guid` imports, probe 63) and is **not** the blocker: 30b keeps the control's
+   ID and still imports. It does not appear in `Technology.xml`.
 6. **`InnerCad` / `InnerT` / section arcs.** Real SVGs carry a discretised `InnerCad` and draw
    the section with arcs; ours omits `InnerCad` and uses a sampled polyline. Unknown if required.
 7. **ZIP flags/compression.** Real CAD entries use flags `6`; `mimetype`/`container.xml` are
-   stored. Our writer stores only `mimetype`. Likely harmless, unproven.
-8. **Quantity > 1.** Every sample is `TotalCount=1`; the multi-quantity behaviour is unverified.
-9. **Hidden-side cuts.** NCEP develops only the front surface; how a cut that exists only on the
-   back/inner face should be encoded is unknown.
-10. **`Length`/`RCornerMaxRadius`.** Matched to real samples (`3000`, `5`/section radius), but the
-    semantics are unconfirmed.
+   stored. `zipQt` reproduces that, but fflate's ordinary `zipSync` metadata (flags 0) also
+   imports (31/32), so the ZIP dialect is not the blocker.
+8. **Quantity > 1.** Real samples are `TotalCount=1`; probe 400–531 shows `Part.TotalCount=2`
+   survives re-export. Whether WiseCAM actually nests/cuts two is still unverified.
+9. **Hidden-side cuts/marks.** NCEP develops only the front surface (`o`/`v`/`u` for I/U; all
+   four for M). `h` marks are **silently dropped** for I/U (see the I-section note above); how a
+   cut that exists only on the back/inner face should be encoded is still unknown.
+10. **`Length`/`RCornerMaxRadius`.** Matched to real samples (`3000`, `5`/section radius).
+    Adobe `Length` alone does **not** drive geometry (probe 305); the end cut/`InnerCad` must be
+    edited. `RCornerMaxRadius` semantics are still unconfirmed.
 
 ---
 
@@ -268,18 +281,29 @@ For SHS89×89×5: `seam=334.54`, `o/u` centre at `83.63 / 250.90` — matches th
 | Files | 9, no `CNC/` | 9, no `CNC/` | ✅ |
 | `mimetype` | stored, first | stored, first | ✅ |
 | `Name` | `M-1` | `M-1` (passed explicitly) | ✅ |
-| `technologyID` | valid GUID | valid GUID | ✅ |
+| `technologyID` | valid GUID | **fresh random GUID** | ✅ |
 | Adobe `Length` | `3000` | `3000` | ✅ |
 | `RCornerMaxRadius` | `5` (I/U), `r` (tube) | same | ✅ |
-| Part SVG | arcs + `InnerCad` + `USERPATH` adobe | polylines, no `InnerCad`, single adobe group | ⚠️ |
-| ZIP flags | CAD entries flag 6; container stored | flags 0 | ⚠️ |
+| Part SVG | arcs + `InnerCad` + `USERPATH` adobe | sibling `cadgroup`; polylines, no `InnerCad` | ⚠️ |
+| ZIP flags | CAD entries flag 6; container stored | matches real (`zipQt`) | ✅ |
 | End cuts | shaped/mitred | straight | ⚠️ (no bevel yet) |
 
 ---
 
 ## 6. Validation matrix (licensed machine)
 
-Generated into `~/Downloads/ncex-probes/`:
+Generated by `probes.test.ts` into `~/Downloads/ncex-probes/`.
+
+**Known result:** the old `33-real-M1-ourpart.ncep` (real package + our part SVG) **crashed
+WiseCAM**. The fix in `ncex.ts` makes the part SVG follow the real grammar exactly:
+
+- cut/end lines, holes and the mark are **direct children** of `cadpart` (the section outline
+  lives in a trailing `cadgroup`, as in every real export);
+- **every** hole and truncate line carries `wh:params` with an `InnerCad` vertex dump;
+- every element carries `wh:technical` (`T={};` or the hole lead template);
+- the mark text carries its `transform="rotate(90 x,y)"` and the `wh:font-*` attributes.
+
+Run the set in this order — the first failure names the required feature:
 
 | File | Isolates |
 |---|---|
@@ -287,17 +311,50 @@ Generated into `~/Downloads/ncex-probes/`:
 | `30b-real-M1-rezipped.ncep` | ZIP writer/flags/order |
 | `31-real-M1-badguid.ncep` | invalid `technologyID` format |
 | `32-real-M1-randomguid.ncep` | valid-but-unknown GUID value |
-| `33-real-M1-ourpart.ncep` | real package + our part SVG |
-| `20-ncep-M-1.ncep` | our full package |
+| `33b-real-M1-ourpart-fixed.ncep` | real package + our part SVG (fixed grammar) |
+| `34-real-M1-our-adobe.ncep` | real package + our adobe SVG |
+| `35-real-M1-our-part-and-adobe.ncep` | both our SVGs in the real package |
+| `36-real-docs-our-cad.ncep` | our whole CAD payload, WiseCAM's package docs |
+| `20-ncep-M-1.ncep` | our full generated package |
+| `37-real-M1-ourpart-no-innercad.ncep` | fixed part minus `InnerCad` |
+| `38-real-M1-ourpart-no-technical.ncep` | fixed part minus `wh:technical` |
+| `39-real-M1-ourpart-no-text-transform.ncep` | fixed part minus the mark `transform` |
+| `40-real-M1-ourpart-old-structure.ncep` | fixed part in the old single-`cadgroup` layout |
+| `41-real-M1-adobe-no-userpath.ncep` | real adobe minus the `USERPATH` group |
 
-Read it as: `30 OK` → `30b` (container) → `31`/`32` (GUID) → `33` (geometry) → `20` (metadata).
+Read it as: `30/30b` (container) → `31`/`32` (GUID) → `33b` (part) → `34`/`35` (adobe) →
+`36` (docs) → `20` (full). If `33b` still fails, `37`–`40` say which part-SVG feature is
+required.
 
 ---
 
-## 7. Sources / cross-refs
+## 7. NC → NCEP converter prototype
 
-- Real samples: `~/Downloads/NCEP samples 2 Hidden Grove/*.ncep`;
-  fixtures `test/fixtures/ncep/` (`M-1`, `M-3`, `M-34`, `M-35`, `M-42` + matching `.nc1`).
+`tools/nc-to-ncep.mjs` converts DSTV `.nc1`/`.nc` files directly with our writer:
+
+```sh
+pnpm nc-to-ncep -i part.nc1 -o out/ --mark M-1 --suffix=-A
+pnpm nc-to-ncep -i nc-folder/ -o out/ --suffix=-A
+```
+
+Use `--suffix` (or a new `--mark`) for every repeated test — WiseCAM caches by `Name`.
+The command writes `conversion-report.json` with profile, length, section-path count, holes,
+section vertices and package size. Supported today: **I** (UB/WB/UC/WC), **U** (PFC/TFC) and
+**M** (RHS/SHS/CHS). **T**, angle and round profiles return unsupported until a real NCEP
+sample exists.
+
+The programmatic gate is `src/lib/wisecam/ncToNcep.test.ts`: it converts M-1/M-3/M-34/M-35/M-42,
+checks the 9-file package, 1-vs-2 section paths, open PFC cavity vs closed hollow void, hole
+count, mark consistency, fresh `technologyID`, determinism and unsupported-`T` rejection.
+The remaining gate is still physical: import the generated files in WiseCAM and confirm the cut
+geometry, then add any newly discovered behaviours as tests.
+
+## 8. Sources / cross-refs
+
+- Real samples: `~/Downloads/NCEP samples 2 Hidden Grove/*.ncep`; all 17 are committed under
+  `test/fixtures/ncep/` with `manifest.json` + a hard-failing guard test. Five also have matching
+  `.nc1`. Known-good generated imports are in `test/fixtures/ncep/working/` (`30`, `30b`, `31`,
+  `32`, `77`). See that folder's `README.md` — do not delete or rewrite them.
 - WiseCAM Tube manual R3 — §5.1 (import list), §12.1 *Export Part (.ncep)*.
 - `docs/ncexa-format.md` — shared NCEX OPC/ZIP container, SVG grammar, `.zua` DSL.
 - `docs/wisecam-formats.md` — supported formats and capability matrix.
