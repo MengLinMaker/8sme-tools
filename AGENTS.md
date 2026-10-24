@@ -90,6 +90,20 @@ maps DSTV faces to machine roles + enforces the cut-side rules.
   `UB530*92`). Don't treat an `h` mark as produced — see `docs/ncep-format.md`.
 - The 3D viewer must show the **real parts**, not simplified geometry.
 
+## NCEP probe strategy
+
+- **Start from a real control NCEP; edit only what is under test.** Do not generate a whole
+  package from scratch for import tests — the generated package has too many variables and
+  mostly fails, which wastes machine time without isolating a cause.
+- **One variable per file, small matrix.** Pair a byte-copy control with 2–3 variants for each
+  section; use unique part names so WiseCAM cannot reuse a cached part. Keep packs small (roughly
+  10 files, not 60).
+- **Work up in stages:** start from a real populated control and change one feature category at
+  a time: holes → end/start cuts → bevels/notches → marks. Do not combine stages until the
+  previous one passes. Do not test blank/feature-stripped parts; keep the start/end trims and
+  section group.
+- Broad "test everything" packs are not useful; test only the next unanswered question.
+
 ## Toolchain
 
 - pnpm + Vite + React + TanStack Router + PWA; Tailwind + shadcn-style UI; Biome; Vitest.

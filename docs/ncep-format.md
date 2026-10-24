@@ -8,9 +8,9 @@ WiseCAM Tube manual §5.1 / §12.1.
 
 Read with `docs/ncexa-format.md` (the shared NCEX container) and `docs/wisecam-formats.md`.
 
-Status: **container + unrolled geometry for PFC/UB/tube are decoded; T/angle/round, bevelled
-ends and some metadata are still open.** A live Add-from-File test on the licensed machine is the
-only proof of correctness.
+Status: **container + unrolled geometry for PFC/UB/RHS and the reference canonical/marking
+variations are decoded; T/angle/round, full bevel generation and some metadata are still open.**
+A live Add-from-File test on the licensed machine is the only proof of correctness.
 
 ---
 
@@ -34,7 +34,7 @@ CAD/CadRoot.xml              Adobes + Parts + BaseZone
 CAD/Technology.xml           32,316 bytes; 8 layers (cut/punch/mark params)
 CAD/CustomizeData.xml        ZoneBlock with 8 empty <customize> stubs
 CAD/adobe1843525.svg         stock layout + applied cut paths (3 groups)
-CAD/part1843526.svg          unrolled part (2 end cuts + section + holes + mark)
+CAD/part1843526.svg          unrolled part (start/end trims + section + holes + text/mark bars)
 ```
 
 ZIP details from the real sample: `mimetype` and `container.xml` are **stored** (method 0);
@@ -147,40 +147,56 @@ Only the front surface is developed. For an I-section that is the two flange out
 web; the inner/back faces are not drawn (the viewer greys them out). A feature that only exists
 on the hidden side is not represented here.
 
-### Structure (real `part1843526.svg`)
+### Structure (representative real part SVG)
 
 ```xml
 <svg version="1.1" xmlns:wh="http://www.weihong.com.cn/cadcam" ...>
- <style>… .layer0 … .layer6 …</style>
+ <style>… .layer0 … .layer4 … .layer6 …</style>
  <g wh:id="15280187" wh:class="cadpart" wh:layer="-1" wh:isfill="0" wh:machining="1"
     wh:refid="1843526" wh:matrixinfo3d="1,0,0,0 0,1,0,0 0,0,1,0" class="layer-1">
   <path ... d="M-290,0 L290,0" wh:params="IsTrucate=1;TrucateType=0;InnerCad=…"/>
-  <path ... d="M290,5084.2 L-290,5084.2" wh:params="IsTrucate=1;TrucateType=1;Part=M-1;InnerCad=…"/>
-  <path ... d="M-190,50 L190,50 L190,-50 … A14,14 0 0,1 158.5,40 …"/>   <!-- section -->
-  <path ... d="M-172.5,-50 … A14,14 …"/>                              <!-- inner section -->
   <circle ... cx="-240.00" cy="135.00" r="11.00"/>
   …
+  <rect wh:class="cadrectangle" wh:layer="6" wh:isfill="0" wh:machining="1"
+        x="-126.30" y="40" width="252.60" height="10" wh:direction="0" .../>
+        <!-- mark bar (UB/PFC reference exports; M-1 has text only) -->
   <text wh:class="cadtext" wh:layer="6" x="260.00" y="2480.20" font-family="Arial"
         font-size="40" transform="rotate(90 260.00,2480.20)"
         wh:params="IsLabel=true;LabelType=0;LabelContent=M-1;LabelWidth=1;LabelHeight=40;
                    LabelRotate=90.0;LabelSource=1;">M-1</text>
+  <path ... d="M290,5084.2 L-290,5084.2" wh:params="IsTrucate=1;TrucateType=1;Part=M-1;InnerCad=…"/>
+ </g>
+ <g wh:id="15280294" wh:class="cadgroup" wh:layer="0" wh:isfill="0" wh:machining="1" class="layer0">
+  <path ... d="M-190,50 L190,50 L190,-50 … A14,14 …"/>   <!-- outer section -->
+  <path ... d="M-172.5,-50 … A14,14 …"/>                  <!-- inner section (PFC/tube only) -->
  </g>
 </svg>
 ```
+
+`cadgroup` is a **sibling of `cadpart`**, not a child. Holes, cut paths, `rect` marks and
+`text` are direct children of `cadpart`; the section outline(s) follow in the trailing
+`cadgroup`. Getting this nesting wrong leaves an empty `cadpart` / misplaced section and
+WiseCAM rejects the part even though the SVG is well-formed.
 
 Key attributes:
 
 | Attribute | Meaning |
 |---|---|
-| `wh:class="cadpart"` | root group; `wh:refid` = the `<Part idref>` |
-| `wh:class="cadgroup"` | inner group holding geometry |
-| `wh:layer` | `0` cut, `1` lead/applied, `6` mark, `-1` container |
+| `wh:class="cadpart"` | part geometry group; `wh:refid` = the `<Part idref>` |
+| `wh:class="cadgroup"` | **sibling** group holding the section outline(s), not a child of `cadpart` |
+| `wh:class="cadpolyline"` | a cut/trim/section/bevel path |
+| `wh:class="cadcircle"` | a hole |
+| `wh:class="cadrectangle"` | a marking bar |
+| `wh:class="cadtext"` | the label/etch text |
+| `wh:layer` | `0` cut, `1` lead/applied, `4` corrected mark, `6` mark, `-1` container |
 | `wh:machining` | `1` = actually cut/marked |
-| `wh:isfill` | fill flag |
+| `wh:isfill` | fill flag; real start/end trims are `1`, section and holes are `0` |
 | `IsTrucate=1;TrucateType=0\|1` | start (0) / end (1) cut contour (note the typo "Trucate") |
 | `InnerCad=…` | discretised copy of the curve (`x,y,radius` triples, `N`-separated) |
 | `Part=M-1` | mark repeated on the end-cut params |
-| `IsLabel=true;LabelContent=…` | the etch/mark text |
+| `PosMap={…}` | position mapping for a bevelled/mitred end segment or a shaped cut |
+| `needSetAdobe=true` | corrected mark/cut adjustment; WiseCAM keeps this through re-export |
+| `IsLabel=true;LabelContent=…` | the label text **node**; the actual mark is also encoded by `rect` bars |
 
 ### Unrolled station formulas (validated on 17 samples)
 
@@ -239,6 +255,120 @@ For SHS89×89×5: `seam=334.54`, `o/u` centre at `83.63 / 250.90` — matches th
 - `wh:technical` carries the lead-in/out (WiseCAM's own default).
 - `InnerCad` is the discretised circle.
 
+### Reference variation set (2026-10-24)
+
+`~/Downloads/ncep-export-variations/` contains 19 real NCEP variants and one `.ncexa` export
+with 20 parts. The set is copied into `test/fixtures/ncep/reference-variations/` and hash-guarded
+by `referenceFixtures.test.ts`; use the repo copy for validation. The extra part is `UB canonical corrected marking and hole`; it has no matching
+input NCEP and is a combined reference. These files are the current golden set for validating
+both the parser and the generator.
+
+Variations per family:
+
+| Family | Variants |
+| --- | --- |
+| PFC (8/15; bbox 250×90) | `PFC`, `corrected marking`, `no marking`, `canonical`, `90 clockwise`, `90 anti-clockwise` |
+| UB (6.1/10.2; bbox 165×304) | `UB`, `corrected hole`, `corrected marking`, `no marking`, `canonical`, `90 clockwise`, `90 anti-clockwise`, plus the combined `.ncexa` part |
+| RHS 100×50×5 | `RHS`, `canonical`, `90 clockwise`, `90 anti-clockwise` |
+| Beveled PFC (4.2/6.7) | `Beveled PFC`, `Beveled PFC remove bevel` |
+
+#### Canonical orientation
+
+Canonical changes the **section `cadgroup` only** in these files. Holes, marking rectangles and
+text keep the same developed coordinates. Do **not** apply canonical as a whole-part transform.
+
+| File / family | Section bbox (mm) | Transform from base | Equivalent file |
+| --- | --- | --- | --- |
+| `PFC`, `PFC canonical` | x −125…125, y −45…45 | none — already canonical | — |
+| `PFC 90 clockwise` | x −45…45, y −125…125 | `(x,y) → (y,−x)` | — |
+| `PFC 90 anti-clockwise` | x −45…45, y −125…125 | `(x,y) → (−y,x)` | — |
+| `UB` (base) | x −82.5…82.5, y −152…152 | web-vertical (Tekla stance) | — |
+| `UB canonical` | x −152…152, y −82.5…82.5 | `(x,y) → (−y,x)` | **identical to `UB 90 anti-clockwise`** |
+| `UB 90 clockwise` | x −152…152, y −82.5…82.5 | `(x,y) → (y,−x)` | — |
+| `RHS`, `RHS canonical` | x −50…50, y −25…25 | none — already canonical | — |
+| `RHS 90 clockwise` | x −25…25, y −50…50 | `(x,y) → (y,−x)` | — |
+| `RHS 90 anti-clockwise` | x −25…25, y −50…50 | `(x,y) → (−y,x)` | — |
+
+So PFC and RHS base exports are already in canonical stance; **UB base is not**. For UB the
+canonical section is the base rotated 90° CCW (`−y, x`) and is interchangeable with the
+`90 anti-clockwise` variant.
+
+#### Marking correction
+
+The mark is encoded twice in these files: as `cadtext` and as one or more `cadrectangle` bars.
+`corrected marking` fixes the **bars**, not the text:
+
+| Family | Text | Bars | Correction |
+| --- | --- | --- | --- |
+| PFC | `5M-2` | 1 bar at `(-5, 3306)`, 110×10 | `wh:layer` 6 → 4; add `wh:params="needSetAdobe=true;"` |
+| UB | `5M-5` | 4 bars at y = 40, 1188.5, 1808, 5982 | same layer/param change; positions unchanged |
+| RHS | none | none | — |
+
+- Bar positions and the `<text>` node are unchanged by the correction.
+- `no marking` removes **both** the bars and the text node.
+- The `.ncexa` preserves the corrected `layer=4` + `needSetAdobe=true` bars.
+- `Part.Name` is a probe label here (`UB corrected marking`), while the etched mark stays
+  `5M-5`. Treat the text/bar content separately from `Part.Name`; keep them consistent in
+  production files.
+
+#### UB hole correction
+
+`UB corrected hole` removes whole developed-x columns, not isolated holes:
+
+| Removed column | Holes | Radius | Along positions |
+| --- | --- | --- | --- |
+| `x = +178.857` | 7 | 6.999 | 250, 1150, 2050, 2950, 3850, 4750, 5650 |
+| `x = -178.857` | 4 | 11.0 | 135.5, 235.5, 5754.5, 5854.5 |
+
+Base has **47** holes; corrected has **36**; no holes are added. This is the current golden
+correction for this UB part. It is not yet known whether the same columns are dropped by a
+general rule or whether this is specific to the part's source geometry — validate a second UB
+before generalising.
+
+The `.ncexa` combined part has the canonical UB section, 36 corrected holes, and the corrected
+bar layer/params.
+
+#### Beveled end
+
+`Beveled PFC` encodes the end bevel as a **cluster of paths**, not as one `TrucateType=1` trim:
+
+- start: normal `TrucateType=0` path;
+- middle: 6 holes;
+- end: multiple path segments carrying `PosMap={Src:4,Dst:…}` and `needSetAdobe=true`; there is
+  **no** `TrucateType=1` path in the beveled variant.
+
+`Beveled PFC remove bevel` replaces that end cluster with a single straight
+`TrucateType=1;Part=…` path. Start trim, holes, text and section are unchanged. Both variants
+survive the `.ncexa` re-export. A validator must allow a bevelled end without a single
+`TrucateType=1` path; a generator needs to emit the `PosMap` cluster, not just a polyline.
+
+### Validator / generator contract
+
+A validator that matches these references should check:
+
+1. Root children are `style`, one `cadpart`, one `cadgroup`; `cadgroup` is a sibling, never
+   nested inside `cadpart`.
+2. `cadpart` has exactly one `TrucateType=0` start trim and, for a straight end, one
+   `TrucateType=1` end trim. A bevelled end may instead have the `PosMap` cluster.
+3. `cadgroup` has **one** section path for UB and **two** for PFC/tube; section paths have
+   `wh:isfill="0"`, trims have `wh:isfill="1"`.
+4. Holes are `cadcircle` direct children of `cadpart`, with `cx`, `cy`, `r`, `wh:direction`,
+   `InnerCad` and `wh:technical`.
+5. Marks are separate `cadrectangle` bars and `cadtext`; corrected bars are `layer=4` with
+   `needSetAdobe=true`, uncorrected bars are `layer=6`; text is `layer=6`.
+6. Canonical section section-group transforms match the table above; do not transform holes,
+   bars or text with the section.
+7. Bevel segments may carry `PosMap`/`needSetAdobe`; do not reject the part for missing a single
+   end trim when that cluster is present.
+8. `Part.Name` can differ from the etched mark in a probe; for production keep `Name`,
+   `LabelContent`, the text node and the mark bars consistent.
+
+A generator should use a real NCEP as the container/adobe/Technology template, write only the
+part SVG, emit the canonical section group for the family, preserve unrolled hole/mark
+coordinates, encode corrected marks as `layer=4` bars with `needSetAdobe=true`, and emit bevels
+as the `PosMap` cluster. Do not generate a blank part: the start/end trim paths and section
+group are structural.
+
 ---
 
 ## 4. What we are still unsure about
@@ -250,8 +380,10 @@ For SHS89×89×5: `seam=334.54`, `o/u` centre at `83.63 / 250.90` — matches th
    All have `RotateAngle=0;Invert=0`, so handedness is not in the header. The writer exposes
    `flipFlanges`, but a rule (or a STEP-derived cue) is still missing.
 2. **No T / angle / round samples.** `partFromNc` returns `null` for `T`, `L`, `RO`.
-3. **Bevelled/mitred end cuts.** The end contour (`TrucateType=1`) can be a shaped polyline with
-   bevel/angle columns; our writer emits a straight line. Not decoded.
+3. **Bevelled/mitred end cuts.** The reference `Beveled PFC` shows a bevel is a **cluster of
+   paths** with `PosMap`/`needSetAdobe`, not a single `TrucateType=1` path. The reference is
+   decoded, but the generator still emits only straight ends; the exact mapping from NC bevel
+   columns to the cluster is not implemented.
 4. **Adobe `USERPATH` group.** The real adobe has three `cadgroup`s, one
    `wh:params="USERPATH=USERPATH;"` carrying the applied cut paths. Ours emits a single group.
    Whether import requires it is untested.
@@ -271,6 +403,14 @@ For SHS89×89×5: `seam=334.54`, `o/u` centre at `83.63 / 250.90` — matches th
 10. **`Length`/`RCornerMaxRadius`.** Matched to real samples (`3000`, `5`/section radius).
     Adobe `Length` alone does **not** drive geometry (probe 305); the end cut/`InnerCad` must be
     edited. `RCornerMaxRadius` semantics are still unconfirmed.
+11. **Mark bar semantics.** The reference correction changes `cadrectangle` from layer 6 to
+    layer 4 + `needSetAdobe=true`. What layer 4 tells WiseCAM, and whether the text node is
+    required alongside the bars, is still untested.
+12. **UB hole-correction rule.** One UB reference removes two whole x-columns (47→36 holes). A
+    second UB is needed to know whether this is a general duplicate-column rule or part-specific.
+13. **Canonical is section-only here.** The reference canonical files rotate only `cadgroup`;
+    holes/marks/text remain fixed. Verify this is WiseCAM's intended machine-stance import
+    behaviour on a second family before relying on it for production nesting.
 
 ---
 
@@ -286,11 +426,18 @@ For SHS89×89×5: `seam=334.54`, `o/u` centre at `83.63 / 250.90` — matches th
 | `RCornerMaxRadius` | `5` (I/U), `r` (tube) | same | ✅ |
 | Part SVG | arcs + `InnerCad` + `USERPATH` adobe | sibling `cadgroup`; polylines, no `InnerCad` | ⚠️ |
 | ZIP flags | CAD entries flag 6; container stored | matches real (`zipQt`) | ✅ |
-| End cuts | shaped/mitred | straight | ⚠️ (no bevel yet) |
+| Canonical section | PFC/RHS already canonical; UB rotated `(−y,x)` | section builder emits canonical stance | ✅/⚠️ verify UB |
+| Marks | `cadtext` + `cadrectangle` bars; corrected bars layer 4 + `needSetAdobe` | text only; no `cadrectangle` bars | ⚠️ |
+| End cuts | shaped/mitred | straight | ⚠️ (bevel cluster not generated) |
 
 ---
 
 ## 6. Validation matrix (licensed machine)
+
+> **Historical (2026-10-21).** Do not rerun this broad matrix. The current golden set is
+> `~/Downloads/ncep-export-variations/` and the current strategy is small, control-first probes
+> (see `docs/ncep-probe-log.md`). This section is kept for the ZIP/GUID/part finding, not as a
+> test plan.
 
 Generated by `probes.test.ts` into `~/Downloads/ncex-probes/`.
 
@@ -347,7 +494,9 @@ The programmatic gate is `src/lib/wisecam/ncToNcep.test.ts`: it converts M-1/M-3
 checks the 9-file package, 1-vs-2 section paths, open PFC cavity vs closed hollow void, hole
 count, mark consistency, fresh `technologyID`, determinism and unsupported-`T` rejection.
 The remaining gate is still physical: import the generated files in WiseCAM and confirm the cut
-geometry, then add any newly discovered behaviours as tests.
+geometry, then add any newly discovered behaviours as tests. Known writer gaps from the reference
+set: no `cadrectangle` mark bars, no `PosMap` bevel cluster, and UB canonical stance still needs
+an explicit verification against the reference.
 
 ## 8. Sources / cross-refs
 
@@ -356,6 +505,9 @@ geometry, then add any newly discovered behaviours as tests.
   `.nc1`. Known-good generated imports are in `test/fixtures/ncep/working/` (`30`, `30b`, `31`,
   `32`, `77`). See that folder's `README.md` — do not delete or rewrite them.
 - WiseCAM Tube manual R3 — §5.1 (import list), §12.1 *Export Part (.ncep)*.
+- Reference variations: `test/fixtures/ncep/reference-variations/` (19 NCEPs + one `.ncexa`;
+  copied from `~/Downloads/ncep-export-variations/`), documented above. These are the
+  canonical/marking/hole/bevel golden set used by the validator and probe generator.
 - `docs/ncexa-format.md` — shared NCEX OPC/ZIP container, SVG grammar, `.zua` DSL.
 - `docs/wisecam-formats.md` — supported formats and capability matrix.
 - Code: `src/lib/wisecam/layout.ts` (stations), `ncex.ts` (package/SVG writer),

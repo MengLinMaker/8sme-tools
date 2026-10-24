@@ -18,7 +18,9 @@ Probe folders live in `~/Downloads/`:
 - `ncep-probes-220-229/` — compression-level isolation (220–225) and final level-6 packages (226–229)
 - `ncep-probes-300-329/` — one-at-a-time content edits on real M-1 / M-26 / M-34
 - `ncep-probes-400-531/` — section permutation matrix (same edits on PFC/UB/SHS/RHS)
-- `ncep-probes-own/` — **full own-part packages** from the writer, no real package bytes (240–245)
+- `ncep-probes-own/` — historical full own-part packages (240–245); **do not extend this route**
+- `ncep-inject-620-627/` — control-first feature injection: own holes/end cut and donor bevels
+- `ncep-export-variations/` — 19 real reference variants + `.ncexa`; canonical/mark/hole/bevel golden set (repo copy: `test/fixtures/ncep/reference-variations/`)
 
 ## Reference fixtures (do not delete)
 
@@ -469,13 +471,16 @@ If 121–124 work but 90–94 fail, the content is fine and only `zipQt` is at f
 fail, the generated part/adobe geometry is at fault for that mark (M-34's missing notch is the
 known suspect).
 
-## Own-part probes (240–245)
+## Own-part probes (240–245) — historical, do not extend
 
-The import blocker narrowed to the section group: real **PFC** and **hollow** exports carry
-**two** section paths (outer + inner/void), while real **UB** carries only the outer. All failing
-generated packages (`220–229`) were PFC with one section path. The writer now emits the PFC
-inner cavity as an **open** path (the channel mouth is open at the flange toes) in the same
-sibling `cadgroup`.
+The broad 2026-10-23 pack showed that most generated-from-scratch packages still failed to load
+(some reached preview). This route has too many variables to isolate a cause; stop adding probes
+here and use the control-first injection matrix below.
+
+The earlier section-group finding still stands: real **PFC** and **hollow** exports carry **two**
+section paths (outer + inner/void), while real **UB** carries only the outer. The writer emits the
+PFC inner cavity as an **open** path (the channel mouth is open at the flange toes) in the same
+sibling `cadgroup`, but that alone did not make generated packages reliable.
 
 | Probe | Part | Section paths | Expected |
 | --- | --- | --- | --- |
@@ -494,18 +499,68 @@ WRITE_NCEX_PROBES=~/Downloads/ncep-probes-own \
   pnpm exec vitest run src/lib/wisecam/probes.own.test.ts
 ```
 
+## Reference export variations (2026-10-24)
+
+`test/fixtures/ncep/reference-variations/` (copied from `~/Downloads/ncep-export-variations/`)
+is the current golden set for parser/generator validation: 19 input NCEPs and one `.ncexa` with 20 parts (the extra is `UB canonical corrected marking and
+hole`). It covers PFC, UB, RHS and a beveled PFC.
+
+Key findings are documented in `docs/ncep-format.md` §3:
+
+- canonical rotation affects the **section `cadgroup` only**; PFC/RHS base exports are already
+  canonical, UB needs `(x,y) → (−y,x)`;
+- corrected marks change `cadrectangle` bars from layer 6 to layer 4 + `needSetAdobe=true`,
+  leaving the text node and positions unchanged;
+- UB hole correction removes two complete x-columns (47 → 36 holes);
+- the beveled PFC end is a `PosMap` path cluster, not a single `TrucateType=1` path.
+
+Use these files to make the validator match WiseCAM before generating new probes. Do not infer
+general rules from the single UB hole correction without a second UB reference.
+
+## Control-first feature injection (620–627)
+
+The active strategy is to keep a **real populated control** — holes, text, section and trims —
+and change one feature category per file. Blank parts are not useful: real beams always have
+features, and removing the start/end trims leaves an invalid empty `cadpart`.
+
+| Probe | Base | Change |
+| --- | --- | --- |
+| 620 | M-1 PFC380 | real control + **own NC holes** |
+| 621 | M-3 UB310 | real control + **own NC holes** |
+| 622 | M-35 SHS89 | real control + **own NC holes** |
+| 623 | M-1 PFC380 | real control + **own NC end cut** |
+| 624 | M-35 SHS89 | real control + **own NC end cut** |
+| 625 | M-8 PFC300 | real control + M-34 **notched/bevelled start** |
+| 626 | M-3 UB310 | real control + M-5 **bevelled start** |
+| 627 | M-42 RHS100x50 | real control + M-43 **bevelled start** |
+
+Every base keeps its real holes, text, section and the untested trim. Each probe changes only
+the named feature category and gets a unique part name. The donor bevel files use a same-section
+control so the profile and developed width match.
+
+Test in order: `620–622` holes, then `623–624` end cuts, then `625–627` bevels. Stop at the first
+failure. The earlier `600–608` blank pack is discarded.
+
+Generate with:
+
+```sh
+WRITE_NCEX_PROBES=~/Downloads/ncep-inject-620-627 \
+  pnpm exec vitest run src/lib/wisecam/probes.injectFeatures.test.ts
+```
+
 ## Reproduce
 
 ```sh
+# Active: control-first injection, step 1
+WRITE_NCEX_PROBES=~/Downloads/ncep-inject-600-608 \
+  pnpm exec vitest run src/lib/wisecam/probes.inject.test.ts
+
+# Historical matrices — kept for reference, do not extend
 WRITE_NCEX_PROBES=~/Downloads/ncep-probes-400-531 \
   pnpm exec vitest run src/lib/wisecam/probes.matrix.test.ts
 
 WRITE_NCEX_PROBES=~/Downloads/ncep-probes-300-329 \
   pnpm exec vitest run src/lib/wisecam/probes.minor.test.ts
-
-# 120-124 (trim the historical 100-113 block first)
-WRITE_NCEX_PROBES=~/Downloads/ncep-probes-100-124 \
-  pnpm exec vitest run src/lib/wisecam/probes.zip.test.ts
 ```
 
 The older ladder/level/part/variant generators are archived in

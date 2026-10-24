@@ -1,2 +1,3 @@
 *.ncep binary
+*.ncexa binary
 *.nc1 text

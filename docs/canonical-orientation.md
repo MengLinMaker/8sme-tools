@@ -49,6 +49,25 @@ the tests in `stock.test.ts`.
 > — it does not need to match Tekla's. `reconstructFromNc` also builds NC parts in the authored
 > (web-vertical) pose and rolls the finished solid back to canonical (`ncAuthoredStancePoints`).
 
+### NCEP reference evidence (2026-10-24)
+
+`test/fixtures/ncep/reference-variations/` (copied from `~/Downloads/ncep-export-variations/`)
+confirms the stance mapping in the **NCEP section group**:
+
+| Reference | Base section | Canonical section | Transform |
+| --- | --- | --- | --- |
+| PFC 250×90 | already depth-horizontal | unchanged | none |
+| RHS 100×50 | already long-side-horizontal | unchanged | none |
+| UB 165×304 | web-vertical (`x=±82.5`, `y=±152`) | depth-horizontal (`x=±152`, `y=±82.5`) | `(x,y) → (−y,x)` |
+
+The UB canonical section is identical to the reference's `90 anti-clockwise` variant. The
+`90 clockwise` variant uses `(x,y) → (y,−x)`.
+
+Important: canonicalisation in these NCEP exports rotates **only the section `cadgroup`**.
+Holes, marking bars and text stay on the same developed `(station, along)` coordinates. Do not
+apply the section transform to the flat pattern. Full details and the marking/hole/bevel
+findings are in `docs/ncep-format.md` §3.
+
 ## 3. DSTV faces and their machine role
 
 DSTV face letters (the first token of every `BO` / `AK` / `IK` / `SI` line):

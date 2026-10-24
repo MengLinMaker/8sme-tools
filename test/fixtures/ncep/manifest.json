@@ -87,6 +87,106 @@
       "bytes": 8550
     },
     {
+      "path": "reference-variations/Beveled PFC remove bevel.ncep",
+      "sha256": "3b6a516a71d1e9040eaa9e49df50a7f474fc732fd56e5b91e6db54bd95814f6c",
+      "bytes": 46978
+    },
+    {
+      "path": "reference-variations/Beveled PFC.ncep",
+      "sha256": "6bf80a2c52d88829014bd4c13fe5774fd9ea8dc69d7a269c0950a4fa58ed5de4",
+      "bytes": 54096
+    },
+    {
+      "path": "reference-variations/necp-export-variations.ncexa",
+      "sha256": "2272cf45640d0905d33a87c79d460f170c59ed12409c0647fdd42e3be0a328e0",
+      "bytes": 752806
+    },
+    {
+      "path": "reference-variations/PFC 90 anti-clockwise.ncep",
+      "sha256": "121ceda07557dc072c6aab3b44b8d54e10c189ba948d732a8d73c678535ae898",
+      "bytes": 51443
+    },
+    {
+      "path": "reference-variations/PFC 90 clockwise.ncep",
+      "sha256": "cfd6bd4f9bafb1dd867063ffce3bad4d99ac2aebccc8b35e976c1da6a6873f5c",
+      "bytes": 51418
+    },
+    {
+      "path": "reference-variations/PFC canonical.ncep",
+      "sha256": "c22add0d0394aa3c8d9142a1e78a32e7b10e662cc03910fe39ce1a7c6d0ad19e",
+      "bytes": 51380
+    },
+    {
+      "path": "reference-variations/PFC corrected marking.ncep",
+      "sha256": "ab8c1be25c7e6815465149778048fd77bd80003eb321dfc6006520eba9399018",
+      "bytes": 51430
+    },
+    {
+      "path": "reference-variations/PFC no marking.ncep",
+      "sha256": "e02e4ad84d3dbe4fbcf2015dbf5d12c954232ab64add8cd36bed849ffac52dcc",
+      "bytes": 50779
+    },
+    {
+      "path": "reference-variations/PFC.ncep",
+      "sha256": "50901972a0ab7a442954e831b49484bfccdc1da880d5aa1f93ad2b3c1eddb5ba",
+      "bytes": 51377
+    },
+    {
+      "path": "reference-variations/RHS 90 anti-clockwise.ncep",
+      "sha256": "f191076ef29e79383cb49afb8ccbfc5a8f6579bc4b4d8cfcecfa7b3e5b8fd6cc",
+      "bytes": 30878
+    },
+    {
+      "path": "reference-variations/RHS 90 clockwise.ncep",
+      "sha256": "4ea2a080192b4256c1be7a3f978aa32436fc872f6a253aa7ad560232de55feb7",
+      "bytes": 30847
+    },
+    {
+      "path": "reference-variations/RHS canonical.ncep",
+      "sha256": "d6a12274925e6157a4bc8e08a2499ab453a4f4dd9f8d67b56ae0cd8164b24dd2",
+      "bytes": 30814
+    },
+    {
+      "path": "reference-variations/RHS.ncep",
+      "sha256": "40ac4da352ee1c5383d358d8dfb45e7e0e3bbec7403543ad349cf2f0f78e0ba6",
+      "bytes": 30789
+    },
+    {
+      "path": "reference-variations/UB 90 anti-clockwise.ncep",
+      "sha256": "b091d968cea007b4d7e1be223ec0e31b683c43d050ef8aa59fb63f03c25a4816",
+      "bytes": 8285
+    },
+    {
+      "path": "reference-variations/UB 90 clockwise.ncep",
+      "sha256": "9e581e08bba31bdc64bd2b12c22b835fb6f809ecbabd57cffb081d408c0c12cb",
+      "bytes": 8286
+    },
+    {
+      "path": "reference-variations/UB canonical.ncep",
+      "sha256": "c5ba7fa7144a88cd28b0b78f9df3c0110a3664e2ca85bd9f9ad7acb75ec896fa",
+      "bytes": 8283
+    },
+    {
+      "path": "reference-variations/UB corrected hole.ncep",
+      "sha256": "988757c96ace9e4b053a801fa34d58dd47649c316bcde417a9f6dcc672bb2388",
+      "bytes": 9027
+    },
+    {
+      "path": "reference-variations/UB corrected marking.ncep",
+      "sha256": "78407fd678f80d924676b5a0048722baf156ddf1035529000d3c7f0da7fdf329",
+      "bytes": 9214
+    },
+    {
+      "path": "reference-variations/UB no marking.ncep",
+      "sha256": "95671acf9b7d7449158128bd4a6d2fa2acc5c068c437a32ef42e729199ff178d",
+      "bytes": 8629
+    },
+    {
+      "path": "reference-variations/UB.ncep",
+      "sha256": "18f51aa2dcf381d180fd8bcbdfcd731757916f5ec537be19806a75c1944e6a3f",
+      "bytes": 9171
+    },
+    {
       "path": "working/30-real-M1.ncep",
       "sha256": "7ef5340ad023db86caebdf24e53c4c8909f95c110818e8379edd380bdf77018b",
       "bytes": 66658
