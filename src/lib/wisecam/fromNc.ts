@@ -1,9 +1,9 @@
 import { parseDstv } from '@/lib/parsers/dstv'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
-import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { type NcContour, type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { faceThickness } from '@/lib/parsers/ncProject'
 import { partSectionForCode } from '@/lib/sections/stock'
-import { stationFor, unrolledLayout } from './layout'
+import { rawStationFor, stationFor, type UnrolledLayout, unrolledLayout } from './layout'
 import {
   buildNcex,
   type NcexCut,
@@ -41,6 +41,165 @@ const TYPE_CODE: Record<string, number> = { I: 8200, U: 8199, M: 8195 }
 /** True when `partFromNc` can develop this profile family. */
 export function canDevelop(profileType: string | undefined): boolean {
   return unrolledLayout(profileType, [1, 1, 1, 1, 0]) != null
+}
+
+interface ContourEnds {
+  start: [number, number][]
+  end: [number, number][]
+}
+
+/**
+ * Splits a face's closed `AK` contour into the start-cut and end-cut arcs. The stock edges are
+ * the long segments at constant face coordinate; everything between them is an end cut.
+ */
+function splitContourEnds(points: [number, number][], length: number): ContourEnds | null {
+  const contour = points.slice()
+  if (contour.length > 2) {
+    const first = contour[0] as [number, number]
+    const last = contour[contour.length - 1] as [number, number]
+    if (Math.hypot(first[0] - last[0], first[1] - last[1]) < 1e-6) contour.pop()
+  }
+  const count = contour.length
+  if (count < 3) return null
+
+  const minLong = Math.max(5, length * 0.25)
+  const longEdge = (index: number): boolean => {
+    const from = contour[index] as [number, number]
+    const to = contour[(index + 1) % count] as [number, number]
+    return Math.abs(to[0] - from[0]) >= minLong && Math.abs(to[1] - from[1]) <= 0.5
+  }
+  let firstLong = -1
+  for (let index = 0; index < count; index++) {
+    if (longEdge(index)) {
+      firstLong = index
+      break
+    }
+  }
+  if (firstLong < 0) return null
+
+  const arcs: [number, number][][] = []
+  let current: [number, number][] | null = null
+  for (let step = 1; step <= count; step++) {
+    const index = (firstLong + step) % count
+    const from = contour[index] as [number, number]
+    const to = contour[(index + 1) % count] as [number, number]
+    if (longEdge(index)) {
+      if (current) arcs.push(current)
+      current = null
+      continue
+    }
+    if (!current) current = [from]
+    current.push(to)
+  }
+  if (current) arcs.push(current)
+  if (arcs.length !== 2) return null
+
+  const meanX = (arc: [number, number][]): number =>
+    arc.reduce((sum, point) => sum + point[0], 0) / arc.length
+  arcs.sort((a, b) => meanX(a) - meanX(b))
+  return { start: arcs[0] as [number, number][], end: arcs[1] as [number, number][] }
+}
+
+function dedupePoints(points: [number, number][]): [number, number][] {
+  const merged: [number, number][] = []
+  for (const point of points) {
+    const last = merged[merged.length - 1]
+    if (!last || Math.hypot(last[0] - point[0], last[1] - point[1]) > 0.01) merged.push(point)
+  }
+  return merged
+}
+
+/** Drops vertices that lie on the straight line between their neighbours. */
+function simplifyCollinear(points: [number, number][]): [number, number][] {
+  const out: [number, number][] = []
+  for (const point of points) {
+    while (out.length >= 2) {
+      const a = out[out.length - 2] as [number, number]
+      const b = out[out.length - 1] as [number, number]
+      const cross = (b[0] - a[0]) * (point[1] - b[1]) - (b[1] - a[1]) * (point[0] - b[0])
+      if (Math.abs(cross) > 1e-6) break
+      out.pop()
+    }
+    out.push(point)
+  }
+  return out
+}
+
+function inRange(points: [number, number][], min: number, max: number): [number, number][] | null {
+  if (points.length < 2) return null
+  const stations = points.map(([x]) => x)
+  if (Math.min(...stations) < min - 0.5 || Math.max(...stations) > max + 0.5) return null
+  return points
+}
+
+/**
+ * Develops one end cut onto the unrolled surface. Returns null when the NC does not give a
+ * complete shaped boundary; the writer then falls back to a straight cut.
+ */
+function developEndCut(
+  layout: UnrolledLayout,
+  contours: NcContour[],
+  length: number,
+  end: 'start' | 'end',
+): [number, number][] | null {
+  // Raw stations are unwrapped so a zero-origin tube's `v` face can straddle the seam.
+  const arcs: [number, number][][] = []
+  for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
+    if (!layout.faces[face]) continue
+    const contour = contours.find((entry) => entry.kind === 'outer' && entry.face === face)
+    if (!contour) return null
+    const ends = splitContourEnds(contour.points, length)
+    if (!ends) return null
+    const arc = end === 'start' ? ends.start : ends.end
+    const developed: [number, number][] = []
+    for (const [x, y] of arc) {
+      const station = rawStationFor(layout, face, y)
+      if (station == null) continue
+      developed.push([station, x])
+    }
+    if (developed.length < 2) return null
+    developed.sort((a, b) => a[0] - b[0])
+    arcs.push(developed)
+  }
+  if (arcs.length === 0) return null
+
+  if (layout.origin === 'centered') {
+    const points = simplifyCollinear(dedupePoints(arcs.flat().sort((a, b) => a[0] - b[0])))
+    return inRange(points, -layout.seam / 2, layout.seam / 2)
+  }
+
+  // Zero origin: split at the seam (raw station 0), then concatenate 0…max and min…seam.
+  const seam = layout.seam
+  const right: [number, number][] = []
+  const left: [number, number][] = []
+  let alongAtSeam: number | null = null
+  for (const arc of arcs) {
+    for (let index = 0; index < arc.length; index++) {
+      const point = arc[index] as [number, number]
+      const [raw, along] = point
+      if (raw > 1e-9) right.push([raw, along])
+      else if (raw < -1e-9) left.push([raw + seam, along])
+      else {
+        right.push([0, along])
+        left.push([seam, along])
+        alongAtSeam = along
+      }
+      const next = arc[index + 1]
+      if (!next) continue
+      const [nextRaw, nextAlong] = next
+      if ((raw < 0 && nextRaw > 0) || (raw > 0 && nextRaw < 0)) {
+        const t = -raw / (nextRaw - raw)
+        alongAtSeam = along + t * (nextAlong - along)
+      }
+    }
+  }
+  if (alongAtSeam == null) return null
+  right.push([0, alongAtSeam])
+  left.push([seam, alongAtSeam])
+  right.sort((a, b) => a[0] - b[0])
+  left.sort((a, b) => a[0] - b[0])
+  const points = simplifyCollinear(dedupePoints([...dedupePoints(right), ...dedupePoints(left)]))
+  return inRange(points, 0, seam)
 }
 
 export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPart | null {
@@ -115,21 +274,28 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
     if (!developed || points.length < 2) continue
     cuts.push({ kind: contour.kind, points })
   }
+
+  const profileType = header.profileType.trim().toUpperCase()
+  const startCut = developEndCut(layout, geometry.contours, header.length, 'start') ?? undefined
+  const endCut = developEndCut(layout, geometry.contours, header.length, 'end') ?? undefined
   return {
     mark: options.mark ?? header.mark,
     profile: header.profile,
     profileType: header.profileType,
-    typeCode: TYPE_CODE[header.profileType.trim().toUpperCase()] ?? 8195,
+    typeCode: TYPE_CODE[profileType] ?? 8195,
     length: header.length,
     quantity: header.quantity ?? 1,
     thickness: thickness ?? 0,
-    legThickness: legThickness ?? 0,
+    // WiseCAM writes LegThickness=2 for hollow sections, not the wall thickness.
+    legThickness: profileType === 'M' ? 2 : (legThickness ?? 0),
     grade: header.grade,
     section: section.points,
     innerSection: section.innerSection ?? section.holes?.[0],
     holes,
     marks,
     cuts,
+    startCut,
+    endCut,
     unrolledPerimeter: layout.seam,
     unrolled: layout,
     rotateAngle: options.rotateAngle,

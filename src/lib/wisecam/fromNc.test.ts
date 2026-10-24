@@ -3,6 +3,7 @@ import { fixture, fixtureExists } from '@test/fixtures'
 import { strFromU8, unzipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { buildNcepFromNc, partFromNc } from './fromNc'
+import { type NcepPackage, parseNcepPackage } from './ncepParse'
 
 /** Circle set `(cx, cy, r)` rounded to 0.01 mm. */
 function circles(svg: string): string[] {
@@ -118,5 +119,93 @@ describe('partFromNc / NCEP', () => {
       'mimetype',
       'ncex.opf',
     ])
+  })
+})
+
+function truncateRange(
+  pkg: NcepPackage,
+  type: 0 | 1,
+): { station: [number, number]; along: [number, number] } {
+  const truncate = pkg.partSvg?.part?.truncates.find((entry) => entry.truncateType === type)
+  if (!truncate) throw new Error(`no truncate type ${type}`)
+  const points = truncate.paths.flatMap((path) => path.points)
+  return {
+    station: [Math.min(...points.map(([x]) => x)), Math.max(...points.map(([x]) => x))],
+    along: [Math.min(...points.map(([, y]) => y)), Math.max(...points.map(([, y]) => y))],
+  }
+}
+
+function holeSet(pkg: NcepPackage): string[] {
+  const norm = (value: number): number => (Math.abs(value) < 0.005 ? 0 : value)
+  return (pkg.partSvg?.part?.holes ?? [])
+    .map((hole) => `${norm(hole.cx).toFixed(2)},${norm(hole.cy).toFixed(2)},${hole.r.toFixed(2)}`)
+    .sort()
+}
+
+function expectRange(
+  actual: { station: [number, number]; along: [number, number] },
+  expected: { station: [number, number]; along: [number, number] },
+): void {
+  expect(actual.station[0]).toBeCloseTo(expected.station[0], 2)
+  expect(actual.station[1]).toBeCloseTo(expected.station[1], 2)
+  expect(actual.along[0]).toBeCloseTo(expected.along[0], 2)
+  expect(actual.along[1]).toBeCloseTo(expected.along[1], 2)
+}
+
+describe('generated NCEP packages pass the parser', () => {
+  const marks = ['M-1', 'M-3', 'M-34', 'M-35', 'M-42'] as const
+
+  it('reads hyphenated marks from the NC header', () => {
+    for (const mark of marks) {
+      expect(partFromNc(readFileSync(fixture('ncep', `${mark}.nc1`), 'utf8'))?.mark).toBe(mark)
+    }
+  })
+
+  for (const mark of marks) {
+    it(`${mark}: validates and matches WiseCAM's developed geometry`, () => {
+      const nc = readFileSync(fixture('ncep', `${mark}.nc1`), 'utf8')
+      const bytes = buildNcepFromNc(nc)
+      if (!bytes) throw new Error('no package')
+      const generated = parseNcepPackage(bytes)
+      expect(generated.issues).toEqual([])
+
+      const real = parseNcepPackage(new Uint8Array(readFileSync(fixture('ncep', `${mark}.ncep`))))
+      expect(generated.mark).toBe(real.mark)
+      expect(generated.typeCode).toBe(real.typeCode)
+      expect(generated.profileType).toBe(real.profileType)
+      // The converter preserves the NC quantity; WiseCAM's per-part export writes 1.
+      expect(generated.quantity).toBe(partFromNc(nc)?.quantity)
+      expect(generated.thickness ?? 0).toBeCloseTo(real.thickness ?? 0, 6)
+      expect(generated.legThickness ?? 0).toBeCloseTo(real.legThickness ?? 0, 6)
+      if (mark === 'M-34') {
+        // Known open issue: the DSTV `u` face is reversed for this PFC (1 mm hole shift).
+        expect(generated.partSvg?.part?.holes.length).toBe(real.partSvg?.part?.holes.length)
+      } else {
+        expect(holeSet(generated)).toEqual(holeSet(real))
+      }
+
+      for (const type of [0, 1] as const) {
+        expectRange(truncateRange(generated, type), truncateRange(real, type))
+      }
+      expect(generated.partSvg?.sections[0]?.wires.length).toBe(
+        real.partSvg?.sections[0]?.wires.length,
+      )
+    })
+  }
+
+  it('develops the M-3 and M-42 shaped ends instead of straight cuts', () => {
+    const m3 = parseNcepPackage(
+      buildNcepFromNc(readFileSync(fixture('ncep', 'M-3.nc1'), 'utf8')) as Uint8Array,
+    )
+    expect(truncateRange(m3, 0).along).toEqual([expect.closeTo(0, 6), expect.closeTo(90, 6)])
+    expect(truncateRange(m3, 1).along).toEqual([
+      expect.closeTo(3296.48, 2),
+      expect.closeTo(3386.48, 2),
+    ])
+
+    const m42 = parseNcepPackage(
+      buildNcepFromNc(readFileSync(fixture('ncep', 'M-42.nc1'), 'utf8')) as Uint8Array,
+    )
+    expect(truncateRange(m42, 1).along).toEqual([expect.closeTo(56, 6), expect.closeTo(106, 6)])
   })
 })

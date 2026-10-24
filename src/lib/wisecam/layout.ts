@@ -154,13 +154,22 @@ export function wrapStation(station: number, layout: UnrolledLayout): number {
 }
 
 /**
- * The unrolled station for an NC point on `face` at across-coordinate `y`, or null when the
- * family/layout has no region for that face.
+ * The unrolled station **before** wrapping. Zero-origin layouts (`M`) put the `v` face across
+ * the seam (`start < 0`); callers that assemble a boundary crossing the seam need this raw value.
  */
-export function stationFor(layout: UnrolledLayout, faceName: NcFace, y: number): number | null {
+export function rawStationFor(layout: UnrolledLayout, faceName: NcFace, y: number): number | null {
   const region = layout.faces[faceName]
   if (!region) return null
   const local = localCoordinate(region, y)
   const oriented = region.reversed ? region.length - local : local
-  return wrapStation(region.start + oriented, layout)
+  return region.start + oriented
+}
+
+/**
+ * The unrolled station for an NC point on `face` at across-coordinate `y`, or null when the
+ * family/layout has no region for that face.
+ */
+export function stationFor(layout: UnrolledLayout, faceName: NcFace, y: number): number | null {
+  const raw = rawStationFor(layout, faceName, y)
+  return raw == null ? null : wrapStation(raw, layout)
 }

@@ -180,7 +180,16 @@ function parseHeader(lines: string[]): DstvHeader {
   const profileType = typeIndex >= 0 ? tokens[typeIndex] : 'SO'
   const profile = typeIndex > 0 ? tokens[typeIndex - 1] : (tokens[0] ?? '')
   const orderId = tokens[0]
-  const mark = tokens.find((t, i) => i > 0 && /^[A-Za-z]+\d+$/.test(t) && !PROFILE_TYPES.has(t))
+  const looksLikeMark = (token: string | undefined): boolean =>
+    token != null &&
+    /[A-Za-z]/.test(token) &&
+    !PROFILE_TYPES.has(token) &&
+    !/^\d+(?:\.\d+)?$/.test(token)
+  // WiseCAM/NC writes the mark before the grade (`0 / M-1 / M-1 / 1 / 300PLUS / …`). Tekla
+  // sometimes inserts drawing/phase fields first, so fall back to the first mark-like token.
+  const mark =
+    [tokens[1], tokens[2]].find(looksLikeMark) ??
+    tokens.find((token, index) => index > 0 && looksLikeMark(token))
   const grade = tokens.find((t) => /^[A-Z]\d{2,3}$/.test(t))
   const gradeIndex = grade ? tokens.indexOf(grade) : -1
   const quantityToken = gradeIndex >= 0 ? tokens[gradeIndex + 1] : undefined

@@ -114,6 +114,13 @@ export interface NcexPart {
   marks?: NcexMark[]
   /** Developed cut contours (`AK`/`IK`) in unrolled coordinates (preview only). */
   cuts?: NcexCut[]
+  /**
+   * Developed start/end cut boundaries (`[station, along]`). When omitted the writer emits a
+   * straight cut across the developed surface. Shaped (bevelled/mitred/notched) ends come from
+   * the NC `AK` contours — see `docs/ncep-format.md` §3.
+   */
+  startCut?: [number, number][]
+  endCut?: [number, number][]
   /** Rotate the section into the machining stance (WiseCAM `RotateAngle`). */
   rotateAngle?: number
   /** Mirror the section about YOZ (WiseCAM `Invert`). */
@@ -276,14 +283,20 @@ function seamBounds(part: NcexPart): [number, number] {
 
 function partSvg(part: NcexPart, refId: number, palette?: NcexPalette): string {
   const [left, right] = seamBounds(part)
-  const start: [number, number][] = [
-    [left, 0],
-    [right, 0],
-  ]
-  const end: [number, number][] = [
-    [right, part.length],
-    [left, part.length],
-  ]
+  const start: [number, number][] =
+    part.startCut && part.startCut.length >= 2
+      ? part.startCut
+      : [
+          [left, 0],
+          [right, 0],
+        ]
+  const end: [number, number][] =
+    part.endCut && part.endCut.length >= 2
+      ? part.endCut
+      : [
+          [right, part.length],
+          [left, part.length],
+        ]
   let seq = refId * 10
   const next = (): number => ++seq
   // WiseCAM's own part SVGs keep the cut geometry (truncations, holes, mark) as direct children
@@ -321,30 +334,24 @@ export function ncexPartSvg(part: NcexPart, refId = 1000, palette?: NcexPalette)
 
 function adobeSvg(part: NcexPart, stockLength: number, refId: number): string {
   const [left, right] = seamBounds(part)
+  const start: [number, number][] =
+    part.startCut && part.startCut.length >= 2
+      ? part.startCut
+      : [
+          [left, 0],
+          [right, 0],
+        ]
+  const end: [number, number][] = part.endCut
+    ? part.endCut.map(([x, y]) => [x, y + (stockLength - part.length)] as [number, number])
+    : [
+        [right, stockLength],
+        [left, stockLength],
+      ]
   let seq = refId * 10
   const next = (): number => ++seq
   const cutGroup: string[] = []
-  cutGroup.push(
-    truncatePath(
-      next(),
-      [
-        [left, 0],
-        [right, 0],
-      ],
-      0,
-    ),
-  )
-  cutGroup.push(
-    truncatePath(
-      next(),
-      [
-        [right, stockLength],
-        [left, stockLength],
-      ],
-      1,
-      part.mark,
-    ),
-  )
+  cutGroup.push(truncatePath(next(), start, 0))
+  cutGroup.push(truncatePath(next(), end, 1, part.mark))
   const section: string[] = [profilePath(next(), part.section)]
   if (part.innerSection)
     section.push(innerProfilePath(next(), part.innerSection, undefined, innerSectionClosed(part)))
