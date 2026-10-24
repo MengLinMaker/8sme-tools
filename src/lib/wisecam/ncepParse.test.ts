@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { fixture } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { buildNcepFromNc } from './fromNc'
@@ -122,6 +122,18 @@ describe('NCEP SVG parser on the real fixtures', () => {
     expect(parseFixture('M-31').partSvg?.part?.holes).toHaveLength(0)
   })
 
+  it('matches the section-path count to the profile family', () => {
+    const count = (mark: string): number =>
+      parseFixture(mark).partSvg?.sections.reduce(
+        (total, group) => total + group.wires.length,
+        0,
+      ) ?? 0
+    expect(count('M-1')).toBe(2)
+    expect(count('M-3')).toBe(1)
+    expect(count('M-26')).toBe(2)
+    expect(ncepErrors(parseFixture('M-1'))).toEqual([])
+  })
+
   it('round-trips the NCEP we generate from the M-1 NC', () => {
     const bytes = buildNcepFromNc(readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8'))
     expect(bytes).not.toBeNull()
@@ -135,6 +147,7 @@ describe('NCEP SVG parser on the real fixtures', () => {
     ).toEqual([])
     expect(pkg.partSvg?.part?.truncates).toHaveLength(2)
     expect(pkg.partSvg?.part?.holes.length).toBeGreaterThan(0)
+    expect(pkg.issues.some((issue) => issue.code === 'adobe-userpath')).toBe(true)
 
     const real = parseFixture('M-1')
     const circleSet = (value: NcepPackage): string[] =>
@@ -142,6 +155,85 @@ describe('NCEP SVG parser on the real fixtures', () => {
         .map((hole) => `${hole.cx.toFixed(2)},${hole.cy.toFixed(2)},${hole.r.toFixed(2)}`)
         .sort()
     expect(circleSet(pkg)).toEqual(circleSet(real))
+  })
+})
+
+const REFERENCE_DIR = 'reference-variations'
+
+function parseReference(name: string): NcepPackage {
+  return parseNcepPackage(new Uint8Array(readFileSync(fixture('ncep', REFERENCE_DIR, name))))
+}
+
+describe('reference variation fixtures', () => {
+  const files = readdirSync(fixture('ncep', REFERENCE_DIR)).filter((name) => name.endsWith('.ncep'))
+
+  for (const name of files) {
+    it(`${name}: parses without errors`, () => {
+      const pkg = parseReference(name)
+      expect(
+        ncepErrors(pkg),
+        ncepErrors(pkg)
+          .map((issue) => issue.message)
+          .join('\n'),
+      ).toEqual([])
+      expect(pkg.partSvg?.part).not.toBeNull()
+      expect(pkg.adobeSvg).not.toBeNull()
+    })
+  }
+
+  it('keeps USERPATH only on real U/I adobes', () => {
+    const pfc = parseReference('PFC.ncep')
+    const ub = parseReference('UB.ncep')
+    const rhs = parseReference('RHS.ncep')
+    expect(pfc.adobeSvg?.userPaths.length).toBe(1)
+    expect(ub.adobeSvg?.userPaths.length).toBe(1)
+    expect(rhs.adobeSvg?.userPaths.length).toBe(0)
+    expect(pfc.issues.some((issue) => issue.code === 'adobe-userpath')).toBe(false)
+    expect(ub.issues.some((issue) => issue.code === 'adobe-userpath')).toBe(false)
+    expect(rhs.issues.some((issue) => issue.code === 'adobe-userpath')).toBe(false)
+  })
+
+  it('keeps corrected layer-4 mark bars separate from text', () => {
+    const pkg = parseReference('PFC corrected marking.ncep')
+    const marks = pkg.partSvg?.part?.marks ?? []
+    const bar = marks.find((mark) => mark.tag === 'rect')
+    const text = marks.find((mark) => mark.tag === 'text')
+    expect(bar?.layer).toBe(4)
+    expect(bar?.corrected).toBe(true)
+    expect(bar?.params.needSetAdobe).toBe('true')
+    expect(text?.layer).toBe(6)
+    expect(text?.label).toBe('5M-2')
+    expect(text?.corrected).toBe(false)
+  })
+
+  it('reads no-marking as no marks at all', () => {
+    expect(parseReference('PFC no marking.ncep').partSvg?.part?.marks).toHaveLength(0)
+    expect(parseReference('UB no marking.ncep').partSvg?.part?.marks).toHaveLength(0)
+  })
+
+  it('keeps the bevel cluster nested under the end trim', () => {
+    const pkg = parseReference('Beveled PFC.ncep')
+    const part = pkg.partSvg?.part
+    expect(part?.truncates.map((truncate) => truncate.truncateType)).toEqual([0, 1])
+    const bevel = part?.truncates[1]?.bevels ?? []
+    expect(bevel.length).toBeGreaterThan(0)
+    expect(bevel.some((path) => path.params.PosMap)).toBe(true)
+    expect(part?.holes).toHaveLength(6)
+    expect(pkg.partSvg?.extents.along?.[1]).toBeCloseTo(2465.69, 2)
+    expect(ncepErrors(pkg)).toEqual([])
+
+    const stripped = parseReference('Beveled PFC remove bevel.ncep')
+    expect(stripped.partSvg?.part?.truncates.map((truncate) => truncate.truncateType)).toEqual([
+      0, 1,
+    ])
+    expect(stripped.partSvg?.part?.truncates.some((truncate) => truncate.bevels?.length)).toBe(
+      false,
+    )
+  })
+
+  it('uses the corrected UB hole set', () => {
+    expect(parseReference('UB corrected hole.ncep').partSvg?.part?.holes).toHaveLength(36)
+    expect(parseReference('UB.ncep').partSvg?.part?.holes).toHaveLength(47)
   })
 })
 

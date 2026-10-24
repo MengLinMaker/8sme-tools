@@ -3,7 +3,7 @@ import { fixture, fixtureExists } from '@test/fixtures'
 import { strFromU8, unzipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { buildNcepFromNc, partFromNc } from './fromNc'
-import { type NcepPackage, parseNcepPackage } from './ncepParse'
+import { type NcepPackage, ncepErrors, parseNcepPackage } from './ncepParse'
 
 /** Circle set `(cx, cy, r)` rounded to 0.01 mm. */
 function circles(svg: string): string[] {
@@ -167,7 +167,9 @@ describe('generated NCEP packages pass the parser', () => {
       const bytes = buildNcepFromNc(nc)
       if (!bytes) throw new Error('no package')
       const generated = parseNcepPackage(bytes)
-      expect(generated.issues).toEqual([])
+      expect(ncepErrors(generated)).toEqual([])
+      const userPathWarning = generated.issues.some((issue) => issue.code === 'adobe-userpath')
+      expect(userPathWarning).toBe(generated.profileType === 'U' || generated.profileType === 'I')
 
       const real = parseNcepPackage(new Uint8Array(readFileSync(fixture('ncep', `${mark}.ncep`))))
       expect(generated.mark).toBe(real.mark)

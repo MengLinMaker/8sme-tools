@@ -16,7 +16,7 @@ import {
  * The parser models the **structure** WiseCAM expects (one `cadpart`, two `IsTrucate` paths,
  * a sibling section group, layer-6 marks) and the **unrolled geometry** (`x` = perimeter
  * station, `y` = along the member). It never rewrites the package. See
- * `docs/ncep-format.md` §3 for the format and §9 for the parser rules.
+ * `docs/ncep-format.md` §3 for the format and the validator/generator contract.
  */
 
 export const ncepPointSchema = z.tuple([z.number().finite(), z.number().finite()])
@@ -36,6 +36,18 @@ export const ncepIssueSchema = z.object({
 })
 export type NcepIssue = z.infer<typeof ncepIssueSchema>
 
+export const ncepWireSchema = z.object({
+  kind: z.literal('wire'),
+  id: z.string().optional(),
+  tag: z.string(),
+  layer: z.number().int(),
+  machining: z.boolean(),
+  fill: z.boolean(),
+  paths: z.array(ncepSubpathSchema).min(1),
+  params: z.record(z.string(), z.string()),
+})
+export type NcepWire = z.infer<typeof ncepWireSchema>
+
 export const ncepTruncateSchema = z.object({
   kind: z.literal('truncate'),
   id: z.string().optional(),
@@ -44,6 +56,8 @@ export const ncepTruncateSchema = z.object({
   paths: z.array(ncepSubpathSchema).min(1),
   params: z.record(z.string(), z.string()),
   innerCad: z.array(ncepPointSchema).optional(),
+  /** Child cut paths nested inside the end-truncate path (bevel/mitre cluster). */
+  bevels: z.array(ncepWireSchema).optional(),
 })
 export type NcepTruncate = z.infer<typeof ncepTruncateSchema>
 
@@ -73,22 +87,12 @@ export const ncepMarkSchema = z.object({
   rotate: z.number().finite().optional(),
   layer: z.number().int(),
   machining: z.boolean(),
+  /** Layer-4 `needSetAdobe=true` mark bar (WiseCAM's corrected marking). */
+  corrected: z.boolean().optional(),
   paths: z.array(ncepSubpathSchema),
   params: z.record(z.string(), z.string()),
 })
 export type NcepMark = z.infer<typeof ncepMarkSchema>
-
-export const ncepWireSchema = z.object({
-  kind: z.literal('wire'),
-  id: z.string().optional(),
-  tag: z.string(),
-  layer: z.number().int(),
-  machining: z.boolean(),
-  fill: z.boolean(),
-  paths: z.array(ncepSubpathSchema).min(1),
-  params: z.record(z.string(), z.string()),
-})
-export type NcepWire = z.infer<typeof ncepWireSchema>
 
 export const ncepGroupSchema = z.object({
   id: z.string().optional(),
@@ -373,6 +377,12 @@ function parseTruncate(
   if (inner.error) {
     issues.push({ code: 'innercad', severity: 'warning', message: `truncate ${inner.error}` })
   }
+  const bevels: NcepWire[] = []
+  for (const child of elements(element.children)) {
+    if (!['path', 'polyline', 'polygon', 'line', 'rect'].includes(child.tag)) continue
+    const wire = parseWire(child, commonOf(child, issues), issues)
+    if (wire) bevels.push(wire)
+  }
   return {
     kind: 'truncate',
     id: common.id,
@@ -381,6 +391,7 @@ function parseTruncate(
     paths,
     params: common.params,
     ...(inner.points.length >= 2 ? { innerCad: inner.points } : {}),
+    ...(bevels.length > 0 ? { bevels } : {}),
   }
 }
 
@@ -421,6 +432,7 @@ function parseMark(
     id: common.id,
     layer: common.layer,
     machining: common.machining,
+    corrected: common.layer === 4 || common.params.needSetAdobe === 'true',
     params: common.params,
   }
   if (element.tag === 'text') {
@@ -620,7 +632,7 @@ function parseGroup(element: XmlElement, issues: NcepIssue[]): NcepGroup {
       if (hole) group.holes.push(hole)
       continue
     }
-    if (childCommon.layer === 6) {
+    if (childCommon.layer === 6 || (childCommon.layer === 4 && child.tag === 'rect')) {
       const mark = parseMark(child, childCommon, issues)
       if (mark) group.marks.push(mark)
       continue
@@ -633,8 +645,15 @@ function parseGroup(element: XmlElement, issues: NcepIssue[]): NcepGroup {
 
 function computedExtents(
   truncates: NcepTruncate[],
+  wires: NcepWire[] = [],
 ): { station: [number, number]; along: [number, number] } | null {
-  const points = truncates.flatMap((truncate) => truncate.paths.flatMap((path) => path.points))
+  const points = [
+    ...truncates.flatMap((truncate) => truncate.paths.flatMap((path) => path.points)),
+    ...truncates.flatMap((truncate) =>
+      (truncate.bevels ?? []).flatMap((bevel) => bevel.paths.flatMap((path) => path.points)),
+    ),
+    ...wires.flatMap((wire) => wire.paths.flatMap((path) => path.points)),
+  ]
   if (points.length === 0) return null
   const stations = points.map(([x]) => x)
   const alongs = points.map(([, y]) => y)
@@ -657,21 +676,20 @@ function validateSvg(document: NcepSvgDocument): void {
           message: 'cadpart has no wh:refid',
         })
       }
-      if (document.part.truncates.length !== 2) {
+      const truncates = document.part.truncates
+      const types = truncates.map((truncate) => truncate.truncateType).sort()
+      if (truncates.length !== 2) {
         issues.push({
           code: 'truncate-count',
           severity: 'error',
-          message: `cadpart has ${document.part.truncates.length} IsTrucate paths (expected 2)`,
+          message: `cadpart has ${truncates.length} IsTrucate paths (expected 2)`,
         })
-      } else {
-        const types = document.part.truncates.map((truncate) => truncate.truncateType).sort()
-        if (types[0] !== 0 || types[1] !== 1) {
-          issues.push({
-            code: 'truncate-types',
-            severity: 'error',
-            message: `cadpart truncates are types ${types.join(',')} (expected 0 and 1)`,
-          })
-        }
+      } else if (types[0] !== 0 || types[1] !== 1) {
+        issues.push({
+          code: 'truncate-types',
+          severity: 'error',
+          message: `cadpart truncates are types ${types.join(',')} (expected 0 and 1)`,
+        })
       }
     }
   } else if (document.part) {
@@ -691,7 +709,7 @@ function validateSvg(document: NcepSvgDocument): void {
   }
 
   const partTruncates = document.part?.truncates ?? []
-  const extents = computedExtents(partTruncates)
+  const extents = computedExtents(partTruncates, document.part?.wires ?? [])
   document.extents = extents
     ? { station: extents.station, along: extents.along }
     : { station: null, along: null }
@@ -1037,6 +1055,27 @@ export function parseNcepPackage(bytes: Uint8Array): NcepPackage {
     for (const issue of adobeSvg.issues) {
       issues.push({ ...issue, path: 'adobe', message: `adobe: ${issue.message}` })
     }
+  }
+
+  if (partSvg) {
+    const sectionPaths = partSvg.sections.reduce((count, group) => count + group.wires.length, 0)
+    const expectedSections =
+      profileType === 'I' ? 1 : profileType === 'U' || profileType === 'M' ? 2 : null
+    if (expectedSections != null && sectionPaths !== expectedSections) {
+      issues.push({
+        code: 'section-count',
+        severity: 'error',
+        message: `part has ${sectionPaths} section path(s); ${profileType} expects ${expectedSections}`,
+      })
+    }
+  }
+  if (adobeSvg && (profileType === 'U' || profileType === 'I') && adobeSvg.userPaths.length === 0) {
+    issues.push({
+      code: 'adobe-userpath',
+      severity: 'warning',
+      message:
+        'U/I Adobe has no USERPATH group; every real U/I reference has one and generated U/I packages without it have failed',
+    })
   }
 
   if (mark == null) {

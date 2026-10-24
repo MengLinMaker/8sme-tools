@@ -330,17 +330,20 @@ bar layer/params.
 
 #### Beveled end
 
-`Beveled PFC` encodes the end bevel as a **cluster of paths**, not as one `TrucateType=1` trim:
+`Beveled PFC` keeps the normal start and end trims, then **nests the bevel cluster inside the
+end-trim `<path>` element**:
 
 - start: normal `TrucateType=0` path;
 - middle: 6 holes;
-- end: multiple path segments carrying `PosMap={Src:4,Dst:…}` and `needSetAdobe=true`; there is
-  **no** `TrucateType=1` path in the beveled variant.
+- end: one `TrucateType=1;Part=…` path whose **child elements** are several `<path>` segments
+  carrying `PosMap={Src:4,Dst:…}` / `needSetAdobe=true` (layer 0 and 1).
 
-`Beveled PFC remove bevel` replaces that end cluster with a single straight
-`TrucateType=1;Part=…` path. Start trim, holes, text and section are unchanged. Both variants
-survive the `.ncexa` re-export. A validator must allow a bevelled end without a single
-`TrucateType=1` path; a generator needs to emit the `PosMap` cluster, not just a polyline.
+`Beveled PFC remove bevel` removes those nested child paths; the outer `TrucateType=1` trim,
+start trim, holes, text and section are unchanged. Both variants survive the `.ncexa` re-export.
+
+A parser must walk the end-trim's child elements; they are **not** siblings in `cadpart`. A
+validator still requires the two outer trims. A generator must emit the cluster as nested children
+of the end-trim path, not replace the end trim with a polyline.
 
 ### Validator / generator contract
 
@@ -348,8 +351,8 @@ A validator that matches these references should check:
 
 1. Root children are `style`, one `cadpart`, one `cadgroup`; `cadgroup` is a sibling, never
    nested inside `cadpart`.
-2. `cadpart` has exactly one `TrucateType=0` start trim and, for a straight end, one
-   `TrucateType=1` end trim. A bevelled end may instead have the `PosMap` cluster.
+2. `cadpart` has exactly one `TrucateType=0` start trim and one `TrucateType=1` end trim. A
+   bevelled end keeps the end trim and nests `PosMap` child paths inside it.
 3. `cadgroup` has **one** section path for UB and **two** for PFC/tube; section paths have
    `wh:isfill="0"`, trims have `wh:isfill="1"`.
 4. Holes are `cadcircle` direct children of `cadpart`, with `cx`, `cy`, `r`, `wh:direction`,
@@ -358,8 +361,8 @@ A validator that matches these references should check:
    `needSetAdobe=true`, uncorrected bars are `layer=6`; text is `layer=6`.
 6. Canonical section section-group transforms match the table above; do not transform holes,
    bars or text with the section.
-7. Bevel segments may carry `PosMap`/`needSetAdobe`; do not reject the part for missing a single
-   end trim when that cluster is present.
+7. Bevel segments are **child paths of the end trim** and may carry `PosMap`/`needSetAdobe`;
+   parse them separately, but keep requiring both outer trims.
 8. `Part.Name` can differ from the etched mark in a probe; for production keep `Name`,
    `LabelContent`, the text node and the mark bars consistent.
 
@@ -368,6 +371,44 @@ part SVG, emit the canonical section group for the family, preserve unrolled hol
 coordinates, encode corrected marks as `layer=4` bars with `needSetAdobe=true`, and emit bevels
 as the `PosMap` cluster. Do not generate a blank part: the start/end trim paths and section
 group are structural.
+
+### Known false negatives / parser gaps
+
+A clean parse is **not** proof that WiseCAM will import the file. Known failures and what the
+parser currently says:
+
+| Known-failing package | Old parser | Current parser | Pattern |
+| --- | --- | --- | --- |
+| 121–124 (real container + our part) | pass | **error**: `section`, warning `nested-group` | our section group was nested inside `cadpart` |
+| 33 / 40 (old single-group writer) | pass | **error**: `truncate-count`, `section` | no direct trim paths, no sibling section |
+| 226 (our level-6 M-1) | pass | **error**: `section-count`; warning `adobe-userpath` | PFC has only **1** section path, not 2; Adobe also lacks USERPATH |
+| 240 (own M-1) | pass | warning `adobe-userpath` (no errors) | PFC section count is correct; Adobe lacks USERPATH |
+| 242 (own M-3) | pass | warning `adobe-userpath` (no errors) | UB section count correct; Adobe lacks USERPATH |
+| 243 / 244 (own tube/RHS) | pass | pass | M adobes correctly have no USERPATH |
+| 245 (own M-34) | pass | warning `adobe-userpath` (no errors) | PFC lacks USERPATH |
+
+The strongest pattern so far is the Adobe:
+
+- real **U/I** adobes have **three** root groups, the middle one `USERPATH=USERPATH` with the
+  applied cut paths;
+- real **M** (tube/RHS/SHS) adobes have **two** groups and no `USERPATH`;
+- all our generated **U/I** adobes have two groups and no `USERPATH`, and those packages fail.
+
+That correlation points at the missing U/I `USERPATH` group as a likely cause of the 240/242/245
+failures, but it is not yet proven. The parser reports it as a **warning**, not an error, until a
+WiseCAM control confirms it. The `section-count` gap is now a hard error (PFC/M need 2 section
+paths, UB needs 1).
+
+Remaining parser gaps:
+
+1. It does not validate Adobe group structure beyond “no cadpart”; the U/I `USERPATH` pattern is
+   only a warning.
+2. It does not validate `Technology.xml`, `cad.opf`/`ncex.opf` manifest consistency, or the
+   presence/semantics of every referenced file.
+3. It does not model WiseCAM's acceptance of generated section geometry, applied cuts, or
+   technology/lead parameters.
+4. A pass therefore means “structurally plausible NCEP”; negative fixtures such as 226 and the
+   240-series must remain in the regression set.
 
 ---
 
@@ -380,13 +421,14 @@ group are structural.
    All have `RotateAngle=0;Invert=0`, so handedness is not in the header. The writer exposes
    `flipFlanges`, but a rule (or a STEP-derived cue) is still missing.
 2. **No T / angle / round samples.** `partFromNc` returns `null` for `T`, `L`, `RO`.
-3. **Bevelled/mitred end cuts.** The reference `Beveled PFC` shows a bevel is a **cluster of
-   paths** with `PosMap`/`needSetAdobe`, not a single `TrucateType=1` path. The reference is
-   decoded, but the generator still emits only straight ends; the exact mapping from NC bevel
-   columns to the cluster is not implemented.
-4. **Adobe `USERPATH` group.** The real adobe has three `cadgroup`s, one
-   `wh:params="USERPATH=USERPATH;"` carrying the applied cut paths. Ours emits a single group.
-   Whether import requires it is untested.
+3. **Bevelled/mitred end cuts.** The reference `Beveled PFC` shows a bevel as **child paths
+   nested inside the end-trim `<path>`**, carrying `PosMap`/`needSetAdobe`. The reference is
+   decoded and the parser exposes them as `truncate.bevels`, but the generator still emits only
+   straight ends; the NC→cluster mapping is not implemented.
+4. **Adobe `USERPATH` group.** Real **U/I** adobes have three root groups; the middle one is
+   `wh:params="USERPATH=USERPATH;"` and carries the applied cut paths. Real **M** adobes have
+   two groups and no `USERPATH`. Generated U/I adobes omit it and fail; this is the strongest
+   current suspect for the 240/242/245 failures, but still needs a controlled WiseCAM test.
 5. **`technologyID`.** Real exports use a fresh GUID per part/adobe, so we emit one. It is not
    validated (`not-a-guid` imports, probe 63) and is **not** the blocker: 30b keeps the control's
    ID and still imports. It does not appear in `Technology.xml`.
@@ -428,6 +470,7 @@ group are structural.
 | ZIP flags | CAD entries flag 6; container stored | matches real (`zipQt`) | ✅ |
 | Canonical section | PFC/RHS already canonical; UB rotated `(−y,x)` | section builder emits canonical stance | ✅/⚠️ verify UB |
 | Marks | `cadtext` + `cadrectangle` bars; corrected bars layer 4 + `needSetAdobe` | text only; no `cadrectangle` bars | ⚠️ |
+| Adobe groups | U/I: three groups incl. `USERPATH`; M: two groups | U/I: two groups, no `USERPATH` | ⚠️ suspected U/I failure |
 | End cuts | shaped/mitred | straight | ⚠️ (bevel cluster not generated) |
 
 ---

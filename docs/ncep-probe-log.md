@@ -517,6 +517,12 @@ Key findings are documented in `docs/ncep-format.md` §3:
 Use these files to make the validator match WiseCAM before generating new probes. Do not infer
 general rules from the single UB hole correction without a second UB reference.
 
+Parser regression status: all 19 reference NCEPs parse with no errors. The parser catches the
+old structural failures (121–124, 33/40) and now catches 226 via `section-count`. It still only
+warns `adobe-userpath` on the generated U/I packages 240/242/245, so a clean parse remains
+necessary but not sufficient. The evidence table and remaining gaps are in
+`docs/ncep-format.md` §3.
+
 ## Control-first feature injection (620–627)
 
 The active strategy is to keep a **real populated control** — holes, text, section and trims —
