@@ -303,6 +303,7 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
     stockLength: options.stockLength,
     rCornerMaxRadius:
       header.profileType.trim().toUpperCase() === 'M' ? (header.dimensions[4] ?? 0) : 5,
+    rootRadius: header.dimensions[4] ?? 0,
   }
 }
 

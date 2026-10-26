@@ -147,7 +147,7 @@ describe('NCEP SVG parser on the real fixtures', () => {
     ).toEqual([])
     expect(pkg.partSvg?.part?.truncates).toHaveLength(2)
     expect(pkg.partSvg?.part?.holes.length).toBeGreaterThan(0)
-    expect(pkg.issues.some((issue) => issue.code === 'adobe-userpath')).toBe(true)
+    expect(pkg.issues.some((issue) => issue.code === 'adobe-userpath')).toBe(false)
 
     const real = parseFixture('M-1')
     const circleSet = (value: NcepPackage): string[] =>

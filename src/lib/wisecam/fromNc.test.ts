@@ -169,7 +169,17 @@ describe('generated NCEP packages pass the parser', () => {
       const generated = parseNcepPackage(bytes)
       expect(ncepErrors(generated)).toEqual([])
       const userPathWarning = generated.issues.some((issue) => issue.code === 'adobe-userpath')
-      expect(userPathWarning).toBe(generated.profileType === 'U' || generated.profileType === 'I')
+      expect(userPathWarning).toBe(false)
+      if (generated.profileType === 'U' || generated.profileType === 'I') {
+        expect(generated.adobeSvg?.groups.length).toBe(3)
+        expect(generated.adobeSvg?.userPaths).toHaveLength(1)
+        expect(generated.adobeSvg?.userPaths[0]?.wires.length).toBe(
+          generated.profileType === 'U' ? 5 : 6,
+        )
+      } else {
+        expect(generated.adobeSvg?.groups.length).toBe(2)
+        expect(generated.adobeSvg?.userPaths).toHaveLength(0)
+      }
 
       const real = parseNcepPackage(new Uint8Array(readFileSync(fixture('ncep', `${mark}.ncep`))))
       expect(generated.mark).toBe(real.mark)

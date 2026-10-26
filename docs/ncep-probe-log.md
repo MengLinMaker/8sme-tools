@@ -554,6 +554,153 @@ WRITE_NCEX_PROBES=~/Downloads/ncep-inject-620-627 \
   pnpm exec vitest run src/lib/wisecam/probes.injectFeatures.test.ts
 ```
 
+## Own NC structure probes (700–712)
+
+Purpose: isolate the **generated NCEP structure** that blocks import for our own NC parts.
+Every probe starts from `buildNcepFromNc` output with a unique CadRoot `Name`, then changes one
+structural block. The current strongest suspect is the missing U/I Adobe `USERPATH` group.
+
+| Probe | Part | Variant | Isolates |
+| --- | --- | --- | --- |
+| 700 | M-1 PFC380 | control | our converter output |
+| 701 | M-1 PFC380 | + real USERPATH | missing Adobe USERPATH group |
+| 702 | M-1 PFC380 | real Adobe | Adobe SVG content (includes USERPATH) |
+| 703 | M-1 PFC380 | real part | part SVG content vs our Adobe |
+| 704 | M-1 PFC380 | real part + real Adobe | package docs/CadRoot vs both SVGs |
+| 705 | M-1 PFC380 | section nested | negative control; parser must reject |
+| 706 | M-3 UB310 | control | our converter output |
+| 707 | M-3 UB310 | + real USERPATH | missing Adobe USERPATH group |
+| 708 | M-3 UB310 | real Adobe | Adobe SVG content |
+| 709 | M-34 PFC300 | control | our converter output |
+| 710 | M-34 PFC300 | + real USERPATH | missing Adobe USERPATH group |
+| 711 | M-35 SHS89 | control | tube control |
+| 712 | M-42 RHS100x50 | control | tube control |
+
+Parser status: the current writer emits `USERPATH`, so U/I controls 700/706/709 are clean; the
+701/707/710 variants strip it and inject the real group (clean); 703 is clean because our Adobe
+now carries `USERPATH`; tubes 711/712 are clean; 705 errors `section` + `section-count`. Parser pass is necessary but not
+sufficient — record the WiseCAM result for each file.
+
+Generate and ZIP with:
+
+```sh
+WRITE_NCEX_PROBES=~/Downloads/ncep-probes-own-structure \
+  pnpm exec vitest run src/lib/wisecam/probes.ownStructure.test.ts
+```
+
+The test writes `README.txt`, every `.ncep`, and `~/Downloads/ncep-probes-own-structure.zip`.
+Test controls first; for U/I test 701/707/710 before 702/708; then 703/704. Stop at the first
+failure.
+
+## Control-first package probes (800–808)
+
+The own-NC pack (700–712) failed even with **real part + real Adobe**, so it did not localize the
+fault. This pack starts from the byte-identical real `M-1.ncep` and replaces one layer at a time.
+
+| Probe | Change | Isolates |
+| --- | --- | --- |
+| 800 | byte-identical real `M-1.ncep` | transfer/machine/cache baseline |
+| 801 | re-zipped by our writer, no content edits | our ZIP writer |
+| 802 | only `technologyID` → fresh GUIDs | GUID / cache key |
+| 803 | consistent rename to `M-1-803` | mark/name handling |
+| 804 | real package + **our part** SVG | our part geometry |
+| 805 | real package + **our Adobe** SVG | our Adobe geometry/USERPATH |
+| 806 | real SVGs + **all our package docs** | CadRoot/Technology/CustomizeData/opf |
+| 807 | our full generated package | full generated package |
+| 808 | our SVGs + real package docs | our SVGs vs real docs |
+| 809 | real content through **our `zipQt`** | our production ZIP writer |
+| 810 | 809 + real DOS timestamp | timestamps |
+| 811 | 809 + stored (no deflate) | fflate deflate stream |
+
+Parser status: all 800–811 are clean now that the writer emits the U/I `USERPATH` group. Parser pass is still necessary but not sufficient.
+
+Test order: **800 first**. If 800 fails, stop — the transfer/machine/cache is the problem. Then
+801 (ZIP), 802 (GUID), 803 (rename), 804/805 (SVGs), 809–811 (our production ZIP writer), 806/807
+(docs vs full), 808 (SVG complement). The first failing code names the layer.
+
+Generate and ZIP with:
+
+```sh
+WRITE_NCEX_PROBES=~/Downloads/ncep-probes-control-first \
+  pnpm exec vitest run src/lib/wisecam/probes.controlFirst.test.ts
+```
+
+## Adobe isolation (900–911)
+
+The updated NCEP spec names the U/I Adobe as the strongest suspect: real U/I adobes have **three**
+root groups (`cut`, `USERPATH`, `section`); the old writer emitted two and no `USERPATH`. The
+current writer synthesizes the group; this pack strips it again for the 902–905/909–911 variants
+so the old failure mode is still testable. It starts from the byte-identical real M-1.
+
+| Probe | Adobe | Adobe groups | USERPATH | Parser |
+| --- | --- | --- | --- | --- |
+| 900 | real control | 3 | 1 | ok |
+| 901 | real, consistent rename | 3 | 1 | ok |
+| 902 | **our Adobe only** | 2 | 0 | warn:adobe-userpath |
+| 903 | our Adobe + real USERPATH | 3 | 1 | ok |
+| 904 | our Adobe + real section | 2 | 0 | warn:adobe-userpath |
+| 905 | our Adobe + real USERPATH + real section | 3 | 1 | ok |
+| 906 | real Adobe, USERPATH removed | 2 | 0 | warn:adobe-userpath |
+| 907 | real Adobe + our section | 3 | 1 | ok |
+| 908 | our package + real Adobe | 3 | 1 | ok |
+| 909 | our package + our Adobe + real USERPATH | 3 | 1 | ok |
+| 910 | our package + our Adobe + real section | 2 | 0 | warn:adobe-userpath |
+| 911 | our package + our Adobe + real USERPATH + real section | 3 | 1 | ok |
+
+Conclusion from the parser matrix: **USERPATH is the only parser-significant Adobe difference**.
+Our sampled section is not the issue (904/910 still warn; 907 is clean). The remaining question is
+whether USERPATH alone makes WiseCAM import, or whether the full package writer also matters —
+908 (our package + real Adobe) and 809 (real content through `zipQt`) separate those cases.
+
+Generate and ZIP with:
+
+```sh
+WRITE_NCEX_PROBES=~/Downloads/ncep-probes-adobe \
+  pnpm exec vitest run src/lib/wisecam/probes.adobe.test.ts
+```
+
+## Theory probes (1200–1215)
+
+Real sample = container/docs/Adobe control; one theory per file. The **nested-section** variants
+are intentional: our parser rejects them, but probe 77 imported with the section nested, so they
+test the docs' unresolved 77-vs-205/226 contradiction on WiseCAM. The **stretch** variants put our
+generated part (and in 1204/1205, our Adobe) into a real container to test how well the ideal
+generalises.
+
+| Probe | Base | Change |
+| --- | --- | --- |
+| 1200 | real M-1 | byte-identical control |
+| 1201 | real M-1 | our part, section **sibling** |
+| 1202 | real M-1 | our part, section **nested** (77 form) |
+| 1203 | real M-1 | our part with the real **arc** section group |
+| 1204 | real M-1 | stretch: our part + our Adobe (synthesized USERPATH) |
+| 1205 | real M-1 | stretch combo: our part nested + our Adobe |
+| 1206 | real M-3 | byte-identical control |
+| 1207 | real M-3 | our UB part, section sibling |
+| 1208 | real M-3 | our UB part, section nested |
+| 1209 | real M-35 | byte-identical control |
+| 1210 | real M-35 | our SHS part in the real container |
+| 1211 | real M-42 | byte-identical control |
+| 1212 | real M-42 | our RHS part in the real container |
+| 1213 | generated M-1 | production combo (sibling + USERPATH + our docs) |
+| 1214 | generated M-1 | production combo with section nested |
+| 1215 | real M-1 docs | our nested part + our Adobe (maximum-fidelity combo) |
+
+Parser status: 1200/1201/1203/1204/1206/1207/1209–1213 are clean; 1202/1205/1208/1214/1215
+intentionally error `section` + `section-count` and warn `nested-group` because the parser contract
+requires a sibling section group.
+
+Test order: **1200** first. Then 1201 vs 1202 (placement), 1203 (arcs), 1204/1205 (stretch combo),
+1206–1208 (UB), 1209–1212 (tubes), 1213–1215 (production combos). The first failure names the
+theory.
+
+Generate and ZIP with:
+
+```sh
+WRITE_NCEX_PROBES=~/Downloads/ncep-probes-theories \
+  pnpm exec vitest run src/lib/wisecam/probes.theories.test.ts
+```
+
 ## Reproduce
 
 ```sh

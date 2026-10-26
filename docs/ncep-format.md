@@ -392,11 +392,12 @@ The strongest pattern so far is the Adobe:
 - real **U/I** adobes have **three** root groups, the middle one `USERPATH=USERPATH` with the
   applied cut paths;
 - real **M** (tube/RHS/SHS) adobes have **two** groups and no `USERPATH`;
-- all our generated **U/I** adobes have two groups and no `USERPATH`, and those packages fail.
+- the **old** writer emitted two groups with no `USERPATH`; the current writer synthesizes the
+  `USERPATH` group for U/I (PFC and UB), so generated U/I adobes now have three groups.
 
-That correlation points at the missing U/I `USERPATH` group as a likely cause of the 240/242/245
-failures, but it is not yet proven. The parser reports it as a **warning**, not an error, until a
-WiseCAM control confirms it. The `section-count` gap is now a hard error (PFC/M need 2 section
+That correlation points at the missing U/I `USERPATH` group as the likely cause of the 240/242/245
+failures. The current writer synthesizes it, and the Adobe-isolation probes (900–911) are the
+controlled WiseCAM check. The `section-count` gap is now a hard error (PFC/M need 2 section
 paths, UB needs 1).
 
 Remaining parser gaps:
@@ -427,8 +428,8 @@ Remaining parser gaps:
    straight ends; the NC→cluster mapping is not implemented.
 4. **Adobe `USERPATH` group.** Real **U/I** adobes have three root groups; the middle one is
    `wh:params="USERPATH=USERPATH;"` and carries the applied cut paths. Real **M** adobes have
-   two groups and no `USERPATH`. Generated U/I adobes omit it and fail; this is the strongest
-   current suspect for the 240/242/245 failures, but still needs a controlled WiseCAM test.
+   two groups and no `USERPATH`. The current writer synthesizes the U/I group (PFC and UB); the
+   900–911 probes strip it again to test the old failure mode.
 5. **`technologyID`.** Real exports use a fresh GUID per part/adobe, so we emit one. It is not
    validated (`not-a-guid` imports, probe 63) and is **not** the blocker: 30b keeps the control's
    ID and still imports. It does not appear in `Technology.xml`.
@@ -470,7 +471,7 @@ Remaining parser gaps:
 | ZIP flags | CAD entries flag 6; container stored | matches real (`zipQt`) | ✅ |
 | Canonical section | PFC/RHS already canonical; UB rotated `(−y,x)` | section builder emits canonical stance | ✅/⚠️ verify UB |
 | Marks | `cadtext` + `cadrectangle` bars; corrected bars layer 4 + `needSetAdobe` | text only; no `cadrectangle` bars | ⚠️ |
-| Adobe groups | U/I: three groups incl. `USERPATH`; M: two groups | U/I: two groups, no `USERPATH` | ⚠️ suspected U/I failure |
+| Adobe groups | U/I: three groups incl. `USERPATH`; M: two groups | U/I: three groups incl. synthesized `USERPATH`; M: two | ✅/⚠️ verify import |
 | End cuts | shaped/mitred | straight | ⚠️ (bevel cluster not generated) |
 
 ---

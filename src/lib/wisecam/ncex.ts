@@ -129,6 +129,8 @@ export interface NcexPart {
   stockLength?: number
   /** `RCornerMaxRadius` in the Adobe params: 5 for I/U, the section radius for tubes. */
   rCornerMaxRadius?: number
+  /** Root radius (mm) for I/U sections; used to synthesize the Adobe `USERPATH` arcs. */
+  rootRadius?: number
 }
 
 export interface NcexOptions {
@@ -332,6 +334,187 @@ export function ncexPartSvg(part: NcexPart, refId = 1000, palette?: NcexPalette)
   return partSvg(part, refId, palette)
 }
 
+const TECHNICAL_USER_LEAD =
+  'T={LeadLine={Pos={Segment=0,Ratio=0,},LeadInBreak=0,Radius = 0,Seal=0,LeadIn={Type=1,Length=2,Angle=0,Radius=3,AbsoluteAngle=1,},LeadOut={Type=1,Length=0,Angle=0,Radius=0.1,},},};'
+const TECHNICAL_USER_CUT =
+  'T={LeadLine={Pos={Segment=0,Ratio=0,},LeadInBreak=0,Radius = 0,Seal=0,LeadIn={Type=1,Length=2,Angle=0,Radius=3,AbsoluteAngle=1,},LeadOut={Type=1,Length=2,Angle=0,Radius=0.1,},},};'
+
+const coord = (value: number): string => mm(Math.abs(value) < 0.005 ? 0 : value)
+
+function userPathLine(
+  id: number,
+  layer: 0 | 1,
+  machining: boolean,
+  d: string,
+  technical: string,
+): string {
+  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="${layer}" wh:isfill="0" wh:machining="${machining ? 1 : 0}" d="${d}" wh:params="USERPATH=USERPATH;" wh:technical="${technical}" class="layer${layer}"/>`
+}
+
+function sectionHalf(part: NcexPart): { x: number; y: number } {
+  let x = 0
+  let y = 0
+  for (const [px, py] of part.section) {
+    x = Math.max(x, Math.abs(px))
+    y = Math.max(y, Math.abs(py))
+  }
+  return { x, y }
+}
+
+/** PFC `USERPATH`: two flange lead-ins, two corner connectors, one web-top cut. */
+function pfcUserPath(part: NcexPart, next: () => number): string[] {
+  const { x, y } = sectionHalf(part)
+  const inner = y - part.thickness
+  return [
+    userPathLine(
+      next(),
+      1,
+      true,
+      `M${coord(-x)},${coord(-y)} L${coord(-x)},${coord(inner)}`,
+      TECHNICAL_USER_LEAD,
+    ),
+    userPathLine(
+      next(),
+      0,
+      false,
+      `M${coord(-x)},${coord(inner)} L${coord(-x)},${coord(y)}`,
+      TECHNICAL_EMPTY,
+    ),
+    userPathLine(
+      next(),
+      0,
+      false,
+      `M${coord(x)},${coord(y)} L${coord(x)},${coord(inner)}`,
+      TECHNICAL_EMPTY,
+    ),
+    userPathLine(
+      next(),
+      1,
+      true,
+      `M${coord(x)},${coord(-y)} L${coord(x)},${coord(inner)}`,
+      TECHNICAL_USER_LEAD,
+    ),
+    userPathLine(
+      next(),
+      0,
+      true,
+      `M${coord(-x)},${coord(y)} L${coord(x)},${coord(y)}`,
+      TECHNICAL_USER_CUT,
+    ),
+  ]
+}
+
+/** UB `USERPATH`: two full-flange leads plus the rounded web/flange connectors. */
+function ubUserPath(part: NcexPart, next: () => number): string[] {
+  const { x, y } = sectionHalf(part)
+  const tw = part.thickness
+  const tf = part.legThickness
+  const r = part.rootRadius ?? 0
+  const yWeb = tw / 2
+  const xInner = x - tf
+  if (r <= 0.01) {
+    return [
+      userPathLine(
+        next(),
+        0,
+        true,
+        `M0,${coord(yWeb)} L${coord(-xInner)},${coord(yWeb)}`,
+        TECHNICAL_EMPTY,
+      ),
+      userPathLine(
+        next(),
+        0,
+        true,
+        `M0,${coord(yWeb)} L${coord(xInner)},${coord(yWeb)}`,
+        TECHNICAL_EMPTY,
+      ),
+      userPathLine(
+        next(),
+        1,
+        true,
+        `M${coord(x)},${coord(-y)} L${coord(x)},${coord(y)}`,
+        TECHNICAL_USER_LEAD,
+      ),
+      userPathLine(
+        next(),
+        1,
+        true,
+        `M${coord(-x)},${coord(-y)} L${coord(-x)},${coord(y)}`,
+        TECHNICAL_USER_LEAD,
+      ),
+      userPathLine(
+        next(),
+        0,
+        false,
+        `M${coord(-xInner)},${coord(yWeb)} L${coord(-xInner)},${coord(y)} L${coord(-x)},${coord(y)}`,
+        TECHNICAL_EMPTY,
+      ),
+      userPathLine(
+        next(),
+        0,
+        false,
+        `M${coord(xInner)},${coord(yWeb)} L${coord(xInner)},${coord(y)} L${coord(x)},${coord(y)}`,
+        TECHNICAL_EMPTY,
+      ),
+    ]
+  }
+  const xArc = xInner - r
+  const arcX = xInner - r + r * Math.SQRT1_2
+  const arcY = yWeb + r - r * Math.SQRT1_2
+  const yVert = yWeb + r
+  return [
+    userPathLine(
+      next(),
+      0,
+      true,
+      `M0,${coord(yWeb)} L${coord(-xArc)},${coord(yWeb)} A${coord(r)},${coord(r)} 0 0,0 ${coord(-arcX)},${coord(arcY)}`,
+      TECHNICAL_EMPTY,
+    ),
+    userPathLine(
+      next(),
+      0,
+      true,
+      `M0,${coord(yWeb)} L${coord(xArc)},${coord(yWeb)} A${coord(r)},${coord(r)} 0 0,1 ${coord(arcX)},${coord(arcY)}`,
+      TECHNICAL_EMPTY,
+    ),
+    userPathLine(
+      next(),
+      1,
+      true,
+      `M${coord(x)},${coord(-y)} L${coord(x)},${coord(y)}`,
+      TECHNICAL_USER_LEAD,
+    ),
+    userPathLine(
+      next(),
+      1,
+      true,
+      `M${coord(-x)},${coord(-y)} L${coord(-x)},${coord(y)}`,
+      TECHNICAL_USER_LEAD,
+    ),
+    userPathLine(
+      next(),
+      0,
+      false,
+      `M${coord(-arcX)},${coord(arcY)} A${coord(r)},${coord(r)} 0 0,0 ${coord(-xInner)},${coord(yVert)} L${coord(-xInner)},${coord(y)} L${coord(-x)},${coord(y)}`,
+      TECHNICAL_EMPTY,
+    ),
+    userPathLine(
+      next(),
+      0,
+      false,
+      `M${coord(arcX)},${coord(arcY)} A${coord(r)},${coord(r)} 0 0,1 ${coord(xInner)},${coord(yVert)} L${coord(xInner)},${coord(y)} L${coord(x)},${coord(y)}`,
+      TECHNICAL_EMPTY,
+    ),
+  ]
+}
+
+function adobeUserPath(part: NcexPart, next: () => number): string[] {
+  const type = part.profileType.trim().toUpperCase()
+  if (type === 'U') return pfcUserPath(part, next)
+  if (type === 'I') return ubUserPath(part, next)
+  return []
+}
+
 function adobeSvg(part: NcexPart, stockLength: number, refId: number): string {
   const [left, right] = seamBounds(part)
   const start: [number, number][] =
@@ -352,20 +535,28 @@ function adobeSvg(part: NcexPart, stockLength: number, refId: number): string {
   const cutGroup: string[] = []
   cutGroup.push(truncatePath(next(), start, 0))
   cutGroup.push(truncatePath(next(), end, 1, part.mark))
+  const userPath = adobeUserPath(part, next)
   const section: string[] = [profilePath(next(), part.section)]
   if (part.innerSection)
     section.push(innerProfilePath(next(), part.innerSection, undefined, innerSectionClosed(part)))
-  return [
-    svgHeader(),
+  const groups = [
     ` <g wh:id="${refId}" wh:class="cadgroup" wh:layer="0" wh:isfill="0" wh:machining="1" class="layer0">`,
     ...cutGroup.map((line) => `  ${line}`),
     ' </g>',
+  ]
+  if (userPath.length > 0) {
+    groups.push(
+      ` <g wh:id="${refId + 2}" wh:class="cadgroup" wh:layer="-1" wh:isfill="0" wh:machining="1" wh:params="USERPATH=USERPATH;" class="layer-1">`,
+      ...userPath.map((line) => `  ${line}`),
+      ' </g>',
+    )
+  }
+  groups.push(
     ` <g wh:id="${refId + 1}" wh:class="cadgroup" wh:layer="0" wh:isfill="0" wh:machining="1" class="layer0">`,
     ...section.map((line) => `  ${line}`),
     ' </g>',
-    '</svg>',
-    '',
-  ].join('\n')
+  )
+  return [svgHeader(), ...groups, '</svg>', ''].join('\n')
 }
 
 /**
