@@ -1,0 +1,77 @@
+{
+  "note": "Generated NCEP baselines for the section/arc theory. These are converter/probe outputs, not WiseCAM ground truth. Do not edit; regenerate with the matching probe pack. Real controls and reference variations live in the parent directories.",
+  "files": [
+    {
+      "path": "M-1-1301-our-part-real-section.ncep",
+      "name": "M-1-1301",
+      "profile": "U",
+      "wisecam": "loads-saves",
+      "why": "Our M-1 part + real arc section in real M-1 package; looked pretty much identical.",
+      "bytes": 23814,
+      "sha256": "8a1654a89e0199785988189e7d04cc31a95ba6122d682965462d54a05d80deed"
+    },
+    {
+      "path": "M-1-1402-sampled-section.ncep",
+      "name": "M-1-1402",
+      "profile": "U",
+      "wisecam": "invalid-cut",
+      "why": "Our sampled section; invalid cut lines off face, cannot save.",
+      "bytes": 23734,
+      "sha256": "39bb6da0abe74202082e316bd115edde26362dd422e99edf832164623ca5d712"
+    },
+    {
+      "path": "M-1-1403-sharp-cavity.ncep",
+      "name": "M-1-1403",
+      "profile": "U",
+      "wisecam": "loads-saves",
+      "why": "Real section arcs replaced by sharp chords; looks same. Exact corner vertices work; inner arcs not required.",
+      "bytes": 23774,
+      "sha256": "e82d7031a5efefcc08de95847b8340683ecb124ef873f0feb029b33cfcd82b1c"
+    },
+    {
+      "path": "M-1-1404-real-outer-sampled-inner.ncep",
+      "name": "M-1-1404",
+      "profile": "U",
+      "wisecam": "loads-saves",
+      "why": "Real outer section path + sampled inner path; looks same. Inner path is irrelevant to the wrap.",
+      "bytes": 23861,
+      "sha256": "0defebbd3ceb144ff994914fa9fe4f3a5d7e48fd5e613ce9a832add3677baff6"
+    },
+    {
+      "path": "M-3-1407-real-section.ncep",
+      "name": "M-3-1407",
+      "profile": "I",
+      "wisecam": "invalid-cut",
+      "why": "Our UB part + real section; invalid cut lines / sharp beam edge, no marking. Points at the UB front trim/holes/mark.",
+      "bytes": 24760,
+      "sha256": "07150787b98803c78e372ec76fffaba399979ee808148ebd0e71ba693c492f65"
+    },
+    {
+      "path": "M-35-1305-our-part-real-section.ncep",
+      "name": "M-35-1305",
+      "profile": "M",
+      "wisecam": "loads-saves",
+      "why": "Our M-35 part + real arc section; pretty much identical.",
+      "bytes": 14769,
+      "sha256": "7c61f245a0d9e88bb79ab09f17da80f300eb61570d9fefb2bcfa6a2221b5bc12"
+    },
+    {
+      "path": "M-35-1413-real-outer-sampled-inner.ncep",
+      "name": "M-35-1413",
+      "profile": "M",
+      "wisecam": "loads-saves",
+      "why": "Real outer + sampled inner tube section; looks same. Inner path is irrelevant.",
+      "bytes": 14769,
+      "sha256": "da492c2bcb74ea88859b4c79d123b3f25ce77f54f108f722ce89aba06b02804b"
+    },
+    {
+      "path": "M-42-1416-real-section-no-mark.ncep",
+      "name": "M-42-1416",
+      "profile": "M",
+      "wisecam": "wrong-geometry",
+      "why": "Our M-42 part + real section, no mark; geometry has 45 degree sharp edges. Points at the mitre/end cut.",
+      "bytes": 13906,
+      "sha256": "eb989ad95d29b95c8a8d65443707db6cc8cfcee72893da93e5b2452c67a63c92"
+    }
+  ]
+}

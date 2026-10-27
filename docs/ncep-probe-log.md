@@ -798,6 +798,133 @@ WRITE_NCEX_PROBES=~/Downloads/ncep-probes-arcs \
   pnpm exec vitest run src/lib/wisecam/probes.arcs.test.ts
 ```
 
+## Arc-bundle results (2026-10-27)
+
+Source: `~/Downloads/ncep-probes-arc-bundle result/`. The exact-result picture is:
+
+### probes-arcs (1300–1316)
+
+| Probe | Result |
+| --- | --- |
+| 1300/1302/1304/1306 | controls load |
+| 1301 our M-1 + real section | **pretty much identical** |
+| 1303 our M-3 + real section | almost identical, no marks, **slight cut issue near front** |
+| 1305 our M-35 + real section | **pretty much identical** |
+| 1307 our M-42 + real section, no mark | **quite different geometry/cut** |
+| 1308–1310 full M-1 + arc part/Adobe | **rejected** |
+| 1311 M-1 real mark / 1312 no mark | load |
+| 1313 M-35 real mark / 1314 no mark | load |
+| 1315 M-42 default mark | **mark massive, geometry wrong** |
+| 1316 M-3 real text + bars | **mark great again, minor cut glitch at front** |
+
+### probes-arc-edges (1400–1417)
+
+| Probe | Result |
+| --- | --- |
+| 1401 M-1 real section | looks same |
+| 1402 M-1 sampled section | invalid cut lines off face, cannot save |
+| 1403 M-1 **sharp cavity** | **looks same** |
+| 1404 M-1 **real outer + sampled inner** | **looks same** |
+| 1405 M-1 **sampled outer + real inner** | invalid cut lines off face |
+| 1407 M-3 real section | invalid cut lines, sharp beam edge, no marking |
+| 1408 M-3 sharp root | invalid cut lines, cannot save |
+| 1409/1410 M-3 full package + real section/Adobe | **rejected** |
+| 1412 M-35 real section | looks same |
+| 1413 M-35 **real outer + sampled inner** | **looks same** |
+| 1414 M-35 **sampled outer + real inner** | cuts offset by arc |
+| 1415 M-35 full package + real section/Adobe | **rejected** |
+| 1416 M-42 real section, no mark | geometry has **45° sharp edges** |
+| 1417 M-42 full package real section/no mark/Adobe | **rejected** |
+
+### Refined theory
+
+1. **The outer section path must use exact corner vertices.** PFC and tubes prove this cleanly:
+   - PFC: `1403` (sharp cavity) and `1404` (real outer + sampled inner) load; `1405`
+     (sampled outer + real inner) fails.
+   - Tube: `1413` (real outer + sampled inner) loads; `1414` (sampled outer + real inner)
+     offsets the cuts.
+   So the inner section path is irrelevant to the wrap, and **true arcs are not strictly
+   required** — sharp chords between the true corner vertices work (`1403`). The failure is
+   the dense sampled outer polyline, not arc curvature itself.
+2. **PFC and M-35 are fixed** by the exact outer section (`1301`, `1305`, `1401`, `1412`,
+   `1413`).
+3. **UB has a second issue.** Even with the real section, `1407` has invalid cut lines /
+   sharp beam edge; `1303`/`1316` are close but have a **minor cut glitch at the front**.
+   Real text + bars fix the mark (`1316`), so the remaining suspect is our **front start/end
+   trim** (and possibly holes), not the section.
+4. **M-42 has a mitre/end-cut issue.** `1307`/`1416` still have “quite different geometry”
+   and **45° sharp edges** with the real section and no mark. This is separate from the mark
+   and section; suspect our shaped end-cut/mitre development.
+5. **Full generated packages still reject even with arc sections** (`1308–1310`, `1409–1410`,
+   `1415`, `1417`). `806` (our docs + real SVGs) and `808` (our SVGs + real docs) both load,
+   and `809–811` (real content through `zipQt`) load. The failing combination is **our docs
+   + our SVGs + our `zipQt` container**, so a full-package matrix is still needed.
+6. **Mark is not the import blocker** for M-1/M-35, but M-42’s default 40 mm mark is wrong;
+   real M-42 has none.
+
+### Next probes
+
+- **UB front-trim isolation:** our UB part + real section + real start/end trims; add real
+  holes; add real marks. Then the same with sharp-root section.
+- **M-42 mitre isolation:** our M-42 part + real section + **real start/end trims**, no mark;
+  and our trims with the real section (already 1307) for comparison.
+- **Full-package matrix:** our `zipQt` + our docs + real SVGs; our `zipQt` + real docs + our
+  SVGs; our docs + real part + our Adobe; our docs + our part + real Adobe; then add real
+  trims/holes/marks to our part.
+- **Sharp-chord production test:** tube with sharp-corner outer + sampled inner; if it loads,
+  we can emit exact-corner chords instead of implementing arc primitives.
+- **UB after trim fix:** sharp-root vs arcs, to confirm whether UB needs arcs once the front
+  trim is correct.
+
+## Round 3 front/full probes (1500–1531)
+
+Builds on the arc-bundle results: PFC/tubes need an exact **outer** section; UB still has a
+front-trim/cut issue; M-42 still has a mitre/end-cut issue; full packages still reject even with
+arc sections.
+
+| Probe | Base | Change |
+| --- | --- | --- |
+| 1500 | real M-3 | control |
+| 1501 | real M-3 | our UB part + real section + **real trims** |
+| 1502 | 1501 | + real holes |
+| 1503 | 1502 | + real marks (text + bars) |
+| 1504 | 1503 | sharp-root section instead of arcs |
+| 1505 | real M-1 | control |
+| 1506 | real M-1 | known-good baseline: our part + real section |
+| 1507 | real M-35 | control |
+| 1508 | real M-35 | known-good baseline: our part + real section |
+| 1510 | real M-42 | control |
+| 1511 | real M-42 | our part + real section + **real trims**, no mark |
+| 1512 | real M-42 | our section + real trims, no mark |
+| 1513 | real M-42 | real section + real trims + default mark |
+| 1520 | our zipQt | our docs + **real part/adobe** |
+| 1521 | our zipQt | **real docs** + our part/adobe |
+| 1522 | our zipQt | our docs + real part + our Adobe |
+| 1523 | our zipQt | our docs + our part + real Adobe |
+| 1524 | our zipQt | our part with real section/trims/holes/marks |
+| 1525 | our zipQt | our part with real section + real trims |
+| 1526 | our zipQt | our part with real section, no mark |
+| 1530 | real M-35 | **sharp outer + sampled inner** |
+| 1531 | real M-1 | **sharp outer + sampled inner** |
+
+The key new questions:
+
+1. Does UB load cleanly once the **front trims** are real (`1501`), then holes (`1502`), then
+   marks (`1503`)? Does a sharp root still work (`1504`)?
+2. Does M-42 behave once the **real mitred trims** are used (`1511`/`1512`)? Is the default mark
+   still the only problem (`1513`)?
+3. Which layer causes full-package rejection: docs/container (`1520`), our SVGs (`1521`), part
+   (`1522`), Adobe (`1523`), trims (`1525`), mark (`1526`)?
+4. Can we avoid arc primitives by emitting **exact sharp chords** for the outer section
+   (`1530`/`1531`), with our sampled inner path?
+
+Generate and ZIP with:
+
+```sh
+WRITE_NCEX_PROBES=~/Downloads/ncep-probes-front-full \
+  pnpm exec vitest run src/lib/wisecam/probes.frontFull.test.ts
+```
+
 ## Reproduce
 
 ```sh
