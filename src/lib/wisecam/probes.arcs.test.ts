@@ -210,7 +210,7 @@ describe.skipIf(!outDir)('round 2 arc/mark probes', () => {
     ): void => {
       const unique = `${base.mark}-${code}`
       const ownFiles = own(base.mark, unique)
-      let part = setPartRef(
+      const part = setPartRef(
         transform(strFromU8(ownFiles['CAD/part1000.svg'] as Uint8Array)),
         base.partId,
       )
