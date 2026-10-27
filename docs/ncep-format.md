@@ -345,6 +345,24 @@ A parser must walk the end-trim's child elements; they are **not** siblings in `
 validator still requires the two outer trims. A generator must emit the cluster as nested children
 of the end-trim path, not replace the end trim with a polyline.
 
+### 2026-10-27 WiseCAM result — the section group, not USERPATH
+
+The generated-all probe results reverse two earlier assumptions:
+
+- **`USERPATH` is not required for import.** Real-package probes with our Adobe (no USERPATH),
+  our Adobe + real section, and the real Adobe with USERPATH removed all load and save.
+- **The part section group is the blocker.** Our part with the sampled section loads but cannot
+  save (`invalid-cut-cannot-save`, `cut-lines-invalid-offset`); the same part with the real
+  **arc** section group loads, saves, and looks identical to the control. Full generated packages
+  are rejected only when the sampled section and our docs are combined; our docs + real SVGs load.
+- **Nested section groups crash.** The old probe-77 nested form is not a fix; the section group
+  must stay a sibling.
+- **ZIP writer and package docs are exonerated.** Real content through our `zipQt` loads, and our
+  docs + real SVGs load.
+
+So the immediate generator fix is to emit **arc section groups** (part and Adobe); USERPATH should
+stay (it matches the real U/I Adobe) but is not the import blocker.
+
 ### Validator / generator contract
 
 A validator that matches these references should check:

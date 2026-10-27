@@ -701,6 +701,103 @@ WRITE_NCEX_PROBES=~/Downloads/ncep-probes-theories \
   pnpm exec vitest run src/lib/wisecam/probes.theories.test.ts
 ```
 
+## WiseCAM results — generated-all (2026-10-27)
+
+Source: `~/Downloads/ncep-generated-all results/`. `CAM导入失败文件` = rejected on import;
+`Crash` = preview/save crash; comments appended to file names record the observed behaviour.
+The `.ncexa` exports confirm the saved parts.
+
+### Result matrix
+
+| Pack | Loaded / saved | Loaded with issues | Rejected | Crash |
+| --- | --- | --- | --- | --- |
+| `generated-from-nc` | — | — | M-1-G, M-3-G, M-34-G, M-35-G, M-42-G | — |
+| `probes-own-structure` | — | — | 700–712 (all) | — |
+| `probes-control-first` | 800–806, 808–811 | 804, 808 (`cut-lines-invalid-offset`) | 807 (our full package) | — |
+| `probes-adobe` | 900–907 | — | 908–911 (our package + real/our Adobe) | — |
+| `probes-theories` | 1200, 1203, 1206, 1209–1212 | 1201, 1204 (`invalid-cut-cannot-save`); 1210 (`feature-wrapping-is-offset`); 1212 (`marking-bigger-than-part`) | 1213, 1214 | 1202, 1205, 1207, 1208, 1215 |
+
+### What the results prove
+
+1. **The ZIP writer is exonerated.** `809` (real content through `zipQt`), `810` (real timestamp)
+   and `811` (stored) all load and save. The earlier all-fail run was not the ZIP encoder.
+2. **Our package docs are not the blocker.** `806` (our CadRoot/Technology/CustomizeData/opf +
+   real SVGs) loads and saves.
+3. **`USERPATH` is not required for import.** `902` (our Adobe, no USERPATH), `904` (our Adobe +
+   real section, no USERPATH) and `906` (real Adobe with USERPATH removed) all load and save.
+   `908`–`911` fail only when the **our package** is the base; the Adobe is not the differentiator.
+4. **The part SVG section group is the root cause.** This is the decisive pair:
+   - `1201`: our part with the **sampled** section → loads but `invalid-cut-cannot-save`;
+   - `1203`: same part with the **real arc section group** → loads, saves, and looks identical to
+     the control.
+   The same pattern appears at `804`/`808` (`cut-lines-invalid-offset`).
+5. **The section must stay a sibling.** Every nested variant crashes: `1202`, `1205`, `1208`,
+   `1215` (`crash-preview`), and `1207` fails to save. The old probe-77 nested form is not a fix.
+6. **Full generated packages fail as a combo.** `806` (our docs + real SVGs) and `808` (our SVGs +
+   real docs) load; `807` (both ours) is rejected. Since 806 is clean, the docs are fine; the
+   sampled part/adobe section geometry is the common defect. Fixing the section arcs should
+   collapse the combo failure.
+7. **Tubes load but features are wrong.** `1210` (M-35) loads with `feature-wrapping-is-offset`;
+   `1212` (M-42) loads with `marking-bigger-than-part`. This is a geometry/marking problem, not
+   an import rejection. M-42 is only 106 mm; our unconditional 40 mm default mark is larger than
+   the part, while the real M-42 has **no** mark.
+8. **UB needs the 1203 analogue.** `1207` (our UB part, sampled section) cannot save; `1208`
+   (nested) crashes. A UB probe with our part + the real arc section is the next check.
+
+### Next fixes, in order
+
+1. Emit **arc section groups** in the part and Adobe instead of sampled polylines (the `1203`
+   result). Use the real same-section section group as the template if the section builders cannot
+   yet return arcs.
+2. Re-run the M-1 full package and the UB analogue after the arc fix. Expect `807`/`1213` to load.
+3. Fix marks: skip the default mark on short parts (M-42), and place marks on the same face/station
+   as the real export instead of always at `x=0`.
+4. Re-check tube feature wrapping after the arc section fix; compare `1210`/`1212` part geometry
+   (section, holes, trims, mark) against the real M-35/M-42 exports.
+5. Keep the section group a **sibling**; nested is confirmed broken.
+
+## Round 2 arc/mark probes (1300–1316)
+
+Baseline: `1203` proved that our part + the **real arc section group** loads, saves and looks
+identical to the control. This pack takes that as the our-parts baseline and tests the remaining
+unproven theories: arcs inside the full generated package, UB/tube arc sections, and marks.
+
+| Probe | Base | Change |
+| --- | --- | --- |
+| 1300 | real M-1 | control |
+| 1301 | real M-1 | our part + real arc section (1203 baseline) |
+| 1302 | real M-3 | control |
+| 1303 | real M-3 | our UB part + real arc section |
+| 1304 | real M-35 | control |
+| 1305 | real M-35 | our tube part + real arc section |
+| 1306 | real M-42 | control |
+| 1307 | real M-42 | our tube part + real arc section, **no mark** |
+| 1308 | our full M-1 | arc part only, Adobe still sampled |
+| 1309 | our full M-1 | arc part + arc Adobe section |
+| 1310 | our full M-1 | arc part + real Adobe (arcs + USERPATH) |
+| 1311 | real M-1 | arc baseline + real mark |
+| 1312 | real M-1 | arc baseline + no mark |
+| 1313 | real M-35 | arc baseline + real mark |
+| 1314 | real M-35 | arc baseline + no mark |
+| 1315 | real M-42 | arc baseline + our default mark (compare 1307) |
+| 1316 | real M-3 | arc baseline + real text + bars |
+
+Still-open questions this pack answers:
+
+1. Do arc sections alone fix the **full generated package** (`1308`–`1310`)?
+2. Do UB/tube parts need the same arc section fix (`1303`/`1305`/`1307`)?
+3. Is the Adobe section group also required to be arcs (`1308` vs `1309`/`1310`)?
+4. Do marks affect import/save, or only marking quality (`1311`–`1316`)?
+5. Does the M-42 short part behave better with no mark (`1307`) than with our default (`1315`)?
+6. Does the M-3 real text + bars change anything on the arc baseline (`1316`)?
+
+Generate and ZIP with:
+
+```sh
+WRITE_NCEX_PROBES=~/Downloads/ncep-probes-arcs \
+  pnpm exec vitest run src/lib/wisecam/probes.arcs.test.ts
+```
+
 ## Reproduce
 
 ```sh
