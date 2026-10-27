@@ -4,6 +4,8 @@ Purpose: find out why WiseCAM imports its own `.ncep` exports but rejects the on
 produces. Record every probe, what changed, and whether it imported. Keep the working/ failing
 lists current — they are the reverse-engineering evidence.
 
+**Open theories and next investigations:** `docs/ncep-open-questions.md` (living log).
+
 Probe folders live in `~/Downloads/`:
 
 - `ncep-probes-30-58/` — differential probes starting from WiseCAM's real `M-1.ncep`

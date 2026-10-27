@@ -7,6 +7,7 @@ exports in `~/Downloads/NCEP samples 2 Hidden Grove` (copied to `test/fixtures/n
 WiseCAM Tube manual §5.1 / §12.1.
 
 Read with `docs/ncexa-format.md` (the shared NCEX container) and `docs/wisecam-formats.md`.
+Open theories and next investigations live in `docs/ncep-open-questions.md`.
 
 Status: **container + unrolled geometry for PFC/UB/RHS and the reference canonical/marking
 variations are decoded; T/angle/round, full bevel generation and some metadata are still open.**
