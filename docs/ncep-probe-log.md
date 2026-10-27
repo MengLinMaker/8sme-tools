@@ -925,6 +925,77 @@ WRITE_NCEX_PROBES=~/Downloads/ncep-probes-front-full \
   pnpm exec vitest run src/lib/wisecam/probes.frontFull.test.ts
 ```
 
+## Front/full results (1500–1531)
+
+Source: `~/Downloads/ncep-probes-front-full result/`.
+
+| Probe | Result |
+| --- | --- |
+| 1500/1505/1507/1510 | controls load |
+| 1501 M-3 real section + real trims | loads |
+| 1502 + real holes | loads |
+| 1503 + real marks | loads |
+| 1504 UB sharp root + real features | **invalid cut, cannot save** |
+| 1506 M-1 our part + real section | looks similar |
+| 1508 M-35 our part + real section | looks similar |
+| 1511 M-42 real section + real trims, no mark | loads |
+| 1512 M-42 our section + real trims, no mark | **end cut offset by a sixth of arc** |
+| 1513 M-42 real section + real trims + default mark | loads |
+| 1520–1526 full-package matrix | **all rejected** |
+| 1530 M-35 sharp outer + sampled inner | **blocky / offset** |
+| 1531 M-1 sharp outer + sampled inner | looks similar |
+
+Conclusions:
+
+1. **PFC** is fine with exact outer vertices, including sharp chords (`1531`, `1403`).
+2. **UB requires true arcs** for the root fillets; sharp root fails even with real trims/holes/marks
+   (`1504`).
+3. **Tubes require true arcs** for the corner radii; sharp outer is blocky/offset (`1530`).
+4. **UB front trim/hole/mark is now solved**: real trims + holes + marks load (`1503`). The earlier
+   front glitch was our front features, not the section alone.
+5. **M-42 needs real mitred trims and the real section**: `1511`/`1513` load; our section with real
+   trims still offsets the end cut (`1512`). The default mark is fine once the geometry is correct.
+6. **Full packages still reject** (`1520–1526`) even when the part features are real. Since the same
+   mixtures load in a **real container** (`806`, `808`, `809–811`), the remaining blocker is the
+   package container/compression, not the NCEP geometry.
+
+## NC→NCEP compression probes (1600–1617)
+
+Bolder full packages with improved features:
+- M-1/M-3: real section + real trims/holes/marks.
+- M-35: real section + real mark.
+- M-42: real section + real trims, no mark.
+
+Each family is emitted with **fflate deflate**, **Node zlib deflate**, and **stored** entries.
+`1604`/`1605` also swap in the real `container.xml`.
+
+| Probe | Change |
+| --- | --- |
+| 1600/1615/1616/1617 | real M-1/M-3/M-35/M-42 controls |
+| 1601 | improved M-1, fflate |
+| 1602 | improved M-1, Node zlib |
+| 1603 | improved M-1, stored |
+| 1604 | improved M-1, fflate + real container.xml |
+| 1605 | improved M-1, zlib + real container.xml |
+| 1606–1608 | improved M-3: fflate / zlib / stored |
+| 1609–1611 | improved M-35: fflate / zlib / stored |
+| 1612–1614 | improved M-42: fflate / zlib / stored |
+
+Interpretation:
+
+- If **zlib or stored loads but fflate rejects**, the blocker is the compressor, not the geometry.
+- If **all modes reject**, the remaining difference is content/container metadata (for example the
+  trailing newline in `container.xml`, entry order, or a content-derived cache key).
+- If **all modes load**, the NC→NCEP path is viable with the improved features and we can move the
+  fixes into the writer.
+
+Generate and ZIP with:
+
+```sh
+WRITE_NCEX_PROBES=~/Downloads/ncep-probes-nc2ncep \
+  pnpm exec vitest run src/lib/wisecam/probes.nc2ncep.test.ts
+```
+
 ## Reproduce
 
 ```sh
