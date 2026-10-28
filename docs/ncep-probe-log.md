@@ -998,6 +998,50 @@ WRITE_NCEX_PROBES=~/Downloads/ncep-probes-nc2ncep \
   pnpm exec vitest run src/lib/wisecam/probes.nc2ncep.test.ts
 ```
 
+## NC→NCEP result and container fix (2026-10-27)
+
+Source: `~/Downloads/ncep-probes-nc2ncep result/`.
+
+- Controls `1600`, `1615`, `1616`, `1617` load.
+- `1604` (fflate + **real `container.xml`**) and `1605` (zlib + real `container.xml`) **load**.
+- `1601` (fflate), `1602` (zlib) and `1603` (stored) with our `container.xml` **reject**.
+- `1606–1614` (M-3/M-35/M-42 improved packages) were built with the old container and rejected.
+
+The only byte difference between the real and our `container.xml` is a **trailing newline**
+(real 379 bytes, ours 380). Compression is irrelevant: fflate and zlib both work with the real
+container, and stored does not fix our container.
+
+The writer now emits the real container bytes with no trailing newline (`src/lib/wisecam/ncex.ts`)
+and `fromNc.test.ts` asserts byte equality against the real M-1 `container.xml`.
+
+Confirmation pack: `~/Downloads/ncep-probes-container-fix.zip` (1600–1618). `1618` deliberately
+re-adds the trailing newline as a negative control; `1601`/`1602`/`1603` and `1606–1614` now use
+the fixed container.
+
+## Feature-matrix probes (1800–1831)
+
+These use **real containers** and, for UB/M-34/M-42, the **real arc section** — so they remain
+valid independently of the full-package container confirmation.
+
+| Probe | Purpose |
+| --- | --- |
+| 1800/1810/1820/1830 | real M-3/M-42/M-34/M-1 controls |
+| 1801–1808 | UB: ours/real trims × holes × marks, real section fixed |
+| 1811–1816 | M-42: ours/real section × ours/real trims × no/default mark |
+| 1821–1823 | M-34 PFC notched start: all-real, our trims, our section |
+| 1831 | real M-1 with `TotalCount=2` |
+
+Known-good anchors: `1808` (all-real UB ≈ `1503`), `1814`/`1815` (M-42 real
+section+trims ≈ `1511`/`1513`). Known-bad anchors: `1807` (all-ours UB ≈ `1303`) and
+`1811`/`1812`/`1813` (M-42 sampled/mitred variants).
+
+Generate and ZIP with:
+
+```sh
+WRITE_NCEX_PROBES=~/Downloads/ncep-probes-feature-matrix \
+  pnpm exec vitest run src/lib/wisecam/probes.featureMatrix.test.ts
+```
+
 ## Reproduce
 
 ```sh

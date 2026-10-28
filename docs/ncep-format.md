@@ -47,6 +47,9 @@ CAD files are deflated with general-purpose **flags = 6**; `ncex.opf` flags = 0.
 
 ### `META-INF/container.xml`
 
+> **Exact bytes matter.** WiseCAM rejects a trailing newline after `</container>` (real files are
+> 379 bytes; ours was 380). Emit the real bytes with no final newline.
+
 ```xml
 <?xml version="1.0"?>
 <container version="1.0" xmlns="http://www.weihong.com.cn/phoenix/ncex">

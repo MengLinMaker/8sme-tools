@@ -30,7 +30,7 @@ Status legend: **SOLID** (proven on WiseCAM), **LIKELY** (strong evidence), **SU
 | Tube section arcs | **LIKELY** | True arcs required at the corner radii; sharp outer is blocky/offset (`1530`). |
 | UB front trims/holes/marks | **LIKELY** | Real section + real trims → holes → marks loads (`1501–1503`). Our front features still glitch. |
 | M-42 mitre/end cut | **LIKELY** | Real section + real mitred trims loads (`1511`/`1513`); our section with real trims offsets the end (`1512`). |
-| Full-package container | **SUSPECT** | `1520–1526` reject even with real part features; same content loads in a real container. Compression/container is the remaining suspect. |
+| Full-package container | **SOLID** | `container.xml` must have no trailing newline. `1604`/`1605` (real container) load; `1601–1603` (our container) reject. Writer fixed + regression test added. |
 | Adobe `USERPATH` | **LIKELY** | Synthesized group parses; `902`/`906` show `USERPATH` is not required for import. Exact applied cut/lead geometry untested. |
 | Hole correction / grey strips | **UNTESTED** | `UB corrected hole` is a desired form (47 → 36 holes); the general rule is unknown. |
 | Bevels / notches / counterbore / slots | **UNTESTED** | Bevel is a nested `PosMap` child cluster; generator not implemented. No notch/counterbore/slot samples. |
@@ -101,24 +101,26 @@ remaining UB/tube offsets?
 
 ## Q3 — Full-package rejection / compression and container
 
-**Status: SUSPECT; `1600–1617` pending.**
+**Status: SOLVED (2026-10-27) — the `container.xml` trailing newline.**
 
-- `1520` (our docs + real SVGs in our `zipQt`) and `1521` (real docs + our SVGs in our `zipQt`)
-  both reject.
-- `806`/`808` (same mixtures in a **real container**) load.
-- `809–811` (real content through `zipQt`, zlib/full timestamp/stored) load.
+Evidence from `ncep-probes-nc2ncep result/`:
 
-**Tests running:** `1600–1617` compare improved full packages with fflate vs Node zlib vs stored,
-and with the real `container.xml`.
+- `1600`/`1615`/`1616`/`1617` controls load.
+- `1604` (fflate + real `container.xml`) and `1605` (zlib + real `container.xml`) **load**.
+- `1601` (fflate), `1602` (zlib) and `1603` (stored) with **our** `container.xml` all reject.
+- The only byte difference between our `container.xml` and the real one is a **trailing newline**:
+  real is 379 bytes, ours was 380.
 
-**Interpretation**
+So compression is irrelevant (fflate, zlib and stored all work with the real container). The fix is
+to emit the real container bytes with **no trailing newline**. This is now done in `ncex.ts`, with a
+byte-exact regression test in `fromNc.test.ts`.
 
-- zlib/stored loads, fflate rejects → switch the compressor;
-- all modes reject → container metadata/entry order/cache key;
-- all modes load → NC→NCEP is viable with the improved features.
+`1606–1614` (M-3/M-35/M-42) were tested before the fix and rejected; regenerate with
+`~/Downloads/ncep-probes-container-fix.zip` to confirm each family. `1618` is the explicit
+old-container negative control.
 
-Also check: trailing newline in `container.xml`, entry order, `technologyID`, `ncex.opf` flags,
-and whether the failing package is cached under an existing mark.
+Residual Q3 items: entry order, `technologyID`, `ncex.opf` flags and content-derived cache keys are
+now lower priority — no evidence they are blocking.
 
 ---
 
@@ -215,7 +217,7 @@ before, suspect a content-derived cache key rather than geometry.
 | `probes.arcs` | 1300–1316 | real arc section + marks |
 | `probes.arcEdges` | 1400–1417 | per-edge/full-arc isolation |
 | `probes.frontFull` | 1500–1531 | UB front features, M-42 mitre, full-package matrix |
-| `probes.nc2ncep` | 1600–1617 | improved full packages + fflate/zlib/stored |
+| `probes.nc2ncep` | 1600–1618 | improved full packages + fflate/zlib/stored + container fix |
 
 Generated references: `test/fixtures/ncep/generated-baselines/` (hash-guarded).
 
