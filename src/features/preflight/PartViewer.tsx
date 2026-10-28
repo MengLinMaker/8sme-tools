@@ -39,9 +39,8 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import type { CutMarker } from '@/lib/audit/cutReach'
 import {
-  faceHalf,
   faceNormal,
-  faceSpanAxis,
+  frameForProfile,
   type NcFaceFrame,
   placeNcFace,
   resolveNcFaceFrame,
@@ -49,6 +48,7 @@ import {
 import type { NcFace, NcGeometry } from '@/lib/parsers/ncGeometry'
 import {
   ETCH_COLOR,
+  faceThickness,
   MARKING_COLOR,
   type NcLineSets,
   type NcProjection,
@@ -56,10 +56,16 @@ import {
   THICKNESS_COLORS,
   type Vec3,
 } from '@/lib/parsers/ncProject'
-import { CUT_FACES, faceRole, type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
+import {
+  CUT_FACES,
+  faceNormalSigns,
+  faceRole,
+  type ProfileFamily,
+  profileFamily,
+} from '@/lib/sections/canonical'
 import type { StockOutline } from '@/lib/sections/stock'
 import { type DiffPresence, probeDiffPresence } from '@/lib/step/booleanDiff'
-import { brepCutSegments, cutEdgeThicknessAt, type SeatedBrepFace } from '@/lib/step/cutEdges'
+import { brepCutSegments, type SeatedBrepFace } from '@/lib/step/cutEdges'
 import { projectCutEdgesToFaces } from '@/lib/step/cutProjection'
 import { closeDiffMask, computeDiffMasks, diffFraction } from '@/lib/step/diffHighlight'
 import type { MeshedStep } from '@/lib/step/mesh'
@@ -218,35 +224,53 @@ export interface CutEdgeOptions {
 const DEFAULT_CUT_FACES: NcFace[] = ['o', 'u', 'h']
 
 /**
- * World-space outward normals of the DSTV faces that should carry cut-edge colouring. The machine
- * role (`faceRole`) gives each face's side — top/bottom lie on the machine-up axis, a side on the
- * cross axis — so the normals never depend on the NC's authored frame. (An angle's authored frame
- * can resolve a quarter-turn off, which used to leak `o` into the targets even when it was not
- * listed.) A symmetric section's two side letters are interchangeable, so a requested side face
- * colours both sides; an asymmetric angle's sides are distinct, so the letter picks its own — `v`
- * the right (`+x`), `h` the left (`−x`).
+ * World-space outward normals of the DSTV faces that should carry cut-edge colouring, paired with
+ * the face letter so the cut thickness can come from the stock's face map. The machine role
+ * (`faceRole`) gives each face's side — top/bottom lie on the machine-up axis, a side on the cross
+ * axis — so the normals never depend on the NC's authored frame. (An angle's authored frame can
+ * resolve a quarter-turn off, which used to leak `o` into the targets even when it was not listed.)
+ * A symmetric section's two side letters are interchangeable, so a requested side face colours both
+ * sides; an asymmetric angle's sides are distinct, so the letter picks its own — `v` the right
+ * (`+x`), `h` the left (`−x`).
  */
-function targetFaceNormals(
+function targetFaceEntries(
   faces: NcFace[],
   family: ProfileFamily,
+  frame: NcFaceFrame,
   xAxis: Vector3,
   yAxis: Vector3,
-): Vec3[] {
-  const normals: Vec3[] = []
+): { face: NcFace; normal: Vec3; offset?: number }[] {
+  const entries: { face: NcFace; normal: Vec3; offset?: number }[] = []
   for (const face of faces) {
     const role = faceRole(family, face)
     const base = role === 'side' ? xAxis : yAxis
-    const signs =
-      role === 'side'
-        ? family === 'angle'
-          ? [face === 'v' ? 1 : -1]
-          : [1, -1]
-        : [role === 'top' ? 1 : -1]
-    for (const sign of signs) {
-      normals.push([base.x * sign, base.y * sign, base.z * sign])
+    // Only an I-section's web needs an explicit plane: it is **interior** at ±tw/2, while every
+    // other stock face is the outermost one along its normal (which the classifier finds itself).
+    const offset =
+      family === 'i' && (face === 'v' || face === 'h')
+        ? (frame.webHalf ?? frame.extent[1] / 2)
+        : undefined
+    for (const sign of faceNormalSigns(family, face)) {
+      entries.push({
+        face,
+        normal: [base.x * sign, base.y * sign, base.z * sign],
+        offset,
+      })
     }
   }
-  return normals
+  return entries
+}
+
+/** The default cut targets when the section family is unknown: both sides and the top. */
+function defaultFaceEntries(
+  xAxis: Vector3,
+  yAxis: Vector3,
+): { face: NcFace; normal: Vec3; offset?: number }[] {
+  return [
+    { face: 'v', normal: [xAxis.x, xAxis.y, xAxis.z] },
+    { face: 'h', normal: [-xAxis.x, -xAxis.y, -xAxis.z] },
+    { face: 'o', normal: [yAxis.x, yAxis.y, yAxis.z] },
+  ]
 }
 
 /** The objects `addNcLines` produces for a projected NC. */
@@ -800,15 +824,47 @@ function mountScene(
       const holes = Array.isArray(stock?.holes) ? stock.holes : []
       const family = cutEdges.profile ? profileFamily(cutEdges.profile) : null
       const frame = faceFrame ?? (nc ? resolveNcFaceFrame(ncSection ?? profile, nc) : null)
-      const targetVectors: Vec3[] | null =
-        family && frame
-          ? targetFaceNormals(
+      // A STEP-only part has no NC frame, but the section + profile still define every face plane.
+      // Build the same face frame from the stock so an I-section's interior web (tw/2) is found and
+      // its thickness comes from the section spec, not measured across the flange edge.
+      const stockFrame =
+        frame ??
+        (family && profile && cutEdges.profile ? frameForProfile(cutEdges.profile, profile) : null)
+      // A `tee` frame's face letters are not reconciled with its canonical stance yet (see
+      // `canonical.ts`), so only trust the synthetic frame for target planes — measure its
+      // thickness from the geometry as before rather than mis-keying a face.
+      const specFrame = !frame && family === 'tee' ? null : stockFrame
+      // Key each target face to the stock's own face thickness — the same map the NC legend uses.
+      // If a STEP cut lands on the wrong face it gets that face's colour, which is the diagnostic.
+      // With no family at all, fall back to both sides + the top (never the bottom), so a STEP-only
+      // part doesn't pick up the open section's underside as a cut.
+      const faceEntries =
+        family && stockFrame
+          ? targetFaceEntries(
               cutEdges.faces ?? CUT_FACES[family] ?? DEFAULT_CUT_FACES,
               family,
+              stockFrame,
               xAxis,
               yAxis,
             )
-          : null
+          : defaultFaceEntries(xAxis, yAxis)
+      const targetVectors: Vec3[] = faceEntries.map((entry) => entry.normal)
+      const targetOffsets =
+        family && stockFrame ? faceEntries.map((entry) => entry.offset) : undefined
+      const thicknessForNormal = (normal: Vec3): number | null => {
+        if (!specFrame || !profile) return null
+        let best: number | null = null
+        let bestDot = 0.98
+        for (const entry of faceEntries) {
+          const alignment =
+            normal[0] * entry.normal[0] + normal[1] * entry.normal[1] + normal[2] * entry.normal[2]
+          if (alignment <= bestDot) continue
+          bestDot = alignment
+          const thickness = faceThickness(specFrame, profile, entry.face)
+          best = thickness > 0 ? Math.round(thickness * 10) / 10 : null
+        }
+        return best
+      }
       const groups = new Map<number, number[]>()
       /** Translucent bevel-area triangle soup per thickness (STEP-detected bevels). */
       const bevelGroups = new Map<number, number[]>()
@@ -849,6 +905,7 @@ function mountScene(
           basisY,
           [1, 0, 0],
           targetVectors,
+          { thicknessForNormal, targetOffsets },
         )
         // Tubes: cut lines come from the face projection — the cut plane's trace on each nominal
         // face, a rounded corner onto BOTH adjacent faces, and all four faces (incl. the bottom).
@@ -873,14 +930,9 @@ function mountScene(
           for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
             const segs = projected[face]
             if (segs.length === 0) continue
-            const faceCentre = placeNcFace(
-              frame,
-              face,
-              0,
-              faceHalf(frame, faceSpanAxis(frame, face)),
-              profile,
-            ).cross
-            const thickness = Math.round(cutEdgeThicknessAt(profile, holes, faceCentre) * 10) / 10
+            // Face-keyed thickness from the stock (not measured from the cut rim), so the colour
+            // reads the wall the STEP face actually represents — the same key as the NC legend.
+            const thickness = Math.round(faceThickness(frame, profile, face) * 10) / 10
             const positions: number[] = []
             for (const seg of segs) {
               const a = placeNcFace(frame, face, seg.a.X, seg.a.Y, profile)

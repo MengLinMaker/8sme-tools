@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { CUT_FACES, faceNormalSigns, faceRole } from '@/lib/sections/canonical'
+import { partSectionForCode } from '@/lib/sections/stock'
 import {
   brepCutSegments,
   classifyEdgeSegments,
@@ -6,6 +8,7 @@ import {
   edgeCutSegments,
   type SeatedBrepFace,
   splitCutEdges,
+  stockFaceThicknesses,
   type Vec3,
 } from './cutEdges'
 
@@ -15,6 +18,22 @@ const SECTION: [number, number][] = [
   [50, -25],
   [50, 25],
   [-50, 25],
+]
+
+/** Canonical `H` I-section: depth 100 on x, width 50 on y, flanges 10, web 6. */
+const I_SECTION: [number, number][] = [
+  [-50, 25],
+  [-40, 25],
+  [-40, 3],
+  [40, 3],
+  [40, 25],
+  [50, 25],
+  [50, -25],
+  [40, -25],
+  [40, -3],
+  [-40, -3],
+  [-40, -25],
+  [-50, -25],
 ]
 
 /** A 100 × 100 square tube, wall 9 mm (inner void wound clockwise). */
@@ -44,6 +63,52 @@ describe('cutEdgeThicknessAt', () => {
   it('uses the inner void for a hollow section wall', () => {
     expect(cutEdgeThicknessAt(TUBE_OUTER, [TUBE_HOLE], [0, 50])).toBeCloseTo(9, 6)
     expect(cutEdgeThicknessAt(TUBE_OUTER, [TUBE_HOLE], [50, 0])).toBeCloseTo(9, 6)
+  })
+})
+
+describe('stockFaceThicknesses', () => {
+  it('measures each stock face at its own surface (no NC frame needed)', () => {
+    // Sides (x = ±50) are 100 mm apart; the top face (y = 25) is 50 mm above the bottom.
+    expect(
+      stockFaceThicknesses(
+        SECTION,
+        [],
+        [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+        ],
+      ),
+    ).toEqual([50, 100])
+  })
+
+  it('reports one wall thickness for every face of a hollow section', () => {
+    expect(
+      stockFaceThicknesses(
+        TUBE_OUTER,
+        [TUBE_HOLE],
+        [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+        ],
+      ),
+    ).toEqual([9])
+  })
+
+  it('gives a PFC the two plate thicknesses on its cut faces, not the open underside', () => {
+    const pfc = partSectionForCode('PFC100*50', [100, 50, 6.7, 4.2, 8])
+    expect(pfc).toBeTruthy()
+    if (!pfc) return
+    const normals: [number, number][] = []
+    for (const face of CUT_FACES.channel) {
+      const role = faceRole('channel', face)
+      for (const sign of faceNormalSigns('channel', face)) {
+        normals.push(role === 'side' ? [sign, 0] : [0, sign])
+      }
+    }
+    // Flange (6.7) and web (4.2) — a channel's underside toe/throat is not a cut face.
+    expect(stockFaceThicknesses(pfc.points, [], normals)).toEqual([4.2, 6.7])
   })
 })
 
@@ -164,6 +229,270 @@ describe('brepCutSegments', () => {
     expect(cut).toHaveLength(2)
   })
 
+  it('keys the cut thickness off the stock face map when supplied', () => {
+    const seen: Vec3[] = []
+    const cut = brepCutSegments(faces(1, 2), SECTION, [], X_AXIS, Y_AXIS, MEMBER, [[0, 0, 1]], {
+      thicknessForNormal: (normal) => {
+        seen.push(normal)
+        return normal[2] > 0.9 ? 12 : null
+      },
+    })
+    expect(cut).toHaveLength(1)
+    // The top face's stock thickness (12 mm) replaces the geometric 50 mm measurement.
+    expect(cut[0]?.thickness).toBe(12)
+    expect(seen).toContainEqual([0, 0, 1])
+  })
+
+  it('falls back to the geometric thickness when the face is not in the stock map', () => {
+    const cut = brepCutSegments(faces(1, 2), SECTION, [], X_AXIS, Y_AXIS, MEMBER, [[0, 0, 1]], {
+      thicknessForNormal: () => null,
+    })
+    expect(cut[0]?.thickness).toBeCloseTo(50, 6)
+  })
+
+  it('targets an I-section interior web by its plane offset, not the flange edge', () => {
+    // The +y normal exists on both the flange top edge (z = 25) and the web top (z = 3). The web
+    // offset (tw/2) must select the web, so its cut reads the web plate, never the flange/depth.
+    const flangeEdge: SeatedBrepFace = {
+      normal: [0, 0, 1],
+      center: [0, -45, 25],
+      planar: true,
+      samples: [0, -45, 25],
+      wires: [
+        {
+          enclosed: false,
+          edges: [{ points: [0, -50, 25, 0, -40, 25], neighbours: [2] }],
+        },
+      ],
+    }
+    // The web is modelled 1 mm off the catalogue plane (z = 2 vs tw/2 = 3): the nearest-face
+    // match must still pick it, not the flange edge.
+    const web: SeatedBrepFace = {
+      normal: [0, 0, 1],
+      center: [50, 0, 2],
+      planar: true,
+      samples: [50, 0, 2],
+      wires: [
+        {
+          enclosed: false,
+          edges: [{ points: [0, -40, 2, 0, 40, 2], neighbours: [2] }],
+        },
+      ],
+    }
+    const cut: SeatedBrepFace = {
+      normal: [1, 0, 0],
+      center: [0, 0, 0],
+      planar: true,
+      samples: [0, 0, 0],
+      wires: [
+        {
+          enclosed: false,
+          edges: [
+            { points: [0, -50, 25, 0, -40, 25], neighbours: [0] },
+            { points: [0, -40, 2, 0, 40, 2], neighbours: [1] },
+          ],
+        },
+      ],
+    }
+    const cutSegments = brepCutSegments(
+      [flangeEdge, web, cut],
+      I_SECTION,
+      [],
+      X_AXIS,
+      Y_AXIS,
+      MEMBER,
+      [[0, 0, 1]],
+      { targetOffsets: [3] },
+    )
+    expect(cutSegments).toHaveLength(1)
+    expect(cutSegments[0]?.points).toEqual([0, -40, 2, 0, 40, 2])
+  })
+
+  it('does not substitute a far-off stock face for a missing NC face plane', () => {
+    // The only +y stock face is the flange edge at z = 25, far from the web plane (tw/2 ≈ 3).
+    // Drawing its cut as a web line would be wrong, so nothing is emitted.
+    const flangeEdge: SeatedBrepFace = {
+      normal: [0, 0, 1],
+      center: [0, -45, 25],
+      planar: true,
+      samples: [0, -45, 25],
+      wires: [
+        {
+          enclosed: false,
+          edges: [{ points: [0, -50, 25, 0, -40, 25], neighbours: [1] }],
+        },
+      ],
+    }
+    const cut: SeatedBrepFace = {
+      normal: [1, 0, 0],
+      center: [0, 0, 0],
+      planar: true,
+      samples: [0, 0, 0],
+      wires: [
+        {
+          enclosed: false,
+          edges: [{ points: [0, -50, 25, 0, -40, 25], neighbours: [0] }],
+        },
+      ],
+    }
+    const cutSegments = brepCutSegments(
+      [flangeEdge, cut],
+      I_SECTION,
+      [],
+      X_AXIS,
+      Y_AXIS,
+      MEMBER,
+      [[0, 0, 1]],
+      { targetOffsets: [3] },
+    )
+    expect(cutSegments).toHaveLength(0)
+  })
+
+  it('treats a flat↔fillet tangent edge as stock, not a cut', () => {
+    // The fillet here is a lengthwise curved face whose surface samples are nowhere near the
+    // catalogue outline (a radius mismatch). It is still stock, so the tangent edge must not be
+    // drawn; only the edge bordering the real cut face is.
+    const flat: SeatedBrepFace = {
+      normal: [0, 1, 0],
+      center: [50, 50, 0],
+      planar: true,
+      samples: [0, 50, 0],
+      wires: [
+        {
+          enclosed: false,
+          edges: [
+            { points: [0, 50, -10, 0, 50, 0], neighbours: [1] },
+            { points: [0, 50, 0, 0, 50, 10], neighbours: [2] },
+          ],
+        },
+      ],
+    }
+    const fillet: SeatedBrepFace = {
+      normal: [0, 0, 1],
+      center: [50, 0, 20],
+      planar: false,
+      samples: [0, 50, 0],
+      wires: [
+        {
+          enclosed: false,
+          edges: [{ points: [0, 50, -10, 0, 50, 0], neighbours: [0] }],
+        },
+      ],
+    }
+    const cut: SeatedBrepFace = {
+      normal: [1, 0, 0],
+      center: [0, 0, 0],
+      planar: true,
+      samples: [0, 0, 0],
+      wires: [
+        {
+          enclosed: false,
+          edges: [{ points: [0, 50, 0, 0, 50, 10], neighbours: [0] }],
+        },
+      ],
+    }
+    const cutSegments = brepCutSegments(
+      [flat, fillet, cut],
+      I_SECTION,
+      [],
+      X_AXIS,
+      Y_AXIS,
+      MEMBER,
+      [[0, 1, 0]],
+    )
+    expect(cutSegments).toHaveLength(1)
+    expect(cutSegments[0]?.points).toEqual([0, 50, 0, 0, 50, 10])
+  })
+
+  it('projects a cut across a root fillet onto the face plane’s cut trace (as if sharp)', () => {
+    // The fillet edge sits above the web plane (z = 5 vs 3) and runs past the web's physical end
+    // (|y| = 45). Projecting orthogonally would leave both the offset and a kink; the cut plane's
+    // trace on the web plane (X = 10 − 0.5·Y) is the line the NC would draw on a sharp section.
+    const n = Math.hypot(1, 0.5)
+    const web: SeatedBrepFace = {
+      normal: [0, 0, 1],
+      center: [50, 0, 3],
+      planar: true,
+      samples: [50, 0, 3],
+      wires: [{ enclosed: false, edges: [{ points: [0, -40, 3, 0, 40, 3], neighbours: [1] }] }],
+    }
+    const fillet: SeatedBrepFace = {
+      normal: [0, 0, 1],
+      center: [50, 45, 5],
+      planar: false,
+      samples: [0, 45, 25],
+      wires: [{ enclosed: false, edges: [{ points: [0, -45, 5, 0, 45, 5], neighbours: [0, 2] }] }],
+    }
+    const cut: SeatedBrepFace = {
+      normal: [1 / n, 0.5 / n, 0],
+      center: [10, 0, 0],
+      planar: true,
+      samples: [0, 0, 0],
+      wires: [{ enclosed: false, edges: [{ points: [0, -45, 5, 0, 45, 5], neighbours: [1] }] }],
+    }
+    const cutSegments = brepCutSegments(
+      [web, fillet, cut],
+      I_SECTION,
+      [],
+      X_AXIS,
+      Y_AXIS,
+      MEMBER,
+      [[0, 0, 1]],
+      { targetOffsets: [undefined] },
+    )
+    expect(cutSegments).toHaveLength(1)
+    const p = cutSegments[0]?.points ?? []
+    expect(p[2]).toBeCloseTo(3, 6)
+    expect(p[5]).toBeCloseTo(3, 6)
+    expect(p[0]).toBeCloseTo(10 - 0.5 * (p[1] as number), 6)
+    expect(p[3]).toBeCloseTo(10 - 0.5 * (p[4] as number), 6)
+    // The span reaches past the web's physical half-width (40): the line goes to the sharp corner.
+    expect(Math.max(Math.abs(p[1] as number), Math.abs(p[4] as number))).toBeGreaterThan(40)
+  })
+
+  it('keeps every coplanar piece of a flange split by a cut', () => {
+    // A flange face can be split into several planar patches. Both are the outermost +x stock
+    // face, so both must stay targets — otherwise an item loses half its flange cut lines.
+    const piece = (z: number): SeatedBrepFace => ({
+      normal: [0, 1, 0],
+      center: [50, 50, z],
+      planar: true,
+      samples: [50, 50, z],
+      wires: [
+        {
+          enclosed: false,
+          edges: [{ points: [0, 50, z - 5, 0, 50, z + 5], neighbours: [2] }],
+        },
+      ],
+    })
+    const cut: SeatedBrepFace = {
+      normal: [1, 0, 0],
+      center: [0, 0, 0],
+      planar: true,
+      samples: [0, 0, 0],
+      wires: [
+        {
+          enclosed: false,
+          edges: [
+            { points: [0, 50, -15, 0, 50, -5], neighbours: [0] },
+            { points: [0, 50, 5, 0, 50, 15], neighbours: [1] },
+          ],
+        },
+      ],
+    }
+    const cutSegments = brepCutSegments(
+      [piece(-10), piece(10), cut],
+      I_SECTION,
+      [],
+      X_AXIS,
+      Y_AXIS,
+      MEMBER,
+      [[0, 1, 0]],
+      { targetOffsets: [undefined] },
+    )
+    expect(cutSegments).toHaveLength(2)
+  })
+
   it('reads a bevel from a tilted cut face and gives its outward sweep direction', () => {
     const degrees = 20
     const rad = (degrees * Math.PI) / 180
@@ -210,11 +539,12 @@ describe('brepCutSegments', () => {
     expect(cut[0]?.bevelDir?.[2]).toBeCloseTo(Math.cos(rad), 3)
   })
 
-  it('reports no bevel for a square cut or a step parallel to the face', () => {
+  it('reports no bevel for a square cut, and no line for a lengthwise step', () => {
     const square = brepCutSegments(faces(1, 2), SECTION, [], X_AXIS, Y_AXIS, MEMBER, [[0, 0, 1]])
     expect(square[0]?.bevel).toBe(0)
     expect(square[0]?.bevelDir).toBeNull()
-    // A face parallel to the top face (a step) reads as 90° — past the head's range, so no bevel.
+    // A face parallel to the top face runs along the member (a flat step), not a transverse cut,
+    // so it produces no cut line at all.
     const step = brepCutSegments(
       [
         {
@@ -249,8 +579,7 @@ describe('brepCutSegments', () => {
       MEMBER,
       [[0, 0, 1]],
     )
-    expect(step[0]?.bevel).toBe(0)
-    expect(step[0]?.bevelDir).toBeNull()
+    expect(step).toHaveLength(0)
   })
 
   it('keeps a bevel fin where the cut rounds a curved stock corner (fillet)', () => {
@@ -333,9 +662,9 @@ describe('brepCutSegments', () => {
     expect(out[0]?.bevelDir).not.toBeNull()
   })
 
-  it('treats a lengthwise chamfer as a cut even though its boundary sits on the outline', () => {
-    // A chamfer cut down the corner: its boundary edges touch the outline (top face at z = 25), but
-    // its *surface* (sampled by the centroid) is inset → a cut face, so the edge is captured.
+  it('does not draw a lengthwise flat step/chamfer as a cut line', () => {
+    // A lengthwise chamfer's boundary touches the outline (top face at z = 25), but it is a flat
+    // surface running along the member — not a transverse cut — so it must not produce a cut line.
     const top: SeatedBrepFace = {
       normal: [0, 0, 1],
       center: [50, 0, 25],
@@ -361,6 +690,6 @@ describe('brepCutSegments', () => {
       ],
     }
     const cut = brepCutSegments([top, chamfer], SECTION, [], X_AXIS, Y_AXIS, MEMBER, [[0, 0, 1]])
-    expect(cut.length).toBeGreaterThan(0)
+    expect(cut).toHaveLength(0)
   })
 })

@@ -190,6 +190,52 @@ export function cutEdgeThicknessAt(
   return Number.isFinite(min) ? min : 0
 }
 
+/**
+ * A point in the middle of a planar outline face whose outward normal is `normal` (2-D section
+ * coordinates). Corners are avoided on purpose: the nearest-edge rule would otherwise read the
+ * adjoining face's thickness instead of this one's.
+ */
+function supportFaceMidpoint(
+  section: [number, number][],
+  normal: [number, number],
+): [number, number] | null {
+  const normals = edgeNormals(section)
+  let support = Number.NEGATIVE_INFINITY
+  for (const p of section) support = Math.max(support, p[0] * normal[0] + p[1] * normal[1])
+  for (let i = 0; i < section.length; i++) {
+    const n = normals[i] as [number, number]
+    if (n[0] * normal[0] + n[1] * normal[1] < 0.98) continue
+    const a = section[i] as [number, number]
+    const b = section[(i + 1) % section.length] as [number, number]
+    const da = a[0] * normal[0] + a[1] * normal[1]
+    const db = b[0] * normal[0] + b[1] * normal[1]
+    if (Math.abs(da - support) > 0.2 || Math.abs(db - support) > 0.2) continue
+    return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+  }
+  return null
+}
+
+/**
+ * The distinct wall thicknesses (mm, ascending) of the raw stock's cut faces — the face→thickness
+ * map for a part with no NC, where the stock outline is still known. `normals` are the outward
+ * section-plane normals of the faces to include (the family's cut faces); each face's thickness is
+ * measured at its own surface, so the same face gives one value instead of a rim-dependent ramp.
+ */
+export function stockFaceThicknesses(
+  section: [number, number][],
+  holes: [number, number][][],
+  normals: [number, number][],
+): number[] {
+  const values = new Set<number>()
+  for (const normal of normals) {
+    const point = supportFaceMidpoint(section, normal)
+    if (!point) continue
+    const thickness = cutEdgeThicknessAt(section, holes, point)
+    if (thickness > MIN_THICKNESS_MM) values.add(Math.round(thickness * 10) / 10)
+  }
+  return [...values].sort((a, b) => a - b)
+}
+
 /** One edge segment's classification: raw stock, or a cut through `thickness` mm of plate. */
 export interface EdgeClassification {
   kind: 'stock' | 'cut'
@@ -349,13 +395,31 @@ function isStockFace(
   return total > 0 && on / total >= OUTLINE_FRACTION
 }
 
+export interface BrepCutSegmentOptions {
+  /**
+   * Stock thickness (mm) of the face whose outward normal is `normal`, or `null` when the face is
+   * not a known stock face. When supplied, a cut's thickness is keyed on the **face** it lands on
+   * (from the stock), not measured geometrically — the same map the NC legend uses, so a STEP edge
+   * that lands on the wrong face shows the wrong colour.
+   */
+  thicknessForNormal?: (normal: Vec3) => number | null
+  /**
+   * Signed plane distance (mm) from the model centre to each target face, aligned with
+   * `targetNormals`; leave an entry `undefined` to use the outermost face of that normal. The
+   * explicit plane is needed for an I-section's **interior web** (`v`/`h` sit at ±tw/2, not at the
+   * flange edge): without it the web is missed and its edge reads the flange/depth instead.
+   */
+  targetOffsets?: (number | undefined)[]
+}
+
 /**
  * The coloured cut-edge segments of a seated B-rep. Faces are classified stock vs cut **by
  * topology**: a cut is any edge (on a stock face) bordering a cut face, so lengthwise cuts survive
  * — they are never dropped as "silhouette". Every cut is then **projected onto the nearest target
  * face** (`o`/`u`/`h`; every planar stock face when `targetNormals` is null) and its thickness is
  * taken there, so a cut riding a rounded corner (or the section's inner surface) reads flat on the
- * right face with that face's wall thickness.
+ * right face with that face's wall thickness. Pass `options.thicknessForNormal` to key the
+ * thickness off the stock face map instead of measuring it from the geometry.
  */
 export function brepCutSegments(
   faces: SeatedBrepFace[],
@@ -365,29 +429,66 @@ export function brepCutSegments(
   yAxis: Vec3,
   memberAxis: Vec3,
   targetNormals: Vec3[] | null,
+  options: BrepCutSegmentOptions = {},
 ): CutEdgeSegment[] {
   const stock = faces.map((face) => isStockFace(face, section, xAxis, yAxis, memberAxis))
 
-  // Target faces: the planar o/u/h stock faces (a hollow section's inset inner wall shares a normal
-  // direction with the opposite outer wall, so keep only the outermost face per direction).
+  // Target faces: the planar o/u/h stock faces. With `targetOffsets` each target picks the stock
+  // face of that normal **nearest its stock plane** (so an I-section's interior web is found at
+  // ±tw/2, not the flange edge, and a STEP modelled a millimetre shallower than the catalogue still
+  // matches its flange instead of dropping it). Without offsets keep the outermost face per normal
+  // direction (a hollow's inner wall shares the outer wall's normal).
   const targetIndices = new Set<number>()
-  const byNormal = new Map<string, { index: number; offset: number }[]>()
-  faces.forEach((face, i) => {
-    if (!stock[i] || !face.planar) return
-    if (targetNormals && !targetNormals.some((t) => dot(face.normal, t) > 0.98)) return
-    const key = `${Math.round(face.normal[0])},${Math.round(face.normal[1])},${Math.round(face.normal[2])}`
-    const list = byNormal.get(key)
-    const entry = { index: i, offset: dot(face.center, face.normal) }
-    if (list) list.push(entry)
-    else byNormal.set(key, [entry])
-  })
-  for (const list of byNormal.values()) {
-    const outermost = Math.max(...list.map((entry) => entry.offset))
-    for (const entry of list) if (entry.offset >= outermost - 0.5) targetIndices.add(entry.index)
+  const offsets = options.targetOffsets
+  if (targetNormals && offsets) {
+    offsets.forEach((wanted, target) => {
+      const normal = targetNormals[target] as Vec3
+      const candidates: { index: number; offset: number }[] = []
+      faces.forEach((face, i) => {
+        if (!stock[i] || !face.planar) return
+        if (dot(face.normal, normal) <= 0.98) return
+        candidates.push({ index: i, offset: dot(face.center, face.normal) })
+      })
+      if (candidates.length === 0) return
+      if (wanted == null) {
+        // No stock plane given: the outermost face of this normal is the stock surface. Keep every
+        // coplanar piece so a cut cannot split a flange into a half that is silently dropped.
+        const outermost = Math.max(...candidates.map((c) => c.offset))
+        for (const candidate of candidates) {
+          if (candidate.offset >= outermost - 0.5) targetIndices.add(candidate.index)
+        }
+        return
+      }
+      // An interior face (an I-section web): take the plane nearest the stock's own, then all
+      // coplanar pieces. Skip when nothing is close — a cut line may only be drawn on one of the
+      // NC face planes, so the flange edge (~60 mm outboard) must not stand in for a missing web.
+      const bestDelta = Math.min(...candidates.map((c) => Math.abs(c.offset - wanted)))
+      if (bestDelta > 2) return
+      for (const candidate of candidates) {
+        if (Math.abs(candidate.offset - wanted) <= bestDelta + 0.5) {
+          targetIndices.add(candidate.index)
+        }
+      }
+    })
+  } else {
+    const byNormal = new Map<string, { index: number; offset: number }[]>()
+    faces.forEach((face, i) => {
+      if (!stock[i] || !face.planar) return
+      if (targetNormals && !targetNormals.some((t) => dot(face.normal, t) > 0.98)) return
+      const key = `${Math.round(face.normal[0])},${Math.round(face.normal[1])},${Math.round(face.normal[2])}`
+      const list = byNormal.get(key)
+      const entry = { index: i, offset: dot(face.center, face.normal) }
+      if (list) list.push(entry)
+      else byNormal.set(key, [entry])
+    })
+    for (const list of byNormal.values()) {
+      const outermost = Math.max(...list.map((entry) => entry.offset))
+      for (const entry of list) if (entry.offset >= outermost - 0.5) targetIndices.add(entry.index)
+    }
   }
   // A rounded corner / fillet (a curved stock face) adjacent to a target is included so a cut
-  // crossing it is captured; it is projected onto the nearest target face. Only curved faces grow,
-  // so an open section's inner groove faces are not swept in.
+  // crossing it is captured, then projected onto the nearest target face along the cut's own trace.
+  // A UB root radius therefore extends the web line to the theoretical sharp corner.
   let growing = true
   while (growing) {
     growing = false
@@ -409,8 +510,11 @@ export function brepCutSegments(
 
   // A cut's thickness is the *target face's* plate thickness — one value for the whole face, as the
   // NC keys on the face. Computing it per point fails near a face edge (and gives a bogus ramp when
-  // a rounded corner's arc is projected onto the face).
+  // a rounded corner's arc is projected onto the face). Callers that know the stock face map supply
+  // it directly; otherwise fall back to measuring the section at the face centre.
   const thicknessOf = (face: SeatedBrepFace): number => {
+    const mapped = options.thicknessForNormal?.(face.normal)
+    if (mapped != null && mapped > 0 && Number.isFinite(mapped)) return mapped
     const cross: [number, number] = [
       face.center[0] * xAxis[0] + face.center[1] * xAxis[1] + face.center[2] * xAxis[2],
       face.center[0] * yAxis[0] + face.center[1] * yAxis[1] + face.center[2] * yAxis[2],
@@ -422,6 +526,7 @@ export function brepCutSegments(
   // and report which face it landed on.
   const projectToNearest = (
     points: number[],
+    cut: SeatedBrepFace | null,
   ): { points: number[]; plane: SeatedBrepFace | null } => {
     if (planarTargets.length === 0) return { points, plane: null }
     const last = points.length - 3
@@ -440,15 +545,29 @@ export function brepCutSegments(
       }
     }
     if (!plane) return { points, plane: null }
+    // A **planar** cut face gives the along-member coordinate by its trace on the target plane, not
+    // by the stock rim. That is what a cut looks like on the NC plane: across a UB's root fillet the
+    // rim curves away, but the face plane continues straight to the theoretical (sharp) corner —
+    // i.e. exactly as if the root radius did not exist.
+    const cutNormal = cut && cut.planar ? cut.normal : null
+    const cutOffset = cut && cut.planar ? dot(cut.normal, cut.center) : 0
+    const alongDenom = cutNormal ? dot(cutNormal, memberAxis) : 0
     const projected: number[] = []
     for (let k = 0; k + 2 < points.length; k += 3) {
       const p: Vec3 = [points[k] as number, points[k + 1] as number, points[k + 2] as number]
       const d = dot(sub(p, plane.center), plane.normal)
-      projected.push(
+      const q: Vec3 = [
         p[0] - d * plane.normal[0],
         p[1] - d * plane.normal[1],
         p[2] - d * plane.normal[2],
-      )
+      ]
+      if (cutNormal && Math.abs(alongDenom) >= 0.2) {
+        const t = (cutOffset - dot(cutNormal, q)) / alongDenom
+        q[0] += t * memberAxis[0]
+        q[1] += t * memberAxis[1]
+        q[2] += t * memberAxis[2]
+      }
+      projected.push(q[0], q[1], q[2])
     }
     return { points: projected, plane }
   }
@@ -506,11 +625,24 @@ export function brepCutSegments(
     const ownThickness = thicknessOf(face)
     for (const wire of face.wires) {
       for (const edge of wire.edges) {
-        if (!wire.enclosed && !edge.neighbours.some((n) => !stock[n])) continue
+        // A cut is a **transverse** feature. A lengthwise non-stock neighbour is an inner face or
+        // a flat step/split — it does not indicate a cut line on the accessible face plane, so the
+        // edge stays undrawn (a hole rim is an enclosed wire and is always kept).
+        const transverseCut = edge.neighbours.some((n) => {
+          const neighbour = faces[n]
+          return (
+            neighbour != null &&
+            !stock[n] &&
+            Math.abs(dot(neighbour.normal, memberAxis)) > LENGTHWISE_DOT
+          )
+        })
+        if (!wire.enclosed && !transverseCut) continue
         if (face.planar) {
           pushSegments(edge.points, ownThickness, edgeBevels(edge, face.normal))
         } else {
-          const projected = projectToNearest(edge.points)
+          const cutIndex = edge.neighbours.find((n) => !stock[n])
+          const cutFace = cutIndex == null ? null : (faces[cutIndex] ?? null)
+          const projected = projectToNearest(edge.points, cutFace)
           pushSegments(
             projected.points,
             projected.plane ? thicknessOf(projected.plane) : ownThickness,

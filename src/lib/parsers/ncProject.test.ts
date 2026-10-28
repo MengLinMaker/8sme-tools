@@ -5,6 +5,7 @@ import { partSectionForCode } from '@/lib/sections/stock'
 import { parseDstv } from './dstv'
 import {
   faceNormal,
+  frameForProfile,
   type NcFaceFrame,
   ncAuthoredStancePoints,
   placeNcFace,
@@ -477,6 +478,15 @@ describe('I-section web face plane', () => {
   it('reports the web wall (tw) for v/h, not the flange width', () => {
     const frame = resolveNcFaceFrame(section, nc, '200UB29.8')
     // 200UB29.8: tf 9.6, tw 6.3. The web faces must measure ~6.3 mm, not ~67 mm.
+    expect(faceThickness(frame, section, 'v')).toBeCloseTo(6.3, 1)
+    expect(faceThickness(frame, section, 'h')).toBeCloseTo(6.3, 1)
+    expect(faceThickness(frame, section, 'o')).toBeCloseTo(9.6, 1)
+    expect(faceThickness(frame, section, 'u')).toBeCloseTo(9.6, 1)
+  })
+
+  it('derives the same spec thicknesses without an NC (STEP-only frame)', () => {
+    const frame = frameForProfile('200UB29.8', section)
+    expect(frame.webHalf).toBeCloseTo(6.3 / 2, 1)
     expect(faceThickness(frame, section, 'v')).toBeCloseTo(6.3, 1)
     expect(faceThickness(frame, section, 'h')).toBeCloseTo(6.3, 1)
     expect(faceThickness(frame, section, 'o')).toBeCloseTo(9.6, 1)

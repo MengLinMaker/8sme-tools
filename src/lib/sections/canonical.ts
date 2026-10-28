@@ -121,6 +121,20 @@ export const CUT_FACES: Record<ProfileFamily, NcFace[]> = {
   round: ['o', 'u', 'h'],
 }
 
+/**
+ * Signs of a DSTV face's outward normal in the canonical stance. Sides point across the section
+ * (`±x`), top/bottom along machine-up (`±y`); a symmetric section's two side letters are
+ * interchangeable and both sides are cut, while an asymmetric angle's `v` is the right (`+x`)
+ * and `h` the left (`−x`). Shared by the viewer's 3-D targets and the stock-only face thickness
+ * map, so a STEP-only part classifies the same faces as an NC-backed one.
+ */
+export function faceNormalSigns(family: ProfileFamily, face: NcFace): (1 | -1)[] {
+  const role = faceRole(family, face)
+  if (role !== 'side') return [role === 'top' ? 1 : -1]
+  if (family === 'angle') return [face === 'v' ? 1 : -1]
+  return [1, -1]
+}
+
 /** Lower is better: cut sides first (most controllable), then top, and the bottom last. */
 export const CUT_ROLE_PRIORITY: Record<MachineRole, number> = { side: 0, top: 1, bottom: 2 }
 

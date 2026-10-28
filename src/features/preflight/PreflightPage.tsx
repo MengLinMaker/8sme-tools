@@ -55,17 +55,19 @@ import { assessUnclosedCuts, type UnclosedCutIssue } from '@/lib/audit/unclosedC
 import { downloadBlob, downloadText } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
 import { removeCutFromNc, setBevelInNc } from '@/lib/parsers/ncEdit'
-import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
+import { frameForProfile, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import {
   cutThicknesses,
   ETCH_COLOR,
+  faceThickness,
   MARKING_COLOR,
   THICKNESS_COLORS,
 } from '@/lib/parsers/ncProject'
 import { reemitPartNc } from '@/lib/parsers/ncReemit'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { InputBundle } from '@/lib/readInput'
+import { CUT_FACES, profileFamily } from '@/lib/sections/canonical'
 import type { SectionGuess } from '@/lib/sections/detect'
 import {
   partSectionForCode,
@@ -74,6 +76,7 @@ import {
   sectionMassPerMetre,
 } from '@/lib/sections/stock'
 import { cleanStep } from '@/lib/step/clean'
+import { stockFaceThicknesses } from '@/lib/step/cutEdges'
 import {
   compareGeometry,
   compareModels,
@@ -550,16 +553,79 @@ export function PreflightPage() {
       return null
     }
   }, [ncBytes, viewingNcProfiles, viewing?.mark])
-  // STEP cut-edge colouring: the ideal model's cut edges on the side/top faces, keyed to the same
-  // thickness legend. `profile` lets the viewer resolve the target faces for the right family.
-  const viewingProfileCode = viewing?.nc?.profile ?? null
+  // STEP cut-edge colouring: the ideal model's cut edges on its accessible faces, keyed to the
+  // stock's face→thickness map. `profile` lets the viewer resolve the target faces for the right
+  // family — including a STEP-only part, where the section detector still knows the code.
+  const viewingProfileCode =
+    viewing?.nc?.profile ??
+    (viewing ? sectionGuesses.get(viewing.mark)?.code : undefined) ??
+    viewing?.expected?.profile ??
+    null
+  // No NC means no face frame, but the stock outline still tells us each cut face's wall. Key the
+  // thickness off the section spec where the family is known (a UB's tf/tw), so the STEP colours
+  // and legend read the real plate, not a measurement across the whole section.
+  const viewingStockThicknesses = useMemo(() => {
+    const section = viewingNcSection ?? viewingStepSection?.points ?? stock?.points ?? null
+    if (!section || section.length < 3) return []
+    const family = viewingProfileCode ? profileFamily(viewingProfileCode) : null
+    if (family && viewingProfileCode && family !== 'tee') {
+      const frame = frameForProfile(viewingProfileCode, section)
+      const faces = CUT_FACES[family] ?? ['o', 'u', 'h']
+      const values = faces
+        .map((face) => Math.round(faceThickness(frame, section, face) * 10) / 10)
+        .filter((value) => value > 0)
+      return [...new Set(values)].sort((a, b) => a - b)
+    }
+    // Unknown family (or `tee`, whose face letters are not reconciled yet): measure the stock
+    // directly. A tee's cut faces are both sides and the flange underside, not the web tip.
+    const holes = viewingStepSection?.holes ?? stock?.holes ?? []
+    const normals: [number, number][] =
+      family === 'tee'
+        ? [
+            [1, 0],
+            [-1, 0],
+            [0, -1],
+          ]
+        : [
+            [1, 0],
+            [-1, 0],
+            [0, 1],
+          ]
+    return stockFaceThicknesses(section, holes, normals)
+  }, [viewingProfileCode, viewingNcSection, viewingStepSection, stock])
+  const viewingCutThicknesses =
+    viewingNcProfiles.length > 0 ? viewingNcProfiles : viewingStockThicknesses
+  // Outer corner radius for a STEP-only hollow (no NC header carries dims[4]). Cold-formed
+  // RHS/SHS use ~2.5×wall; without it a rounded-corner cut has radius 0 and is dropped at the
+  // corners instead of reaching onto both adjacent faces.
+  const viewingCornerRadius = useMemo(() => {
+    const fromNc = viewing?.nc?.dimensions?.[4]
+    if (fromNc != null && fromNc > 0) return fromNc
+    const section = viewingStepSection
+    const hole = section?.holes?.[0]
+    if (!section || !hole) return 0
+    const span = (points: [number, number][], axis: 0 | 1): number => {
+      let min = Number.POSITIVE_INFINITY
+      let max = Number.NEGATIVE_INFINITY
+      for (const p of points) {
+        min = Math.min(min, p[axis])
+        max = Math.max(max, p[axis])
+      }
+      return max - min
+    }
+    const wall = Math.min(
+      (span(section.points, 0) - span(hole, 0)) / 2,
+      (span(section.points, 1) - span(hole, 1)) / 2,
+    )
+    return wall > 0 ? 2.5 * wall : 0
+  }, [viewing, viewingStepSection])
   const viewingCutEdgeOptions = useMemo(
     () => ({
-      thicknesses: viewingNcProfiles,
+      thicknesses: viewingCutThicknesses,
       profile: viewingProfileCode,
-      radius: viewing?.nc?.dimensions?.[4] ?? 0,
+      radius: viewingCornerRadius,
     }),
-    [viewingNcProfiles, viewingProfileCode, viewing],
+    [viewingCutThicknesses, viewingProfileCode, viewingCornerRadius],
   )
   // Legend chips only for the mark channels the parsed NC actually carries (`SI` etch,
   // `PU`/`KO` scribe), so the key never promises lines the viewer cannot draw.
@@ -2881,10 +2947,15 @@ export function PreflightPage() {
                         </div>
                       </div>
                     </div>
-                    {(viewingNcGeom || (overlayShown && mfgDiff)) && (
+                    {(viewingNcGeom ||
+                      viewingCutThicknesses.length > 0 ||
+                      (overlayShown && mfgDiff)) && (
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border bg-card/50 px-3 py-1 text-[11px] font-medium text-muted-foreground">
-                        {viewingNcGeom && (
-                          <NcLegend thicknesses={viewingNcProfiles} markings={viewingMarkKinds} />
+                        {(viewingNcGeom || viewingCutThicknesses.length > 0) && (
+                          <NcLegend
+                            thicknesses={viewingCutThicknesses}
+                            markings={viewingMarkKinds}
+                          />
                         )}
                         {overlayShown && mfgDiff && <DiffLegend info={mfgDiff} />}
                       </div>

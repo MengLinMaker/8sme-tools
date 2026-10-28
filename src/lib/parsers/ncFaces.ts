@@ -90,6 +90,34 @@ export function resolveNcFaceFrame(
   return frame
 }
 
+/**
+ * A face frame built from the stock section alone, for a part with **no NC** (a STEP-only import).
+ * The section axes follow the family's canonical stance, and an I-section's web half is read from
+ * the outline exactly as {@link resolveNcFaceFrame} does — so `faceThickness` can key every cut
+ * face to the section's real plate thickness (a UB's `tf`/`tw`) instead of measuring across the
+ * whole depth.
+ */
+export function frameForProfile(profile: string, section: [number, number][]): NcFaceFrame {
+  const family = profileFamily(profile)
+  const axisVH: Axis = family === 'angle' || family === 'tee' || family === 'round' ? 1 : 0
+  const frame: NcFaceFrame = {
+    extent: [extentOf(section, 0), extentOf(section, 1)],
+    axisVH,
+    axisOU: (1 - axisVH) as Axis,
+    profile,
+  }
+  if (family === 'i') {
+    const widthAxis = (1 - axisVH) as Axis
+    let min = Number.POSITIVE_INFINITY
+    for (const p of section) {
+      const value = Math.abs(p[widthAxis] ?? 0)
+      if (value > 1e-6 && value < min) min = value
+    }
+    if (Number.isFinite(min)) frame.webHalf = min
+  }
+  return frame
+}
+
 /** Section axis a face's width spans. */
 export function faceSpanAxis(frame: NcFaceFrame, face: NcFace): Axis {
   return face === 'v' || face === 'h' ? frame.axisVH : frame.axisOU
