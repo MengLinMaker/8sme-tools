@@ -270,7 +270,7 @@ describe.skipIf(!outDir)('NC→NCEP compression probes', () => {
       mode: Mode,
       variant: string,
       partTransform: (svg: string, unique: string) => string,
-      realContainer: boolean,
+      containerMode: 'ours' | 'real' | 'old',
     ): void => {
       const unique = `${base.mark}-${code}`
       const { files, entries } = buildFull(base, unique)
@@ -278,9 +278,11 @@ describe.skipIf(!outDir)('NC→NCEP compression probes', () => {
       const edits: Record<string, Edit> = {
         [partPath]: (text) => partTransform(text, unique),
       }
-      if (realContainer) {
+      if (containerMode === 'real') {
         edits['META-INF/container.xml'] = () =>
           strFromU8(m1.files['META-INF/container.xml'] as Uint8Array)
+      } else if (containerMode === 'old') {
+        edits['META-INF/container.xml'] = (text) => `${text}\n`
       }
       const files2 = editedFiles(files, edits)
       const outEntries =
@@ -326,24 +328,26 @@ describe.skipIf(!outDir)('NC→NCEP compression probes', () => {
       )
 
     // M-1 compression/container matrix.
-    improved(m1, 1601, 'fflate', 'improved-fflate', m1Improved, false)
-    improved(m1, 1602, 'zlib', 'improved-zlib', m1Improved, false)
-    improved(m1, 1603, 'stored', 'improved-stored', m1Improved, false)
-    improved(m1, 1604, 'fflate', 'improved-fflate-real-container', m1Improved, true)
-    improved(m1, 1605, 'zlib', 'improved-zlib-real-container', m1Improved, true)
+    improved(m1, 1601, 'fflate', 'improved-fflate', m1Improved, 'ours')
+    improved(m1, 1602, 'zlib', 'improved-zlib', m1Improved, 'ours')
+    improved(m1, 1603, 'stored', 'improved-stored', m1Improved, 'ours')
+    improved(m1, 1604, 'fflate', 'improved-fflate-real-container', m1Improved, 'real')
+    improved(m1, 1605, 'zlib', 'improved-zlib-real-container', m1Improved, 'real')
+
+    improved(m1, 1618, 'fflate', 'improved-fflate-old-container', m1Improved, 'old')
 
     // Per-family improved samples: fflate vs zlib vs stored.
-    improved(m3, 1606, 'fflate', 'improved-fflate', m3Improved, false)
-    improved(m3, 1607, 'zlib', 'improved-zlib', m3Improved, false)
-    improved(m3, 1608, 'stored', 'improved-stored', m3Improved, false)
-    improved(m35, 1609, 'fflate', 'improved-fflate', m35Improved, false)
-    improved(m35, 1610, 'zlib', 'improved-zlib', m35Improved, false)
-    improved(m35, 1611, 'stored', 'improved-stored', m35Improved, false)
-    improved(m42, 1612, 'fflate', 'improved-fflate', m42Improved, false)
-    improved(m42, 1613, 'zlib', 'improved-zlib', m42Improved, false)
-    improved(m42, 1614, 'stored', 'improved-stored', m42Improved, false)
+    improved(m3, 1606, 'fflate', 'improved-fflate', m3Improved, 'ours')
+    improved(m3, 1607, 'zlib', 'improved-zlib', m3Improved, 'ours')
+    improved(m3, 1608, 'stored', 'improved-stored', m3Improved, 'ours')
+    improved(m35, 1609, 'fflate', 'improved-fflate', m35Improved, 'ours')
+    improved(m35, 1610, 'zlib', 'improved-zlib', m35Improved, 'ours')
+    improved(m35, 1611, 'stored', 'improved-stored', m35Improved, 'ours')
+    improved(m42, 1612, 'fflate', 'improved-fflate', m42Improved, 'ours')
+    improved(m42, 1613, 'zlib', 'improved-zlib', m42Improved, 'ours')
+    improved(m42, 1614, 'stored', 'improved-stored', m42Improved, 'ours')
 
-    expect(reports).toHaveLength(18)
+    expect(reports).toHaveLength(19)
     const readme = [
       'NC→NCEP compression probes (1600–1617)',
       '',
@@ -359,6 +363,7 @@ describe.skipIf(!outDir)('NC→NCEP compression probes', () => {
       '5. 1609–1611 M-35 fflate/zlib/stored.',
       '6. 1612–1614 M-42 fflate/zlib/stored.',
       '7. 1615–1617 real M-3/M-35/M-42 controls.',
+      '8. 1618 improved M-1 with the OLD container.xml (trailing newline) — negative control.',
       '',
       'If zlib or stored loads but fflate rejects, the fix is the compressor, not the NCEP geometry.',
       'If all modes reject, the remaining difference is package content/container metadata.',

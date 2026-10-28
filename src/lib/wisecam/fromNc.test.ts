@@ -101,6 +101,16 @@ describe('partFromNc / NCEP', () => {
     expect(part.cuts?.every((cut) => cut.points.length >= 4)).toBe(true)
   })
 
+  it('writes the real container.xml bytes (no trailing newline)', () => {
+    const bytes = buildNcepFromNc(readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8'))
+    if (!bytes) throw new Error('no package')
+    const real = unzipSync(new Uint8Array(readFileSync(fixture('ncep', 'M-1.ncep'))))
+    const ours = unzipSync(bytes)
+    expect(strFromU8(ours['META-INF/container.xml'] as Uint8Array)).toBe(
+      strFromU8(real['META-INF/container.xml'] as Uint8Array),
+    )
+  })
+
   it('emits the NCEP file set (no CNC payload)', () => {
     const part = partFromNc(readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8'))
     expect(part).not.toBeNull()

@@ -649,8 +649,7 @@ const CONTAINER_XML = `<?xml version="1.0"?>
     <rootfile full-path="CNC/cnc.opf" media-type="application/ncex-package+xml"/>
     <rootfile full-path="ncex.opf" media-type="application/ncex-package+xml"/>
   </rootfiles>
-</container>
-`
+</container>`
 
 const CNC_BASE_XML = `<?xml version="1.0" encoding="UTF-8" ?>
 <root>
