@@ -1042,6 +1042,31 @@ WRITE_NCEX_PROBES=~/Downloads/ncep-probes-feature-matrix \
   pnpm exec vitest run src/lib/wisecam/probes.featureMatrix.test.ts
 ```
 
+## Untested omnibus result (2026-10-28)
+
+Source: `~/Downloads/ncep-probes-untested partial result/`.
+
+- **All 32 probes loaded and exported**; only `1618` (old `container.xml` with a trailing
+  newline) was rejected. The container fix is confirmed.
+- `.ncexa` quantities survive: M-35/M-42 improved packages export `qty=3`, `1831` exports
+  `qty=2`.
+- `1601–1605` (improved M-1) match the control geometry: 24 holes, same trims, same arc
+  section. M-35/M-42 improved packages also match their controls. So the improved NC→NCEP
+  path works for M-1/M-35/M-42.
+- **Probe-generator bug found:** `holeBlock` captured only the first contiguous cluster of
+  `<circle>` elements. M-3's real holes are split by the mark bars, so “real holes” variants
+  got **3 holes instead of 22**. This affected `1606–1608` and `1801/1803/1805/1808`, not the
+  M-1/M-35/M-42 probes.
+- The bug is fixed (`holeBlock` now collects all circles, `replaceHoles` inserts all at the
+  first circle position) and the omnibus was regenerated. The M-3 hole variants need a retest.
+- Feature matrix: all variants loaded. M-42 all section/trim combinations load, including our
+  sampled section and simplified trims; the remaining difference is geometry quality
+  (29-pt sampled section vs 9-pt arcs; 9-pt vs 204-pt end trim), not rejection.
+- M-34 `1821` (all-real features) matches the control. `1822` shows our known 1 mm u-face
+  hole reversal; `1823` shows our sampled section (21/16 pts vs real 11/6 arcs). Both loaded.
+
+Generated fixed omnibus: `~/Downloads/ncep-probes-untested.zip`.
+
 ## Reproduce
 
 ```sh

@@ -82,11 +82,16 @@ function replaceTrims(svg: string, real: { start: string; end: string }): string
 }
 
 function holeBlock(partSvg: string): string {
-  return partSvg.match(/(?:<circle\b[^>]*\/>\s*)+/)?.[0] ?? ''
+  return (partSvg.match(/<circle\b[^>]*\/>/g) ?? []).join('\n')
 }
 
 function replaceHoles(svg: string, holes: string): string {
-  return svg.replace(/(?:<circle\b[^>]*\/>\s*)+/, holes)
+  let replaced = false
+  return svg.replace(/<circle\b[^>]*\/>\s*/g, () => {
+    if (replaced) return ''
+    replaced = true
+    return `${holes}\n  `
+  })
 }
 
 function markElements(partSvg: string): string {

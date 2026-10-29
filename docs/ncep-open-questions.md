@@ -30,7 +30,7 @@ Status legend: **SOLID** (proven on WiseCAM), **LIKELY** (strong evidence), **SU
 | Tube section arcs | **LIKELY** | True arcs required at the corner radii; sharp outer is blocky/offset (`1530`). |
 | UB front trims/holes/marks | **LIKELY** | Real section + real trims → holes → marks loads (`1501–1503`). Our front features still glitch. |
 | M-42 mitre/end cut | **LIKELY** | Real section + real mitred trims loads (`1511`/`1513`); our section with real trims offsets the end (`1512`). |
-| Full-package container | **SOLID** | `container.xml` must have no trailing newline. `1604`/`1605` (real container) load; `1601–1603` (our container) reject. Writer fixed + regression test added. |
+| Full-package container | **SOLID** | `container.xml` must have no trailing newline. The fixed writer’s improved M-1/M-3/M-35/M-42 packages all loaded; only the old-container `1618` was rejected. |
 | Adobe `USERPATH` | **LIKELY** | Synthesized group parses; `902`/`906` show `USERPATH` is not required for import. Exact applied cut/lead geometry untested. |
 | Hole correction / grey strips | **UNTESTED** | `UB corrected hole` is a desired form (47 → 36 holes); the general rule is unknown. |
 | Bevels / notches / counterbore / slots | **UNTESTED** | Bevel is a nested `PosMap` child cluster; generator not implemented. No notch/counterbore/slot samples. |
@@ -115,9 +115,9 @@ So compression is irrelevant (fflate, zlib and stored all work with the real con
 to emit the real container bytes with **no trailing newline**. This is now done in `ncex.ts`, with a
 byte-exact regression test in `fromNc.test.ts`.
 
-`1606–1614` (M-3/M-35/M-42) were tested before the fix and rejected; regenerate with
-`~/Downloads/ncep-probes-container-fix.zip` to confirm each family. `1618` is the explicit
-old-container negative control.
+The regenerated pack (`~/Downloads/ncep-probes-untested.zip`) confirms the fix: every improved
+package loaded/exported, and only the old-container `1618` was rejected. Quantity survived
+(M-35/M-42 `qty=3`, `1831` `qty=2`).
 
 Residual Q3 items: entry order, `technologyID`, `ncex.opf` flags and content-derived cache keys are
 now lower priority — no evidence they are blocking.
@@ -140,6 +140,8 @@ now lower priority — no evidence they are blocking.
 - Add real layer-4 bars to a generated part; compare with `PFC/UB corrected marking`.
 - Determine the auto-mark length threshold and whether short parts should omit the mark.
 - Compare mark placement at `x=0` vs the real face/station for M-1/M-3/M-35.
+- The M-3 feature matrix was regenerated after the `holeBlock` bug fix; retest `1801`,
+  `1803`, `1805`, `1808` with all 22 real holes.
 
 ---
 
