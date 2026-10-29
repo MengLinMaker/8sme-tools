@@ -1,3 +1,8 @@
+export function fileStem(name: string): string {
+  const stem = name.replace(/\.[^./\\]+$/, '')
+  return stem.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'job'
+}
+
 export function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')

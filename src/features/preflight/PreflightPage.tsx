@@ -52,7 +52,7 @@ import { listedProfile } from '@/lib/audit/partProfile'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
 import { assessUnclosedCuts, type UnclosedCutIssue } from '@/lib/audit/unclosedCuts'
-import { downloadBlob, downloadText } from '@/lib/download'
+import { downloadBlob, downloadText, fileStem } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
 import { removeCutFromNc, setBevelInNc } from '@/lib/parsers/ncEdit'
 import { frameForProfile, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
@@ -2252,9 +2252,8 @@ export function PreflightPage() {
         if (nc && part.nc?.path) files.set(part.nc.path, nc)
         if (ncep) files.set(`${part.mark}.ncep`, ncep)
       }
-      const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
       downloadBlob(
-        `fixed-${safeName || 'job'}.zip`,
+        `${fileStem(result.sourceName)}-fixed.zip`,
         new Blob([zipSync(flattenZipEntries(files))], { type: 'application/zip' }),
       )
     } finally {
@@ -2326,9 +2325,8 @@ export function PreflightPage() {
         setError(t('preflight.findings.nothingSelected'))
         return
       }
-      const safeName = result.sourceName.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
       downloadBlob(
-        `selected-${safeName || 'job'}.zip`,
+        `${fileStem(result.sourceName)}-selected.zip`,
         new Blob([zipSync(flattenZipEntries(files))], { type: 'application/zip' }),
       )
     } finally {
@@ -2564,7 +2562,7 @@ export function PreflightPage() {
                   size="sm"
                   onClick={() =>
                     downloadText(
-                      `preflight-${result.sourceName}.csv`,
+                      `${fileStem(result.sourceName)}-findings.csv`,
                       findingsToCsv({ ...result, findings: allFindings }),
                     )
                   }
@@ -2574,7 +2572,9 @@ export function PreflightPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => downloadText(`parts-${result.sourceName}.csv`, partsToCsv(result))}
+                  onClick={() =>
+                    downloadText(`${fileStem(result.sourceName)}-parts.csv`, partsToCsv(result))
+                  }
                 >
                   {t('preflight.findings.exportParts')}
                 </Button>
