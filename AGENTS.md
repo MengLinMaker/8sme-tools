@@ -103,6 +103,9 @@ maps DSTV faces to machine roles + enforces the cut-side rules.
   previous one passes. Do not test blank/feature-stripped parts; keep the start/end trims and
   section group.
 - Broad "test everything" packs are not useful; test only the next unanswered question.
+- **Ultimate export goals and non-goals:** `docs/ncep-export-strategy.md` — feature-full NCEP,
+  canonical orientation, grey-strip hole removal, bevel preservation, corrected marks, quantity;
+  general nesting is a non-goal.
 
 ## Toolchain
 

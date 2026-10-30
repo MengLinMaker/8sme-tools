@@ -6,6 +6,7 @@ do not delete earlier entries.
 
 Related docs:
 
+- `docs/ncep-export-strategy.md` — ultimate export goals, priorities, non-goals, round-trip acceptance
 - `docs/ncep-format.md` — format + parser/generator contract
 - `docs/ncep-probe-log.md` — probe packs, WiseCAM results, reproductions
 - `test/fixtures/ncep/` — real controls and reference variations
@@ -96,6 +97,8 @@ remaining UB/tube offsets?
 - Generate the bevel cluster from a known NC bevel column set; probe `Beveled PFC` vs
   `remove bevel`.
 - Add a notch probe and a counterbore/slot probe when real examples exist.
+- Round-4 `1940–1944` isolates the nested `PosMap` child-path structure on the real
+  `Beveled PFC` reference (hoisted children, missing outer trim, first child only).
 
 ---
 
@@ -163,6 +166,9 @@ Real U/I adobes have a `USERPATH` group with applied separation cut paths. We sy
 5-path PFC / 6-path UB group; `902`/`906` show it is not required for import. Exact lead-in/out,
 `wh:technical` and path ordering are still unverified. The WiseCAM head-contact view (Q1) may
 explain how the leads relate to the manufacturable arc span.
+
+Round-4 `1900–1908` and `1910–1917` are the first direct arc-role tests: which section arcs must
+remain true arcs, and which can be sharp chords. `1930–1932` tests the M-34 handedness shift.
 
 ---
 

@@ -5,6 +5,7 @@ produces. Record every probe, what changed, and whether it imported. Keep the wo
 lists current — they are the reverse-engineering evidence.
 
 **Open theories and next investigations:** `docs/ncep-open-questions.md` (living log).
+**Ultimate export goals and strategic priorities:** `docs/ncep-export-strategy.md`.
 
 Probe folders live in `~/Downloads/`:
 
@@ -1066,6 +1067,36 @@ Source: `~/Downloads/ncep-probes-untested partial result/`.
   hole reversal; `1823` shows our sampled section (21/16 pts vs real 11/6 arcs). Both loaded.
 
 Generated fixed omnibus: `~/Downloads/ncep-probes-untested.zip`.
+
+## Round 4 breakthrough probes (1900–1944)
+
+| Group | Probes | Purpose |
+| --- | --- | --- |
+| UB per-corner arc roles | 1900–1908 | Real M-3 section has 4 arcs; sharpen one/pair/all to find which arcs are manufacturable. |
+| Tube per-corner arc roles | 1910–1917 | M-35 outer path has 4 arcs, inner path 4; sharpen single/all outer or all inner. |
+| Grey-strip hole removal | 1920–1924 | Real UB reference: base 47 holes, corrected 36; remove the +178.857 and −178.857 columns separately and together. |
+| M-34 handedness | 1930–1932 | Our M-34 part with our holes vs the known u-face shift from −195.5 to −194.5. |
+| Bevel structure | 1940–1944 | Real Beveled PFC: control, remove-bevel, hoist children, remove outer trim, first child only. |
+
+Anchors: `1901`/`1911` all arcs (good), `1908` sharp all arcs (bad), `1916` sharp all
+outer (bad), `1921` corrected holes, `1924` should match corrected, `1940` bevel control,
+`1943` expected reject (no outer trim).
+
+Latest full result notes:
+- M-3 "missing inner holes and cut lines" was the probe-generator bug (3 real holes instead of
+  22). Fixed; the M-3 improved/real-hole variants need a retest.
+- M-42: our section/trims give `zigzag end cut`/offset; real section + real trims looks similar;
+  the default mark extends off the 106 mm part.
+- M-34: our sampled section gives `arc offset make cuts invalid`; real section needed. The 1 mm
+  u-face hole shift looks similar.
+- M-1/M-35 improved packages look similar; quantity 2 is preserved.
+
+Generate and ZIP with:
+
+```sh
+WRITE_NCEX_PROBES=~/Downloads/ncep-probes-round4 \
+  pnpm exec vitest run src/lib/wisecam/probes.round4.test.ts
+```
 
 ## Reproduce
 
