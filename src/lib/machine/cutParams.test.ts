@@ -1,0 +1,56 @@
+import { describe, expect, it } from 'vitest'
+import { CUT_TABLE_RANGE_MM, suggestCut } from './cutParams'
+import { KL90010T, type MachineProfile } from './profile'
+
+describe('suggestCut (O₂ carbon steel)', () => {
+  it('matches the 5 mm research row and flips focus into the CAM sign', () => {
+    const cut = suggestCut(5)
+    expect(cut.powerPct).toBe(25)
+    expect(cut.focusMm).toBe(4)
+    expect(cut.camFocusMm).toBe(-4)
+    expect(cut.heightMm).toBe(0.8)
+    expect(cut.pressureBar).toBe(0.7)
+    expect(cut.speedMinMmMin).toBe(3)
+    expect(cut.speedMaxMmMin).toBe(3.6)
+  })
+
+  it('interpolates between rows', () => {
+    const cut = suggestCut(6.3)
+    expect(cut.powerPct).toBeGreaterThanOrEqual(29)
+    expect(cut.powerPct).toBeLessThanOrEqual(30)
+    expect(cut.focusMm).toBe(4)
+  })
+
+  it('uses the explicit 12 kW rows above 10 mm', () => {
+    const cut = suggestCut(10)
+    expect(cut.powerPct).toBe(50)
+    expect(cut.focusMm).toBe(6)
+    expect(cut.camFocusMm).toBe(-6)
+    expect(cut.pressureBar).toBe(0.6)
+  })
+
+  it('clamps below the table floor and above the ceiling', () => {
+    expect(suggestCut(1).thicknessMm).toBe(CUT_TABLE_RANGE_MM.min)
+    expect(suggestCut(40).thicknessMm).toBe(CUT_TABLE_RANGE_MM.max)
+    expect(suggestCut(1).notes.join(' ')).toContain('floor')
+    expect(suggestCut(40).notes.join(' ')).toContain('ceiling')
+  })
+
+  it('keeps power above the source minimum', () => {
+    expect(suggestCut(3).powerPct).toBeGreaterThanOrEqual(KL90010T.laser.minPowerPct)
+  })
+
+  it('adjusts focus and speed for surface condition', () => {
+    const normal = suggestCut(6)
+    const rust = suggestCut(6, 'rust')
+    expect(rust.focusMm).toBeCloseTo(normal.focusMm + 1.5, 5)
+    expect(rust.speedMinMmMin).toBeLessThan(normal.speedMinMmMin)
+    expect(rust.notes.join(' ')).toContain('Rust')
+  })
+
+  it('honours a non-inverted controller sign', () => {
+    const upright: MachineProfile = { ...KL90010T, focus: { sign: 1 } }
+    const cut = suggestCut(10, 'normal', upright)
+    expect(cut.camFocusMm).toBe(cut.focusMm)
+  })
+})

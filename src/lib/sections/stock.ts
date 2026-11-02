@@ -791,6 +791,86 @@ export function partSectionForCode(
   }
 }
 
+/** A distinct wall thickness in a section, with the role it plays. */
+export interface SectionThickness {
+  role: 'flange' | 'web' | 'wall' | 'leg'
+  /** Nominal thickness (mm). */
+  mm: number
+}
+
+/**
+ * The distinct material thicknesses a section is cut through, for cut-parameter suggestions.
+ *
+ * A rolled I/T/channel has two (flange `tf`, web `tw`); a hollow or angle has one (`wall`/`leg`).
+ * Values come from the NC header dims where present, else from the section catalogue. Thicknesses
+ * that round to the same 0.1 mm are collapsed, so a section whose `tf ≈ tw` shows one row.
+ */
+export function sectionThicknesses(code: string, dims: number[]): SectionThickness[] {
+  const clean = code.trim().replace(/\s+/g, '').toUpperCase()
+  const family = detectFamily(clean)
+  if (!family) return []
+  const n = numbers(clean)
+  const out: SectionThickness[] = []
+
+  const add = (role: SectionThickness['role'], value?: number) => {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      out.push({ role, mm: Math.round(value * 10) / 10 })
+    }
+  }
+
+  switch (family) {
+    case 'tee': {
+      const match = inferTee(clean, dims)
+      add('flange', dims[2] ?? match?.section.tf)
+      add('web', dims[3] ?? match?.section.tw)
+      break
+    }
+    case 'ub': {
+      const section = getUb(clean)
+      add('flange', dims[2] ?? section?.tf)
+      add('web', dims[3] ?? section?.tw)
+      break
+    }
+    case 'uc': {
+      const section = getUc(clean) ?? getUcByDepth(dims[0] ?? n[0] ?? 0)
+      add('flange', dims[2] ?? section?.tf)
+      add('web', dims[3] ?? section?.tw)
+      break
+    }
+    case 'tfb': {
+      const section = getTfbByDepth(n[0] || dims[0] || dims[1] || 0)
+      add('flange', dims[2] ?? section?.tf)
+      add('web', dims[3] ?? section?.tw)
+      break
+    }
+    case 'channel': {
+      const section = /PFC/i.test(clean) ? getPfcByDepth(n[0] || dims[0] || 0) : undefined
+      add('flange', dims[2] ?? section?.tf)
+      add('web', dims[3] ?? section?.tw)
+      break
+    }
+    case 'angle-equal':
+    case 'angle-unequal':
+      add('leg', n[2] ?? dims[2])
+      break
+    case 'rhs':
+    case 'shs':
+      add('wall', n[2] ?? dims[2])
+      break
+    case 'chs':
+      add('wall', n[1] ?? dims[2])
+      break
+  }
+
+  const seen = new Set<number>()
+  return out.filter((thickness) => {
+    const key = Math.round(thickness.mm * 10)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 /** Nominal steel density (kg/m³), per AS/NZS 3679.1 / AS 4100. */
 const STEEL_DENSITY = 7850
 

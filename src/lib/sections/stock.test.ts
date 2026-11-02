@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { partSectionForCode, resolveStockOutline, stockOutlineForCode } from './stock'
+import {
+  partSectionForCode,
+  resolveStockOutline,
+  sectionThicknesses,
+  stockOutlineForCode,
+} from './stock'
 
 function bbox(points: [number, number][]) {
   let minX = Infinity
@@ -216,5 +221,29 @@ describe('stockOutlineForCode', () => {
       expect(outline?.points.length).toBeGreaterThan(3)
       expect(bbox(outline?.points ?? []).width).toBeCloseTo(100, 0)
     })
+  })
+})
+
+describe('sectionThicknesses', () => {
+  it('reads flange and web thicknesses for a rolled section', () => {
+    expect(sectionThicknesses('200UB29.8', [207, 134, 9.6, 6.3])).toEqual([
+      { role: 'flange', mm: 9.6 },
+      { role: 'web', mm: 6.3 },
+    ])
+  })
+
+  it('reads the parent UB thicknesses for a T', () => {
+    expect(sectionThicknesses('BT100*15', [134, 103, 9.6, 6.3, 8.9])).toEqual([
+      { role: 'flange', mm: 9.6 },
+      { role: 'web', mm: 6.3 },
+    ])
+  })
+
+  it('collapses a section whose flange and web are the same', () => {
+    expect(sectionThicknesses('SHS100*100*6.0', [100, 100, 6])).toEqual([{ role: 'wall', mm: 6 }])
+  })
+
+  it('reads the wall from the callout for a hollow section', () => {
+    expect(sectionThicknesses('RHS150*100*9.0', [])).toEqual([{ role: 'wall', mm: 9 }])
   })
 })

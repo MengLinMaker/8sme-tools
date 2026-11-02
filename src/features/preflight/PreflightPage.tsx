@@ -108,6 +108,7 @@ import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
 import { createOrbitBus, requestLocation, requestView, type ViewPreset } from './orbitSync'
 import type { DiffStats } from './PartViewer'
+import { ProfileSettingsDialog } from './ProfileSettingsDialog'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 
@@ -1555,7 +1556,14 @@ export function PreflightPage() {
     if (!result) return []
     const map = new Map<
       string,
-      { marks: Set<string>; pieces: number; lengthMm: number; massKg: number }
+      {
+        marks: Set<string>
+        pieces: number
+        lengthMm: number
+        massKg: number
+        /** NC header dims from a representative part, for the cross-section + thicknesses. */
+        dims: number[]
+      }
     >()
     for (const part of result.parts) {
       const profile = sectionLabel(part)
@@ -1564,6 +1572,11 @@ export function PreflightPage() {
         pieces: 0,
         lengthMm: 0,
         massKg: 0,
+        dims: [],
+      }
+      if (entry.dims.length === 0) {
+        const dims = part.nc?.dimensions ?? sectionGuesses.get(part.mark)?.dims ?? []
+        if (dims.length > 0) entry.dims = dims
       }
       entry.marks.add(part.mark)
       const qty = partQty(part)
@@ -1577,7 +1590,7 @@ export function PreflightPage() {
     return [...map.entries()]
       .map(([profile, entry]) => ({ profile, ...entry, markCount: entry.marks.size }))
       .sort((a, b) => b.lengthMm - a.lengthMm || b.pieces - a.pieces)
-  }, [result, pieceMass, sectionLabel, partQty, partLength])
+  }, [result, pieceMass, sectionLabel, partQty, partLength, sectionGuesses])
 
   /** One status pill per distinct finding code, so the parts table carries its own triage. */
   const issuesByMark = useMemo(() => {
@@ -1707,6 +1720,21 @@ export function PreflightPage() {
   // and parts collapse like an accordion.
   const [profilesOpen, setProfilesOpen] = useState(true)
   const [partsOpen, setPartsOpen] = useState(true)
+  /** Index into `profileGroups` of the profile whose cut-settings dialog is open. */
+  const [settingsProfileIndex, setSettingsProfileIndex] = useState<number | null>(null)
+  const settingsGroup =
+    settingsProfileIndex === null ? null : (profileGroups[settingsProfileIndex] ?? null)
+  /** Previous/next profile while the dialog is open (arrow keys or the header buttons). */
+  const navigateProfile = useCallback(
+    (delta: -1 | 1) => {
+      setSettingsProfileIndex((current) => {
+        if (current === null) return current
+        const next = current + delta
+        return next < 0 || next >= profileGroups.length ? current : next
+      })
+    },
+    [profileGroups.length],
+  )
 
   // Parts table sorting — defaults to worst-problem-first so triage is quick.
   const [sort, setSort] = useState<{ key: PartSortKey; dir: 1 | -1 }>({ key: 'severity', dir: 1 })
@@ -2443,8 +2471,19 @@ export function PreflightPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {profileGroups.map((group) => (
-                        <TableRow key={group.profile}>
+                      {profileGroups.map((group, index) => (
+                        <TableRow
+                          key={group.profile}
+                          className={cn(group.profile !== '—' && 'cursor-pointer')}
+                          title={
+                            group.profile !== '—'
+                              ? t('preflight.profileSettings.open', { profile: group.profile })
+                              : undefined
+                          }
+                          onClick={() => {
+                            if (group.profile !== '—') setSettingsProfileIndex(index)
+                          }}
+                        >
                           <TableCell className="font-mono text-xs">{group.profile}</TableCell>
                           <TableCell>{group.markCount}</TableCell>
                           <TableCell>{group.pieces}</TableCell>
@@ -3215,6 +3254,21 @@ export function PreflightPage() {
           </div>
         )}
       </Dialog>
+
+      <ProfileSettingsDialog
+        open={settingsProfileIndex !== null}
+        onClose={() => setSettingsProfileIndex(null)}
+        profile={settingsGroup?.profile ?? ''}
+        dims={settingsGroup?.dims ?? []}
+        onNavigate={navigateProfile}
+        canPrevious={settingsProfileIndex !== null && settingsProfileIndex > 0}
+        canNext={settingsProfileIndex !== null && settingsProfileIndex < profileGroups.length - 1}
+        position={
+          settingsProfileIndex === null
+            ? undefined
+            : { index: settingsProfileIndex + 1, total: profileGroups.length }
+        }
+      />
 
       <BevelMenu
         open={bevelEdit !== null}

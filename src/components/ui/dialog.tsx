@@ -62,12 +62,12 @@ export function Dialog({ open, onClose, title, children, className, fullscreen }
       >
         {title != null && (
           <div className="flex items-center justify-between gap-4 border-b border-border px-5 py-3.5">
-            <div className="font-semibold tracking-tight">{title}</div>
+            <div className="min-w-0 flex-1 font-semibold tracking-tight">{title}</div>
             <button
               type="button"
               onClick={onClose}
               aria-label={t('common.dialog.close')}
-              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+              className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
             >
               <X className="size-4" />
             </button>

@@ -35,6 +35,21 @@ export interface MachineBevel {
   maxDeg: number
 }
 
+export interface MachineLaser {
+  /** Rated source power (W). Cutting power is programmed as a percentage of this. */
+  ratedPowerW: number
+  /** Lowest stable power the source will hold (%). Below this it cannot cut reliably. */
+  minPowerPct: number
+}
+
+export interface MachineFocus {
+  /**
+   * Sign the controller/CAM uses for `FocusPos` relative to the physical focus
+   * (+1 = positive means above the surface, −1 = inverted).
+   */
+  sign: 1 | -1
+}
+
 export interface MachineProfile {
   id: string
   name: string
@@ -42,6 +57,10 @@ export interface MachineProfile {
   doc: string
   envelope: MachineEnvelope
   bevel: MachineBevel
+  /** Source power + the lowest stable power percentage. */
+  laser: MachineLaser
+  /** How the controller/CAM labels focus position. */
+  focus: MachineFocus
   /** Largest slug a bottom cut may drop without endangering the head (grams). */
   bottomCutMaxGrams: number
   /** Deepest thickness step the head can reach sweeping one face (mm). */
@@ -85,6 +104,10 @@ export const KL90010T: MachineProfile = {
     nozzleMm: 2,
   },
   bevel: { minDeg: -45, maxDeg: 45 },
+  // 12 kW source; the control will not hold a stable cut below 7% (~840 W).
+  laser: { ratedPowerW: 12_000, minPowerPct: 7 },
+  // The shop CAM labels focus inverted: a physical focus above the surface is a negative number.
+  focus: { sign: -1 },
   bottomCutMaxGrams: 10,
   unmachinableDepthMm: 30,
   placementToleranceMm: 1,
