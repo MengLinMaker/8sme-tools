@@ -1098,6 +1098,92 @@ WRITE_NCEX_PROBES=~/Downloads/ncep-probes-round4 \
   pnpm exec vitest run src/lib/wisecam/probes.round4.test.ts
 ```
 
+## Round 4/5 result and clean arc probes (2026-10-30)
+
+The round-4 arc probes were **confounded**: every variant used our trims and marks, so the same
+"sharp end near front" and mark shifts appeared regardless of the arc change. The useful results
+from that run:
+
+- **Improved full packages `1601–1614`:** all look similar after the fixed M-3 holes. The
+  container fix + real features is a working NC→NCEP path for M-1/M-3/M-35/M-42.
+- **UB feature matrix:** our **trims** cause the sharp end near the front (`1801/1804/1805/1807`);
+  our **marks** remove the etchings (`1803/1805/1806/1807`); our **holes** are fine
+  (`1802` looks similar). Real trims + real marks + our holes works (`1802`).
+- **M-42:** both the section and the trims must be real; our trims give zigzag/offset ends, our
+  sampled section gives a shifted end. The default mark is too large for the 106 mm part.
+- **M-34:** our sampled section gives `arc shifted cannot save` (`1823`); real section needed.
+- **Grey-strip holes:** removing the `+178.857` and `−178.857` columns produces the corrected
+  36-hole set (`1922–1924`). Marking correction is separate.
+- **Bevels:** the outer end trim and all nested child paths are required. Hoisting children
+  removes the bevel (`1942`); removing the outer trim makes the bevel cut invalid (`1943`);
+  keeping only the first child gives only one bevel cut (`1944`).
+- **M-34 handedness:** the 1 mm u-face shift (`1931/1932`) looks the same; not a priority.
+- **Quantity:** `1831` confirms 2.
+
+Round 5 fixes the arc confound:
+
+- `2000–2008` UB clean arc roles: real trims/holes/marks fixed, only section arcs vary.
+- `2010–2017` tube clean arc roles: same, outer/inner paths varied.
+- `2020–2023` UB marking structure: our text only, real text+bars, our text+real bars,
+  real text only.
+- `2030–2031` M-34 control + our trims.
+
+Generated as `~/Downloads/ncep-probes-round5-20261030-f9721f3.zip` (20 probes + controls).
+
+## Round 6 arc rotation / corrected marking (2026-10-30)
+
+Round 5/6 address the two remaining review points:
+
+- **Arc probes were confounded by our trims/marks.** Round 5 fixes real trims, holes and marks
+  first, then varies only the section arcs.
+- **Arc assignment/orientation may be systematically wrong.** Round 6 rotates and flips the arc
+  sweep pattern with real features fixed:
+  - `2101–2107` UB rotate/flip/all-0/all-1 sweeps
+  - `2111–2117` tube outer sweep variants
+- **Marking correction.** `Part.Name` is overwritten by WiseCAM, but etchings should persist when
+  encoded correctly. Round 6 compares:
+  - `2120` our text only
+  - `2121` real text + uncorrected layer-6 bars
+  - `2122` real text + corrected layer-4 + `needSetAdobe` bars
+  - `2123` our text + corrected bars
+  - `2124` corrected bars only
+  - `2125` uncorrected bars only
+
+Latest round-4/5 results:
+
+- Improved full packages `1601–1614` all look similar after the fixed M-3 holes — the container
+  fix + real features is a working NC→NCEP path.
+- UB: our **trims** cause the sharp front end; our **marks** remove the etchings; our **holes**
+  are fine.
+- M-42: both section and trims must be real; the default mark is too large.
+- M-34: our sampled section gives an arc shift; real section needed.
+- Grey strips: removing the `+178.857` and `−178.857` columns reproduces the corrected 36-hole
+  set; marking correction is separate.
+- Bevels: the outer end trim **and all nested child paths** are required; hoisting removes the
+  bevel, removing the outer trim makes it invalid, first-child-only gives a partial bevel.
+
+## Round 7 mark writing (2026-10-30)
+
+`partFromNc` already collected NC marks; `partSvg` now writes them:
+
+- `SI` text -> layer-6 `cadtext`.
+- `PU`/`KO` scribe bars -> layer-4 `cadrectangle`/`cadpolyline` with `needSetAdobe=true` and
+  the real corrected-bar `LeadLine` technical block.
+- KO/PU duplicates collapse by text + points, not kind.
+- M-3 writes two bars at `x=-125.5..125.5`, matching the real control.
+- Unit tests: `fromNc.test.ts` checks M-3 mark count/geometry and an `SI` text mark in the SVG.
+
+Probe group `2201–2206` uses improved packages (real section/trims/holes) with the writer's NC
+marks instead of injected real marks; `2202` is the standard M-3 package. If the bars/etchings
+show, NC mark emission is confirmed.
+
+Current pack: `~/Downloads/ncep-probes-round5-7-20261030-f9721f3.zip` (44 probes + 5 controls).
+
+Probe naming: file and `CadRoot.Name` use `<code> <description>` (e.g. `2101 original
+sweeps`). Controls keep real marks. The M-42 part-name mark size is **not** a target; WiseCAM
+overwrites `Part.Name`. The production-critical markings are the `SI`/`PU`/`KO` etchings, which
+the writer now emits.
+
 ## Reproduce
 
 ```sh

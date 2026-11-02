@@ -43,7 +43,7 @@ Status legend: **SOLID** (proven on WiseCAM), **LIKELY** (strong evidence), **SU
 
 ## Q1 — Arc span and the manufacturable surface (highest-value new clue)
 
-**Status: SUSPECT → needs observation.**
+**Status: SUSPECT → round-5 clean arc probes pending.**
 
 WiseCAM has a view showing how the laser/head would contact the **manufacturable surface**. The
 user observed that the arc is sometimes limited to a **shorter section**, not the whole section.
@@ -72,8 +72,10 @@ start/end vertices and the exposed span must match the head-contact surface.
 4. Probe designs:
    - section group with **partial** arcs over only the manufacturable span vs full arcs;
    - vary arc start/end vertices while keeping the same radius;
+   - **rotate/flip the arc sweep pattern** to test whether the arc assignment/orientation is
+     systematically wrong (round-6 `2101–2117`);
    - UB/tube with arcs only on the front/manufacturable face, sharp elsewhere;
-   - use `USERPATH` lead/contact points as a cross-check.
+   - use `USERPATH` lead/contact points and the head-contact view as a cross-check.
 
 **Question to answer:** does the arc endpoint/span, rather than arc vs chord, explain the
 remaining UB/tube offsets?
@@ -93,6 +95,7 @@ remaining UB/tube offsets?
 
 **Next tests**
 
+- Round-4 `1940–1944` confirms the bevel structure: outer trim + all nested children required.
 - Decode the M-42 AK start/end contours and compare our `startCut`/`endCut` with the real trims.
 - Generate the bevel cluster from a known NC bevel column set; probe `Beveled PFC` vs
   `remove bevel`.
@@ -132,19 +135,27 @@ now lower priority — no evidence they are blocking.
 **Status: LIKELY / partly untested.**
 
 - Text marks load; UB real text + bars improved the result (`1316`).
-- Corrected marking moves bars to **layer 4** and adds `needSetAdobe=true`; our writer does not
-  emit bars.
-- M-42 is 106 mm; our unconditional 40 mm default mark is wrong. Real M-42 has **no mark**.
+- Corrected marking moves bars to **layer 4** and adds `needSetAdobe=true`.
+- The writer now emits NC `SI` text and `PU`/`KO` bars; M-3 generated bars match the real control
+  (`x=-125.5..125.5`, two 251 mm bars). KO/PU duplicates collapse by points/text.
+- Still unproven on WiseCAM: whether corrected layer-4 bars etch/persist and whether text angle is
+  right for sloped marks. Mark-write probe group `2201–2206` tests this.
+- M-42 is 106 mm; our default part-name mark is overwritten by WiseCAM. **Do not pursue mark size**; the etchings are what matter.
 - M-1/M-35 default marks at `x=0` load, but the real exports place the text on a face/station,
   not always the seam.
 
 **Next tests**
 
 - Add real layer-4 bars to a generated part; compare with `PFC/UB corrected marking`.
+- Round-6 `2020–2025` isolates our text, uncorrected layer-6 bars, and corrected layer-4 +
+  `needSetAdobe` bars. `Part.Name` is overwritten; etchings must survive on the corrected layer.
+- Confirm `2201`/`2202`/`2204`/`2206` show the writer's NC bars/etchings in WiseCAM.
+- Determine whether the writer should keep the default part-name text when an `SI` mark exists.
 - Determine the auto-mark length threshold and whether short parts should omit the mark.
 - Compare mark placement at `x=0` vs the real face/station for M-1/M-3/M-35.
-- The M-3 feature matrix was regenerated after the `holeBlock` bug fix; retest `1801`,
-  `1803`, `1805`, `1808` with all 22 real holes.
+- The M-3 feature matrix was regenerated after the `holeBlock` bug fix; `1802` + all-real
+  `1808` confirm our holes are fine, while our trims cause the sharp front end and our marks
+  remove the etchings. Round-5 `2020–2023` isolates text vs bars.
 
 ---
 
@@ -167,8 +178,9 @@ Real U/I adobes have a `USERPATH` group with applied separation cut paths. We sy
 `wh:technical` and path ordering are still unverified. The WiseCAM head-contact view (Q1) may
 explain how the leads relate to the manufacturable arc span.
 
-Round-4 `1900–1908` and `1910–1917` are the first direct arc-role tests: which section arcs must
-remain true arcs, and which can be sharp chords. `1930–1932` tests the M-34 handedness shift.
+Round-4 `1900–1908` and `1910–1917` were confounded by our trims/marks. Round-5 `2000–2008`
+and `2010–2017` repeat the arc-role matrix with real trims/holes/marks fixed. `1930–1932`
+tested the M-34 handedness shift and looked the same.
 
 ---
 

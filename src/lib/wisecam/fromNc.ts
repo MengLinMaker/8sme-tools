@@ -246,7 +246,7 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
     }
     if (!developed || points.length === 0) continue
     // DSTV often carries the same mark twice (KO punch + PU scribe); keep one.
-    const signature = `${mark.kind}|${mark.text?.value ?? ''}|${points
+    const signature = `${mark.text?.value ?? ''}|${points
       .map(([station, along]) => `${station.toFixed(3)},${along.toFixed(3)}`)
       .join(';')}`
     if (seenMarks.has(signature)) continue

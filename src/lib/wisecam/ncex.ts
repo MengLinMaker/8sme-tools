@@ -112,6 +112,8 @@ export interface NcexPart {
   holes?: NcexHole[]
   /** Layout marks (`SI` etch text / `PU`-`KO` scribe lines) in unrolled coordinates. */
   marks?: NcexMark[]
+  /** Emit scribe/bars on the corrected layer 4 with `needSetAdobe=true` (default true). */
+  correctMarks?: boolean
   /** Developed cut contours (`AK`/`IK`) in unrolled coordinates (preview only). */
   cuts?: NcexCut[]
   /**
@@ -222,6 +224,10 @@ const TECHNICAL_CIRCLE =
 const TECHNICAL_TRUNCATE = 'T={};InnerT={};'
 const TECHNICAL_EMPTY = 'T={};'
 
+/** Copied from a real corrected UB marking bar; WiseCAM expects the lead-line block. */
+const MARK_BAR_TECHNICAL =
+  'T={LeadLine={Pos={Segment=1,Ratio=0.5,},LeadInBreak=0,Radius = 0,Seal=0,LeadIn={Type=0,Length=3,Angle=0.5235987755982988,Radius=3,AbsoluteAngle=1,},LeadOut={Type=0,Length=3,Angle=0.5235987755982988,Radius=0.1,},},};'
+
 function truncatePath(
   id: number,
   points: [number, number][],
@@ -250,6 +256,100 @@ function innerProfilePath(
 function holeCircle(id: number, hole: NcexHole, stroke?: string): string {
   const params = `InnerCad=${circleInnerCad(hole.station, hole.along, hole.radius)};`
   return `<circle wh:id="${id}" wh:class="cadcircle" wh:layer="0" wh:isfill="0" wh:machining="1" cx="${mm(hole.station)}" cy="${mm(hole.along)}" r="${mm(hole.radius)}" wh:direction="1" wh:params="${params}" wh:technical="${TECHNICAL_CIRCLE}" class="layer0"${paint(stroke)}/>`
+}
+
+function sameMarkPoint(a: [number, number], b: [number, number]): boolean {
+  return Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6
+}
+
+function axisAlignedRect(
+  points: [number, number][],
+): { x: number; y: number; width: number; height: number } | null {
+  const unique = points.slice()
+  if (unique.length > 1) {
+    const first = unique[0] as [number, number]
+    const last = unique[unique.length - 1] as [number, number]
+    if (sameMarkPoint(first, last)) unique.pop()
+  }
+  if (unique.length !== 4) return null
+  const xs = [...new Set(unique.map(([x]) => x.toFixed(6)))].map(Number)
+  const ys = [...new Set(unique.map(([, y]) => y.toFixed(6)))].map(Number)
+  if (xs.length !== 2 || ys.length !== 2) return null
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+  const expected = new Set([
+    `${minX.toFixed(6)},${minY.toFixed(6)}`,
+    `${maxX.toFixed(6)},${minY.toFixed(6)}`,
+    `${maxX.toFixed(6)},${maxY.toFixed(6)}`,
+    `${minX.toFixed(6)},${maxY.toFixed(6)}`,
+  ])
+  for (const [x, y] of unique) {
+    if (!expected.has(`${x.toFixed(6)},${y.toFixed(6)}`)) return null
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+}
+
+function markRect(
+  id: number,
+  rect: { x: number; y: number; width: number; height: number },
+  layer: 4 | 6,
+  params: string,
+  stroke?: string,
+): string {
+  return `<rect wh:id="${id}" wh:class="cadrectangle" wh:layer="${layer}" wh:isfill="0" wh:machining="1" x="${mm(rect.x)}" y="${mm(rect.y)}" width="${mm(rect.width)}" height="${mm(rect.height)}" wh:direction="0" wh:params="${params}" wh:technical="${MARK_BAR_TECHNICAL}" class="layer${layer}"${paint(stroke)}/>`
+}
+
+function markPolyline(
+  id: number,
+  points: [number, number][],
+  layer: 4 | 6,
+  params: string,
+  stroke?: string,
+): string {
+  const closed =
+    points.length > 2 &&
+    sameMarkPoint(points[0] as [number, number], points[points.length - 1] as [number, number])
+  const body = closed ? points.slice(0, -1) : points
+  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="${layer}" wh:isfill="0" wh:machining="1" d="${pathFromPoints(body, closed)}" wh:params="${params}" wh:technical="${MARK_BAR_TECHNICAL}" class="layer${layer}"${paint(stroke)}/>`
+}
+
+function ncTextMark(
+  id: number,
+  x: number,
+  y: number,
+  height: number,
+  angle: number,
+  value: string,
+  stroke?: string,
+): string {
+  return `<text wh:id="${id}" wh:class="cadtext" wh:layer="6" wh:isfill="0" wh:machining="1" x="${mm(x)}" y="${mm(y)}" font-family="Arial" font-size="${mm(height)}" font-size-adjust="1" letter-spacing="0" word-spacing="0" font-weight="normal" font-style="normal" wh:font-shxfont="txt.shx" wh:font-bigfont="gbcbig.shx" wh:font-isvertrical="0" wh:font-isshape="0" wh:font-obliqueangle="0" wh:font-charset="134" wh:font-pitchandfamily="32" wh:params="IsLabel=true;LabelType=0;LabelContent=${xml(value)};LabelWidth=1.000000;LabelHeight=${mm(height)};LabelRotate=${angle};LabelSource=1;" wh:technical="${TECHNICAL_EMPTY}" class="layer6"${paint(stroke)} transform="rotate(${angle} ${mm(x)},${mm(y)})">${xml(value)}</text>`
+}
+
+function ncMarkElements(
+  part: NcexPart,
+  next: () => number,
+  correct: boolean,
+  palette?: NcexPalette,
+): string[] {
+  const out: string[] = []
+  for (const mark of part.marks ?? []) {
+    if (mark.kind === 'etch' && mark.text) {
+      const [x, y] = (mark.points[0] as [number, number] | undefined) ?? [0, 0]
+      const height = mark.text.height > 0 ? mark.text.height : 40
+      const angle = mark.text.reversed ? 90 + mark.text.angle : 90 - mark.text.angle
+      out.push(ncTextMark(next(), x, y, height, angle, mark.text.value, palette?.mark))
+      continue
+    }
+    if (mark.kind !== 'marking' || mark.points.length < 2) continue
+    const layer: 4 | 6 = correct ? 4 : 6
+    const params = correct ? 'needSetAdobe=true;' : ''
+    const rect = axisAlignedRect(mark.points)
+    if (rect) out.push(markRect(next(), rect, layer, params, palette?.mark))
+    else out.push(markPolyline(next(), mark.points, layer, params, palette?.mark))
+  }
+  return out
 }
 
 function markText(id: number, part: NcexPart, stroke?: string): string {
@@ -308,6 +408,7 @@ function partSvg(part: NcexPart, refId: number, palette?: NcexPalette): string {
   for (const hole of part.holes ?? []) {
     body.push(holeCircle(next(), hole, palette?.hole?.(hole)))
   }
+  body.push(...ncMarkElements(part, next, part.correctMarks ?? true, palette))
   body.push(markText(next(), part, palette?.mark))
   body.push(truncatePath(next(), end, 1, part.mark, palette?.outline))
   const section: string[] = [profilePath(next(), part.section, palette?.outline)]

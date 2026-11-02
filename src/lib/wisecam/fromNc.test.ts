@@ -75,6 +75,19 @@ describe('partFromNc / NCEP', () => {
     expect(ncepPartSvg(bytes)).toContain(`M0.00,0.00 L${seam.toFixed(2)},0.00`)
   })
 
+  it('emits NC scribe marks as corrected layer-4 bars', () => {
+    const part = partFromNc(readFileSync(fixture('ncep', 'M-3.nc1'), 'utf8'))
+    expect(part?.marks).toHaveLength(2)
+    const bytes = buildNcepFromNc(readFileSync(fixture('ncep', 'M-3.nc1'), 'utf8'))
+    if (!bytes) throw new Error('no package')
+    const svg = ncepPartSvg(bytes)
+    expect((svg.match(/<rect\b/g) ?? []).length).toBe(2)
+    expect(svg).toContain('wh:layer="4"')
+    expect(svg).toContain('needSetAdobe=true')
+    expect(svg).toContain('LeadLine=')
+    expect(svg).toContain('width="251.00" height="10.00"')
+  })
+
   it('develops layout markings onto the unrolled surface', () => {
     const ncText = readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8').replace(
       /EN(\r?\n)?$/,
@@ -92,6 +105,11 @@ describe('partFromNc / NCEP', () => {
     expect(etch?.text?.angle).toBe(0)
     expect(etch?.text?.reversed).toBe(false)
     expect(etch?.points[0]).toEqual([-165, 100])
+    const bytes = buildNcepFromNc(ncText)
+    if (!bytes) throw new Error('no package')
+    const svg = ncepPartSvg(bytes)
+    expect(svg).toContain('LabelContent=TEST')
+    expect(svg).toContain('>TEST</text>')
   })
 
   it('develops the NC cut contours onto the net', () => {
