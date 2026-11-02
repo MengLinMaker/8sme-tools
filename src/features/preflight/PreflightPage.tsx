@@ -48,6 +48,7 @@ import {
   MAX_CUT_THICKNESS_MM,
 } from '@/lib/audit/cutReach'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
+import { MASS_BAND_CLASS, MASS_RED_KG, MASS_YELLOW_KG, massBand } from '@/lib/audit/mass'
 import { listedProfile } from '@/lib/audit/partProfile'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
@@ -108,7 +109,7 @@ import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
 import { createOrbitBus, requestLocation, requestView, type ViewPreset } from './orbitSync'
 import type { DiffStats } from './PartViewer'
-import { ProfileSettingsDialog } from './ProfileSettingsDialog'
+import { type ProfileMarkRow, ProfileSettingsDialog } from './ProfileSettingsDialog'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 
@@ -146,10 +147,6 @@ function markerIndexOf(finding: Finding): number | null {
 
 /** How many drawings to parse at once. Matches the pdf.js worker pool size. */
 const CONCURRENCY = 6
-
-/** Per-piece mass bands: red above `MASS_RED_KG`, yellow at/above `MASS_YELLOW_KG`, else green. */
-const MASS_RED_KG = 30
-const MASS_YELLOW_KG = 20
 
 /** The head's bevel range (deg); a unify-bevel angle outside it is rejected. */
 const MAX_BEVEL_DEG = Math.max(Math.abs(MACHINE.bevel.minDeg), Math.abs(MACHINE.bevel.maxDeg))
@@ -1557,7 +1554,7 @@ export function PreflightPage() {
     const map = new Map<
       string,
       {
-        marks: Set<string>
+        marks: Map<string, ProfileMarkRow>
         pieces: number
         lengthMm: number
         massKg: number
@@ -1568,7 +1565,7 @@ export function PreflightPage() {
     for (const part of result.parts) {
       const profile = sectionLabel(part)
       const entry = map.get(profile) ?? {
-        marks: new Set<string>(),
+        marks: new Map<string, ProfileMarkRow>(),
         pieces: 0,
         lengthMm: 0,
         massKg: 0,
@@ -1578,17 +1575,36 @@ export function PreflightPage() {
         const dims = part.nc?.dimensions ?? sectionGuesses.get(part.mark)?.dims ?? []
         if (dims.length > 0) entry.dims = dims
       }
-      entry.marks.add(part.mark)
       const qty = partQty(part)
       const length = partLength(part)
       const mass = pieceMass(part)
+      const mark = entry.marks.get(part.mark) ?? {
+        mark: part.mark,
+        pieces: 0,
+        lengthMm: 0,
+        massKg: 0,
+      }
+      mark.pieces += qty
+      if (length != null) mark.lengthMm += qty * length
+      if (mass != null) mark.massKg += qty * mass
+      entry.marks.set(part.mark, mark)
       entry.pieces += qty
       if (length != null) entry.lengthMm += qty * length
       if (mass != null) entry.massKg += qty * mass
       map.set(profile, entry)
     }
     return [...map.entries()]
-      .map(([profile, entry]) => ({ profile, ...entry, markCount: entry.marks.size }))
+      .map(([profile, entry]) => ({
+        profile,
+        marks: [...entry.marks.values()].sort((a, b) =>
+          a.mark.localeCompare(b.mark, undefined, { numeric: true }),
+        ),
+        markCount: entry.marks.size,
+        pieces: entry.pieces,
+        lengthMm: entry.lengthMm,
+        massKg: entry.massKg,
+        dims: entry.dims,
+      }))
       .sort((a, b) => b.lengthMm - a.lengthMm || b.pieces - a.pieces)
   }, [result, pieceMass, sectionLabel, partQty, partLength, sectionGuesses])
 
@@ -2689,14 +2705,7 @@ export function PreflightPage() {
                       const qtyMismatch = pdfQty != null && ncQty != null && pdfQty !== ncQty
                       const qtyFallback = pdfQty == null && ncQty != null
                       const mass = pieceMass(part)
-                      const massBand: 'red' | 'yellow' | 'green' | null =
-                        mass == null
-                          ? null
-                          : mass > MASS_RED_KG
-                            ? 'red'
-                            : mass >= MASS_YELLOW_KG
-                              ? 'yellow'
-                              : 'green'
+                      const band = massBand(mass)
                       const pills = issuesByMark.get(part.mark) ?? []
                       return (
                         <TableRow
@@ -2790,16 +2799,11 @@ export function PreflightPage() {
                             )}
                           </TableCell>
                           <TableCell
-                            className={cn(
-                              'font-mono text-xs',
-                              massBand === 'red' && 'font-semibold text-red-400',
-                              massBand === 'yellow' && 'font-semibold text-amber-400',
-                              massBand === 'green' && 'text-emerald-400',
-                            )}
+                            className={cn('font-mono text-xs', band && MASS_BAND_CLASS[band])}
                             title={
-                              massBand === 'red'
+                              band === 'red'
                                 ? t('preflight.mass.heavy', { kg: MASS_RED_KG })
-                                : massBand === 'yellow'
+                                : band === 'yellow'
                                   ? t('preflight.mass.medium', { kg: MASS_YELLOW_KG })
                                   : undefined
                             }
@@ -3260,6 +3264,7 @@ export function PreflightPage() {
         onClose={() => setSettingsProfileIndex(null)}
         profile={settingsGroup?.profile ?? ''}
         dims={settingsGroup?.dims ?? []}
+        marks={settingsGroup?.marks ?? []}
         onNavigate={navigateProfile}
         canPrevious={settingsProfileIndex !== null && settingsProfileIndex > 0}
         canNext={settingsProfileIndex !== null && settingsProfileIndex < profileGroups.length - 1}
