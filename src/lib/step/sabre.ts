@@ -273,6 +273,13 @@ function longAxis(vertices: number[]): Vector3 {
   return new Vector3().setComponent(longest, 1)
 }
 
+export interface SabreMeshOptions {
+  /** Linear tessellation deflection in mm. */
+  tolerance?: number
+  /** Angular tolerance in radians. */
+  angularTolerance?: number
+}
+
 export interface SabreSample {
   point: [number, number, number]
   normal: [number, number, number]
@@ -289,13 +296,20 @@ export interface SabreSample {
  * the NC projection cut lines: a sparse set of points on the actual cut path is both faster and
  * more meaningful than probing the whole stock skin.
  */
+/**
+ * Default probe mesh: accuracy first. The 0.3 mm / no-angular-cap variant is only ~9% faster on
+ * the 16-part Luenard job and can move a surface by up to ~0.2 mm, so keep the fine probe.
+ */
+const SABRE_MESH_OPTIONS: SabreMeshOptions = { tolerance: 0.1, angularTolerance: 0.3 }
+
 export function sabreSamples(
   shape: MeshableShape,
   samples: SabreSample[],
   length = SABRE_LENGTH,
+  meshOptions: SabreMeshOptions = SABRE_MESH_OPTIONS,
 ): SabreResult {
   if (samples.length === 0) return { ok: true, checked: 0, failures: [] }
-  const mesh = shape.mesh({ tolerance: 0.1, angularTolerance: 0.3 })
+  const mesh = shape.mesh(meshOptions)
 
   const geometry = new BufferGeometry()
   geometry.setAttribute('position', new BufferAttribute(Float32Array.from(mesh.vertices), 3))

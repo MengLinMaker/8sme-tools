@@ -321,6 +321,8 @@ export interface ReconstructOptions {
   debugSkipShallow?: boolean
   /** Run the CUT_DEPTH sabre probe (default true; the viewer model skips it for speed). */
   sabre?: boolean
+  /** Tuning/debug: sabre probe tessellation resolution. */
+  sabreMesh?: { tolerance?: number; angularTolerance?: number }
 }
 
 export async function reconstructStepFromNc(
@@ -970,6 +972,8 @@ export async function reconstructSolidFromNc(
     sabre = sabreSamples(
       solid as unknown as Parameters<typeof sabreSamples>[0],
       cutSamples,
+      undefined,
+      options.sabreMesh,
     ).failures
     const roll = (p: [number, number, number]): [number, number, number] =>
       family === 'channel' ? [p[0], p[2], -p[1]] : [p[0], -p[2], p[1]]

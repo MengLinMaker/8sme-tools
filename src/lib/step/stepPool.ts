@@ -47,10 +47,13 @@ interface WorkerHandle {
 // Use the cores (minus one for the UI). Each worker is a full OCC kernel (~23 MB WASM plus the
 // per-part B-reps), so the cap trades memory for background throughput; 8 keeps a large job from
 // queuing behind a handful of workers without exhausting memory.
-const MAX_WORKERS = Math.max(1, Math.min(8, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1))
+export const STEP_WORKER_COUNT = Math.max(
+  1,
+  Math.min(8, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1),
+)
 
 class StepWorkerPool {
-  private readonly max = MAX_WORKERS
+  private readonly max = STEP_WORKER_COUNT
   private readonly workers: WorkerHandle[] = []
   private readonly idle: WorkerHandle[] = []
   private readonly queue: Task[] = []

@@ -112,6 +112,19 @@ or end-cap false positives.
 - The cut-line sample set also removes the stock-skin / end-cap false positives by construction:
   those surfaces are not cut lines.
 
+### Performance
+
+- The probe stays at **0.1 mm / 0.3 rad**: accuracy first. Coarser meshes gave identical failure
+  sets on the 16-part selected-26 Luenard job, but only ~9% faster end-to-end (0.1 = 7.03 s,
+  0.3/20 = 6.44 s, 0.5/20 = 6.30 s, 1.0/20 = 6.28 s) while moving a surface by up to the
+  deflection. Not worth the accuracy loss; the benchmark keeps the trade-off measurable.
+- The viewer STEP and the probe are built in **one** reconstruction and the viewer cache is primed
+  from it (`reconstructViewerWithSabre`), so opening a no-STEP part does not rebuild the solid.
+- The no-STEP background pass fills the worker pool (`STEP_WORKER_COUNT`); foreground viewer and
+  neighbour tasks still jump the queue by priority.
+- Re-run the benchmark with `SME_BENCH=1 pnpm vitest run src/lib/step/sabre.bench.test.ts`
+  (`SME_BENCH_DIR` points it at another NC folder).
+
 Open: the exact 2-flange-subcut pattern (tw = 8 mm from the corner end at the fillet) still
 needs to be pinned to a concrete cut-line span so the check reports exactly 2 findings on each
 of M36/M39.

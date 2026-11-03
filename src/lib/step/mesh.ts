@@ -116,7 +116,7 @@ export interface BrepFace {
  * abandoned: 0.2 rad densified fillets 2.3× and slowed CSG ~12×; 0.3 rad still
  * cost +58% tris and 4× CSG for the same verdicts.)
  */
-const MESH_OPTIONS = { tolerance: 0.3, angularTolerance: 20 }
+export const MESH_OPTIONS = { tolerance: 0.3, angularTolerance: 20 }
 
 /** Curve sampling: ~1 sample per this many mm, clamped, so circles don't read faceted. */
 const CURVE_SAMPLE_MM = 1.5
