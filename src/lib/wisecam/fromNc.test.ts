@@ -119,6 +119,20 @@ describe('partFromNc / NCEP', () => {
     expect(part.cuts?.every((cut) => cut.points.length >= 4)).toBe(true)
   })
 
+  it.skipIf(!fixtureExists('nw30-bottom', 'm105.nc1'))(
+    'samples DSTV radius arcs in the developed cuts and end cuts',
+    () => {
+      const part = partFromNc(readFileSync(fixture('nw30-bottom', 'm105.nc1'), 'utf8'))
+      if (!part) throw new Error('no part')
+      // The SHS corner arcs (R 6.7) must be sampled, not collapsed to their chord vertices.
+      const outer = part.cuts?.filter((cut) => cut.kind === 'outer') ?? []
+      expect(outer.some((cut) => cut.points.length > 40)).toBe(true)
+      // The end cut follows the rounded corners across the face instead of a straight line.
+      expect(part.startCut?.length).toBeGreaterThan(10)
+      expect(part.endCut?.length).toBeGreaterThan(10)
+    },
+  )
+
   it('writes the real container.xml bytes (no trailing newline)', () => {
     const bytes = buildNcepFromNc(readFileSync(fixture('ncep', 'M-1.nc1'), 'utf8'))
     if (!bytes) throw new Error('no package')

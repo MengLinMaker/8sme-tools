@@ -1,6 +1,6 @@
 import { parseDstv } from '@/lib/parsers/dstv'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
-import { type NcContour, type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { arcSamples, type NcContour, type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { faceThickness } from '@/lib/parsers/ncProject'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { rawStationFor, stationFor, type UnrolledLayout, unrolledLayout } from './layout'
@@ -46,6 +46,27 @@ export function canDevelop(profileType: string | undefined): boolean {
 interface ContourEnds {
   start: [number, number][]
   end: [number, number][]
+}
+
+/**
+ * Expands a DSTV contour so its radius arcs (the `R` field on each vertex) are sampled into the
+ * polyline. Without this the developed cut chords every fillet/notch arc, drawing a straight
+ * line across the real curve (the NCEP view's overlay artifacts and the missed end-cut curve).
+ */
+function densifyContour(contour: NcContour): [number, number][] {
+  const radii = contour.radii
+  if (!radii?.some((radius) => radius)) return contour.points
+  const count = contour.points.length
+  const out: [number, number][] = []
+  for (let index = 0; index < count; index++) {
+    const from = contour.points[index] as [number, number]
+    const to = contour.points[(index + 1) % count] as [number, number]
+    const samples = arcSamples(from, to, radii[index] ?? 0)
+    // Drop each segment's end point; it is the next segment's start (or the closing duplicate).
+    for (let step = 0; step < samples.length - 1; step++)
+      out.push(samples[step] as [number, number])
+  }
+  return out
 }
 
 /**
@@ -148,7 +169,7 @@ function developEndCut(
     if (!layout.faces[face]) continue
     const contour = contours.find((entry) => entry.kind === 'outer' && entry.face === face)
     if (!contour) return null
-    const ends = splitContourEnds(contour.points, length)
+    const ends = splitContourEnds(densifyContour(contour), length)
     if (!ends) return null
     const arc = end === 'start' ? ends.start : ends.end
     const developed: [number, number][] = []
@@ -263,7 +284,7 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
     if (!layout.faces[contour.face]) continue
     const points: [number, number][] = []
     let developed = true
-    for (const [x, y] of contour.points) {
+    for (const [x, y] of densifyContour(contour)) {
       const station = stationFor(layout, contour.face, y)
       if (station == null) {
         developed = false
