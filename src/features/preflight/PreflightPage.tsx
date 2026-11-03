@@ -109,7 +109,7 @@ import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
 import { createOrbitBus, requestLocation, requestView, type ViewPreset } from './orbitSync'
 import type { DiffStats } from './PartViewer'
-import { type ProfileMarkRow, ProfileInfo, ProfileSettingsDialog } from './ProfileSettingsDialog'
+import { ProfileInfo, type ProfileMarkRow, ProfileSettingsDialog } from './ProfileSettingsDialog'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 
@@ -457,8 +457,7 @@ export function PreflightPage() {
   const viewingPdfBytes = viewing?.pdf ? bytesByPath.get(viewing.pdf.path) : undefined
   /** NC header dims (or the detector's) for the viewed part's profile, for the Info tab section. */
   const viewingDims = useMemo(
-    () =>
-      viewing ? (viewing.nc?.dimensions ?? sectionGuesses.get(viewing.mark)?.dims ?? []) : [],
+    () => (viewing ? (viewing.nc?.dimensions ?? sectionGuesses.get(viewing.mark)?.dims ?? []) : []),
     [viewing, sectionGuesses],
   )
 
