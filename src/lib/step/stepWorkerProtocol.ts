@@ -2,6 +2,7 @@ import type { SectionGuess } from '@/lib/sections/detect'
 import type { StepMeasure } from './measure'
 import type { MeshedStep } from './mesh'
 import type { DiffPayload } from './occDiff'
+import type { SabreFailure } from './sabre'
 
 /**
  * Message protocol between the preflight UI and the STEP worker pool.
@@ -22,6 +23,8 @@ export interface InspectResult {
 export interface ReconstructResult {
   step: string | null
   measure: StepMeasure | null
+  /** Light-sabre failures on the manufactured solid (empty when clean). */
+  sabre: SabreFailure[]
 }
 
 /** A real part STEP re-seated into the canonical manufacturing orientation. */

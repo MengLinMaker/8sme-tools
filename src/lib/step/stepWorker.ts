@@ -125,7 +125,11 @@ async function reconstruct(request: {
       measure = null
     }
   }
-  return { step: request.measureOnly ? null : (built?.step ?? null), measure }
+  return {
+    step: request.measureOnly ? null : (built?.step ?? null),
+    measure,
+    sabre: built?.sabre ?? [],
+  }
 }
 
 /** The subset of an imported OCC shape the canonical seat needs. */

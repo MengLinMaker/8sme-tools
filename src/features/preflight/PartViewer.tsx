@@ -38,6 +38,12 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import type { CutMarker } from '@/lib/audit/cutReach'
+
+/** How far the red mitre projection travels into the material (the sabre reach). */
+const SABRE_PROJECTION_MM = 25
+/** Thickness of the mitre-projection slab (mm) so it reads from the thin side. */
+const SABRE_PROJECTION_THICKNESS_MM = 1
+
 import {
   faceNormal,
   frameForProfile,
@@ -505,7 +511,7 @@ interface SceneHandle {
   /** Glow the sub-cut marker at `index` and dim the rest (null clears the hover highlight). */
   highlight: (index: number | null) => void
   /** Pull every synced viewport toward the geometry behind a finding code (null = whole model). */
-  focus: (code: string | null, index?: number) => void
+  focus: (code: string | null, index?: number, source?: 'nc') => void
   diffStats: DiffStats | null
   diffPresence: DiffPresence | null
   runDiff: () => Promise<DiffStats | null>
@@ -587,6 +593,7 @@ function mountScene(
   compareBytes: Uint8Array | null | undefined,
   deferDiff?: boolean,
   sabre?: CutMarker[] | null,
+  sabrePoints?: { point: Vec3; normal: Vec3; entry: Vec3; exit: Vec3; depth?: number }[] | null,
   nc?: NcGeometry | null,
   ncMarks?: NcGeometry['marks'] | null,
   ncSection?: [number, number][] | null,
@@ -746,6 +753,13 @@ function mountScene(
   const ncResolution = new Vector2(container.clientWidth || 1, container.clientHeight || 1)
   // Red bevel arrows at uncuttable cuts (light-sabre failures) — toggled as one object.
   const sabreObjects: LineSegments2[] = []
+  const sabreRunObjects: Mesh[] = []
+  const sabreRunLines: LineSegments2[] = []
+  const sabreRunDirections: Vec3[] = []
+  const sabreRunShown: boolean[] = []
+  const sabreRunCentres: Vec3[] = []
+  const sabreRunRadii: number[] = []
+  let sabreHover: number | null = null
   /** One span marker per failing sub-cut, indexed like `sabreFailures`, so a finding can zoom in. */
   const sabreSpanObjects: (LineSegments2 | null)[] = []
   /** View direction (scene) to look onto each failing cut's face from, indexed like the markers. */
@@ -1251,6 +1265,151 @@ function mountScene(
     }
   }
 
+  // Sweep the guilty cut line into the material along the face normal (`T + r`) to make the mitre
+  // projection: one closed slab and one red cut line per failing run, on the layer-1 pass (depth
+  // cleared) so they read through the solid and keep constant translucency.
+  if (sabrePoints && sabrePoints.length > 1) {
+    const inner = (sample: (typeof sabrePoints)[number]): Vec3 => {
+      const depth = sample.depth ?? SABRE_PROJECTION_MM
+      return [
+        sample.point[0] - sample.normal[0] * depth,
+        sample.point[1] - sample.normal[1] * depth,
+        sample.point[2] - sample.normal[2] * depth,
+      ]
+    }
+    // Split into runs of consecutive samples (different subcuts stay separate findings).
+    const runs: (typeof sabrePoints)[] = []
+    let run: typeof sabrePoints = []
+    for (let i = 0; i < sabrePoints.length; i++) {
+      const sample = sabrePoints[i]
+      const prev = sabrePoints[i - 1]
+      if (!sample) continue
+      if (
+        prev &&
+        Math.hypot(
+          sample.point[0] - prev.point[0],
+          sample.point[1] - prev.point[1],
+          sample.point[2] - prev.point[2],
+        ) > 2.5
+      ) {
+        if (run.length > 1) runs.push(run)
+        run = []
+      }
+      run.push(sample)
+    }
+    if (run.length > 1) runs.push(run)
+
+    const half = SABRE_PROJECTION_THICKNESS_MM / 2
+    for (const strip of runs) {
+      sabreRunShown.push(true)
+      const n = strip.length
+      // Cut-line centre + half-extent (including the projection depth), in the model frame, so the
+      // focus can frame the run without relying on the fat-line geometry's bounds.
+      let cx = 0
+      let cy = 0
+      let cz = 0
+      for (const sample of strip) {
+        cx += sample.point[0]
+        cy += sample.point[1]
+        cz += sample.point[2]
+      }
+      cx /= n
+      cy /= n
+      cz /= n
+      let halfExtent = 0
+      for (const sample of strip) {
+        halfExtent = Math.max(
+          halfExtent,
+          Math.hypot(sample.point[0] - cx, sample.point[1] - cy, sample.point[2] - cz),
+        )
+      }
+      sabreRunCentres.push([cx, cy, cz])
+      sabreRunRadii.push(halfExtent + (strip[0]?.depth ?? SABRE_PROJECTION_MM))
+      const positions: number[] = []
+      const cutLine: number[] = []
+      const quad = (a: Vec3, b: Vec3, c: Vec3, d: Vec3) => {
+        positions.push(...a, ...b, ...c, ...a, ...c, ...d)
+      }
+      const oPlus: Vec3[] = []
+      const oMinus: Vec3[] = []
+      const iPlus: Vec3[] = []
+      const iMinus: Vec3[] = []
+      for (let j = 0; j < n; j++) {
+        const sample = strip[j]!
+        const prev = strip[Math.max(0, j - 1)]!
+        const next = strip[Math.min(n - 1, j + 1)]!
+        const tx = next.point[0] - prev.point[0]
+        const ty = next.point[1] - prev.point[1]
+        const tz = next.point[2] - prev.point[2]
+        const tl = Math.hypot(tx, ty, tz) || 1
+        const nx = sample.normal[0]
+        const ny = sample.normal[1]
+        const nz = sample.normal[2]
+        let bx = (ty / tl) * nz - (tz / tl) * ny
+        let by = (tz / tl) * nx - (tx / tl) * nz
+        let bz = (tx / tl) * ny - (ty / tl) * nx
+        const bl = Math.hypot(bx, by, bz) || 1
+        bx = (bx / bl) * half
+        by = (by / bl) * half
+        bz = (bz / bl) * half
+        const p = sample.point
+        const q = inner(sample)
+        oPlus.push([p[0] + bx, p[1] + by, p[2] + bz])
+        oMinus.push([p[0] - bx, p[1] - by, p[2] - bz])
+        iPlus.push([q[0] + bx, q[1] + by, q[2] + bz])
+        iMinus.push([q[0] - bx, q[1] - by, q[2] - bz])
+      }
+      for (let j = 0; j < n - 1; j++) {
+        cutLine.push(...strip[j]!.point, ...strip[j + 1]!.point)
+        quad(oPlus[j]!, oPlus[j + 1]!, iPlus[j + 1]!, iPlus[j]!)
+        quad(oMinus[j]!, iMinus[j]!, iMinus[j + 1]!, oMinus[j + 1]!)
+        quad(oPlus[j]!, oMinus[j]!, oMinus[j + 1]!, oPlus[j + 1]!)
+        quad(iPlus[j]!, iPlus[j + 1]!, iMinus[j + 1]!, iMinus[j]!)
+      }
+      quad(oPlus[0]!, iPlus[0]!, iMinus[0]!, oMinus[0]!)
+      quad(oPlus[n - 1]!, oMinus[n - 1]!, iMinus[n - 1]!, iPlus[n - 1]!)
+
+      if (positions.length > 0) {
+        const geometry = new BufferGeometry()
+        geometry.setAttribute('position', new Float32BufferAttribute(positions, 3))
+        geometry.computeVertexNormals()
+        const material = new MeshBasicMaterial({
+          color: 0xff2d2d,
+          side: DoubleSide,
+          transparent: true,
+          opacity: 0.35,
+          depthTest: true,
+          depthWrite: true,
+        })
+        const mesh = new Mesh(geometry, material)
+        mesh.renderOrder = 20
+        mesh.layers.set(1)
+        primary.group.add(mesh)
+        sabreRunObjects.push(mesh)
+        const mid = strip[Math.floor(n / 2)]!
+        sabreRunDirections.push([mid.normal[0], mid.normal[1], mid.normal[2]])
+      }
+      if (cutLine.length > 0) {
+        const cutGeometry = new LineSegmentsGeometry()
+        cutGeometry.setPositions(cutLine)
+        const cutMaterial = new LineMaterial({
+          color: 0xff2d2d,
+          linewidth: 2.5,
+          depthTest: false,
+          depthWrite: false,
+          transparent: true,
+          opacity: 0.95,
+        })
+        cutMaterial.resolution.copy(ncResolution)
+        ncMaterials.push(cutMaterial)
+        const line = new LineSegments2(cutGeometry, cutMaterial)
+        line.renderOrder = 21
+        primary.group.add(line)
+        sabreRunLines.push(line)
+      }
+    }
+  }
+
   // Frame the model and overlays in view.
   const fit = new Box3().expandByObject(primary.group)
   if (compareGroup) fit.expandByObject(compareGroup)
@@ -1749,6 +1908,26 @@ function mountScene(
     }
   }
 
+  /** Same visibility/hover treatment for the NC CUT_DEPTH_NC runs (area slab + cut line). */
+  const refreshSabreAppearance = (): void => {
+    for (let i = 0; i < sabreRunObjects.length; i++) {
+      const mesh = sabreRunObjects[i]
+      if (!mesh) continue
+      const highlighted = sabreHover != null && i === sabreHover
+      const visible = sabreVisible && (highlighted || sabreRunShown[i] === true)
+      mesh.visible = visible
+      const material = mesh.material as MeshBasicMaterial
+      material.opacity = highlighted ? 0.6 : sabreHover != null ? 0.12 : 0.35
+      const line = sabreRunLines[i]
+      if (line) {
+        line.visible = visible
+        const lineMaterial = line.material as LineMaterial
+        lineMaterial.linewidth = highlighted ? 6 : 2.5
+        lineMaterial.opacity = highlighted ? 1 : sabreHover != null ? 0.3 : 0.95
+      }
+    }
+  }
+
   applyBevelStyle()
 
   return {
@@ -1768,6 +1947,7 @@ function mountScene(
     setSabreVisible(visible: boolean) {
       sabreVisible = visible
       refreshSpanAppearance()
+      refreshSabreAppearance()
     },
     setBevelStyle(style: BevelStyle) {
       bevelStyleState = style
@@ -1779,14 +1959,18 @@ function mountScene(
     setVisibleSpans(indices: number[] | null) {
       const set = indices == null ? null : new Set(indices)
       for (let i = 0; i < sabreSpanObjects.length; i++) spanShown[i] = set == null || set.has(i)
+      for (let i = 0; i < sabreRunShown.length; i++) sabreRunShown[i] = set == null || set.has(i)
       refreshSpanAppearance()
+      refreshSabreAppearance()
     },
     /** Hover highlight: glow the marker at `index` (force-shown), dim the rest (null = clear). */
     highlight(index: number | null) {
       hoverSpan = index
+      sabreHover = index
       refreshSpanAppearance()
+      refreshSabreAppearance()
     },
-    focus(code: string | null, index?: number) {
+    focus(code: string | null, index?: number, source?: 'nc') {
       if (!bus) return
       // An NC-specific marker isn't drawn on this pane; skip the focus so it stays driven by the
       // manufactured pane (which has the marker) instead of framing every other marker here.
@@ -1794,7 +1978,41 @@ function mountScene(
       const box = new Box3()
       const cut = code?.startsWith('CUT') ?? false
       let direction: Vec3 | undefined
-      if (cut) {
+      let centre: Vector3 | null = null
+      let radius: number | null = null
+      if (source === 'nc') {
+        // Only the pane that carries the NC projection draws these; the STEP/overlay panes skip so
+        // they don't frame the whole model instead.
+        if (sabreRunObjects.length === 0) return
+        if (index != null && sabreRunObjects[index]) {
+          // Centre on the cut line, then include the projection depth in the radius — centring on
+          // the slab alone puts the camera inside the material.
+          primary.group.updateMatrixWorld(true)
+          const local = sabreRunCentres[index]
+          if (local) {
+            centre = new Vector3(...local).applyMatrix4(primary.group.matrixWorld)
+            radius = Math.max(sabreRunRadii[index] ?? 10, 10) * primary.group.scale.x * 1.6
+          }
+          const normal = sabreRunDirections[index]
+          if (normal) {
+            // A 3/4 (isometric-ish) view of the cut: the face normal plus the member axis and the
+            // in-face tangent, so the projection depth reads instead of a flat head-on view.
+            const worldNormal = new Vector3(...normal).applyQuaternion(primary.group.quaternion)
+            const axis = new Vector3()
+              .setComponent(longAxis, 1)
+              .applyQuaternion(primary.group.quaternion)
+            const tangent = new Vector3().crossVectors(worldNormal, axis).normalize()
+            const iso = worldNormal
+              .clone()
+              .addScaledVector(axis, 0.8)
+              .addScaledVector(tangent, 0.6)
+              .normalize()
+            direction = [iso.x, iso.y, iso.z]
+          }
+        } else {
+          for (const object of sabreRunObjects) box.expandByObject(object)
+        }
+      } else if (cut) {
         // A specific sub-cut (clicked from the issues list) rotates onto and frames just that one;
         // otherwise frame *all* checked sub-cuts, then every marker, then the toolpath.
         if (index != null && sabreSpanObjects[index]) {
@@ -1808,13 +2026,17 @@ function mountScene(
         if (box.isEmpty()) for (const lines of sabreObjects) box.expandByObject(lines)
         if (box.isEmpty()) for (const line of ncObjects) box.expandByObject(line)
       }
-      if (box.isEmpty()) box.expandByObject(primary.group)
-      if (box.isEmpty()) return
-      const centre = box.getCenter(new Vector3())
+      if (!centre && box.isEmpty()) box.expandByObject(primary.group)
+      if (!centre && box.isEmpty()) return
+      const point = centre ?? box.getCenter(new Vector3())
       const size = box.getSize(new Vector3())
       // A little margin so the framed cut isn't jammed against the viewport edge.
-      const radius = Math.max(Math.hypot(size.x, size.y, size.z) / 2, 1) * 1.4
-      requestFocus(bus, { point: [centre.x, centre.y, centre.z], radius, direction })
+      const finalRadius = radius ?? Math.max(Math.hypot(size.x, size.y, size.z) / 2, 1) * 1.4
+      requestFocus(bus, {
+        point: [point.x, point.y, point.z],
+        radius: finalRadius,
+        direction,
+      })
     },
     dispose() {
       cancelAnimationFrame(raf)
@@ -1866,6 +2088,16 @@ function mountScene(
       for (const area of ncAreaObjects) {
         area.geometry.dispose()
         ;(area.material as MeshBasicMaterial).dispose()
+      }
+      for (const mesh of sabreRunObjects) {
+        primary.group.remove(mesh)
+        mesh.geometry.dispose()
+        ;(mesh.material as Material).dispose()
+      }
+      for (const line of sabreRunLines) {
+        primary.group.remove(line)
+        line.geometry.dispose()
+        ;(line.material as Material).dispose()
       }
       for (const lines of sabreObjects) {
         scene.remove(lines)
@@ -1919,6 +2151,8 @@ export interface PartViewerProps {
   smoothLines?: boolean
   /** cut-reach failures (a bevel whose bore is past the pierce cap) — drawn at their NC cut */
   sabreFailures?: CutMarker[] | null
+  /** Failing cut-line samples from the light-sabre probe, in the primary model's frame. */
+  sabrePoints?: { point: Vec3; normal: Vec3; entry: Vec3; exit: Vec3; depth?: number }[] | null
   /** NC toolpath geometry to project onto this (manufactured) model */
   nc?: NcGeometry | null
   /** Layout marks (`SI` etch / `PU`/`KO` scribe) to project even when `nc` is not passed. */
@@ -1949,7 +2183,7 @@ export interface PartViewerProps {
   faceFrame?: NcFaceFrame | null
   /** Clicked-finding focus: bump `token` to pull every viewport to `code`'s geometry (optionally a
    * specific failing sub-cut, by `index`). */
-  focus?: { code: string; token: number; index?: number } | null
+  focus?: { code: string; token: number; index?: number; source?: 'nc' } | null
   /** Which failing sub-cut markers to show, by index (null/undefined = all; [] = none). */
   visibleSpans?: number[] | null
   /** Hovered finding's sub-cut index: glow that marker and dim the others (null = no highlight). */
@@ -1993,6 +2227,7 @@ export default function PartViewer({
   highlightStray = false,
   smoothLines: smoothModelLines = false,
   sabreFailures = null,
+  sabrePoints = null,
   nc = null,
   ncMarks = null,
   ncSection = null,
@@ -2107,6 +2342,7 @@ export default function PartViewer({
           compareBytes,
           true,
           sabreFailures,
+          sabrePoints,
           nc,
           ncMarks,
           ncSection,
@@ -2159,6 +2395,7 @@ export default function PartViewer({
     highlightStray,
     smoothModelLines,
     sabreFailures,
+    sabrePoints,
     nc,
     ncMarks,
     ncSection,
@@ -2213,10 +2450,11 @@ export default function PartViewer({
   const focusToken = focus?.token
   const focusCode = focus?.code ?? null
   const focusIndex = focus?.index
+  const focusSource = focus?.source
   useEffect(() => {
     if (focusToken === undefined) return
-    handleRef.current?.focus(focusCode, focusIndex)
-  }, [focusToken, focusCode, focusIndex])
+    handleRef.current?.focus(focusCode, focusIndex, focusSource)
+  }, [focusToken, focusCode, focusIndex, focusSource])
   const hasOverlay = Boolean((stock || beam) && status === 'ready')
   const hasCompare = Boolean(compareBytes && status === 'ready')
   const hasSabre = Boolean(sabreFailures && sabreFailures.length > 0 && status === 'ready')

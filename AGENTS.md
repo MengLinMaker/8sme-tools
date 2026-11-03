@@ -58,6 +58,10 @@ maps DSTV faces to machine roles + enforces the cut-side rules.
 - **Bottom cuts** eject a slug that can hit the head: only cut the bottom when the removed piece
   is **< 10 g** (`BOTTOM_CUT_MAX_GRAMS`). `holeRemovedMassGrams(d, t)` / `bottomCutAllowed(g)`
   implement it.
+- **CUT_DEPTH detection decision log: `docs/cut-depth-architecture.md`.** Read it before adding
+  a probe — it lists the rejected sabre/face approaches (stock sabre, `allFaces`, red face
+  patches, section `cutReach`) and why. Sample the **NC projection cut lines**, not faces.
+  **Never nudge/move a cut line** to make a probe hit — the line is where the laser goes.
 
 ## The two halves are INDEPENDENT
 

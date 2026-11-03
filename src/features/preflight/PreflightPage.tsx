@@ -89,6 +89,7 @@ import {
   type StepMeasure,
   stepOnlySizeCheck,
 } from '@/lib/step/measure'
+import type { SabreFailure } from '@/lib/step/sabre'
 import {
   getStepWorkerPool,
   PRIORITY_FOREGROUND,
@@ -100,6 +101,7 @@ import {
   diffForViewer,
   meshForViewer,
   reconstructForViewer,
+  sabreForViewer,
 } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { buildNcepFromNc, partFromNc } from '@/lib/wisecam/fromNc'
@@ -384,6 +386,7 @@ export function PreflightPage() {
   const [stepLengths, setStepLengths] = useState<Map<string, number>>(new Map())
   /** Per-part laser-cut manufacturability issues (sudden thickness steps). */
   const [cutIssues, setCutIssues] = useState<Map<string, Finding[]>>(new Map())
+  const [sabreChecks, setSabreChecks] = useState<Map<string, SabreFailure[]>>(new Map())
   /** Per-part cut-reach failures (a bevel whose bore exceeds the head's pierce cap). */
   const [reachChecks, setReachChecks] = useState<Map<string, CutReachFailure[]>>(new Map())
   /** Per-part bevel-change lines (one cut line whose bevel is not a single angle). */
@@ -648,15 +651,45 @@ export function PreflightPage() {
 
   // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
   const [manufactured, setManufactured] = useState<Uint8Array | null>(null)
+  const [manufacturedSabre, setManufacturedSabre] = useState<
+    import('@/lib/step/sabre').SabreFailure[] | null
+  >(null)
   const [mfgStatus, setMfgStatus] = useState<'idle' | 'pending' | 'failed'>('idle')
+  // Stable identity: a fresh `.map` each render re-runs the viewer's scene effect (rebuilding the
+  // whole three.js scene) and makes orbiting lag.
+  const manufacturedSabrePoints = useMemo(
+    () =>
+      manufacturedSabre?.map((failure) => ({
+        point: failure.point,
+        normal: failure.normal,
+        entry: failure.entry,
+        exit: failure.exit,
+        depth: failure.depth,
+      })) ?? null,
+    [manufacturedSabre],
+  )
+  const viewingMark = viewing?.mark
   useEffect(() => {
     setManufactured(null)
+    setManufacturedSabre(null)
     if (!ncBytes) {
       setMfgStatus('idle')
       return
     }
     setMfgStatus('pending')
     let cancelled = false
+    void sabreForViewer(new TextDecoder().decode(ncBytes)).then(
+      (failures) => {
+        if (cancelled) return
+        setManufacturedSabre(failures)
+        // The viewed part's CUT_DEPTH finding is surfaced even when it has no STEP (the analysis
+        // path needs a STEP measure, so no-STEP parts would otherwise never reach `sabreChecks`).
+        if (viewingMark) {
+          setSabreChecks((prev) => new Map(prev).set(viewingMark, failures))
+        }
+      },
+      () => {},
+    )
     void reconstructForViewer(new TextDecoder().decode(ncBytes)).then(
       (step) => {
         if (cancelled) return
@@ -671,7 +704,7 @@ export function PreflightPage() {
     return () => {
       cancelled = true
     }
-  }, [ncBytes])
+  }, [ncBytes, viewingMark])
 
   // Kick off the overlay diff as soon as the manufactured model lands, so it is already computed
   // (in the OCC worker) by the time the overlay pane mounts — the viewer then reads it from cache
@@ -821,8 +854,8 @@ export function PreflightPage() {
   } | null>(null)
   /** Issue row currently hovered in the list, so its 3D marker can glow (null = none). */
   const [hoverIssueIndex, setHoverIssueIndex] = useState<number | null>(null)
-  /** Issue indices the user has shown — their sub-cuts render in the 3D. Default: none. */
-  const [shownIssues, setShownIssues] = useState<Set<number>>(new Set())
+  /** Issue indices the user has hidden — everything else renders in the 3D. Default: all shown. */
+  const [hiddenIssues, setHiddenIssues] = useState<Set<number>>(new Set())
   /** Live location (mm) of the orbit pivot along the viewed member, shown in the legend bar. */
   const [locationMm, setLocationMm] = useState<number | null>(null)
   /** Editable copy of the location readout: the user can type an mm to jump the view there. */
@@ -843,7 +876,7 @@ export function PreflightPage() {
     setOrbitBus(createOrbitBus())
     setFindingFocus(null)
     setHoverIssueIndex(null)
-    setShownIssues(new Set())
+    setHiddenIssues(new Set())
     setLocationMm(null)
     setLocationInput('')
     setLocationEditing(false)
@@ -856,7 +889,13 @@ export function PreflightPage() {
   const focusFinding = useCallback((finding: Finding) => {
     const raw = finding.params?.index
     const index = typeof raw === 'number' ? raw : undefined
-    setFindingFocus((prev) => ({ code: finding.code, token: (prev?.token ?? 0) + 1, index }))
+    const source = finding.params?.nc === 1 ? 'nc' : undefined
+    setFindingFocus((prev) => ({
+      code: finding.code,
+      token: (prev?.token ?? 0) + 1,
+      index,
+      source,
+    }))
   }, [])
   // Format the live pivot location for display (rounded to whole mm, grouped per locale).
   const formatLocation = useCallback(
@@ -905,6 +944,8 @@ export function PreflightPage() {
     setSectionGuesses(new Map())
     setStepLengths(new Map())
     setCutIssues(new Map())
+    // `sabreChecks` is not cleared here: the viewer fills the viewed part (even with no STEP), and
+    // marks not in the new result are simply ignored by `allFindings`.
     setReachChecks(new Map())
     setBevelChanges(new Map())
     setUnclosedCuts(new Map())
@@ -1171,6 +1212,9 @@ export function PreflightPage() {
               measureOnly: true,
             })
             if (cancelled) return
+            if (made.sabre.length > 0) {
+              setSabreChecks((prev) => new Map(prev).set(part.mark, made.sabre))
+            }
             if (made.measure) {
               publishRebuild(
                 part.mark,
@@ -1263,6 +1307,9 @@ export function PreflightPage() {
               priority,
             })
             if (!made.measure) return
+            if (made.sabre.length > 0) {
+              setSabreChecks((prev) => new Map(prev).set(mark, made.sabre))
+            }
             const comparison = compareModels(measure, made.measure)
             setManufactureChecks((prev) => new Map(prev).set(mark, comparison))
             const extra = made.measure.bodies - measure.bodies
@@ -1361,6 +1408,48 @@ export function PreflightPage() {
       }
       const cut = cutIssues.get(part.mark)
       if (cut) extra.push(...cut)
+      const sabre = sabreChecks.get(part.mark)
+      if (sabre && sabre.length > 0) {
+        // One finding per failing run (a separate cut), so each can be navigated to in 3D. A cut
+        // that stays inside the material past T + r has removed metal that cannot be put back —
+        // scrap, so it is a hard error, not a warning.
+        const runs: SabreFailure[][] = []
+        let run: SabreFailure[] = []
+        for (const failure of sabre) {
+          const prev = run[run.length - 1]
+          if (
+            prev &&
+            Math.hypot(
+              failure.point[0] - prev.point[0],
+              failure.point[1] - prev.point[1],
+              failure.point[2] - prev.point[2],
+            ) > 2.5
+          ) {
+            runs.push(run)
+            run = []
+          }
+          run.push(failure)
+        }
+        if (run.length > 0) runs.push(run)
+        runs.forEach((cut, index) => {
+          const x = Math.round(cut.reduce((sum, f) => sum + f.point[0], 0) / cut.length)
+          const depth = Math.max(...cut.map((f) => f.depth ?? 0))
+          extra.push({
+            severity: 'error',
+            code: 'CUT_DEPTH',
+            mark: part.mark,
+            message: `${cut.length}mm cut of ${Math.round(depth)}mm depth removes additional material`,
+            params: {
+              index,
+              samples: cut.length,
+              x,
+              nc: 1,
+              span: String(cut.length),
+              depth: String(Math.round(depth)),
+            },
+          })
+        })
+      }
       const reach = reachChecks.get(part.mark)
       if (reach) {
         // One finding per failing sub-cut, so each can be zoomed to individually.
@@ -1451,6 +1540,7 @@ export function PreflightPage() {
     manufactureChecks,
     geometryChecks,
     cutIssues,
+    sabreChecks,
     reachChecks,
     bevelChanges,
     unclosedCuts,
@@ -1670,10 +1760,10 @@ export function PreflightPage() {
     () =>
       viewerFindings
         .map((finding, index) => ({ finding, index }))
-        .filter(({ index }) => shownIssues.has(index))
+        .filter(({ index }) => !hiddenIssues.has(index))
         .map(({ finding }) => markerIndexOf(finding))
         .filter((value): value is number => value != null),
-    [viewerFindings, shownIssues],
+    [viewerFindings, hiddenIssues],
   )
   /** Sub-cut index to glow in the 3D while its issue row is hovered (only cut checks map to one). */
   const highlightSpan = useMemo(() => {
@@ -1682,7 +1772,7 @@ export function PreflightPage() {
     return typeof index === 'number' ? index : null
   }, [viewerFindings, hoverIssueIndex])
   const toggleIssue = useCallback((index: number) => {
-    setShownIssues((prev) => {
+    setHiddenIssues((prev) => {
       const next = new Set(prev)
       if (next.has(index)) next.delete(index)
       else next.add(index)
@@ -1690,15 +1780,15 @@ export function PreflightPage() {
     })
   }, [])
   const toggleAllIssues = useCallback(() => {
-    setShownIssues((prev) =>
-      prev.size > 0
-        ? new Set()
-        : new Set(
+    setHiddenIssues((prev) =>
+      prev.size === 0
+        ? new Set(
             viewerFindings
               .map((finding, index) => ({ finding, index }))
               .filter(({ finding }) => isVisualisable(finding))
               .map(({ index }) => index),
-          ),
+          )
+        : new Set(),
     )
   }, [viewerFindings])
   /** Row click: toggle the issue's marker, and when turning it on, pan/zoom/rotate onto it. */
@@ -1707,11 +1797,11 @@ export function PreflightPage() {
       const finding = viewerFindings[index]
       // Only findings with a 3D marker are interactive; the rest have no eye.
       if (!finding || !isVisualisable(finding)) return
-      const turningOn = !shownIssues.has(index)
+      const turningOn = hiddenIssues.has(index)
       toggleIssue(index)
       if (turningOn && findingLocationOf(finding) != null) focusFinding(finding)
     },
-    [viewerFindings, shownIssues, toggleIssue, focusFinding],
+    [viewerFindings, hiddenIssues, toggleIssue, focusFinding],
   )
 
   /**
@@ -3123,6 +3213,7 @@ export function PreflightPage() {
                             // The rebuild is oriented to the STEP frame, so the guilty-cut
                             // marks land on what the laser will actually cut — not the ideal.
                             sabreFailures={viewerSabreFailures}
+                            sabrePoints={manufacturedSabrePoints}
                             nc={viewingNcGeom}
                             ncSection={viewingNcSection}
                             faceFrame={viewingNcFrame}
@@ -3261,9 +3352,9 @@ export function PreflightPage() {
                       findings={viewerFindings}
                       step={viewing.step}
                       onHover={setHoverIssueIndex}
-                      isChecked={(index) => shownIssues.has(index)}
+                      isChecked={(index) => !hiddenIssues.has(index)}
                       onToggleCheck={activateIssue}
-                      allShown={shownIssues.size > 0}
+                      allShown={hiddenIssues.size === 0}
                       onToggleAll={toggleAllIssues}
                       fix={{
                         override: overrideFor(viewing)?.kind,
@@ -3495,7 +3586,10 @@ function ViewerWarnings({
       return a.finding.code.localeCompare(b.finding.code)
     })
   const findingText = (finding: Finding) =>
-    t(`findings.${finding.code}`, { ...finding.params, defaultValue: finding.message })
+    t(finding.params?.nc === 1 ? 'findings.CUT_DEPTH_NC' : `findings.${finding.code}`, {
+      ...finding.params,
+      defaultValue: finding.message,
+    })
   /** A sortable column header, with an up/down arrow when it's the active sort. */
   const SortHead = ({ k, label }: { k: 'severity' | 'code' | 'location'; label: string }) => (
     <button
@@ -3519,16 +3613,6 @@ function ViewerWarnings({
     <div className="flex h-full min-h-0 flex-col gap-1.5 bg-card px-4 py-2">
       {findings.length > 0 && (
         <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
-          {onToggleAll && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 shrink-0 px-2 text-xs normal-case tracking-normal"
-              onClick={onToggleAll}
-            >
-              {allShown ? t('preflight.warnings.hideAll') : t('preflight.warnings.showAll')}
-            </Button>
-          )}
           <span className="font-semibold">
             {t('preflight.warnings.issues', { count: findings.length })}
           </span>
@@ -3547,7 +3631,24 @@ function ViewerWarnings({
         <Table>
           <TableHeader className="sticky top-0 z-10 bg-card">
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-8" />
+              <TableHead className="h-auto w-8 px-3 py-1">
+                {onToggleAll ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-5 p-0.5 text-muted-foreground hover:text-foreground"
+                    onClick={onToggleAll}
+                    title={
+                      allShown ? t('preflight.warnings.hideAll') : t('preflight.warnings.showAll')
+                    }
+                    aria-label={
+                      allShown ? t('preflight.warnings.hideAll') : t('preflight.warnings.showAll')
+                    }
+                  >
+                    {allShown ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
+                  </Button>
+                ) : null}
+              </TableHead>
               <TableHead className="w-24">
                 <SortHead k="severity" label={t('preflight.warnings.colSeverity')} />
               </TableHead>

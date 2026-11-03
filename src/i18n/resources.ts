@@ -454,6 +454,7 @@ export const en = {
       'Not manufacturable: a sudden {{depth}} mm thickness change on face(s) {{faces}} is past the ~30 mm the head can reach — it would damage the machine. Cut at an angle on the radius (a manual judgement), it cannot be swept in one pass',
     CUT_DEPTH:
       "Cut can't pass through: {{span}} mm of the cut on face {{face}} needs a {{path}} mm bore ({{bevel}}° bevel), past the head's ~25 mm pierce — not manufacturable",
+    CUT_DEPTH_NC: '{{span}}mm cut of {{depth}}mm depth removes additional material',
     CUT_CORNER:
       "Cut lands on a corner: with the head's ±{{tol}} mm placement error, {{span}} mm of the cut on face {{face}} can fall on the section's corner radius — the beam meets the curve at a bevel with no flat escape for the slag — not manufacturable",
     CUT_BEVEL_CHANGE:
@@ -896,6 +897,7 @@ export const zh = {
       '不可制造：{{faces}} 面上 {{depth}} mm 的厚度突变超出了机头约 30 mm 的加工范围——会损坏机器。需在圆弧处斜切（人工判断），无法一次扫切成型',
     CUT_DEPTH:
       '无法切透：{{face}} 面上 {{span}} mm 的切缝需要 {{path}} mm 的切割深度（{{bevel}}° 坡口），超过机头约 25 mm 的穿透能力——无法制造',
+    CUT_DEPTH_NC: '{{span}}mm 长、{{depth}}mm 深的切割会多切除材料',
     CUT_CORNER:
       '切缝落在圆角上：受机头 ±{{tol}} mm 定位误差影响，{{face}} 面上 {{span}} mm 的切缝可能落到型材圆角上——激光束斜切曲面且无平面排渣通道——无法制造',
     CUT_BEVEL_CHANGE:

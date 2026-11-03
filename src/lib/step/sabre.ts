@@ -39,6 +39,16 @@ export interface SabreFailure {
   entry: [number, number, number]
   /** where the beam exits the far wall — the other end of the material it bores through */
   exit: [number, number, number]
+  /** how far the cut actually reaches (face thickness + corner radius), when known */
+  depth?: number
+  /** extra material the beam still has ahead past the intended cut depth (mm; Infinity = no exit) */
+  overcut?: number
+  /** intended subcut length (the web thickness, Tw), when known */
+  tw?: number
+  /** corner/root radius (r): the material cut past the face thickness, when known */
+  r?: number
+  /** measured material span from the cut surface to its first exit (mm) */
+  material?: number
 }
 
 /**
@@ -263,6 +273,79 @@ function longAxis(vertices: number[]): Vector3 {
   return new Vector3().setComponent(longest, 1)
 }
 
+export interface SabreSample {
+  point: [number, number, number]
+  normal: [number, number, number]
+  /** actual cut depth (face thickness + corner radius), when known */
+  depth?: number
+  /** intended subcut length (the web thickness, Tw), when known */
+  tw?: number
+  /** corner/root radius (r): the material cut past the face thickness, when known */
+  r?: number
+}
+
+/**
+ * Runs the light-sabre test at explicit sample points instead of every triangulated face. Used for
+ * the NC projection cut lines: a sparse set of points on the actual cut path is both faster and
+ * more meaningful than probing the whole stock skin.
+ */
+export function sabreSamples(
+  shape: MeshableShape,
+  samples: SabreSample[],
+  length = SABRE_LENGTH,
+): SabreResult {
+  if (samples.length === 0) return { ok: true, checked: 0, failures: [] }
+  const mesh = shape.mesh({ tolerance: 0.1, angularTolerance: 0.3 })
+
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new BufferAttribute(Float32Array.from(mesh.vertices), 3))
+  geometry.setIndex(new BufferAttribute(Uint32Array.from(mesh.triangles), 1))
+  const target = new Mesh(geometry, new MeshBasicMaterial({ side: DoubleSide }))
+
+  const probe = new Raycaster()
+  const origin = new Vector3()
+  const flipDir = new Vector3(0.123, 0.456, 0.789).normalize()
+  const failures: SabreFailure[] = []
+
+  for (const sample of samples) {
+    const point = new Vector3(...sample.point)
+    const normal = new Vector3(...sample.normal).normalize()
+    // The projected cut line may sit on either side of the face; flip the normal if the probe
+    // point just outside it is inside the solid.
+    origin.copy(point).addScaledVector(normal, 0.3)
+    probe.set(origin, flipDir)
+    probe.near = 0
+    probe.far = Number.POSITIVE_INFINITY
+    if (probe.intersectObject(target, false).length % 2 === 1) normal.negate()
+
+    // Gate: follow the beam inward for the intended cut depth (`T + r`) plus 1 mm, then ask
+    // whether that endpoint is *inside* the solid. If it is, the beam has not exited at the cut
+    // depth — it stays inside the material (the failure). The entry distance is irrelevant: the
+    // beam may cross air (e.g. a cut line on a flange end edge) before entering the solid.
+    const cutDepth = sample.depth ?? length
+    const endpoint = point.clone().addScaledVector(normal, -(cutDepth + 1))
+    probe.set(endpoint, flipDir)
+    probe.near = 0
+    probe.far = Number.POSITIVE_INFINITY
+    const endsInside = probe.intersectObject(target, false).length % 2 === 1
+    if (endsInside) {
+      failures.push({
+        point: sample.point,
+        normal: [normal.x, normal.y, normal.z],
+        thickness: cutDepth,
+        area: 0,
+        tri: [sample.point, sample.point, sample.point],
+        entry: sample.point,
+        exit: [endpoint.x, endpoint.y, endpoint.z],
+        depth: sample.depth,
+      })
+    }
+  }
+
+  geometry.dispose()
+  return { ok: failures.length === 0, checked: samples.length, failures }
+}
+
 export async function sabreTest(bytes: Uint8Array, length = SABRE_LENGTH): Promise<SabreResult> {
   await ensureOc()
   const { importSTEP } = await import('replicad')
@@ -280,7 +363,15 @@ export async function sabreTest(bytes: Uint8Array, length = SABRE_LENGTH): Promi
  * Runs the light-sabre test on an already-imported OCC shape. Split out from {@link sabreTest} so
  * a worker can import a STEP once and reuse the same shape for several checks (measure + sabre).
  */
-export function sabreShape(shape: MeshableShape, length = SABRE_LENGTH): SabreResult {
+export function sabreShape(
+  shape: MeshableShape,
+  length = SABRE_LENGTH,
+  options: {
+    allFaces?: boolean
+    /** Extra face filter (e.g. only faces created by a cut, not the stock skin). */
+    isCutFace?: (point: [number, number, number]) => boolean
+  } = {},
+): SabreResult {
   const mesh = shape.mesh({ tolerance: 0.1, angularTolerance: 0.3 })
 
   const geometry = new BufferGeometry()
@@ -295,8 +386,11 @@ export function sabreShape(shape: MeshableShape, length = SABRE_LENGTH): SabreRe
   // and side walls (|n·axis|≈0) are cut radially through their thin wall; neither is a risk.
   const sampled = tris
     .filter((t) => {
+      if (t.area < MIN_TRIANGLE_AREA) return false
+      if (options.isCutFace) return options.isCutFace([t.centroid.x, t.centroid.y, t.centroid.z])
+      if (options.allFaces) return true
       const axial = Math.abs(t.normal.dot(axis))
-      return t.area >= MIN_TRIANGLE_AREA && axial > 0.05 && axial < 0.98
+      return axial > 0.05 && axial < 0.98
     })
     .sort((a, b) => b.area - a.area)
     .slice(0, MAX_SAMPLES)

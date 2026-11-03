@@ -61,6 +61,11 @@ export interface NcProjection {
 export interface NcLineSets {
   /** Plain cut lines and hole rings; one entry per distinct cut thickness (mm). */
   cuts: { thickness: number; points: number[] }[]
+  /**
+   * Points sampled along the projected cut lines (1 mm apart) with the face's outward normal, for
+   * the light-sabre CUT_DEPTH probe. Sparse compared with the solid mesh, and only on real cuts.
+   */
+  cutSamples: { point: Vec3; normal: Vec3; face: NcFace }[]
   /** Stemmed welding-bevel arrows (flat XYZ pair list), coloured like their cut thickness. */
   bevelArrows: { thickness: number; points: number[] }[]
   /**
@@ -320,6 +325,8 @@ export function faceThickness(
 export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets {
   const { frame, section, toScene, normal } = projection
   const byFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
+  const cutSamples: { point: Vec3; normal: Vec3; face: NcFace }[] = []
+  const CUT_SAMPLE_STEP_MM = 1
   const arrowsByFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
   const areasByFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
   /** Corner coordinates of the DSTV notch labels on a face — real cuts even where material recedes. */
@@ -329,6 +336,32 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
   const place = (face: NcFace, x: number, y: number) => {
     const point = placeNcFace(frame, face, x, y, section)
     return { point, world: toScene(point.along, point.cross, face) }
+  }
+  /** Samples a cut segment (following its arc) every 1 mm for the CUT_DEPTH probe. */
+  const sampleCut = (
+    face: NcFace,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    radius: number,
+    outward: Vec3,
+  ): void => {
+    const samples = arcSamples([x0, y0], [x1, y1], radius)
+    for (let j = 0; j < samples.length - 1; j++) {
+      const p0 = samples[j] as [number, number]
+      const p1 = samples[j + 1] as [number, number]
+      const length = Math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+      const steps = Math.max(1, Math.ceil(length / CUT_SAMPLE_STEP_MM))
+      for (let k = 0; k <= steps; k++) {
+        const t = k / steps
+        cutSamples.push({
+          point: place(face, p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t).world,
+          normal: outward,
+          face,
+        })
+      }
+    }
   }
   /** Push a face segment, following its DSTV arc radius so the drawn line matches the solid. */
   const pushCurve = (
@@ -395,6 +428,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       ) {
         continue
       }
+      sampleCut(contour.face, x0, y0, x1, y1, contour.radii?.[i] ?? 0, spur)
       const d0 = bevelDistance(contour.bevels[i])
       const d1 = bevelDistance(contour.bevels[i + 1])
       // The cut line is grouped by its face's thickness; the bevel just adds its indication.
@@ -551,7 +585,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     thickness,
     triangles: points,
   }))
-  return { cuts, bevelArrows, bevelAreas, marks }
+  return { cuts, cutSamples, bevelArrows, bevelAreas, marks }
 }
 
 /** Distinct cut thicknesses (mm) present in an NC, sorted ascending — for the viewer legend. */

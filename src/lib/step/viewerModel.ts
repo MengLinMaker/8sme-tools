@@ -1,5 +1,6 @@
 import type { MeshedStep } from './mesh'
 import type { DiffPayload } from './occDiff'
+import type { SabreFailure } from './sabre'
 import { relativeSeat } from './seat'
 import { getStepWorkerPool, PRIORITY_FOREGROUND } from './stepPool'
 
@@ -32,7 +33,12 @@ export function meshForViewer(
   return promise
 }
 
-const reconstructCache = new Map<string, Promise<Uint8Array | null>>()
+interface ViewerReconstruct {
+  bytes: Uint8Array | null
+  sabre: SabreFailure[]
+}
+
+const reconstructCache = new Map<string, Promise<ViewerReconstruct>>()
 /**
  * Cap on cached reconstructions: each holds a full STEP text (~0.2–2 MB), so
  * an unbounded map OOMs the tab on 350-part jobs. Evicted parts rebuild on
@@ -47,10 +53,10 @@ const RECONSTRUCT_CACHE_LIMIT = 32
  * `priority` defaults to foreground (the user is looking at it now); neighbours prefetch at a lower
  * one so they never delay the open part.
  */
-export function reconstructForViewer(
+function reconstructDetailed(
   ncText: string,
   options: { simplify?: boolean; priority?: number } = {},
-): Promise<Uint8Array | null> {
+): Promise<ViewerReconstruct> {
   const key = `${options.simplify ? 1 : 0}:${ncText}`
   const hit = reconstructCache.get(key)
   if (hit) {
@@ -64,7 +70,10 @@ export function reconstructForViewer(
       simplify: options.simplify,
       priority: options.priority ?? PRIORITY_FOREGROUND,
     })
-    .then((result) => (result.step ? new TextEncoder().encode(result.step) : null))
+    .then((result) => ({
+      bytes: result.step ? new TextEncoder().encode(result.step) : null,
+      sabre: result.sabre ?? [],
+    }))
     .catch((error) => {
       reconstructCache.delete(key)
       throw error
@@ -75,6 +84,21 @@ export function reconstructForViewer(
     reconstructCache.delete(oldest.value)
   }
   return promise
+}
+
+export function reconstructForViewer(
+  ncText: string,
+  options: { simplify?: boolean; priority?: number } = {},
+): Promise<Uint8Array | null> {
+  return reconstructDetailed(ncText, options).then((result) => result.bytes)
+}
+
+/** Light-sabre failures on the same manufactured rebuild `reconstructForViewer` returns. */
+export function sabreForViewer(
+  ncText: string,
+  options: { simplify?: boolean; priority?: number } = {},
+): Promise<SabreFailure[]> {
+  return reconstructDetailed(ncText, options).then((result) => result.sabre)
 }
 
 /** Drop reconstruction results for a superseded job (the mesh cache is keyed weakly, so it self-clears). */

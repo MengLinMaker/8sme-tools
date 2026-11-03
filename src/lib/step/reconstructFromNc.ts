@@ -2,6 +2,7 @@ import { contourHasBevel, contourStepDepth } from '@/lib/audit/manufacturability
 import { parseDstv } from '@/lib/parsers/dstv'
 import {
   faceHalf,
+  faceNormal,
   facePlaneHalf,
   faceSpanAxis,
   isSquareTube,
@@ -12,12 +13,14 @@ import {
   sectionSpanAt,
 } from '@/lib/parsers/ncFaces'
 import { type NcContour, type NcFace, parseNcGeometry, slotOffset } from '@/lib/parsers/ncGeometry'
+import { faceThickness, projectNc } from '@/lib/parsers/ncProject'
 import { selectWeldingPrep } from '@/lib/parsers/weldingPrep'
 import { profileFamily } from '@/lib/sections/canonical'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stripStraySolids } from './clean'
 import type { MeasurableShape } from './measure'
 import { ensureOc } from './occInit'
+import { type SabreFailure, sabreSamples } from './sabre'
 
 /**
  * EXPERIMENTAL / standalone: rebuild a prismatic part's solid from its DSTV `.nc1`.
@@ -335,7 +338,7 @@ export async function reconstructStepFromNc(
 export async function reconstructSolidFromNc(
   ncText: string,
   options: ReconstructOptions = {},
-): Promise<{ solid: SolidOps & MeasurableShape; step: string } | null> {
+): Promise<{ solid: SolidOps & MeasurableShape; step: string; sabre: SabreFailure[] } | null> {
   const header = parseDstv(ncText).header
   const geo = parseNcGeometry(ncText)
   const rawSection = partSectionForCode(header.profile, header.dimensions)
@@ -916,6 +919,58 @@ export async function reconstructSolidFromNc(
   // (centre-of-mass ranking), measure and export all see the manufactured body only.
   solid = (await stripStraySolids(solid as unknown as MeasurableShape)).solid as unknown as SolidOps
 
+  // Probe the manufactured solid along the **NC projection cut lines** — 1 mm samples on the
+  // actual cut path, fired along the surface normal. This is the sparse, fast path: no stock-skin
+  // or end-cap faces to produce false positives, and only the cuts are tested. The samples are in
+  // the authored stance, so they (and the failures) roll back with the solid below.
+  const projection = {
+    frame,
+    section: section.points,
+    toScene: (along: number, cross: [number, number], face: NcFace) => {
+      const n = faceNormal(frame, face, section.points)
+      const local: [number, number] = [cross[0], cross[1]]
+      local[n.axis] += n.sign * 0.4
+      return [along, local[0], local[1]] as [number, number, number]
+    },
+    normal: (face: NcFace): [number, number, number] => {
+      const n = faceNormal(frame, face, section.points)
+      return n.axis === 0 ? [0, n.sign, 0] : [0, 0, n.sign]
+    },
+  }
+  // The actual cut reaches the face thickness plus the corner (root) radius — both come from the
+  // stock section / NC header, so the projection stops at the real cut depth.
+  const rootRadius =
+    family === 'channel' || family === 'i' || family === 'tee' ? (header.dimensions[4] ?? 0) : 0
+  const cutSamples = projectNc(geo, projection)
+    .cutSamples.filter(
+      // Probe the flange cut lines only, and skip the part ends (traced by the perimeter, not bored
+      // along the member). The invalid cuts are on the flanges at the corner end, near the fillet.
+      (sample) =>
+        (sample.face === 'o' || sample.face === 'u') &&
+        sample.point[0] > 1 &&
+        sample.point[0] < maxX - 1,
+    )
+    .map((sample) => ({
+      ...sample,
+      depth: faceThickness(frame, section.points, sample.face) + rootRadius,
+    }))
+  let sabre = sabreSamples(
+    solid as unknown as Parameters<typeof sabreSamples>[0],
+    cutSamples,
+  ).failures
+  const roll = (p: [number, number, number]): [number, number, number] =>
+    family === 'channel' ? [p[0], p[2], -p[1]] : [p[0], -p[2], p[1]]
+  if (canonicalSectionFlip) {
+    sabre = sabre.map((f) => ({
+      ...f,
+      point: roll(f.point),
+      normal: roll(f.normal),
+      tri: [roll(f.tri[0]), roll(f.tri[1]), roll(f.tri[2])] as SabreFailure['tri'],
+      entry: roll(f.entry),
+      exit: roll(f.exit),
+    }))
+  }
+
   // Roll the internal (authored) stance build back to the canonical stance so the viewer, NC
   // projection and exported STEP are all canonical. 90° about the member axis (X): a channel's
   // canonical `n` is a 90° CW rotation of the authored pose, an I-section's canonical `H` 90° CCW.
@@ -928,7 +983,7 @@ export async function reconstructSolidFromNc(
 
   // Measure-only callers (analysis phase 4) compare the live solid and discard
   // the text — skip the STEP export entirely.
-  if (options.measureOnly) return { solid: solid as SolidOps & MeasurableShape, step: '' }
+  if (options.measureOnly) return { solid: solid as SolidOps & MeasurableShape, step: '', sabre }
   const blob = (solid as unknown as { blobSTEP: () => Blob }).blobSTEP()
-  return { solid: solid as SolidOps & MeasurableShape, step: await blob.text() }
+  return { solid: solid as SolidOps & MeasurableShape, step: await blob.text(), sabre }
 }
