@@ -361,7 +361,8 @@ export async function reconstructSolidFromNc(
         const chord = Math.hypot(b[0] - a[0], b[1] - a[1])
         if (chord > 0 && Math.abs(radius) > chord / 2) {
           const sagitta = Math.abs(radius) - Math.sqrt(radius * radius - (chord / 2) ** 2)
-          pen = pen.sagittaArcTo(b, radius >= 0 ? sagitta : -sagitta)
+          // Same DSTV radius-side convention as `arcSamples` in ncGeometry.ts.
+          pen = pen.sagittaArcTo(b, radius >= 0 ? -sagitta : sagitta)
           continue
         }
       }

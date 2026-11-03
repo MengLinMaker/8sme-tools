@@ -25,7 +25,14 @@ import {
   ncAuthoredAcrossSign,
   placeNcFace,
 } from './ncFaces'
-import { type NcFace, type NcGeometry, type NcHole, type NcMark, slotOffset } from './ncGeometry'
+import {
+  arcSamples,
+  type NcFace,
+  type NcGeometry,
+  type NcHole,
+  type NcMark,
+  slotOffset,
+} from './ncGeometry'
 import { selectWeldingPrep } from './weldingPrep'
 
 export type Vec3 = [number, number, number]
@@ -323,6 +330,23 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     const point = placeNcFace(frame, face, x, y, section)
     return { point, world: toScene(point.along, point.cross, face) }
   }
+  /** Push a face segment, following its DSTV arc radius so the drawn line matches the solid. */
+  const pushCurve = (
+    target: number[],
+    face: NcFace,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    radius: number,
+  ): void => {
+    const samples = arcSamples([x0, y0], [x1, y1], radius)
+    for (let j = 0; j < samples.length - 1; j++) {
+      const p0 = samples[j] as [number, number]
+      const p1 = samples[j + 1] as [number, number]
+      push(target, place(face, p0[0], p0[1]).world, place(face, p1[0], p1[1]).world)
+    }
+  }
 
   for (const contour of nc.contours) {
     const spur = normal(contour.face)
@@ -332,7 +356,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       const a = place(contour.face, x0, y0)
       const b = place(contour.face, x1, y1)
       if (contour.kind === 'inner') {
-        push(byFace[contour.face], a.world, b.world)
+        pushCurve(byFace[contour.face], contour.face, x0, y0, x1, y1, contour.radii?.[i] ?? 0)
         continue
       }
       // A cut with no material anywhere along it (edge of stock / one-sided section) removes
@@ -374,7 +398,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       const d0 = bevelDistance(contour.bevels[i])
       const d1 = bevelDistance(contour.bevels[i + 1])
       // The cut line is grouped by its face's thickness; the bevel just adds its indication.
-      push(byFace[contour.face], a.world, b.world)
+      pushCurve(byFace[contour.face], contour.face, x0, y0, x1, y1, contour.radii?.[i] ?? 0)
       if (d0 <= 0 && d1 <= 0) continue
 
       // The cut face is tilted off the surface normal by the bevel angle; show that tilt either as

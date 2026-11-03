@@ -10,7 +10,7 @@ import {
   placeNcFace,
   resolveNcFaceFrame,
 } from '@/lib/parsers/ncFaces'
-import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { arcSamples, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { profileFamily } from '@/lib/sections/canonical'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { meshStepFile } from './mesh'
@@ -81,11 +81,19 @@ describe('manufactured NC edge agreement', () => {
               Math.abs(Math.abs(cb) - half) < 0.5
             )
               continue
-            segments.push({
-              a: rollPt([pa.along, pa.cross[0], pa.cross[1]]),
-              b: rollPt([pb.along, pb.cross[0], pb.cross[1]]),
-              tag: `${contour.face}[${i}]`,
-            })
+            // Follow the DSTV arc radius so the expected line matches the solid's notch/arc.
+            const samples = arcSamples(p, q, contour.radii?.[i] ?? 0)
+            for (let j = 0; j < samples.length - 1; j++) {
+              const s0 = samples[j] as [number, number]
+              const s1 = samples[j + 1] as [number, number]
+              const sa = placeNcFace(frame, contour.face, s0[0], s0[1], section.points)
+              const sb = placeNcFace(frame, contour.face, s1[0], s1[1], section.points)
+              segments.push({
+                a: rollPt([sa.along, sa.cross[0], sa.cross[1]]),
+                b: rollPt([sb.along, sb.cross[0], sb.cross[1]]),
+                tag: `${contour.face}[${i}]`,
+              })
+            }
           }
         }
 

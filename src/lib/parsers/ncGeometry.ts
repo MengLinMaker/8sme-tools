@@ -283,3 +283,44 @@ export function parseNcGeometry(text: string): NcGeometry {
 
   return { contours, holes, notches, marks }
 }
+
+/**
+ * Samples a DSTV arc segment (the `R` field at a vertex, to the next vertex) in face coordinates.
+ * Returns `[a, b]` for a straight edge or a circle-sampled polyline for an arc, so callers that draw
+ * the cut line (the projection, the edge test) follow the same curve the solid's `poly` builds.
+ */
+export function arcSamples(
+  a: [number, number],
+  b: [number, number],
+  radius: number,
+  steps = 8,
+): [number, number][] {
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  const chord = Math.hypot(dx, dy)
+  if (!Number.isFinite(radius) || radius === 0 || !(Math.abs(radius) > chord / 2) || chord === 0)
+    return [a, b]
+  const r = Math.abs(radius)
+  const sagitta = r - Math.sqrt(r * r - (chord / 2) ** 2)
+  // Same arc side as the reconstruction's `poly` (which calls `sagittaArcTo` with the opposite
+  // sagitta sign): the DSTV radius sign flips the bulge side.
+  const sign = radius >= 0 ? -1 : 1
+  const nx = -dy / chord
+  const ny = dx / chord
+  const mx = (a[0] + b[0]) / 2
+  const my = (a[1] + b[1]) / 2
+  // Centre sits on the opposite side of the chord from the bulge.
+  const cx = mx - nx * sign * (r - sagitta)
+  const cy = my - ny * sign * (r - sagitta)
+  const angleA = Math.atan2(a[1] - cy, a[0] - cx)
+  const angleB = Math.atan2(b[1] - cy, b[0] - cx)
+  let sweep = angleB - angleA
+  while (sweep > Math.PI) sweep -= Math.PI * 2
+  while (sweep < -Math.PI) sweep += Math.PI * 2
+  const out: [number, number][] = []
+  for (let i = 0; i <= steps; i++) {
+    const angle = angleA + (sweep * i) / steps
+    out.push([cx + Math.cos(angle) * r, cy + Math.sin(angle) * r])
+  }
+  return out
+}

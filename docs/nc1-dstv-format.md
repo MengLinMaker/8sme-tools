@@ -100,6 +100,18 @@ Slotted holes carry a fabrication letter `l` after a `ttt.tt` code field, then t
 Polyline of X/Y vertices; a third value is a **bulge/radius** (arc to the next vertex),
 which is how curved copes/miters appear.
 
+**Notch lines (`t`/`w`) are a separate instruction, not a contour vertex.** DSTV: *“When notches
+are needed, the Bloc AK contains an information line which is not a part of the contour
+description. This line contains the coordinates of the corner as well as the type of radius to
+notch this corner. We write ‘t’ if we want a tangential notch or ‘w’ if we want a hole like.”* The
+contour itself is the straight chord across the corner; the notch line adds the radius/type at that
+corner.
+
+> **Detail kept.** The rebuild applies that notch radius (a real bevel/rounded notch at the end
+> cut), and `projectNc` samples the same arc so the drawn cut line follows it. The remaining
+> ~4 mm gap at a notch side on M_32/M_36 is the stock's root fillet at the web/flange junction, not
+> the notch line. Keep this tabbed if a job needs the junction itself cut sharp.
+
 ### Profile types
 
 Official "code profile" list (the `ST` header's profile-type field):
