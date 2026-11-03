@@ -355,7 +355,7 @@ export async function reconstructSolidFromNc(
   const section = canonicalSectionFlip ? { ...rawSection, points: authoredPoints } : rawSection
 
   await ensureOc()
-  const { draw, drawCircle, drawRoundedRectangle, Plane } = await import('replicad')
+  const { draw, drawCircle, drawRoundedRectangle, Plane, compoundShapes } = await import('replicad')
   const poly = (pts: Pt[], radii?: number[], mirrored = false) => {
     let pen = draw(pts[0])
     for (let i = 1; i < pts.length; i++) {
@@ -862,6 +862,10 @@ export async function reconstructSolidFromNc(
     family === 'tube' && !isSquareTube(frame)
       ? face === 'o' || face === 'h'
       : face === 'u' || face === 'h'
+  // Batch all hole tools into one compound and cut once: each `solid.cut` is an OCC boolean and
+  // the holes dominate the rebuild (86–93% of it on the real parts). One boolean with a compound
+  // of disjoint tools is far cheaper than N sequential cuts.
+  const holeTools: SolidOps[] = []
   for (const h of geo.holes.filter((h) => h.diameter > 0)) {
     const axis = faceAxis(h.face)
     const half = halfOf(axis)
@@ -910,20 +914,27 @@ export async function reconstructSolidFromNc(
       const webHalf = frame.webHalf ?? 0
       const span = 2 * webHalf + 4
       const cyl = crossDrawing().sketchOnPlane('XZ').extrude(span)
-      solid = solid.cut(cyl.translate(0, webHalf + 2, 0) as unknown as SolidOps)
+      holeTools.push(cyl.translate(0, webHalf + 2, 0) as unknown as SolidOps)
       continue
     }
     if (axis === 0) {
       // Drill along the 3D Z axis (perpendicular to the `v`/`h` faces).
       const cyl = crossDrawing().sketchOnPlane('XY').extrude(reach)
       const shift = sign > 0 ? outside - reach : -outside
-      solid = solid.cut(cyl.translate(0, 0, shift) as unknown as SolidOps)
+      holeTools.push(cyl.translate(0, 0, shift) as unknown as SolidOps)
     } else {
       // Drill along the 3D Y axis (`o`/`u`); `sketchOnPlane('XZ')` extrudes towards −Y.
       const cyl = crossDrawing().sketchOnPlane('XZ').extrude(reach)
       const shift = sign > 0 ? outside : reach - outside
-      solid = solid.cut(cyl.translate(0, shift, 0) as unknown as SolidOps)
+      holeTools.push(cyl.translate(0, shift, 0) as unknown as SolidOps)
     }
+  }
+  if (holeTools.length > 0) {
+    const holes =
+      holeTools.length === 1
+        ? holeTools[0]!
+        : (compoundShapes(holeTools as never) as unknown as SolidOps)
+    solid = solid.cut(holes)
   }
 
   // NC booleans can leave floating slivers alongside the real body. Strip them on the
