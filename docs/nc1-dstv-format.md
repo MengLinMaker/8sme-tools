@@ -108,9 +108,10 @@ contour itself is the straight chord across the corner; the notch line adds the 
 corner.
 
 > **Detail kept.** The rebuild applies that notch radius (a real bevel/rounded notch at the end
-> cut), and `projectNc` samples the same arc so the drawn cut line follows it. The remaining
-> ~4 mm gap at a notch side on M_32/M_36 is the stock's root fillet at the web/flange junction, not
-> the notch line. Keep this tabbed if a job needs the junction itself cut sharp.
+> cut), and `projectNc` samples the same arc so the drawn cut line follows it. The reconstruction's
+> `sagittaArcTo` side matches `arcSamples`, so the fillet curve follows the cut line in the same
+> direction as the projection (both fillet lines on M_36/M_39 now agree to ~0.1 mm). The face cut
+> itself stays shallow — up to the inner face; the arc side is not a deeper cut.
 
 ### Profile types
 

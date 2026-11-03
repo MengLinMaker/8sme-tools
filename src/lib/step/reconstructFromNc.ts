@@ -362,7 +362,7 @@ export async function reconstructSolidFromNc(
         if (chord > 0 && Math.abs(radius) > chord / 2) {
           const sagitta = Math.abs(radius) - Math.sqrt(radius * radius - (chord / 2) ** 2)
           // Same DSTV radius-side convention as `arcSamples` in ncGeometry.ts.
-          pen = pen.sagittaArcTo(b, radius >= 0 ? -sagitta : sagitta)
+          pen = pen.sagittaArcTo(b, radius >= 0 ? sagitta : -sagitta)
           continue
         }
       }
@@ -487,22 +487,12 @@ export async function reconstructSolidFromNc(
   // face's cut line as an edge — the old union of `o`/`u` suppressed the shorter flange's line
   // (m127 `o[0]`).
   const channelFaces = family === 'channel'
-  const buildFaceCut = (
-    face: NcFace,
-    axis: Axis,
-    pts: Pt[],
-    radii: number[],
-    bevelFactor: number,
-  ): SolidOps | null => {
+  const buildFaceCut = (face: NcFace, axis: Axis, pts: Pt[], radii: number[]): SolidOps | null => {
     const wall = plateThicknessMm(header.profile, header.dimensions, (1 - axis) as Axis)
     if (!(wall > 0)) return null
-    // A bevelled cut leans through the wall, so it needs more than the square wall depth. Extend
-    // the tool by the bevel's in-plane leg (`wall * tan θ`) so it clears the slanted surface.
-    const bevelLeg = wall * Math.sqrt(Math.max(0, bevelFactor * bevelFactor - 1))
-    // The stock's root radius is material *behind* the face, so a wall-deep cut can stop short of
-    // the rounded edge and leave a sliver. Add the radius so the tool clears the fillet too.
-    const rootRadius = Math.max(0, header.dimensions[4] ?? 0)
-    const reach = wall + bevelLeg + rootRadius + CUT_OUTSIDE + LASER_KERF
+    // Shallow: through the wall, up to the **inner face** only. The fillet is a swept shape at the
+    // cut edge (an OCC fillet), never a deeper cut.
+    const reach = wall + LASER_KERF
     const faceOut = facePlaneHalf(frame, face)
     const faceSign = resolveFaceSign(frame, section.points, face)
     const half = halfOf(axis)
@@ -559,7 +549,7 @@ export async function reconstructSolidFromNc(
     const sign = acrossSign(c.face)
     const pts = rawPts.map(([x, y]) => [x, sign * (y - half)] as Pt)
     if (channelFaces) {
-      const cut = buildFaceCut(c.face, axis, pts, radii, contourBevelFactor(c))
+      const cut = buildFaceCut(c.face, axis, pts, radii)
       if (cut) solid = solid.cut(cut)
       if (options.bevels === true && !options.simplify) {
         const ccw = signedArea2(pts) > 0
