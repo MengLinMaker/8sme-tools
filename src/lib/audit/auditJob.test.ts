@@ -87,8 +87,16 @@ describe('auditEntries', () => {
     const stepOnly = auditEntries('job.zip', [
       { path: 'b1.nc1', bytes: strToU8(makeNc('b1', 1, 100)) },
     ])
-    expect(stepOnly.findings.some((f) => f.code === 'MISSING_STEP' && f.mark === 'b1')).toBe(true)
+    const missingStep = stepOnly.findings.find((f) => f.code === 'MISSING_STEP' && f.mark === 'b1')
+    expect(missingStep?.severity).toBe('info')
     expect(stepOnly.findings.some((f) => f.code === 'MISSING_PDF' && f.mark === 'b1')).toBe(true)
+  })
+
+  it('ignores slash/underscore differences in the NC internal mark', () => {
+    const result = auditEntries('job.zip', [
+      { path: 'a_1.nc1', bytes: strToU8(makeNc('A/1', 1, 100)) },
+    ])
+    expect(result.findings.some((f) => f.code === 'NC_MARK_MISMATCH')).toBe(false)
   })
 
   it('skips marks with neither an NC nor a STEP as non-parts', () => {

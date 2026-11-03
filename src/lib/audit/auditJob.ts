@@ -38,6 +38,11 @@ export function markFromFilename(path: string): string {
   return (match ? match[0] : base).toLowerCase()
 }
 
+/** Filenames cannot carry `/`, so Tekla substitutes `_`; the mark is still the same part. */
+export function normalizeMark(mark: string): string {
+  return mark.toLowerCase().replace(/[/_]/g, '')
+}
+
 const decoder = new TextDecoder('utf-8')
 function decodeText(bytes: Uint8Array): string {
   return decoder.decode(bytes)
@@ -164,7 +169,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           message: `NC has no usable quantity`,
         })
       }
-      if (part.nc.mark && part.nc.mark.toLowerCase() !== part.mark) {
+      if (part.nc.mark && normalizeMark(part.nc.mark) !== normalizeMark(part.mark)) {
         findings.push({
           severity: 'warning',
           code: 'NC_MARK_MISMATCH',
@@ -195,7 +200,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
       }
     } else {
       findings.push({
-        severity: 'warning',
+        severity: 'info',
         code: 'MISSING_STEP',
         mark: part.mark,
         message: `No STEP file found for ${part.mark}`,
