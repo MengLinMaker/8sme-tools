@@ -144,18 +144,12 @@ export interface ProfileInfoProps {
 /** Cross-section, suggested cut parameters and (optionally) the per-mark rollup for a profile. */
 export function ProfileInfo({ profile, dims, marks = [] }: ProfileInfoProps) {
   const { t } = useTranslation()
-  const [surface, setSurface] = useState<SurfaceCondition>('normal')
   const [markSort, setMarkSort] = useState<{ key: MarkSortKey; dir: 1 | -1 }>({
     key: 'mark',
     dir: 1,
   })
 
   const section = useMemo(() => partSectionForCode(profile, dims), [profile, dims])
-  const thicknesses = useMemo(() => sectionThicknesses(profile, dims), [profile, dims])
-  const suggestions = useMemo(
-    () => thicknesses.map((thickness) => ({ thickness, cut: suggestCut(thickness.mm, surface) })),
-    [thicknesses, surface],
-  )
   const totals = useMemo(
     () =>
       marks.reduce(
@@ -193,71 +187,11 @@ export function ProfileInfo({ profile, dims, marks = [] }: ProfileInfoProps) {
   return (
     <div className="flex flex-col gap-4">
       <div className="grid gap-5 md:grid-cols-[15.5rem_minmax(0,1fr)]">
-        <SectionPreview section={section} label={profile} />
-
-        <div className="flex flex-col gap-3">
-          <fieldset className="m-0 grid grid-cols-4 gap-1.5 border-0 p-0">
-            <legend className="sr-only">{t('preflight.profileSettings.surface')}</legend>
-            {SURFACES.map((value) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setSurface(value)}
-                className={cn(
-                  'min-w-0 truncate rounded-md border px-2 py-1 text-center text-[11px] transition-colors',
-                  surface === value
-                    ? 'border-primary bg-primary/15 text-foreground'
-                    : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                )}
-              >
-                {t(`preflight.profileSettings.surfaces.${value}`)}
-              </button>
-            ))}
-          </fieldset>
-
-          {thicknesses.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {t('preflight.profileSettings.noThickness')}
-            </p>
-          ) : (
-            <div className="w-full overflow-x-auto rounded-lg border border-border">
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="h-8 w-40">
-                      {t('preflight.profileSettings.thickness')}
-                    </TableHead>
-                    {suggestions.map(({ thickness }) => (
-                      <TableHead
-                        key={`${thickness.role}-${thickness.mm}`}
-                        className="h-8 w-20 text-right font-mono text-xs text-foreground"
-                      >
-                        {thickness.mm.toFixed(1)}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {PARAM_ROWS.map((row) => (
-                    <TableRow key={row.key}>
-                      <TableCell className="w-40 whitespace-nowrap px-3 py-1.5 text-xs text-muted-foreground">
-                        {t(`preflight.profileSettings.${row.key}`)}
-                      </TableCell>
-                      {suggestions.map(({ thickness, cut }) => (
-                        <TableCell
-                          key={`${row.key}-${thickness.role}-${thickness.mm}`}
-                          className="w-20 px-3 py-1.5 text-right font-mono text-xs"
-                        >
-                          {row.value(cut)}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+        <div className="w-40 md:w-full">
+          <SectionPreview section={section} label={profile} />
         </div>
+
+        <CutSettings profile={profile} dims={dims} />
       </div>
 
       {marks.length > 0 && (
@@ -376,8 +310,105 @@ function MarkSortHead({
   )
 }
 
+/** Surface selector + suggested O₂ cut parameters per thickness for a profile. */
+export function CutSettings({
+  profile,
+  dims,
+  compact = false,
+}: {
+  profile: string
+  dims: number[]
+  compact?: boolean
+}) {
+  const { t } = useTranslation()
+  const [surface, setSurface] = useState<SurfaceCondition>('normal')
+  const thicknesses = useMemo(() => sectionThicknesses(profile, dims), [profile, dims])
+  const suggestions = useMemo(
+    () => thicknesses.map((thickness) => ({ thickness, cut: suggestCut(thickness.mm, surface) })),
+    [thicknesses, surface],
+  )
+  const labelWidth = compact ? 'w-28' : 'w-40'
+  const cell = compact ? 'px-2 py-1' : 'px-3 py-1.5'
+  return (
+    <div className={cn('flex flex-col gap-3', compact && '@container')}>
+      <fieldset
+        className={cn(
+          'm-0 grid gap-1.5 border-0 p-0',
+          compact ? 'grid-cols-2 @[18rem]:grid-cols-4' : 'grid-cols-4',
+        )}
+      >
+        <legend className="sr-only">{t('preflight.profileSettings.surface')}</legend>
+        {SURFACES.map((value) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setSurface(value)}
+            className={cn(
+              'min-w-0 truncate rounded-md border px-2 py-1 text-center text-[11px] transition-colors',
+              surface === value
+                ? 'border-primary bg-primary/15 text-foreground'
+                : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+            )}
+          >
+            {t(`preflight.profileSettings.surfaces.${value}`)}
+          </button>
+        ))}
+      </fieldset>
+
+      {thicknesses.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {t('preflight.profileSettings.noThickness')}
+        </p>
+      ) : (
+        <div className="w-full overflow-x-auto rounded-lg border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className={cn('h-8', labelWidth)}>
+                  {t('preflight.profileSettings.thickness')}
+                </TableHead>
+                {suggestions.map(({ thickness }) => (
+                  <TableHead
+                    key={`${thickness.role}-${thickness.mm}`}
+                    className="h-8 w-20 text-right font-mono text-xs text-foreground"
+                  >
+                    {thickness.mm.toFixed(1)}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {PARAM_ROWS.map((row) => (
+                <TableRow key={row.key}>
+                  <TableCell
+                    className={cn(
+                      labelWidth,
+                      cell,
+                      'whitespace-nowrap text-xs text-muted-foreground',
+                    )}
+                  >
+                    {t(`preflight.profileSettings.${row.key}`)}
+                  </TableCell>
+                  {suggestions.map(({ thickness, cut }) => (
+                    <TableCell
+                      key={`${row.key}-${thickness.role}-${thickness.mm}`}
+                      className={cn(cell, 'w-20 text-right font-mono text-xs')}
+                    >
+                      {row.value(cut)}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Draws the cross-section to scale, centred in a square viewBox. */
-function SectionPreview({
+export function SectionPreview({
   section,
   label,
 }: {
@@ -414,7 +445,7 @@ function SectionPreview({
   }, [section])
 
   return (
-    <div className="flex aspect-square w-40 flex-col gap-1.5 self-start rounded-lg border border-border bg-muted/20 p-2 md:w-full">
+    <div className="flex aspect-square w-full flex-col gap-1.5 self-start rounded-lg border border-border bg-muted/20 p-2">
       {drawing ? (
         <svg
           viewBox={drawing.viewBox}

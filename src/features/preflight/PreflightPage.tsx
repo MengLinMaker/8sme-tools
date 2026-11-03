@@ -109,7 +109,12 @@ import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
 import { createOrbitBus, requestLocation, requestView, type ViewPreset } from './orbitSync'
 import type { DiffStats } from './PartViewer'
-import { ProfileInfo, type ProfileMarkRow, ProfileSettingsDialog } from './ProfileSettingsDialog'
+import {
+  CutSettings,
+  type ProfileMarkRow,
+  ProfileSettingsDialog,
+  SectionPreview,
+} from './ProfileSettingsDialog'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 
@@ -3212,17 +3217,33 @@ export function PreflightPage() {
                 </div>
                 <div className="min-h-0 flex-1 overflow-hidden">
                   {rightTab === 'info' ? (
-                    <div className="h-full overflow-auto p-4">
-                      <div className="flex flex-col gap-5">
-                        <PartSummary
-                          part={viewing}
-                          material={drawingMaterials.get(viewing.mark)}
-                          profile={sectionLabel(viewing)}
-                          massKg={pieceMass(viewing)}
-                          qty={partQty(viewing)}
-                          lengthMm={partLength(viewing)}
-                        />
-                        <ProfileInfo profile={sectionLabel(viewing)} dims={viewingDims} />
+                    <div className="h-full overflow-auto p-3 @container">
+                      <div className="flex flex-wrap items-start gap-3">
+                        <div className="flex w-full min-w-0 items-start gap-3 @[42rem]:flex-1">
+                          <div className="w-[9.5rem] shrink-0">
+                            <SectionPreview
+                              section={partSectionForCode(sectionLabel(viewing), viewingDims)}
+                              label={sectionLabel(viewing)}
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <PartSummary
+                              part={viewing}
+                              material={drawingMaterials.get(viewing.mark)}
+                              profile={sectionLabel(viewing)}
+                              massKg={pieceMass(viewing)}
+                              qty={partQty(viewing)}
+                              lengthMm={partLength(viewing)}
+                            />
+                          </div>
+                        </div>
+                        <div className="w-full min-w-0 @[42rem]:flex-1">
+                          <CutSettings
+                            profile={sectionLabel(viewing)}
+                            dims={viewingDims}
+                            compact
+                          />
+                        </div>
                       </div>
                     </div>
                   ) : rightTab === 'ncep' ? (
@@ -3347,10 +3368,10 @@ function PartSummary({
         <TableBody>
           {rows.map(([label, value]) => (
             <TableRow key={label}>
-              <TableCell className="w-40 whitespace-nowrap px-3 py-1.5 text-xs text-muted-foreground">
+              <TableCell className="w-24 whitespace-nowrap px-2 py-1 text-xs text-muted-foreground">
                 {label}
               </TableCell>
-              <TableCell className="px-3 py-1.5 font-mono text-xs tabular-nums">{value}</TableCell>
+              <TableCell className="px-2 py-1 font-mono text-xs tabular-nums">{value}</TableCell>
             </TableRow>
           ))}
         </TableBody>
