@@ -96,12 +96,14 @@ import {
   PRIORITY_FOREGROUND,
   PRIORITY_NEIGHBOR,
   prebootStepWorkers,
+  STEP_WORKER_COUNT,
 } from '@/lib/step/stepPool'
 import {
   clearViewerModels,
   diffForViewer,
   meshForViewer,
   peekReconstructForViewer,
+  primeReconstructForViewer,
   reconstructForViewer,
   reconstructViewerWithSabre,
 } from '@/lib/step/viewerModel'
@@ -1223,13 +1225,13 @@ export function PreflightPage() {
           const stepMeasure = measures.get(part.mark)
           if (!ncBytes || !stepMeasure) return
           try {
-            const made = await pool.reconstruct(new TextDecoder().decode(ncBytes), {
+            const ncText = new TextDecoder().decode(ncBytes)
+            const made = await pool.reconstruct(ncText, {
               measure: true,
-              // Only the measure is read below — skip the STEP export (it doubles rebuild cost
-              // for nothing here).
-              measureOnly: true,
             })
             if (cancelled) return
+            // The export is cheap and lets the viewer open this part from cache.
+            if (made.step) primeReconstructForViewer(ncText, made.step)
             if (made.sabre.length > 0) {
               setSabreChecks((prev) => new Map(prev).set(part.mark, made.sabre))
             }
@@ -1319,12 +1321,13 @@ export function PreflightPage() {
             }
           }
           if (needsRebuild && ncBytes && measure) {
-            const made = await pool.reconstruct(new TextDecoder().decode(ncBytes), {
+            const ncText = new TextDecoder().decode(ncBytes)
+            const made = await pool.reconstruct(ncText, {
               measure: true,
-              measureOnly: true,
               priority,
             })
             if (!made.measure) return
+            if (made.step) primeReconstructForViewer(ncText, made.step)
             if (made.sabre.length > 0) {
               setSabreChecks((prev) => new Map(prev).set(mark, made.sabre))
             }
@@ -2058,8 +2061,9 @@ export function PreflightPage() {
       (part) => part.nc?.path && !part.step && !sabreChecksRef.current.has(part.mark),
     )
     let next = 0
-    // Keep the main thread clear: only this many NC decodes/tasks are in flight at once.
-    const CONCURRENCY = 4
+    // Fill the worker pool: each task does its OCC work off the main thread, and foreground
+    // viewer/neighbour tasks still jump the queue by priority.
+    const CONCURRENCY = STEP_WORKER_COUNT
     const work = async () => {
       while (!cancelled) {
         const part = pending[next++]

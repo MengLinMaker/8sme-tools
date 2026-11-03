@@ -126,6 +126,19 @@ export function reconstructViewerWithSabre(
   })
 }
 
+/**
+ * Prime the plain viewer cache from a STEP produced elsewhere (the analysis/fastTrack rebuild),
+ * so opening the part is a cache hit and the viewer never rebuilds it.
+ */
+export function primeReconstructForViewer(ncText: string, step: string): void {
+  const key = `0:f:n:${ncText}`
+  if (reconstructCache.has(key)) return
+  const bytes = new TextEncoder().encode(step)
+  resolvedCache.set(key, bytes)
+  reconstructCache.set(key, Promise.resolve({ bytes, sabre: [] }))
+  trimReconstructCache()
+}
+
 /** Synchronous cache peek for the viewer: cached manufactured bytes, or null if not built yet. */
 export function peekReconstructForViewer(ncText: string): Uint8Array | null {
   return resolvedCache.get(`0:f:n:${ncText}`) ?? null
