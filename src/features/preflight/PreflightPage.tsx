@@ -3238,11 +3238,7 @@ export function PreflightPage() {
                           </div>
                         </div>
                         <div className="w-full min-w-0 @[42rem]:flex-1">
-                          <CutSettings
-                            profile={sectionLabel(viewing)}
-                            dims={viewingDims}
-                            compact
-                          />
+                          <CutSettings profile={sectionLabel(viewing)} dims={viewingDims} compact />
                         </div>
                       </div>
                     </div>
