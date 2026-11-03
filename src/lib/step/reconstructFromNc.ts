@@ -533,13 +533,7 @@ export async function reconstructSolidFromNc(
 
   const buildFlangeFillet = (face: NcFace, axis: Axis, pts: Pt[]): SolidOps[] => {
     if (family !== 'channel' || axis !== 0 || header.dimensions.length < 5) return []
-    const [, flange, tf, tw, r] = header.dimensions as [
-      number,
-      number,
-      number,
-      number,
-      number,
-    ]
+    const [, flange, tf, tw, r] = header.dimensions as [number, number, number, number, number]
     if (!(r > 0)) return []
     const faceOut = facePlaneHalf(frame, face)
     const faceSign = resolveFaceSign(frame, section.points, face)
