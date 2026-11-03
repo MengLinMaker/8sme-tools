@@ -110,8 +110,9 @@ corner.
 > **Detail kept.** The rebuild applies that notch radius (a real bevel/rounded notch at the end
 > cut), and `projectNc` samples the same arc so the drawn cut line follows it. The reconstruction's
 > `sagittaArcTo` side matches `arcSamples`, so the fillet curve follows the cut line in the same
-> direction as the projection (both fillet lines on M_36/M_39 now agree to ~0.1 mm). The face cut
-> itself stays shallow — up to the inner face; the arc side is not a deeper cut.
+> direction as the projection (both fillet lines on M_36/M_39 agree to ~0.1 mm). On the PFC **web
+> face** the cut follows that cut line through the stock root radius, so the fillet follows the cut;
+> the flange faces stay shallow.
 
 ### Profile types
 

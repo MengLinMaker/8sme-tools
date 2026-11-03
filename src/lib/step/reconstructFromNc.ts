@@ -490,9 +490,10 @@ export async function reconstructSolidFromNc(
   const buildFaceCut = (face: NcFace, axis: Axis, pts: Pt[], radii: number[]): SolidOps | null => {
     const wall = plateThicknessMm(header.profile, header.dimensions, (1 - axis) as Axis)
     if (!(wall > 0)) return null
-    // Shallow: through the wall, up to the **inner face** only. The fillet is a swept shape at the
-    // cut edge (an OCC fillet), never a deeper cut.
-    const reach = wall + LASER_KERF
+    // Web face only: the cut follows the NC cut line (including its fillet arc) through the stock
+    // root radius, so the fillet follows the cut. Flange faces stay shallow.
+    const rootRadius = face === 'v' ? Math.max(0, header.dimensions[4] ?? 0) : 0
+    const reach = wall + rootRadius + LASER_KERF
     const faceOut = facePlaneHalf(frame, face)
     const faceSign = resolveFaceSign(frame, section.points, face)
     const half = halfOf(axis)
