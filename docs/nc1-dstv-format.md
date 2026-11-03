@@ -111,8 +111,9 @@ corner.
 > cut), and `projectNc` samples the same arc so the drawn cut line follows it. The reconstruction's
 > `sagittaArcTo` side matches `arcSamples`, so the fillet curve follows the cut line in the same
 > direction as the projection (both fillet lines on M_36/M_39 agree to ~0.1 mm). On the PFC **web
-> face** the cut follows that cut line through the stock root radius, so the fillet follows the cut;
-> the flange faces stay shallow.
+> face** the cut follows that cut line through the stock root radius. The flange faces stay shallow
+> and get a targeted fillet strip (`Tw → Tw + r` across, `Tf + r` through the flange, run ~1 m along
+> the beam past the end) so the flange/web fillet scrap is cleared without deepening the flange cut.
 
 ### Profile types
 

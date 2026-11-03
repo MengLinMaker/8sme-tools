@@ -314,6 +314,8 @@ export interface ReconstructOptions {
    * and is left alone; on an open section (no opposite face) it is extended through the wall.
    */
   bevels?: boolean
+  /** **Debug only:** skip the shallow (1st) face cut so the 2nd extrusion can be inspected. */
+  debugSkipShallow?: boolean
 }
 
 export async function reconstructStepFromNc(
@@ -492,6 +494,8 @@ export async function reconstructSolidFromNc(
     if (!(wall > 0)) return null
     // Web face only: the cut follows the NC cut line (including its fillet arc) through the stock
     // root radius, so the fillet follows the cut. Flange faces stay shallow.
+    // Web face follows the cut line through the root radius; flange faces stay shallow and get
+    // the targeted 1 m fillet strip below.
     const rootRadius = face === 'v' ? Math.max(0, header.dimensions[4] ?? 0) : 0
     const reach = wall + rootRadius + LASER_KERF
     const faceOut = facePlaneHalf(frame, face)
@@ -527,6 +531,53 @@ export async function reconstructSolidFromNc(
       .translate(0, 0, shiftZ) as unknown as SolidOps
   }
 
+  const buildFlangeFillet = (face: NcFace, axis: Axis, pts: Pt[]): SolidOps[] => {
+    if (family !== 'channel' || axis !== 0 || header.dimensions.length < 5) return []
+    const [, flange, tf, tw, r] = header.dimensions as [
+      number,
+      number,
+      number,
+      number,
+      number,
+    ]
+    if (!(r > 0)) return []
+    const faceOut = facePlaneHalf(frame, face)
+    const faceSign = resolveFaceSign(frame, section.points, face)
+    const hb = flange / 2
+    const bandLo = -hb + tw
+    const bandHi = bandLo + r
+    const reach = tf + r + LASER_KERF
+    // Run the strip ~1 m along the beam away from the part so the cut is complete, not just a
+    // Tf+r stub at the end.
+    const along = 1000
+    const xs = pts.map((p) => p[0])
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const spans: [number, number][] = [[maxX, maxX + along]]
+    if (minX > 0.5) spans.push([Math.max(0, minX - along), minX])
+    const cuts: SolidOps[] = []
+    for (const [x0, x1] of spans) {
+      try {
+        const strip = poly([
+          [x0, bandLo],
+          [x1, bandLo],
+          [x1, bandHi],
+          [x0, bandHi],
+        ])
+        const shiftZ = faceSign > 0 ? faceOut - reach : -faceOut
+        cuts.push(
+          (strip as unknown as ReturnType<typeof poly>)
+            .sketchOnPlane('XY')
+            .extrude(reach)
+            .translate(0, 0, shiftZ) as unknown as SolidOps,
+        )
+      } catch {
+        // Leave the shallow cut if the strip will not extrude.
+      }
+    }
+    return cuts
+  }
+
   // Pure stock: cross-section in the (width=Y, depth=Z) plane, extruded along the member (X).
   let solid = poly(section.points)
     .sketchOnPlane('YZ')
@@ -550,8 +601,11 @@ export async function reconstructSolidFromNc(
     const sign = acrossSign(c.face)
     const pts = rawPts.map(([x, y]) => [x, sign * (y - half)] as Pt)
     if (channelFaces) {
-      const cut = buildFaceCut(c.face, axis, pts, radii)
-      if (cut) solid = solid.cut(cut)
+      if (options.debugSkipShallow !== true) {
+        const cut = buildFaceCut(c.face, axis, pts, radii)
+        if (cut) solid = solid.cut(cut)
+      }
+      for (const strip of buildFlangeFillet(c.face, axis, pts)) solid = solid.cut(strip)
       if (options.bevels === true && !options.simplify) {
         const ccw = signedArea2(pts) > 0
         const map = (p: Pt): Pt => [p[0], sign * (p[1] - half)]
