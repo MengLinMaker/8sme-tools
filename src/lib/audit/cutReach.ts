@@ -6,6 +6,7 @@ import {
   type NcGeometry,
   parseNcGeometry,
 } from '@/lib/parsers/ncGeometry'
+import { type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
 
 /**
  * Cut-reach analysis from the *profile*, not the part.
@@ -37,6 +38,21 @@ export const MAX_CUT_THICKNESS_MM = MACHINE.envelope.maxThicknessMm
 const MAX_BEVEL_DEG = Math.max(Math.abs(MACHINE.bevel.minDeg), Math.abs(MACHINE.bevel.maxDeg))
 
 /**
+ * Families whose rolled root fillets — a T's web/flange, an angle's leg, a channel's web/flange,
+ * an I-beam's web/flange — are expected corners the head finishes with its bevel settings. The
+ * ±placement band would otherwise read the fillet as a `corner` with no flat escape for the slag.
+ */
+const CORNER_FINISH_FAMILIES: ReadonlySet<ProfileFamily> = new Set(['tee', 'angle', 'channel', 'i'])
+
+/**
+ * Families whose junction **bevels** — a T's web/flange root, an angle's leg root — are cut with
+ * the machine's dedicated bevel settings. The straight-ray model reads the junction's backing as
+ * an unreachable `reach`, but the head follows the bevel rather than boring straight in. A `wall`
+ * behind the cut (the beam would cut the same material twice) stays reported for every family.
+ */
+const JUNCTION_BEVEL_FAMILIES: ReadonlySet<ProfileFamily> = new Set(['tee', 'angle'])
+
+/**
  * Max search distance (mm) for the ray march. Only needs to clear the first wall (whose full
  * length we must measure) plus a little; a section can't be wider than ~450 mm.
  */
@@ -58,6 +74,14 @@ const CORNER_BAND_MM = MACHINE.envelope.nozzleMm / 2
  * uncuttable subsection to ~1 mm, which is what the red span marker is drawn from.
  */
 const SAMPLE_STEP_MM = 1
+
+/**
+ * A short `reach` stub (mm) at the junction of a member end and a raw-stock edge is a finishing
+ * corner, not a missing cut: the beam enters the end cut just off the section's corner and the
+ * straight-ray model over-measures the wall. Kept to half the pierce cap so only these little
+ * end-corner spans are dropped, never a genuine deep pass.
+ */
+const END_CORNER_SPAN_MM = MAX_CUT_THICKNESS_MM / 2
 
 /**
  * A cut line the viewer draws a marker over, in NC face coords. Both the cut-reach failures and
@@ -297,6 +321,45 @@ function sameFailure(a: CutReachFailure, b: CutReachFailure): boolean {
   )
 }
 
+/** Face bounding box in NC face coords: X along the member, Y across it. */
+interface FaceBounds {
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+}
+
+/** Whether both ends of a run sit on the same face X extreme (a member-end cut line). */
+function isAtFaceEnd(from: [number, number], to: [number, number], bounds: FaceBounds): boolean {
+  const atMinX =
+    Math.abs(from[0] - bounds.minX) <= SAMPLE_STEP_MM &&
+    Math.abs(to[0] - bounds.minX) <= SAMPLE_STEP_MM
+  const atMaxX =
+    Math.abs(from[0] - bounds.maxX) <= SAMPLE_STEP_MM &&
+    Math.abs(to[0] - bounds.maxX) <= SAMPLE_STEP_MM
+  return atMinX || atMaxX
+}
+
+/**
+ * Whether a `reach` run is a short finishing stub at a raw-stock corner — on an end cut and
+ * against one raw-stock edge (both ends within {@link END_CORNER_SPAN_MM} of the same Y extreme).
+ * These are the little spans the head simply finishes around; the straight-ray model over-measures
+ * the wall there.
+ */
+function isEndCornerStub(
+  from: [number, number],
+  to: [number, number],
+  bounds: FaceBounds,
+): boolean {
+  if (Math.hypot(to[0] - from[0], to[1] - from[1]) > END_CORNER_SPAN_MM) return false
+  if (!isAtFaceEnd(from, to, bounds)) return false
+  const nearMinY =
+    from[1] <= bounds.minY + END_CORNER_SPAN_MM && to[1] <= bounds.minY + END_CORNER_SPAN_MM
+  const nearMaxY =
+    from[1] >= bounds.maxY - END_CORNER_SPAN_MM && to[1] >= bounds.maxY - END_CORNER_SPAN_MM
+  return nearMinY || nearMaxY
+}
+
 /** One probe along a cut edge: its status and (for a failure) the bore it would need. */
 interface Probe {
   x: number
@@ -349,9 +412,27 @@ export function assessCutReachGeometry(
 ): CutReachFailure[] {
   if (section.length < 3) return []
   const frame = resolveNcFaceFrame(section, nc, options.profile)
+  const family = options.profile ? profileFamily(options.profile) : null
   const failures: CutReachFailure[] = []
   const tol = options.toleranceMm ?? 0
   const offsets = tol > 0 ? [-tol, -tol / 2, 0, tol / 2, tol] : [0]
+
+  // X coordinates each outer face reaches. A member-end cut also shows on the mating faces (the
+  // end is open), so a `reach` on one face there is not a blind bore — the part simply ends.
+  const faceXs = new Map<NcFace, number[]>()
+  for (const contour of nc.contours) {
+    if (contour.kind !== 'outer') continue
+    const list = faceXs.get(contour.face) ?? []
+    for (const point of contour.points) list.push(point[0])
+    faceXs.set(contour.face, list)
+  }
+  const hasMatingEndCut = (face: NcFace, x: number): boolean => {
+    for (const [other, xs] of faceXs) {
+      if (other === face) continue
+      if (xs.some((value) => Math.abs(value - x) <= SAMPLE_STEP_MM)) return true
+    }
+    return false
+  }
 
   for (const contour of nc.contours) {
     if (contour.kind !== 'outer') continue
@@ -362,6 +443,14 @@ export function assessCutReachGeometry(
     const span = faceSpanAxis(frame, face)
     const points = contour.points
     const count = points.length
+    const xs = points.map((point) => point[0])
+    const ys = points.map((point) => point[1])
+    const bounds: FaceBounds = {
+      minX: Math.min(...xs),
+      maxX: Math.max(...xs),
+      minY: Math.min(...ys),
+      maxY: Math.max(...ys),
+    }
 
     /** Classify one ray entry point on the face plane. */
     const classify = (
@@ -445,6 +534,11 @@ export function assessCutReachGeometry(
       if (Math.abs(b[1] - a[1]) < Math.abs(b[0] - a[0])) continue
       const budget = MAX_CUT_THICKNESS_MM * Math.cos((bevel * Math.PI) / 180)
       const cosBevel = Math.cos((bevel * Math.PI) / 180)
+      // Rolled root fillets are expected corners the head finishes; a bevel at a T/angle junction
+      // is a deliberate weld prep cut by the bevel settings, not a straight bore. `wall` still
+      // means cutting twice and stays reported.
+      const cornerFinishes = family != null && CORNER_FINISH_FAMILIES.has(family)
+      const junctionBevel = family != null && JUNCTION_BEVEL_FAMILIES.has(family) && bevel > 0
 
       // Dense sample along the edge, then group the failing probes into contiguous runs — each
       // run is the subsection of the cut that is unreachable.
@@ -501,24 +595,46 @@ export function assessCutReachGeometry(
         const from: [number, number] = isCorner ? [a[0], a[1]] : [first.x, first.y]
         const to: [number, number] = isCorner ? [b[0], b[1]] : [last.x, last.y]
         const spanMm = Math.hypot(to[0] - from[0], to[1] - from[1])
-        const failure: CutReachFailure = {
-          reason: worst.status === 'wall' ? 'wall' : isCorner ? 'corner' : 'reach',
-          face,
-          from,
-          to,
-          spanMm,
-          x: worst.x,
-          entry: worst.entry,
-          dir,
-          exit: worst.exit,
-          path: worst.path,
-          bevel,
+        const reason: CutReachFailure['reason'] = isCorner
+          ? 'corner'
+          : worst.status === 'wall'
+            ? 'wall'
+            : 'reach'
+        // A zero-length / zero-wall run is numerical noise, not a missing cut.
+        const degenerate = reason !== 'corner' && (spanMm < 1e-6 || worst.path <= 1e-6)
+        // A short reach stub at a raw-stock corner is a finishing pass, not a missing cut.
+        const endCornerStub = reason === 'reach' && isEndCornerStub(from, to, bounds)
+        // A member-end cut is open on the mating faces — the beam comes in from the end, so a
+        // `reach` measure that runs along the web there is not a blind bore.
+        const openEnd =
+          reason === 'reach' && isAtFaceEnd(from, to, bounds) && hasMatingEndCut(face, from[0])
+        if (!degenerate && !endCornerStub && !openEnd) {
+          const failure: CutReachFailure = {
+            reason,
+            face,
+            from,
+            to,
+            spanMm,
+            x: worst.x,
+            entry: worst.entry,
+            dir,
+            exit: worst.exit,
+            path: worst.path,
+            bevel,
+          }
+          if (!failures.some((existing) => sameFailure(existing, failure))) failures.push(failure)
         }
-        if (!failures.some((existing) => sameFailure(existing, failure))) failures.push(failure)
         run = []
       }
       for (const probe of probes) {
-        if (probe.status === 'reach' || probe.status === 'wall' || probe.status === 'corner') {
+        // A rolled root fillet is an expected corner the head finishes with its bevel settings,
+        // and a beveled junction's straight-ray bore is not the real pass. `wall` (the same
+        // material cut twice) is still reported.
+        const ignored =
+          (cornerFinishes && probe.status === 'corner') ||
+          (junctionBevel && probe.status === 'reach')
+        const status = ignored ? ('clean' as const) : probe.status
+        if (status === 'reach' || status === 'wall' || status === 'corner') {
           run.push(probe)
         } else flush()
       }

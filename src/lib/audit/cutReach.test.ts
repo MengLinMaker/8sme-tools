@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { nw30Bottom, nw31Bottom } from '@test/fixtures'
+import { fixture, nw30Bottom, nw31Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
@@ -28,6 +28,19 @@ function rectNc(bevelDeg = 0): string {
     row(' ', 0, 100),
     'EN',
   ].join('\n')
+}
+
+/** The same rectangle cut on two faces (as a real part's end is), both reaching each end X. */
+function crossNc(): string {
+  const row = (head: string, x: number, y: number) =>
+    `${head}${x.toFixed(2).padStart(10)}${y.toFixed(2).padStart(12)}${'0.00'.padStart(12)}${'0.00'.padStart(12)}${'0.00'.padStart(12)}${'0.00'.padStart(12)}${'0.00'.padStart(12)}`
+  const rect = (face: string) => [
+    row(face, 0, 0),
+    row(' ', 200, 0),
+    row(' ', 200, 100),
+    row(' ', 0, 100),
+  ]
+  return ['ST', '  m1', 'AK', ...rect('  v'), 'AK', ...rect('  o'), 'EN'].join('\n')
 }
 
 const SOLID: [number, number][] = [
@@ -90,6 +103,26 @@ describe('cutReach geometry', () => {
     }
   })
 
+  it('ignores a member-end reach when the mating face is cut at the same X', () => {
+    // One face alone reads as a deep end bore; with the mating face cut at the same X the end is
+    // open, so there is nothing to bore.
+    expect(assessCutReach(rectNc(0), SOLID).length).toBeGreaterThan(0)
+    expect(assessCutReach(crossNc(), SOLID)).toEqual([])
+  })
+
+  it('ignores the straight-ray reach on a beveled T/angle junction cut', () => {
+    // The head cuts a T web/flange (or angle leg) bevel with its bevel settings; the straight-ray
+    // bore the model measures there is not the real pass. Only `reach` is dropped — `wall` (the
+    // same material cut twice) is still reported.
+    for (const profile of ['BT100*15', 'EA75*75*6', 'UA100*75*6']) {
+      expect(assessCutReach(rectNc(45), SOLID, [], { profile })).toEqual([])
+    }
+    // A non-junction profile keeps the bevel-bore check.
+    expect(assessCutReach(rectNc(45), SOLID, [], { profile: 'PFC100*50' }).length).toBeGreaterThan(
+      0,
+    )
+  })
+
   it('clears a thin-wall cut', () => {
     const section = partSectionForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])
     expect(section).not.toBeNull()
@@ -137,6 +170,91 @@ describe('cutReach on real parts', () => {
       },
     )
   }
+
+  // m134 is a BT100*15 (T) with a ~45° weld-prep bevel at the web/flange root. The straight-ray
+  // model sees a deep bore there, but the bevel head cuts it with its bevel settings, so the
+  // junction-bevel suppression clears the finding. Without the profile it still flags.
+  it.skipIf(!existsSync(join(nw31Top('NC files'), 'm134.nc1')))(
+    'm134 (NW31 Top, BT100*15) ignores the deep bore on a beveled T junction cut',
+    () => {
+      const ncText = readFileSync(join(nw31Top('NC files'), 'm134.nc1'), 'utf8')
+      const nc = parseNcGeometry(ncText)
+      const header = parseDstv(ncText).header
+      const section = partSectionForCode(header.profile, header.dimensions)
+      expect(section).not.toBeNull()
+      if (!section) return
+      expect(assessCutReachGeometry(nc, section.points, section.holes ?? [])).not.toEqual([])
+      expect(
+        assessCutReachGeometry(nc, section.points, section.holes ?? [], {
+          profile: header.profile,
+        }),
+      ).toEqual([])
+    },
+  )
+
+  // M-1 is a plain PFC380*100. Its end cuts only "bore" the full depth in a ~10 mm stub where the
+  // cut meets the raw-stock corner; that finish is not a missing cut, so the reach stub is dropped.
+  // M-34 adds a degenerate zero-span wall at the same end — also noise.
+  for (const mark of ['M-1', 'M-34']) {
+    it.skipIf(!existsSync(fixture('ncep', `${mark}.nc1`)))(
+      `${mark} (PFC) ignores the end-corner reach stubs`,
+      () => {
+        const ncText = readFileSync(fixture('ncep', `${mark}.nc1`), 'utf8')
+        const nc = parseNcGeometry(ncText)
+        const header = parseDstv(ncText).header
+        const section = partSectionForCode(header.profile, header.dimensions)
+        expect(section).not.toBeNull()
+        if (!section) return
+        expect(
+          assessCutReachGeometry(nc, section.points, section.holes ?? [], {
+            profile: header.profile,
+            toleranceMm: 1,
+          }),
+        ).toEqual([])
+      },
+    )
+  }
+
+  // M-3 is a UB310*32. Its end cuts pass the rolled web/flange root fillets, so the ±1 mm
+  // placement band lands samples on the curve — an expected finishing corner, not a finding.
+  it.skipIf(!existsSync(fixture('ncep', 'M-3.nc1')))(
+    'M-3 (UB310*32) suppresses the rolled root-fillet corner risk',
+    () => {
+      const ncText = readFileSync(fixture('ncep', 'M-3.nc1'), 'utf8')
+      const nc = parseNcGeometry(ncText)
+      const header = parseDstv(ncText).header
+      const section = partSectionForCode(header.profile, header.dimensions)
+      expect(section).not.toBeNull()
+      if (!section) return
+      expect(
+        assessCutReachGeometry(nc, section.points, section.holes ?? [], {
+          profile: header.profile,
+          toleranceMm: 1,
+        }),
+      ).toEqual([])
+    },
+  )
+
+  // m118 is a BT100*15 (T). Its end cut runs into the web/flange root fillet, so a ±1 mm placement
+  // shift lands samples on the curve. That is the T's expected junction corner, cut with the
+  // machine's bevel settings — unlike an SHS corner (m166), it is not a finding.
+  it.skipIf(!existsSync(join(nw31Top('NC files'), 'm118.nc1')))(
+    'm118 (NW31 Top, BT100*15) suppresses the T root-fillet corner risk',
+    () => {
+      const ncText = readFileSync(join(nw31Top('NC files'), 'm118.nc1'), 'utf8')
+      const nc = parseNcGeometry(ncText)
+      const header = parseDstv(ncText).header
+      const section = partSectionForCode(header.profile, header.dimensions)
+      expect(section).not.toBeNull()
+      if (!section) return
+      expect(
+        assessCutReachGeometry(nc, section.points, section.holes ?? [], {
+          profile: header.profile,
+          toleranceMm: 1,
+        }),
+      ).toEqual([])
+    },
+  )
 
   // m166 is an SHS100*100*6.0 shaft whose cut runs near the tube's 15 mm corner radius. On the
   // line it clears (thin wall, far opposite wall), but the machine's ±1 mm placement error —

@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { assessManufacturability, contourHasBevel, contourStepDepth } from './manufacturability'
@@ -17,6 +20,31 @@ const STEP = `  o       0.00       0.00       0.00       0.00       0.00       0
 const RECT = `  o       0.00       0.00       0.00       0.00       0.00       0.00       0.00
        100.00       0.00       0.00       0.00       0.00       0.00       0.00
        100.00     100.00       0.00       0.00       0.00       0.00       0.00
+         0.00     100.00       0.00       0.00       0.00       0.00       0.00`
+
+/** The same step, but its far end rolls into a rounded corner (arc radius). */
+const ROUNDED_STEP = `  o       0.00       0.00       0.00       0.00       0.00       0.00       0.00
+       100.00       0.00       0.00       0.00       0.00       0.00       0.00
+       100.00      30.00       0.00       0.00       0.00       0.00       0.00
+        60.00      30.00       0.00       0.00       0.00       0.00       0.00
+        60.00     100.00     -15.00       0.00       0.00       0.00       0.00
+         0.00     100.00       0.00       0.00       0.00       0.00       0.00`
+
+/** The same step, with a notch instruction on the step's line (`t` = tangential notch). */
+const NOTCHED_STEP = `  o       0.00       0.00       0.00       0.00       0.00       0.00       0.00
+       100.00       0.00       0.00       0.00       0.00       0.00       0.00
+       100.00      30.00       0.00       0.00       0.00       0.00       0.00
+        60.00      30.00       0.00       0.00       0.00       0.00       0.00
+        60.00     100.00       0.00       0.00       0.00       0.00       0.00
+         0.00     100.00       0.00       0.00       0.00       0.00       0.00
+        60.00      15.00t      0.00       0.00       0.00       0.00       0.00`
+
+/** The same step, but its near-vertical edge carries welding-prep bevel data (an angled cut). */
+const BEVELED_STEP = `  o       0.00       0.00       0.00       0.00       0.00       0.00       0.00
+       100.00       0.00       0.00       0.00       0.00       0.00       0.00
+       100.00      30.00       0.00       0.00       0.00       0.00       0.00
+        60.00      30.00       0.00      20.00       9.00       0.00       0.00
+        60.00     100.00       0.00      20.00       9.00       0.00       0.00
          0.00     100.00       0.00       0.00       0.00       0.00       0.00`
 
 /** A shallow step (20 mm) — within the head's ~30 mm reach, so not flagged. */
@@ -55,6 +83,41 @@ describe('manufacturability', () => {
     // Deeper than the head can reach → an unmanufacturable error, not a fixable warning.
     expect(issues[0]?.severity).toBe('error')
   })
+
+  it('ignores a beveled step (a T/angle junction cut)', () => {
+    // The raw step is still measurable for the STEP rebuild (which uses `contourHasBevel`).
+    expect(contourStepDepth(first(nc(BEVELED_STEP)))).toBeCloseTo(70, 0)
+    // But as a manufacturability finding it is an angled/bevel cut, handled by the bevel settings.
+    expect(contourStepDepth(first(nc(BEVELED_STEP)), { ignoreBeveled: true })).toBe(0)
+    expect(assessManufacturability(nc(BEVELED_STEP))).toEqual([])
+  })
+
+  it('ignores a step that meets a rounded corner', () => {
+    expect(contourStepDepth(first(nc(ROUNDED_STEP)))).toBeCloseTo(70, 0)
+    expect(contourStepDepth(first(nc(ROUNDED_STEP)), { ignoreRoundedCorners: true })).toBe(0)
+    expect(assessManufacturability(nc(ROUNDED_STEP))).toEqual([])
+  })
+
+  it('ignores a step that is part of a notch/corner instruction', () => {
+    expect(contourStepDepth(first(nc(NOTCHED_STEP)), { notches: [[60, 15]] })).toBe(0)
+    expect(assessManufacturability(nc(NOTCHED_STEP))).toEqual([])
+  })
+
+  it.skipIf(!existsSync(join(nw31Top('NC files'), 'm134.nc1')))(
+    'm134 (BT100*15) ignores the beveled web/flange root step',
+    () => {
+      const text = readFileSync(join(nw31Top('NC files'), 'm134.nc1'), 'utf8')
+      expect(assessManufacturability(text)).toEqual([])
+    },
+  )
+
+  it.skipIf(!existsSync(join(nw31Top('NC files'), 'm144.nc1')))(
+    'm144 (BT100*15) ignores the end cut meeting a rounded corner',
+    () => {
+      const text = readFileSync(join(nw31Top('NC files'), 'm144.nc1'), 'utf8')
+      expect(assessManufacturability(text)).toEqual([])
+    },
+  )
 
   it('ignores a shallow step within the head reach', () => {
     expect(contourStepDepth(first(nc(SHALLOW)))).toBeCloseTo(20, 0)

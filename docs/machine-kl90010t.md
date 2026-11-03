@@ -149,6 +149,35 @@ the slag. `cutReach.ts` flags this as `reason: 'corner'` (the `CUT_CORNER` findi
 crossing the fillet on the line (a plain transverse end cut) is exempt, so only cuts whose shift
 *creates* the corner condition are reported.
 
+**Rolled root fillets & T/angle junction bevels.** A bevel at a T's web/flange root or an angle's
+leg root is cut with the head's dedicated bevel settings, not a straight bore. `cutReach.ts`
+therefore ignores:
+
+- `reason: 'corner'` on **any** cut line for the rolled families (`CORNER_FINISH_FAMILIES`:
+  `tee`, `angle`, `channel`, `i`) — the root fillet is an expected corner, not a bad placement,
+  because the head follows the radius; and
+- `reason: 'reach'` on a **beveled** cut line for `tee`/`angle` (`JUNCTION_BEVEL_FAMILIES`) — the
+  straight-ray model would over-measure the junction's backing.
+
+A second wall behind the cut (`reason: 'wall'` — the beam would cut the same material twice) is
+still reported for every family, since that is an unintended pass.
+
+On **any** section, a short `reach` stub at the junction of a member end and a raw-stock edge is a
+finishing corner, not a missing cut: the cut is at the face's X extreme and within
+`END_CORNER_SPAN_MM` (half the pierce cap) of one Y extreme. Those stubs are dropped (this is what
+cleared the PFC end-cut false positives); a longer or mid-member deep pass is still reported.
+Zero-length / zero-wall reaches are treated as numerical noise and dropped too.
+
+A **member-end cut** is also open on its mating faces. When a face's X extreme appears on another
+outer face's contour, a `reach` run there is not a blind bore: the beam cuts in from the end, not
+along the web. This is what clears the UB false positives at the mid-depth T-junction (e.g.
+`UB360*57`, where the model otherwise "bores" the full 359 mm depth along the web). A mid-member
+deep pass — with no mating end cut — is still reported.
+
+The separate `CUT_STEP` check has a related blind spot: `assessManufacturability` ignores a step
+edge bounded by bevel data, a rounded corner (arc), or a notch instruction — the material it sees
+on the far side is the intended bevel/corner feature, not a sudden thickness change.
+
 
 ## Sources
 

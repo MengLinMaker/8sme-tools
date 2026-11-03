@@ -15,6 +15,8 @@ import { type NcContour, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 
 /** Non-zero bevel/weld-prep value threshold (mm or degrees). */
 const BEVEL_EPS = 1e-6
+/** The head's bevel / weld-prep range; values outside it are not bevel angles. */
+const MAX_BEVEL_DEG = Math.max(Math.abs(MACHINE.bevel.minDeg), Math.abs(MACHINE.bevel.maxDeg))
 /** A near-vertical outline edge: |ΔX| at most this (mm). */
 const STEP_DX = 1.0
 /** ...and |ΔY| at least this (mm) — a sudden, not gradual, change. */
@@ -38,6 +40,42 @@ export function contourHasBevel(contour: NcContour): boolean {
   return contour.bevels.some((values) =>
     values.some((value) => Number.isFinite(value) && Math.abs(value) > BEVEL_EPS),
   )
+}
+
+/**
+ * True when the vertex carries a welding-prep **angle** within the head's range. The `bevels`
+ * array interleaves angle/distance pairs, so only the angle fields (`0` and `2`) count — a
+ * distance value alone is not a bevel cut (cf. {@link contourHasBevel}).
+ */
+function hasBevelAngleAt(contour: NcContour, index: number): boolean {
+  const values = contour.bevels[index] ?? []
+  return [values[0], values[2]].some(
+    (angle) =>
+      Number.isFinite(angle) &&
+      Math.abs(angle as number) > BEVEL_EPS &&
+      Math.abs(angle as number) <= MAX_BEVEL_DEG,
+  )
+}
+
+/**
+ * True when the edge at `index` meets a rounded corner: the edge itself is an arc, or an arc
+ * starts/ends at either endpoint. A corner arc puts stock on the far side of a cut line (the
+ * rounded end), which the step probes would otherwise read as a sudden thickness change.
+ */
+function touchesArc(contour: NcContour, index: number): boolean {
+  const radii = contour.radii ?? []
+  const n = contour.points.length
+  return [index, index + 1, index - 1].some(
+    (k) => Math.abs(radii[((k % n) + n) % n] ?? 0) > BEVEL_EPS,
+  )
+}
+
+/** True when the near-vertical edge at `index` shares a line with a notch/corner instruction. */
+function touchesNotch(contour: NcContour, index: number, notches: [number, number][]): boolean {
+  if (notches.length === 0) return false
+  const a = contour.points[index]
+  if (!a) return false
+  return notches.some(([x]) => Math.abs(x - a[0]) <= STEP_DX)
 }
 
 function pointInPolygon([px, py]: [number, number], polygon: [number, number][]): boolean {
@@ -75,8 +113,23 @@ function materialBothSides(
  * A sudden thickness change: a near-vertical edge with material present on **both** sides
  * (an end cut has material on one side only, so it is not flagged). A jump deeper than the
  * beam can clear (~3 cm reach) cannot be cut by sweeping one face.
+ *
+ * With `ignoreBeveled`, an edge whose vertices carry welding-prep **angle** data is not a sudden
+ * step: it is an angled/bevel cut, and the material the probe sees on the far side is the bevel
+ * wedge the head removes. That is how a T's web/flange root and an angle's leg root are cut with
+ * the machine's bevel settings, so those edges are skipped (the bevel check surfaces them).
+ * With `ignoreRoundedCorners`, an edge meeting an arc is likewise skipped — the far-side material
+ * is the rounded corner, not a thickness step.
  */
-export function contourStepDepth(contour: NcContour): number {
+export function contourStepDepth(
+  contour: NcContour,
+  options: {
+    ignoreBeveled?: boolean
+    ignoreRoundedCorners?: boolean
+    /** Notch/corner instruction points on this contour's face (NC face coords). */
+    notches?: [number, number][]
+  } = {},
+): number {
   const points = contour.points
   if (points.length < 4) return 0
   const xs = points.map((p) => p[0])
@@ -93,6 +146,14 @@ export function contourStepDepth(contour: NcContour): number {
     const dx = Math.abs(b[0] - a[0])
     const dy = Math.abs(b[1] - a[1])
     if (dx > STEP_DX || dy < STEP_DY) continue
+    if (
+      options.ignoreBeveled &&
+      (hasBevelAngleAt(contour, i) || hasBevelAngleAt(contour, (i + 1) % points.length))
+    ) {
+      continue
+    }
+    if (options.ignoreRoundedCorners && touchesArc(contour, i)) continue
+    if (touchesNotch(contour, i, options.notches ?? [])) continue
     const edgeX = (a[0] + b[0]) / 2
     if (edgeX <= midX) continue
     const { near, far } = materialBothSides(points, edgeX, minY, span)
@@ -110,18 +171,25 @@ export function contourHasStep(contour: NcContour): boolean {
  * thickness change deeper than the head can reach (`UNMANUFACTURABLE_DEPTH`) — material on both
  * sides of a deep near-vertical step, which a single-face laser sweep cannot cut. This is a
  * judgement call (e.g. the fix is to cut at an angle on the radius so the side doesn't exist),
- * so it is surfaced as an **error** and never auto-fixed. Bevels are captured separately (see
- * `contourHasBevel`) and are surfaced by viewing rather than as a finding.
+ * so it is surfaced as an **error** and never auto-fixed. A step bounded by bevel/weld-prep data
+ * is that angled cut (a T web/flange or angle leg root) and is skipped — it is cut with the
+ * machine's bevel settings, not a straight sweep.
  */
 export function assessManufacturability(ncText: string): ManufacturabilityIssue[] {
-  const { contours } = parseNcGeometry(ncText)
+  const { contours, notches } = parseNcGeometry(ncText)
   const outer = contours.filter((contour) => contour.kind === 'outer')
   const issues: ManufacturabilityIssue[] = []
 
   let depth = 0
   const faces: string[] = []
   for (const contour of outer) {
-    const contourDepth = contourStepDepth(contour)
+    const contourDepth = contourStepDepth(contour, {
+      ignoreBeveled: true,
+      ignoreRoundedCorners: true,
+      notches: notches
+        .filter((notch) => notch.face === contour.face)
+        .map((notch) => [notch.x, notch.y] as [number, number]),
+    })
     if (contourDepth >= UNMANUFACTURABLE_DEPTH) {
       depth = Math.max(depth, contourDepth)
       faces.push(contour.face)
