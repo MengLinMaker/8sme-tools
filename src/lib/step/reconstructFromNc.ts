@@ -2,14 +2,17 @@ import { contourHasBevel, contourStepDepth } from '@/lib/audit/manufacturability
 import { parseDstv } from '@/lib/parsers/dstv'
 import {
   faceHalf,
+  facePlaneHalf,
   faceSpanAxis,
   isSquareTube,
   ncAuthoredAcrossSign,
   ncAuthoredStancePoints,
+  resolveFaceSign,
   resolveNcFaceFrame,
   sectionSpanAt,
 } from '@/lib/parsers/ncFaces'
 import { type NcContour, type NcFace, parseNcGeometry, slotOffset } from '@/lib/parsers/ncGeometry'
+import { selectWeldingPrep } from '@/lib/parsers/weldingPrep'
 import { profileFamily } from '@/lib/sections/canonical'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stripStraySolids } from './clean'
@@ -106,6 +109,66 @@ export function contourBevelFactor(contour: NcContour): number {
     }
   }
   return factor
+}
+
+type Vec3 = [number, number, number]
+
+const cross3 = (a: Vec3, b: Vec3): Vec3 => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0],
+]
+const dot3 = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+const unit3 = (a: Vec3): Vec3 => {
+  const l = Math.hypot(a[0], a[1], a[2]) || 1
+  return [a[0] / l, a[1] / l, a[2] / l]
+}
+
+/** Signed area of a 2-D loop: positive = counter-clockwise. */
+function signedArea2(pts: Pt[]): number {
+  let area = 0
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i]
+    const b = pts[(i + 1) % pts.length]
+    if (!a || !b) continue
+    area += a[0] * b[1] - b[0] * a[1]
+  }
+  return area / 2
+}
+
+interface FaceBevelEdge {
+  a: Pt
+  b: Pt
+  /** Bevel / welding-preparation angle (deg, off square). */
+  angle: number
+  /** Bevel depth (mm); 0 falls back to the wall thickness. */
+  distance: number
+}
+
+/**
+ * The bevelled **edges** of an outer face contour, in face coordinates. A vertex's welding-prep
+ * pair describes the edge that starts at it (the same convention as its arc radius). The two
+ * `angle, distance` pairs describe the two sides of the plate; only the cuttable side is a real
+ * prep ({@link selectWeldingPrep}), so each vertex yields at most one edge. Zero-angle pairs (the
+ * common case) are dropped; zero-length closing edges are ignored.
+ */
+export function faceBevelEdges(contour: NcContour, map: (p: Pt) => Pt = (p) => p): FaceBevelEdge[] {
+  const points = contour.points
+  const out: FaceBevelEdge[] = []
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i]
+    const b = points[(i + 1) % points.length]
+    if (!a || !b || Math.hypot(b[0] - a[0], b[1] - a[1]) <= 1e-6) continue
+    const prep = selectWeldingPrep(contour.bevels[i])
+    if (!Number.isFinite(prep.angle) || Math.abs(prep.angle) <= 1e-6) continue
+    out.push({
+      a: map(a),
+      b: map(b),
+      angle: prep.angle,
+      distance: Number.isFinite(prep.distance) ? prep.distance : 0,
+    })
+  }
+  return out
 }
 
 /**
@@ -244,6 +307,13 @@ export interface ReconstructOptions {
    * discards the text — pure waste there.
    */
   measureOnly?: boolean
+  /**
+   * **Experimental, opt-in:** reproduce DSTV welding-preparation chamfers as slanted cut
+   * surfaces. Off by default because the double-bevel side semantics still need a real-article
+   * check. On a closed section a full-wall bevel is already encoded by the opposite face outline
+   * and is left alone; on an open section (no opposite face) it is extended through the wall.
+   */
+  bevels?: boolean
 }
 
 export async function reconstructStepFromNc(
@@ -276,7 +346,7 @@ export async function reconstructSolidFromNc(
   const section = canonicalSectionFlip ? { ...rawSection, points: authoredPoints } : rawSection
 
   await ensureOc()
-  const { draw, drawCircle, drawRoundedRectangle } = await import('replicad')
+  const { draw, drawCircle, drawRoundedRectangle, Plane } = await import('replicad')
   const poly = (pts: Pt[], radii?: number[]) => {
     let pen = draw(pts[0])
     for (let i = 1; i < pts.length; i++) {
@@ -337,7 +407,135 @@ export async function reconstructSolidFromNc(
   // Steepest bevel per face axis: a slanted cut has to reach `t / cos θ` through the wall.
   const bevelFactorByAxis: Record<Axis, number> = { 0: 1, 1: 1 }
 
-  // Base prism: cross-section in the (width=Y, depth=Z) plane, extruded along the member (X).
+  // A bevel removes the wedge the square tool leaves behind the face: the cut line is the face
+  // outline at the surface and shifts `depth * tan(angle)` into the outline at `depth` through the
+  // wall. Sweeping that triangular section along the edge gives the slanted cut surface. The
+  // square cut still does the bulk trim, so this only has to shave the sliver — which keeps it
+  // independent of the existing per-axis boolean strategy.
+  const facePresent = new Set(outer.map((c) => c.face))
+  const oppositeFace = (face: NcFace): NcFace =>
+    face === 'v' ? 'h' : face === 'h' ? 'v' : face === 'o' ? 'u' : 'o'
+  const bevelCut = (
+    edge: FaceBevelEdge,
+    axis: Axis,
+    face: NcFace,
+    ccw: boolean,
+  ): SolidOps | null => {
+    const angle = Math.abs(edge.angle)
+    if (!(angle > 1e-6) || angle >= 89) return null
+    const dx = edge.b[0] - edge.a[0]
+    const dy = edge.b[1] - edge.a[1]
+    const length = Math.hypot(dx, dy)
+    if (!(length > 1e-6)) return null
+    const plate = plateThicknessMm(header.profile, header.dimensions, (1 - axis) as Axis)
+    const wall = plate > 0 ? plate : BEAM_REACH
+    // A bevel with no leg distance, or one that runs the whole wall, is a full-wall bevel. On a
+    // **closed** section the opposite face's outline already encodes that miter, so adding it again
+    // would cut a second facet in the opposite direction. On an **open** section (PFC/T/angle have
+    // no opposite face — a channel exports `v` but no `h`) nothing encodes the inner cut line, so
+    // the wedge must run right through the wall; `CUT_MARGIN` takes it clear of the inner surface.
+    const fullWall = !(edge.distance > 1e-6) || edge.distance >= wall - 0.5
+    if (fullWall && facePresent.has(oppositeFace(face))) return null
+    if (fullWall && !(plate > 0)) return null
+    const depth = fullWall ? wall + CUT_MARGIN : edge.distance
+    const tan = Math.tan((angle * Math.PI) / 180)
+    const width = depth * tan
+    const faceOut = facePlaneHalf(frame, face)
+    const faceSign = resolveFaceSign(frame, section.points, face)
+    const nx = ccw ? -dy / length : dy / length
+    const ny = ccw ? dx / length : -dx / length
+    const n3: Vec3 = axis === 0 ? [nx, ny, 0] : [nx, 0, ny]
+    const t3 = unit3(axis === 0 ? [dx, dy, 0] : [dx, 0, dy])
+    const origin: Vec3 =
+      axis === 0
+        ? [edge.a[0], edge.a[1], faceSign * faceOut]
+        : [edge.a[0], faceSign * faceOut, edge.a[1]]
+    // The face's outward normal, so the tool can start just outside it. `Plane`'s second axis is
+    // `t3 × n3`, whose sign depends on the face side, so the depth sign is resolved from it.
+    const inward: Vec3 = axis === 0 ? [0, 0, -faceSign] : [0, -faceSign, 0]
+    const vSign = dot3(cross3(t3, n3), inward) >= 0 ? 1 : -1
+    const outside = CUT_OUTSIDE
+    // A welding-prep chamfer removes the corner behind the cut line: the slanted surface starts
+    // **on the cut line** at the face surface and runs `width` into the material at `depth`. Keeping
+    // the surface anchored at the NC line is what makes the manufactured edge agree with the drawn
+    // cut line; the old wedge started `width` inside it and shaved the face back instead.
+    const section2: Pt[] = [
+      [-outside, -vSign * outside],
+      [0, 0],
+      [width, vSign * depth],
+      [-outside, vSign * depth],
+    ]
+    const plane = new Plane(origin, n3, t3)
+    const [first, ...rest] = section2
+    if (!first) return null
+    let pen = draw(first)
+    for (const point of rest) pen = pen.lineTo(point)
+    return pen.close().sketchOnPlane(plane).extrude(length) as unknown as SolidOps
+  }
+
+  // Global member-end extent over every outer face outline. Faces routinely disagree in X at
+  // an end (a sloped/bevel end runs long on one face, short on another); the union silhouette —
+  // never the shortest face — is the true end.
+  const endXs = outer.flatMap((c) => c.points.map((p) => p[0]))
+  const endMinX = Math.min(...endXs)
+  const endMaxX = Math.max(...endXs)
+
+  // A channel is cut **one face at a time on the pure stock**: each face's outline is extruded
+  // through that face's own wall and removed. Starting from stock (not a union of plates) keeps the
+  // section's curves and rounded/bevelled edges, and cutting each face separately keeps every
+  // face's cut line as an edge — the old union of `o`/`u` suppressed the shorter flange's line
+  // (m127 `o[0]`).
+  const channelFaces = family === 'channel'
+  const buildFaceCut = (
+    face: NcFace,
+    axis: Axis,
+    pts: Pt[],
+    radii: number[],
+    bevelFactor: number,
+  ): SolidOps | null => {
+    const wall = plateThicknessMm(header.profile, header.dimensions, (1 - axis) as Axis)
+    if (!(wall > 0)) return null
+    // A bevelled cut leans through the wall, so it needs more than the square wall depth. Extend
+    // the tool by the bevel's in-plane leg (`wall * tan θ`) so it clears the slanted surface.
+    const bevelLeg = wall * Math.sqrt(Math.max(0, bevelFactor * bevelFactor - 1))
+    // The stock's root radius is material *behind* the face, so a wall-deep cut can stop short of
+    // the rounded edge and leave a sliver. Add the radius so the tool clears the fillet too.
+    const rootRadius = Math.max(0, header.dimensions[4] ?? 0)
+    const reach = wall + bevelLeg + rootRadius + CUT_OUTSIDE + LASER_KERF
+    const faceOut = facePlaneHalf(frame, face)
+    const faceSign = resolveFaceSign(frame, section.points, face)
+    const half = halfOf(axis)
+    const rect = poly([
+      [endMinX - 2, -half - 2],
+      [maxX + 22, -half - 2],
+      [maxX + 22, half + 2],
+      [endMinX - 2, half + 2],
+    ])
+    const notch = (() => {
+      try {
+        return (rect as unknown as { cut: (o: unknown) => unknown }).cut(poly(pts, radii))
+      } catch {
+        return null
+      }
+    })()
+    if (!notch) return null
+    if (axis === 1) {
+      // Face spans depth (Z), normal is width (Y); `XZ` extrudes towards −Y.
+      const shiftY = faceSign > 0 ? faceOut : -faceOut + reach
+      return (notch as ReturnType<typeof poly>)
+        .sketchOnPlane('XZ')
+        .extrude(reach)
+        .translate(0, shiftY, 0) as unknown as SolidOps
+    }
+    // Face spans width (Y), normal is depth (Z); `XY` extrudes towards +Z.
+    const shiftZ = faceSign > 0 ? faceOut - reach : -faceOut
+    return (notch as ReturnType<typeof poly>)
+      .sketchOnPlane('XY')
+      .extrude(reach)
+      .translate(0, 0, shiftZ) as unknown as SolidOps
+  }
+
+  // Pure stock: cross-section in the (width=Y, depth=Z) plane, extruded along the member (X).
   let solid = poly(section.points)
     .sketchOnPlane('YZ')
     .extrude(maxX + 20) as unknown as SolidOps
@@ -359,6 +557,23 @@ export async function reconstructSolidFromNc(
     // applies for the projection, so the two agree.
     const sign = acrossSign(c.face)
     const pts = rawPts.map(([x, y]) => [x, sign * (y - half)] as Pt)
+    if (channelFaces) {
+      const cut = buildFaceCut(c.face, axis, pts, radii, contourBevelFactor(c))
+      if (cut) solid = solid.cut(cut)
+      if (options.bevels === true && !options.simplify) {
+        const ccw = signedArea2(pts) > 0
+        const map = (p: Pt): Pt => [p[0], sign * (p[1] - half)]
+        for (const edge of faceBevelEdges(c, map)) {
+          try {
+            const bevel = bevelCut(edge, axis, c.face, ccw)
+            if (bevel) solid = solid.cut(bevel)
+          } catch {
+            // A degenerate bevel wedge must not take the whole rebuild down.
+          }
+        }
+      }
+      continue
+    }
     bevelFactorByAxis[axis] = Math.max(bevelFactorByAxis[axis], contourBevelFactor(c))
     pointsByAxis[axis].push(...pts)
     // Exact outline for both axes. The axis-1 outline used to be kerf-eroded (0.1 mm inset) to
@@ -366,21 +581,30 @@ export async function reconstructSolidFromNc(
     // beside every real edge and mis-aligned with the end "band", walling the bevel off as a
     // staircase. stripStraySolids now absorbs any floating debris instead.
     drawingsByAxis[axis].push(poly(pts, radii))
-  }
 
-  // Global member-end extent over every outer face outline. Faces routinely disagree in X at
-  // an end (a sloped/bevel end runs long on one face, short on another); the union silhouette —
-  // never the shortest face — is the true end. Without this the short face's trim severs the
-  // long face's end wedge into stray bodies (and deletes a slice at the cut), or squares the
-  // member short by dropping the end caps entirely (m106 lost 92 mm silently).
-  const endXs = outer.flatMap((c) => c.points.map((p) => p[0]))
-  const endMinX = Math.min(...endXs)
-  const endMaxX = Math.max(...endXs)
+    // Reproduce welding-preparation data as true slanted cut walls. An I-section's `v`/`h` faces
+    // are the interior web, whose authored across coordinate is not the section silhouette this
+    // tool is placed on — leave those square until they have a real fixture.
+    const webFace = isI && (c.face === 'v' || c.face === 'h')
+    if (options.bevels === true && !options.simplify && !webFace) {
+      const ccw = signedArea2(pts) > 0
+      const map = (p: Pt): Pt => [p[0], sign * (p[1] - half)]
+      for (const edge of faceBevelEdges(c, map)) {
+        try {
+          const cut = bevelCut(edge, axis, c.face, ccw)
+          if (cut && solid) solid = solid.cut(cut)
+        } catch {
+          // A degenerate bevel wedge must not take the whole rebuild down; the square cut stands.
+        }
+      }
+    }
+  }
 
   // Constrain each cross-section axis by the union of that axis's face outlines. A mitre makes
   // the top face shorter than the bottom, so the union (not either face alone) is the true
   // silhouette and stops the intersection from over-trimming the ends.
   for (const axis of [0, 1] as Axis[]) {
+    if (channelFaces) break
     const drawings = drawingsByAxis[axis]
     if (drawings.length === 0) continue
     const half = halfOf(axis)
@@ -548,11 +772,26 @@ export async function reconstructSolidFromNc(
             .sketchOnPlane('XZ')
             .extrude(reach)
             .translate(0, topEdge, 0) as unknown as SolidOps
-        solid = solid.cut(skin(faceOut + 2))
-        solid = solid.cut(skin(-faceOut - 2 + reach))
+        for (const side of [1, -1] as const) {
+          solid = solid.cut(skin(side > 0 ? faceOut + 2 : -faceOut - 2 + reach))
+        }
       }
     }
   }
+
+  // The stock runs past `maxX` so the cut tools clear; a per-face cut only reaches through its own
+  // wall, so trim the remaining overhang to the global end extent once. This is an intersection,
+  // not a union, so the stock's curves/fillets are preserved.
+  const trim = poly([
+    [-(halfOf(0) + 2), -(halfOf(1) + 2)],
+    [halfOf(0) + 2, -(halfOf(1) + 2)],
+    [halfOf(0) + 2, halfOf(1) + 2],
+    [-(halfOf(0) + 2), halfOf(1) + 2],
+  ])
+    .sketchOnPlane('YZ')
+    .extrude(Math.max(0.1, endMaxX - endMinX))
+    .translate(endMinX, 0, 0) as unknown as SolidOps
+  solid = solid.intersect(trim)
 
   // Holes, drilled perpendicular to the face they sit on — and only as deep as that face's wall.
   // An enclosed NC surface (a `BO` hole) is a single cut: the cutter runs from just outside the
