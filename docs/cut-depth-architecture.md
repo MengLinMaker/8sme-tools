@@ -82,6 +82,12 @@ inside past the intended cut depth** (`thickness > T + r + 0.5`). A beam that mi
 (entry metres away) or exits at `T + r` is not a failure, so no red line is drawn where the area
 does not go into the solid.
 
+**Beveled cut lines are excluded.** A welding-prep bevel (any non-zero angle or distance) is a
+slanted cut **surface**, not a square wall-piercing cut: the face normal is not its cut path. The
+normal probe then reports the section width as "depth" (e.g. a T flange side bevel) and flags a
+cut that never goes through the wall. Only plain segments (`angle 0`, `distance 0`) feed
+`cutSamples`.
+
 Rendering (final style):
 
 - Projection depth is **`T + r`** — face thickness (`faceThickness(frame, section, face)`) plus the

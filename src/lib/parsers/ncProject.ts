@@ -428,9 +428,17 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       ) {
         continue
       }
-      sampleCut(contour.face, x0, y0, x1, y1, contour.radii?.[i] ?? 0, spur)
+      const deg =
+        Math.abs(bevelAngle(contour.bevels[i])) >= Math.abs(bevelAngle(contour.bevels[i + 1]))
+          ? bevelAngle(contour.bevels[i])
+          : bevelAngle(contour.bevels[i + 1])
       const d0 = bevelDistance(contour.bevels[i])
       const d1 = bevelDistance(contour.bevels[i + 1])
+      // A bevel is a slanted cut **surface**, not a square wall-piercing cut: the face normal is
+      // not its cut path, so the CUT_DEPTH probe (which follows the normal for T + r) does not
+      // apply. Sampling it reported "overcuts" on plain beveled end cuts.
+      if (deg === 0 && d0 === 0 && d1 === 0)
+        sampleCut(contour.face, x0, y0, x1, y1, contour.radii?.[i] ?? 0, spur)
       // The cut line is grouped by its face's thickness; the bevel just adds its indication.
       pushCurve(byFace[contour.face], contour.face, x0, y0, x1, y1, contour.radii?.[i] ?? 0)
       if (d0 <= 0 && d1 <= 0) continue
@@ -438,10 +446,6 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       // The cut face is tilted off the surface normal by the bevel angle; show that tilt either as
       // a stemmed arrow or as a translucent fin swept along the cut line. A bevel within
       // REGULAR_CUT_DEG of the normal is just a plain cut — neither is drawn.
-      const deg =
-        Math.abs(bevelAngle(contour.bevels[i])) >= Math.abs(bevelAngle(contour.bevels[i + 1]))
-          ? bevelAngle(contour.bevels[i])
-          : bevelAngle(contour.bevels[i + 1])
       if (Math.abs(deg) < REGULAR_CUT_DEG) continue
       const line = normalize([
         b.world[0] - a.world[0],

@@ -12,8 +12,8 @@ import {
 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
-import { faceNormal, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
-import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { faceNormal, placeNcFace, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
+import { arcSamples, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { projectNc, type Vec3 } from '@/lib/parsers/ncProject'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { measureStep } from './measure'
@@ -168,18 +168,20 @@ function cleanUbNc(
   opts: {
     /** Override the `v` (side/web) silhouette, e.g. a web tenon at the far end. */
     v?: [number, number][]
+    /** Per-vertex DSTV arc radii for `v` (0 = straight). */
+    vRadii?: number[]
     holes?: { face: string; x: number; y: number; d: number }[]
   } = {},
 ): string {
   const number = (v: number): string => v.toFixed(2)
-  const contour = (face: string, points: [number, number][]): string => {
+  const contour = (face: string, points: [number, number][], radii?: number[]): string => {
     const [p0x, p0y] = points[0] ?? [0, 0]
-    const first = `  ${face}       ${number(p0x)}s      ${number(p0y)}       0.00       0.00       0.00       0.00       0.00`
+    const first = `  ${face}       ${number(p0x)}s      ${number(p0y)}       ${number(radii?.[0] ?? 0)}       0.00       0.00       0.00       0.00`
     const rows = points
       .slice(1)
       .map(
-        ([x, y]) =>
-          `       ${number(x)}       ${number(y)}       0.00       0.00       0.00       0.00       0.00`,
+        ([x, y], i) =>
+          `       ${number(x)}       ${number(y)}       ${number(radii?.[i + 1] ?? 0)}       0.00       0.00       0.00       0.00`,
       )
     return ['AK', first, ...rows].join('\n')
   }
@@ -221,7 +223,7 @@ function cleanUbNc(
     '      0.000',
     '      0.000',
     '      0.000',
-    contour('v', vPoints),
+    contour('v', vPoints, opts.vRadii),
     contour('o', [
       [0, 0],
       [0, width],
@@ -403,5 +405,114 @@ describe('reconstructFromNc — I-section NC projection lands on the manufacture
     const median = distances[Math.floor(distances.length / 2)] as number
     // The cuts sit on the surface (plus the 0.4 mm overlay nudge); a mirrored projection is 20+ mm off.
     expect(median).toBeLessThan(2)
+  }, 120000)
+})
+
+describe('reconstructFromNc — I-section cut arc side (synthetic)', () => {
+  it('manufactures the end-cut fillet on the same side as the NC cut line', async () => {
+    const L = 1000
+    const D = 359
+    const W = 172
+    const radius = 55
+    // A rounded end cut on the v (side/web) silhouette, kept inside the web (|depth| < D/2 − tf − r)
+    // so the stock root fillet never confuses the arc-side check: the centre ±50 mm edge.
+    const nc = cleanUbNc(L, D, W, 13, 8, 11.4, {
+      v: [
+        [0, 0],
+        [L, 0],
+        [L, D / 2 - 50],
+        [L, D / 2 + 50],
+        [L, D],
+        [0, D],
+        [0, 0],
+      ],
+      vRadii: [0, 0, -radius, 0, 0, 0, 0],
+    })
+
+    const header = parseDstv(nc).header
+    const section = partSectionForCode(header.profile ?? '', header.dimensions ?? [])
+    expect(section).toBeTruthy()
+    if (!section) return
+    const geo = parseNcGeometry(nc)
+    const frame = resolveNcFaceFrame(section.points, geo, header.profile)
+
+    const step = await reconstructStepFromNc(nc)
+    expect(step).toBeTruthy()
+    if (!step) return
+    const mesh = await meshStepFile('ub-arc', new TextEncoder().encode(step))
+    const pair = seatedPair(mesh.vertices, null, section.points, true)
+    const seated = transformVertices(mesh.vertices, pair.primary)
+    let minX = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    for (let i = 0; i + 2 < seated.length; i += 3) {
+      minX = Math.min(minX, seated[i] as number)
+      maxX = Math.max(maxX, seated[i] as number)
+    }
+    const length = maxX - minX
+    const OFF = 0.4
+    const toScene = (along: number, cross: [number, number], face: 'v' | 'o' | 'u' | 'h'): Vec3 => {
+      const n = faceNormal(frame, face, section.points)
+      const local: [number, number] = [cross[0], cross[1]]
+      local[n.axis] += n.sign * OFF
+      return [
+        along - length / 2 + local[0] * CANONICAL_X_AXIS.x + local[1] * CANONICAL_Y_AXIS.x,
+        local[0] * CANONICAL_X_AXIS.y + local[1] * CANONICAL_Y_AXIS.y,
+        local[0] * CANONICAL_X_AXIS.z + local[1] * CANONICAL_Y_AXIS.z,
+      ]
+    }
+
+    const contour = geo.contours.find((c) => c.kind === 'outer' && c.face === 'v')
+    expect(contour).toBeTruthy()
+    if (!contour) return
+    const expected: Vec3[] = []
+    for (let i = 0; i < contour.points.length; i++) {
+      const arcRadius = contour.radii?.[i] ?? 0
+      if (arcRadius === 0) continue
+      const p = contour.points[i] as [number, number]
+      const q = contour.points[(i + 1) % contour.points.length] as [number, number]
+      for (const [x, y] of arcSamples(p, q, arcRadius, 24)) {
+        const placed = placeNcFace(frame, 'v', x, y, section.points)
+        expected.push(toScene(placed.along, placed.cross, 'v'))
+      }
+    }
+    expect(expected.length).toBeGreaterThan(2)
+    const spanX = Math.max(...expected.map((p) => p[0])) - Math.min(...expected.map((p) => p[0]))
+    expect(spanX).toBeGreaterThan(20)
+
+    const edges: Vec3[][] = []
+    for (const body of mesh.bodies)
+      for (const face of body.brep ?? [])
+        for (const wire of face.wires)
+          for (const edge of wire.edges) {
+            const pts = transformVertices(edge.points, pair.primary)
+            const line: Vec3[] = []
+            for (let k = 0; k + 2 < pts.length; k += 3)
+              line.push([pts[k] as number, pts[k + 1] as number, pts[k + 2] as number])
+            edges.push(line)
+          }
+
+    const pointSeg = (p: Vec3, a: Vec3, b: Vec3): number => {
+      const ab: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+      const l2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2
+      let t =
+        l2 > 0 ? ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1] + (p[2] - a[2]) * ab[2]) / l2 : 0
+      t = Math.max(0, Math.min(1, t))
+      return Math.hypot(
+        p[0] - (a[0] + t * ab[0]),
+        p[1] - (a[1] + t * ab[1]),
+        p[2] - (a[2] + t * ab[2]),
+      )
+    }
+
+    let maxGap = 0
+    for (const p of expected) {
+      let gap = Number.POSITIVE_INFINITY
+      for (const line of edges)
+        for (let i = 0; i + 1 < line.length; i++)
+          gap = Math.min(gap, pointSeg(p, line[i] as Vec3, line[i + 1] as Vec3))
+      maxGap = Math.max(maxGap, gap)
+    }
+    // A flipped arc puts the manufactured fillet ~2 × sagitta (~64 mm) off the NC line.
+    expect(maxGap).toBeLessThan(2)
   }, 120000)
 })

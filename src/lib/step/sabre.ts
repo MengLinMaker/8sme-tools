@@ -304,7 +304,42 @@ export function sabreSamples(
 
   const probe = new Raycaster()
   const origin = new Vector3()
-  const flipDir = new Vector3(0.123, 0.456, 0.789).normalize()
+  // Three independent directions with a majority vote: a single ray can land on a tessellation
+  // edge/vertex of an OCC cut mesh and return an odd count for a point that is actually outside.
+  // The flag is only valid when the light-sabre end really is inside the solid.
+  const insideDirs = [
+    new Vector3(0.123, 0.456, 0.789).normalize(),
+    new Vector3(-0.789, 0.123, 0.456).normalize(),
+    new Vector3(0.456, -0.789, 0.123).normalize(),
+  ]
+  const isInside = (point: Vector3): boolean => {
+    let votes = 0
+    for (const dir of insideDirs) {
+      probe.set(point, dir)
+      probe.near = 0
+      probe.far = Number.POSITIVE_INFINITY
+      if (probe.intersectObject(target, false).length % 2 === 1) votes += 1
+    }
+    return votes >= 2
+  }
+  // **Strictly** inside: a point sitting on a cut/finish surface is not an overcut. Sample the
+  // point and six neighbours; a boundary point has some neighbours outside, a bulk point has none.
+  // This is what rejects a beam that stops exactly on the far surface (M_32's tenon edge).
+  const STRICT_EPS = 0.25
+  const offsets = [
+    [STRICT_EPS, 0, 0],
+    [-STRICT_EPS, 0, 0],
+    [0, STRICT_EPS, 0],
+    [0, -STRICT_EPS, 0],
+    [0, 0, STRICT_EPS],
+    [0, 0, -STRICT_EPS],
+  ] as const
+  const isStrictlyInside = (point: Vector3): boolean => {
+    if (!isInside(point)) return false
+    for (const [dx, dy, dz] of offsets)
+      if (!isInside(new Vector3(point.x + dx, point.y + dy, point.z + dz))) return false
+    return true
+  }
   const failures: SabreFailure[] = []
 
   for (const sample of samples) {
@@ -313,10 +348,7 @@ export function sabreSamples(
     // The projected cut line may sit on either side of the face; flip the normal if the probe
     // point just outside it is inside the solid.
     origin.copy(point).addScaledVector(normal, 0.3)
-    probe.set(origin, flipDir)
-    probe.near = 0
-    probe.far = Number.POSITIVE_INFINITY
-    if (probe.intersectObject(target, false).length % 2 === 1) normal.negate()
+    if (isStrictlyInside(origin)) normal.negate()
 
     // Gate: follow the beam inward for the intended cut depth (`T + r`) plus 1 mm, then ask
     // whether that endpoint is *inside* the solid. If it is, the beam has not exited at the cut
@@ -324,11 +356,7 @@ export function sabreSamples(
     // beam may cross air (e.g. a cut line on a flange end edge) before entering the solid.
     const cutDepth = sample.depth ?? length
     const endpoint = point.clone().addScaledVector(normal, -(cutDepth + 1))
-    probe.set(endpoint, flipDir)
-    probe.near = 0
-    probe.far = Number.POSITIVE_INFINITY
-    const endsInside = probe.intersectObject(target, false).length % 2 === 1
-    if (endsInside) {
+    if (isStrictlyInside(endpoint)) {
       failures.push({
         point: sample.point,
         normal: [normal.x, normal.y, normal.z],

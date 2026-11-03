@@ -270,6 +270,35 @@ describe('projectNc', () => {
     expect(out.bevelAreas[0]?.triangles).toHaveLength(2 * 3 * 3)
   })
 
+  it('does not depth-probe a beveled (slanted surface) cut segment', () => {
+    const nc: NcGeometry = {
+      contours: [
+        {
+          face: 'o',
+          kind: 'outer',
+          // Segment 0 is a plain cut (x 0→10); segment 1 is a beveled end surface (x 10→30).
+          points: [
+            [0, 90],
+            [10, 90],
+            [30, 130],
+          ],
+          bevels: [
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [-3.5, 6.3, 0, 0],
+          ],
+        },
+      ],
+      holes: [],
+      notches: [],
+      marks: [],
+    }
+    const out = projectNc(nc, { frame, section, toScene, normal })
+    expect(out.cutSamples.length).toBeGreaterThan(0)
+    // Only the plain segment is sampled; the beveled surface is not a wall-piercing cut.
+    expect(Math.max(...out.cutSamples.map((sample) => sample.point[0]))).toBeLessThanOrEqual(10.5)
+  })
+
   it('projects etch text and scribe lines as their own mark sets', () => {
     const nc: NcGeometry = {
       contours: [],
