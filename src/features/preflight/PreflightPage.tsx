@@ -1791,15 +1791,17 @@ export function PreflightPage() {
         : new Set(),
     )
   }, [viewerFindings])
-  /** Row click: toggle the issue's marker, and when turning it on, pan/zoom/rotate onto it. */
+  /**
+   * Row click: pan/zoom onto the issue. It never hides a visible marker — if the marker is
+   * currently hidden it is turned back on first.
+   */
   const activateIssue = useCallback(
     (index: number) => {
       const finding = viewerFindings[index]
       // Only findings with a 3D marker are interactive; the rest have no eye.
       if (!finding || !isVisualisable(finding)) return
-      const turningOn = hiddenIssues.has(index)
-      toggleIssue(index)
-      if (turningOn && findingLocationOf(finding) != null) focusFinding(finding)
+      if (hiddenIssues.has(index)) toggleIssue(index)
+      if (findingLocationOf(finding) != null) focusFinding(finding)
     },
     [viewerFindings, hiddenIssues, toggleIssue, focusFinding],
   )
@@ -3353,7 +3355,8 @@ export function PreflightPage() {
                       step={viewing.step}
                       onHover={setHoverIssueIndex}
                       isChecked={(index) => !hiddenIssues.has(index)}
-                      onToggleCheck={activateIssue}
+                      onToggleCheck={toggleIssue}
+                      onActivate={activateIssue}
                       allShown={hiddenIssues.size === 0}
                       onToggleAll={toggleAllIssues}
                       fix={{
@@ -3543,6 +3546,7 @@ function ViewerWarnings({
   onHover,
   isChecked,
   onToggleCheck,
+  onActivate,
   allShown = true,
   onToggleAll,
 }: {
@@ -3552,6 +3556,7 @@ function ViewerWarnings({
   onHover?: (index: number | null) => void
   isChecked?: (index: number) => boolean
   onToggleCheck?: (index: number) => void
+  onActivate?: (index: number) => void
   allShown?: boolean
   onToggleAll?: () => void
 }) {
@@ -3676,13 +3681,13 @@ function ViewerWarnings({
                 <TableRow
                   key={`${finding.code}-${finding.params?.index ?? finding.message}`}
                   tabIndex={showable ? 0 : undefined}
-                  onClick={showable && onToggleCheck ? () => onToggleCheck(index) : undefined}
+                  onClick={showable && onActivate ? () => onActivate(index) : undefined}
                   onKeyDown={
                     showable
                       ? (event) => {
                           if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault()
-                            onToggleCheck?.(index)
+                            onActivate?.(index)
                           }
                         }
                       : undefined
@@ -3696,8 +3701,13 @@ function ViewerWarnings({
                 >
                   <TableCell className="py-1">
                     {showable ? (
-                      <span
+                      <button
+                        type="button"
                         title={t('preflight.warnings.toggleIssue')}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onToggleCheck?.(index)
+                        }}
                         className={cn(
                           'inline-flex rounded p-0.5',
                           isChecked?.(index) ? 'text-primary' : 'text-muted-foreground',
@@ -3708,7 +3718,7 @@ function ViewerWarnings({
                         ) : (
                           <EyeOff className="size-4" />
                         )}
-                      </span>
+                      </button>
                     ) : null}
                   </TableCell>
                   <TableCell className="py-1">

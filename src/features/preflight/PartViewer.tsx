@@ -1985,13 +1985,33 @@ function mountScene(
         // they don't frame the whole model instead.
         if (sabreRunObjects.length === 0) return
         if (index != null && sabreRunObjects[index]) {
-          // Centre on the cut line, then include the projection depth in the radius — centring on
-          // the slab alone puts the camera inside the material.
+          // Frame the clicked cut together with nearby cuts (e.g. the two flange subcuts at one
+          // end), so all local errors are visible in the same view.
           primary.group.updateMatrixWorld(true)
-          const local = sabreRunCentres[index]
-          if (local) {
-            centre = new Vector3(...local).applyMatrix4(primary.group.matrixWorld)
-            radius = Math.max(sabreRunRadii[index] ?? 10, 10) * primary.group.scale.x * 1.6
+          const clicked = sabreRunCentres[index]
+          if (clicked) {
+            const NEAR_MM = 200
+            const min: Vec3 = [Infinity, Infinity, Infinity]
+            const max: Vec3 = [-Infinity, -Infinity, -Infinity]
+            for (let i = 0; i < sabreRunCentres.length; i++) {
+              const c = sabreRunCentres[i]
+              if (!c) continue
+              const dist = Math.hypot(c[0] - clicked[0], c[1] - clicked[1], c[2] - clicked[2])
+              if (dist > NEAR_MM) continue
+              const r = sabreRunRadii[i] ?? 10
+              for (let a = 0; a < 3; a++) {
+                min[a] = Math.min(min[a], c[a] - r)
+                max[a] = Math.max(max[a], c[a] + r)
+              }
+            }
+            const localCentre: Vec3 = [
+              (min[0] + max[0]) / 2,
+              (min[1] + max[1]) / 2,
+              (min[2] + max[2]) / 2,
+            ]
+            const localRadius = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) / 2
+            centre = new Vector3(...localCentre).applyMatrix4(primary.group.matrixWorld)
+            radius = Math.max(localRadius, 10) * primary.group.scale.x * 1.6
           }
           const normal = sabreRunDirections[index]
           if (normal) {
@@ -2002,10 +2022,13 @@ function mountScene(
               .setComponent(longAxis, 1)
               .applyQuaternion(primary.group.quaternion)
             const tangent = new Vector3().crossVectors(worldNormal, axis).normalize()
+            // Slightly above: lift the camera toward world-up as well as along the member, so the
+            // cut reads as a 3/4 view rather than level with the face.
             const iso = worldNormal
               .clone()
               .addScaledVector(axis, 0.8)
-              .addScaledVector(tangent, 0.6)
+              .addScaledVector(tangent, 0.5)
+              .add(new Vector3(0, 0.7, 0))
               .normalize()
             direction = [iso.x, iso.y, iso.z]
           }

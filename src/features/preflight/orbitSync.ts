@@ -336,7 +336,9 @@ export function attachOrbit(
     const distance = frame.distance * 0.5
     // Ortho framing is the zoom factor; zoom in so the area's radius fills the fitted view.
     const base = frame.radius
-    const zoom = base && radius > 0 ? Math.min(Math.max(base / radius, 1), 20) : 1
+    // Frame the cut with context (≈3× its half-size) and cap the zoom so it never slams the
+    // camera right onto the surface.
+    const zoom = base && radius > 0 ? Math.min(Math.max(base / (radius * 3), 1), 40) : 1
     animateTo(
       {
         position: [
