@@ -303,7 +303,6 @@ export function sabreSamples(
   const target = new Mesh(geometry, new MeshBasicMaterial({ side: DoubleSide }))
 
   const probe = new Raycaster()
-  const origin = new Vector3()
   // Three independent directions with a majority vote: a single ray can land on a tessellation
   // edge/vertex of an OCC cut mesh and return an odd count for a point that is actually outside.
   // The flag is only valid when the light-sabre end really is inside the solid.
@@ -345,10 +344,7 @@ export function sabreSamples(
   for (const sample of samples) {
     const point = new Vector3(...sample.point)
     const normal = new Vector3(...sample.normal).normalize()
-    // The projected cut line may sit on either side of the face; flip the normal if the probe
-    // point just outside it is inside the solid.
-    origin.copy(point).addScaledVector(normal, 0.3)
-    if (isStrictlyInside(origin)) normal.negate()
+    // `projectNc` already gives each face's outward normal; no per-sample orientation probe.
 
     // Gate: follow the beam inward for the intended cut depth (`T + r`) plus 1 mm, then ask
     // whether that endpoint is *inside* the solid. If it is, the beam has not exited at the cut

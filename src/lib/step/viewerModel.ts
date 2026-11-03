@@ -93,12 +93,37 @@ function reconstructDetailed(
       throw error
     })
   reconstructCache.set(key, promise)
-  const oldest = reconstructCache.keys().next()
-  if (!oldest.done && reconstructCache.size > RECONSTRUCT_CACHE_LIMIT) {
+  trimReconstructCache()
+  return promise
+}
+
+function trimReconstructCache(): void {
+  while (reconstructCache.size > RECONSTRUCT_CACHE_LIMIT) {
+    const oldest = reconstructCache.keys().next()
+    if (oldest.done) break
     reconstructCache.delete(oldest.value)
     resolvedCache.delete(oldest.value)
   }
-  return promise
+}
+
+/**
+ * Rebuild once and return **both** the viewer STEP and the CUT_DEPTH probe, priming the normal
+ * viewer cache key so the subsequent `reconstructForViewer`/`peekReconstructForViewer` is a hit.
+ * The probe does not change the solid, so its STEP is valid for the plain viewer key.
+ */
+export function reconstructViewerWithSabre(
+  ncText: string,
+  options: { simplify?: boolean; priority?: number } = {},
+): Promise<ViewerReconstruct> {
+  return reconstructDetailed(ncText, { ...options, sabre: true }).then((result) => {
+    const viewerKey = `${options.simplify ? 1 : 0}:f:n:${ncText}`
+    if (!reconstructCache.has(viewerKey)) {
+      reconstructCache.set(viewerKey, Promise.resolve(result))
+      resolvedCache.set(viewerKey, result.bytes)
+      trimReconstructCache()
+    }
+    return result
+  })
 }
 
 /** Synchronous cache peek for the viewer: cached manufactured bytes, or null if not built yet. */
@@ -118,9 +143,7 @@ export function sabreForViewer(
   ncText: string,
   options: { simplify?: boolean; priority?: number; measureOnly?: boolean } = {},
 ): Promise<SabreFailure[]> {
-  return reconstructDetailed(ncText, { ...options, sabre: true, measureOnly: true }).then(
-    (result) => result.sabre,
-  )
+  return reconstructDetailed(ncText, { ...options, sabre: true }).then((result) => result.sabre)
 }
 
 /** Drop reconstruction results for a superseded job (the mesh cache is keyed weakly, so it self-clears). */

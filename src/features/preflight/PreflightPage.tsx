@@ -103,7 +103,7 @@ import {
   meshForViewer,
   peekReconstructForViewer,
   reconstructForViewer,
-  sabreForViewer,
+  reconstructViewerWithSabre,
 } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { buildNcepFromNc, partFromNc } from '@/lib/wisecam/fromNc'
@@ -684,30 +684,36 @@ export function PreflightPage() {
     setManufactured(cached)
     setMfgStatus(cached ? 'idle' : 'pending')
     let cancelled = false
-    // A STEP part's sabre is already produced by its foreground analysis rebuild; only no-STEP
-    // parts need the extra probe here.
+    // A STEP part's sabre is already produced by its foreground analysis rebuild, and its viewer
+    // rebuild is cheap/separate. A no-STEP part needs both the probe and the STEP, so build it
+    // once and share the result (the background pass primes the same cache key).
     if (!viewingHasStep) {
-      void sabreForViewer(ncText).then(
-        (failures) => {
+      void reconstructViewerWithSabre(ncText).then(
+        ({ bytes, sabre }) => {
           if (cancelled) return
           if (viewingMark) {
-            setSabreChecks((prev) => new Map(prev).set(viewingMark, failures))
+            setSabreChecks((prev) => new Map(prev).set(viewingMark, sabre))
           }
+          if (bytes) setManufactured(bytes)
+          // reconstruction is best-effort; a null/failed build falls back to the STEP view
+          else setMfgStatus('failed')
         },
-        () => {},
+        () => {
+          if (!cancelled) setMfgStatus('failed')
+        },
+      )
+    } else {
+      void reconstructForViewer(ncText).then(
+        (step) => {
+          if (cancelled) return
+          if (step) setManufactured(step)
+          else setMfgStatus('failed')
+        },
+        () => {
+          if (!cancelled) setMfgStatus('failed')
+        },
       )
     }
-    void reconstructForViewer(ncText).then(
-      (step) => {
-        if (cancelled) return
-        if (step) setManufactured(step)
-        // reconstruction is best-effort; a null/failed build falls back to the STEP view
-        else setMfgStatus('failed')
-      },
-      () => {
-        if (!cancelled) setMfgStatus('failed')
-      },
-    )
     return () => {
       cancelled = true
     }
@@ -2039,8 +2045,9 @@ export function PreflightPage() {
   }, [viewing, viewingIndex, viewableParts, bytesByPath, fastTrackPart])
 
   // Background CUT_DEPTH pass: parts with no STEP are skipped by the analysis rebuild, so probe
-  // their NC cut lines here too. Run a few at a time across the multi-core pool; the viewed part
-  // and its neighbours still jump ahead on priority.
+  // their NC cut lines here too. The combined viewer+sabre build also primes the viewer cache, so
+  // opening the part later does not rebuild it. Run a few at a time across the multi-core pool;
+  // the viewed part and its neighbours still jump ahead on priority.
   const sabreQueued = useRef(new Set<string>())
   const sabreChecksRef = useRef(sabreChecks)
   sabreChecksRef.current = sabreChecks
@@ -2063,12 +2070,11 @@ export function PreflightPage() {
         if (!bytes) continue
         sabreQueued.current.add(part.mark)
         try {
-          const failures = await sabreForViewer(new TextDecoder().decode(bytes), {
+          const { sabre } = await reconstructViewerWithSabre(new TextDecoder().decode(bytes), {
             priority: PRIORITY_BACKGROUND,
-            measureOnly: true,
           })
           if (cancelled) return
-          setSabreChecks((prev) => new Map(prev).set(part.mark, failures))
+          setSabreChecks((prev) => new Map(prev).set(part.mark, sabre))
         } catch {
           // best-effort
         } finally {
