@@ -178,9 +178,10 @@ export const en = {
     columns: {
       mark: 'Mark',
       status: 'Status',
-      qty: 'QTY',
+      qty: 'Qty',
       mass: 'Mass',
       profile: 'Profile',
+      grade: 'Grade',
       model: 'Model size',
     },
     qty: {
@@ -222,6 +223,7 @@ export const en = {
       bottom: 'Bottom',
       left: 'Left',
       right: 'Right',
+      info: 'Info',
       drawing: 'Drawing',
       ncep: 'NCEP (unrolled)',
       ncepHint:
@@ -648,6 +650,7 @@ export const zh = {
       qty: '数量',
       mass: '重量',
       profile: '型材',
+      grade: '牌号',
       model: '模型尺寸',
     },
     qty: {
@@ -688,6 +691,7 @@ export const zh = {
       bottom: '仰视',
       left: '左视',
       right: '右视',
+      info: '信息',
       drawing: '图纸',
       ncep: 'NCEP（展开）',
       ncepHint: '生成的 NCEP 零件：WiseCAM 导入的展开面（x = 周长位置，y = 沿构件方向）。',

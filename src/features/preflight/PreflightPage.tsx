@@ -109,7 +109,7 @@ import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
 import { createOrbitBus, requestLocation, requestView, type ViewPreset } from './orbitSync'
 import type { DiffStats } from './PartViewer'
-import { type ProfileMarkRow, ProfileSettingsDialog } from './ProfileSettingsDialog'
+import { type ProfileMarkRow, ProfileInfo, ProfileSettingsDialog } from './ProfileSettingsDialog'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 
@@ -455,6 +455,12 @@ export function PreflightPage() {
   }, [viewing, bytesByPath, sectionGuesses])
 
   const viewingPdfBytes = viewing?.pdf ? bytesByPath.get(viewing.pdf.path) : undefined
+  /** NC header dims (or the detector's) for the viewed part's profile, for the Info tab section. */
+  const viewingDims = useMemo(
+    () =>
+      viewing ? (viewing.nc?.dimensions ?? sectionGuesses.get(viewing.mark)?.dims ?? []) : [],
+    [viewing, sectionGuesses],
+  )
 
   const [stepOverrides, setStepOverrides] = useState<Map<string, StepOverride>>(new Map())
   /**
@@ -1644,14 +1650,17 @@ export function PreflightPage() {
 
   // The right pane swaps between the drawing, the issues list and the generated NCEP unroll;
   // default to issues when there are any, since that's what needs attention.
-  const [rightTab, setRightTab] = useState<'drawing' | 'issues' | 'ncep'>('drawing')
+  const [rightTab, setRightTab] = useState<'info' | 'drawing' | 'issues' | 'ncep'>('drawing')
   useEffect(() => {
+    if (!viewing) return
     setRightTab(
-      viewing && allFindings.some((finding) => finding.mark === viewing.mark)
+      allFindings.some((finding) => finding.mark === viewing.mark)
         ? 'issues'
-        : 'drawing',
+        : viewingPdfBytes
+          ? 'drawing'
+          : 'ncep',
     )
-  }, [viewing, allFindings])
+  }, [viewing, allFindings, viewingPdfBytes])
   /** Marker indices whose sub-cuts are shown in the 3D (row toggled on). */
   const visibleSpans = useMemo(
     () =>
@@ -2843,16 +2852,9 @@ export function PreflightPage() {
         title={
           viewing ? (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <PartSummary
-                part={viewing}
-                material={drawingMaterials.get(viewing.mark)}
-                profile={sectionLabel(viewing)}
-                massKg={pieceMass(viewing)}
-                qty={partQty(viewing)}
-                lengthMm={partLength(viewing)}
-              />
+              <span className="min-w-0 flex-1 truncate text-sm font-semibold">{viewing.mark}</span>
               {viewingIndex >= 0 && (
-                <div className="flex items-center gap-1">
+                <div className="flex shrink-0 items-center gap-0.5">
                   <Button
                     variant="ghost"
                     size="icon"
@@ -2864,7 +2866,10 @@ export function PreflightPage() {
                   >
                     <ChevronLeft />
                   </Button>
-                  <span className="text-xs font-normal text-muted-foreground">
+                  <span
+                    className="w-16 whitespace-nowrap text-center text-xs font-normal tabular-nums text-muted-foreground"
+                    aria-live="polite"
+                  >
                     {viewingIndex + 1} / {viewableParts.length}
                   </span>
                   <Button
@@ -2917,7 +2922,7 @@ export function PreflightPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          className="h-7 px-2 text-xs"
+                          className="h-auto rounded-sm px-1.5 py-0.5 text-[11px] leading-none"
                           disabled={!ncBytes || fixingMark === viewing.mark}
                           onClick={() => void regeneratePart(viewing)}
                           title={t('preflight.viewer.ncToStepHint')}
@@ -3192,7 +3197,10 @@ export function PreflightPage() {
                 <div className="relative z-10 flex shrink-0 items-center gap-1 border-b border-border bg-card px-2 py-1">
                   <TabBar
                     options={[
-                      { id: 'drawing' as const, label: t('preflight.viewer.drawing') },
+                      { id: 'info' as const, label: t('preflight.viewer.info') },
+                      ...(viewingPdfBytes
+                        ? [{ id: 'drawing' as const, label: t('preflight.viewer.drawing') }]
+                        : []),
                       {
                         id: 'issues' as const,
                         label: t('preflight.warnings.issues', { count: viewerFindings.length }),
@@ -3204,7 +3212,21 @@ export function PreflightPage() {
                   />
                 </div>
                 <div className="min-h-0 flex-1 overflow-hidden">
-                  {rightTab === 'ncep' ? (
+                  {rightTab === 'info' ? (
+                    <div className="h-full overflow-auto p-4">
+                      <div className="flex flex-col gap-5">
+                        <PartSummary
+                          part={viewing}
+                          material={drawingMaterials.get(viewing.mark)}
+                          profile={sectionLabel(viewing)}
+                          massKg={pieceMass(viewing)}
+                          qty={partQty(viewing)}
+                          lengthMm={partLength(viewing)}
+                        />
+                        <ProfileInfo profile={sectionLabel(viewing)} dims={viewingDims} />
+                      </div>
+                    </div>
+                  ) : rightTab === 'ncep' ? (
                     viewingNcep ? (
                       <UnrolledDrawing
                         part={viewingNcep.part}
@@ -3311,21 +3333,29 @@ function PartSummary({
   const qty = qtyProp ?? material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
   const length = lengthMm ?? material?.length ?? part.expected?.length ?? part.nc?.length ?? null
   const mass = massKg ?? material?.weight ?? part.expected?.weight ?? null
-  const stats: [string, string][] = [
+  const grade = part.nc?.grade ?? part.expected?.grade ?? '—'
+  const rows: [string, string][] = [
+    [t('preflight.columns.mark'), part.mark],
     [t('preflight.columns.profile'), section],
+    [t('preflight.columns.grade'), grade],
     [t('preflight.columns.qty'), qty != null ? String(qty) : '—'],
     [t('preflight.meta.length'), length != null ? `${length} mm` : '—'],
     [t('preflight.columns.mass'), mass != null ? `${mass.toFixed(1)} kg` : '—'],
   ]
   return (
-    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-      <span className="text-sm font-semibold">{part.mark}</span>
-      {stats.map(([label, value]) => (
-        <span key={label} className="flex items-baseline gap-1.5 text-xs">
-          <span className="uppercase tracking-wide text-muted-foreground">{label}</span>
-          <span className="font-mono text-sm">{value}</span>
-        </span>
-      ))}
+    <div className="overflow-hidden rounded-lg border border-border">
+      <Table>
+        <TableBody>
+          {rows.map(([label, value]) => (
+            <TableRow key={label}>
+              <TableCell className="w-40 whitespace-nowrap px-3 py-1.5 text-xs text-muted-foreground">
+                {label}
+              </TableCell>
+              <TableCell className="px-3 py-1.5 font-mono text-xs tabular-nums">{value}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </div>
   )
 }

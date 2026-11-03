@@ -73,51 +73,6 @@ export function ProfileSettingsDialog({
   position,
 }: ProfileSettingsDialogProps) {
   const { t } = useTranslation()
-  const [surface, setSurface] = useState<SurfaceCondition>('normal')
-  const [markSort, setMarkSort] = useState<{ key: MarkSortKey; dir: 1 | -1 }>({
-    key: 'mark',
-    dir: 1,
-  })
-
-  const section = useMemo(() => partSectionForCode(profile, dims), [profile, dims])
-  const thicknesses = useMemo(() => sectionThicknesses(profile, dims), [profile, dims])
-  const suggestions = useMemo(
-    () => thicknesses.map((thickness) => ({ thickness, cut: suggestCut(thickness.mm, surface) })),
-    [thicknesses, surface],
-  )
-  const totals = useMemo(
-    () =>
-      marks.reduce(
-        (acc, row) => ({
-          marks: acc.marks + 1,
-          pieces: acc.pieces + row.pieces,
-          lengthMm: acc.lengthMm + row.lengthMm,
-          massKg: acc.massKg + row.massKg,
-        }),
-        { marks: 0, pieces: 0, lengthMm: 0, massKg: 0 },
-      ),
-    [marks],
-  )
-
-  const sortedMarks = useMemo(() => {
-    const direction = markSort.dir
-    return [...marks].sort((a, b) => {
-      const result =
-        markSort.key === 'mark'
-          ? a.mark.localeCompare(b.mark, undefined, { numeric: true })
-          : markSort.key === 'pieces'
-            ? a.pieces - b.pieces
-            : markSort.key === 'length'
-              ? a.lengthMm - b.lengthMm
-              : a.massKg - b.massKg
-      return result * direction
-    })
-  }, [marks, markSort])
-
-  const toggleMarkSort = (key: MarkSortKey) =>
-    setMarkSort((current) =>
-      current.key === key ? { key, dir: current.dir === 1 ? -1 : 1 } : { key, dir: 1 },
-    )
 
   useEffect(() => {
     if (!open) return
@@ -172,161 +127,224 @@ export function ProfileSettingsDialog({
 
   return (
     <Dialog open={open} onClose={onClose} title={title} className="max-w-2xl">
-      <div className="flex flex-col gap-4 p-5">
-        <div className="grid gap-5 md:grid-cols-[15.5rem_minmax(0,1fr)]">
-          <SectionPreview section={section} label={profile} />
+      <div className="p-5">
+        <ProfileInfo profile={profile} dims={dims} marks={marks} />
+      </div>
+    </Dialog>
+  )
+}
 
-          <div className="flex flex-col gap-3">
-            <fieldset className="m-0 grid grid-cols-4 gap-1.5 border-0 p-0">
-              <legend className="sr-only">{t('preflight.profileSettings.surface')}</legend>
-              {SURFACES.map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setSurface(value)}
-                  className={cn(
-                    'min-w-0 truncate rounded-md border px-2 py-1 text-center text-[11px] transition-colors',
-                    surface === value
-                      ? 'border-primary bg-primary/15 text-foreground'
-                      : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                  )}
-                >
-                  {t(`preflight.profileSettings.surfaces.${value}`)}
-                </button>
-              ))}
-            </fieldset>
+export interface ProfileInfoProps {
+  profile: string
+  dims: number[]
+  /** Marks cut from this profile, rolled up by quantity; omit to hide the per-mark tables. */
+  marks?: ProfileMarkRow[]
+}
 
-            {thicknesses.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {t('preflight.profileSettings.noThickness')}
-              </p>
-            ) : (
-              <div className="w-full overflow-x-auto rounded-lg border border-border">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead className="h-8 w-40">
-                        {t('preflight.profileSettings.thickness')}
-                      </TableHead>
-                      {suggestions.map(({ thickness }) => (
-                        <TableHead
-                          key={`${thickness.role}-${thickness.mm}`}
-                          className="h-8 w-20 text-right font-mono text-xs text-foreground"
-                        >
-                          {thickness.mm.toFixed(1)}
-                        </TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {PARAM_ROWS.map((row) => (
-                      <TableRow key={row.key}>
-                        <TableCell className="w-40 whitespace-nowrap px-3 py-1.5 text-xs text-muted-foreground">
-                          {t(`preflight.profileSettings.${row.key}`)}
-                        </TableCell>
-                        {suggestions.map(({ thickness, cut }) => (
-                          <TableCell
-                            key={`${row.key}-${thickness.role}-${thickness.mm}`}
-                            className="w-20 px-3 py-1.5 text-right font-mono text-xs"
-                          >
-                            {row.value(cut)}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </div>
-        </div>
+/** Cross-section, suggested cut parameters and (optionally) the per-mark rollup for a profile. */
+export function ProfileInfo({ profile, dims, marks = [] }: ProfileInfoProps) {
+  const { t } = useTranslation()
+  const [surface, setSurface] = useState<SurfaceCondition>('normal')
+  const [markSort, setMarkSort] = useState<{ key: MarkSortKey; dir: 1 | -1 }>({
+    key: 'mark',
+    dir: 1,
+  })
 
-        {marks.length > 0 && (
-          <div className="flex flex-col gap-3">
-            <div className="overflow-x-auto rounded-lg border border-border">
+  const section = useMemo(() => partSectionForCode(profile, dims), [profile, dims])
+  const thicknesses = useMemo(() => sectionThicknesses(profile, dims), [profile, dims])
+  const suggestions = useMemo(
+    () => thicknesses.map((thickness) => ({ thickness, cut: suggestCut(thickness.mm, surface) })),
+    [thicknesses, surface],
+  )
+  const totals = useMemo(
+    () =>
+      marks.reduce(
+        (acc, row) => ({
+          marks: acc.marks + 1,
+          pieces: acc.pieces + row.pieces,
+          lengthMm: acc.lengthMm + row.lengthMm,
+          massKg: acc.massKg + row.massKg,
+        }),
+        { marks: 0, pieces: 0, lengthMm: 0, massKg: 0 },
+      ),
+    [marks],
+  )
+
+  const sortedMarks = useMemo(() => {
+    const direction = markSort.dir
+    return [...marks].sort((a, b) => {
+      const result =
+        markSort.key === 'mark'
+          ? a.mark.localeCompare(b.mark, undefined, { numeric: true })
+          : markSort.key === 'pieces'
+            ? a.pieces - b.pieces
+            : markSort.key === 'length'
+              ? a.lengthMm - b.lengthMm
+              : a.massKg - b.massKg
+      return result * direction
+    })
+  }, [marks, markSort])
+
+  const toggleMarkSort = (key: MarkSortKey) =>
+    setMarkSort((current) =>
+      current.key === key ? { key, dir: current.dir === 1 ? -1 : 1 } : { key, dir: 1 },
+    )
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid gap-5 md:grid-cols-[15.5rem_minmax(0,1fr)]">
+        <SectionPreview section={section} label={profile} />
+
+        <div className="flex flex-col gap-3">
+          <fieldset className="m-0 grid grid-cols-4 gap-1.5 border-0 p-0">
+            <legend className="sr-only">{t('preflight.profileSettings.surface')}</legend>
+            {SURFACES.map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setSurface(value)}
+                className={cn(
+                  'min-w-0 truncate rounded-md border px-2 py-1 text-center text-[11px] transition-colors',
+                  surface === value
+                    ? 'border-primary bg-primary/15 text-foreground'
+                    : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                )}
+              >
+                {t(`preflight.profileSettings.surfaces.${value}`)}
+              </button>
+            ))}
+          </fieldset>
+
+          {thicknesses.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t('preflight.profileSettings.noThickness')}
+            </p>
+          ) : (
+            <div className="w-full overflow-x-auto rounded-lg border border-border">
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <TableHead>{t('preflight.profileSettings.summaryMarks')}</TableHead>
-                    <TableHead className="text-right">
-                      {t('preflight.profileSettings.summaryPieces')}
+                    <TableHead className="h-8 w-40">
+                      {t('preflight.profileSettings.thickness')}
                     </TableHead>
-                    <TableHead className="text-right">
-                      {t('preflight.profileSettings.summaryLength')}
-                    </TableHead>
-                    <TableHead className="text-right">
-                      {t('preflight.profileSettings.summaryMass')}
-                    </TableHead>
+                    {suggestions.map(({ thickness }) => (
+                      <TableHead
+                        key={`${thickness.role}-${thickness.mm}`}
+                        className="h-8 w-20 text-right font-mono text-xs text-foreground"
+                      >
+                        {thickness.mm.toFixed(1)}
+                      </TableHead>
+                    ))}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow>
-                    <TableCell className="font-mono text-xs">{totals.marks}</TableCell>
-                    <TableCell className="text-right font-mono text-xs">{totals.pieces}</TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {(totals.lengthMm / 1000).toFixed(1)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {totals.massKg.toFixed(1)}
-                    </TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <span className="text-xs font-medium text-muted-foreground">
-                {t('preflight.profileSettings.marksTitle')}
-              </span>
-              <Table containerClassName="h-48 overflow-auto rounded-lg border border-border">
-                <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card">
-                  <TableRow className="hover:bg-transparent">
-                    <MarkSortHead
-                      label={t('preflight.profileSettings.mark')}
-                      sortKey="mark"
-                      sort={markSort}
-                      onSort={toggleMarkSort}
-                    />
-                    <MarkSortHead
-                      label={t('preflight.profileSettings.pieces')}
-                      sortKey="pieces"
-                      sort={markSort}
-                      onSort={toggleMarkSort}
-                    />
-                    <MarkSortHead
-                      label={t('preflight.profileSettings.length')}
-                      sortKey="length"
-                      sort={markSort}
-                      onSort={toggleMarkSort}
-                    />
-                    <MarkSortHead
-                      label={t('preflight.profileSettings.mass')}
-                      sortKey="mass"
-                      sort={markSort}
-                      onSort={toggleMarkSort}
-                    />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sortedMarks.map((row) => (
-                    <TableRow key={row.mark}>
-                      <TableCell className="font-mono text-xs">{row.mark}</TableCell>
-                      <TableCell className="text-right font-mono text-xs">{row.pieces}</TableCell>
-                      <TableCell className="text-right font-mono text-xs">
-                        {row.lengthMm > 0 ? (row.lengthMm / 1000).toFixed(1) : '—'}
+                  {PARAM_ROWS.map((row) => (
+                    <TableRow key={row.key}>
+                      <TableCell className="w-40 whitespace-nowrap px-3 py-1.5 text-xs text-muted-foreground">
+                        {t(`preflight.profileSettings.${row.key}`)}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-xs">
-                        {row.massKg > 0 ? row.massKg.toFixed(1) : '—'}
-                      </TableCell>
+                      {suggestions.map(({ thickness, cut }) => (
+                        <TableCell
+                          key={`${row.key}-${thickness.role}-${thickness.mm}`}
+                          className="w-20 px-3 py-1.5 text-right font-mono text-xs"
+                        >
+                          {row.value(cut)}
+                        </TableCell>
+                      ))}
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </Dialog>
+
+      {marks.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>{t('preflight.profileSettings.summaryMarks')}</TableHead>
+                  <TableHead className="text-right">
+                    {t('preflight.profileSettings.summaryPieces')}
+                  </TableHead>
+                  <TableHead className="text-right">
+                    {t('preflight.profileSettings.summaryLength')}
+                  </TableHead>
+                  <TableHead className="text-right">
+                    {t('preflight.profileSettings.summaryMass')}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow>
+                  <TableCell className="font-mono text-xs">{totals.marks}</TableCell>
+                  <TableCell className="text-right font-mono text-xs">{totals.pieces}</TableCell>
+                  <TableCell className="text-right font-mono text-xs">
+                    {(totals.lengthMm / 1000).toFixed(1)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs">
+                    {totals.massKg.toFixed(1)}
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              {t('preflight.profileSettings.marksTitle')}
+            </span>
+            <Table containerClassName="h-48 overflow-auto rounded-lg border border-border">
+              <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card">
+                <TableRow className="hover:bg-transparent">
+                  <MarkSortHead
+                    label={t('preflight.profileSettings.mark')}
+                    sortKey="mark"
+                    sort={markSort}
+                    onSort={toggleMarkSort}
+                  />
+                  <MarkSortHead
+                    label={t('preflight.profileSettings.pieces')}
+                    sortKey="pieces"
+                    sort={markSort}
+                    onSort={toggleMarkSort}
+                  />
+                  <MarkSortHead
+                    label={t('preflight.profileSettings.length')}
+                    sortKey="length"
+                    sort={markSort}
+                    onSort={toggleMarkSort}
+                  />
+                  <MarkSortHead
+                    label={t('preflight.profileSettings.mass')}
+                    sortKey="mass"
+                    sort={markSort}
+                    onSort={toggleMarkSort}
+                  />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sortedMarks.map((row) => (
+                  <TableRow key={row.mark}>
+                    <TableCell className="font-mono text-xs">{row.mark}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">{row.pieces}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      {row.lengthMm > 0 ? (row.lengthMm / 1000).toFixed(1) : '—'}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      {row.massKg > 0 ? row.massKg.toFixed(1) : '—'}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
