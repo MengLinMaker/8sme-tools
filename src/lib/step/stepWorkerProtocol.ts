@@ -54,6 +54,7 @@ export type StepRequest =
        * text, so the export is pure waste there).
        */
       measureOnly?: boolean
+      sabre?: boolean
     }
   | {
       id: number

@@ -110,10 +110,12 @@ async function reconstruct(request: {
   measure?: boolean
   simplify?: boolean
   measureOnly?: boolean
+  sabre?: boolean
 }): Promise<ReconstructResult> {
   const built = await reconstructSolidFromNc(request.ncText, {
     simplify: request.simplify,
     measureOnly: request.measureOnly,
+    sabre: request.sabre,
   })
   let measure: StepMeasure | null = null
   if (built && request.measure) {

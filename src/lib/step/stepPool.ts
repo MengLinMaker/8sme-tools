@@ -30,7 +30,7 @@ interface Task {
 /** Queued behind everything else (worker boot) — must never delay a viewer mesh. */
 const PRIORITY_WARM = -10
 /** Bulk background analysis across the whole job. */
-const PRIORITY_BACKGROUND = 0
+export const PRIORITY_BACKGROUND = 0
 /**
  * The marks either side of the one being viewed — cheap to guess (navigation is ±1) and worth
  * building ahead of background analysis, but never ahead of the part the user is actually on.
@@ -44,9 +44,10 @@ interface WorkerHandle {
   task: Task | null
 }
 
-// Cap well below hardwareConcurrency: each worker is a full OCC kernel, so 2–3 is the sweet spot
-// before memory (WASM + per-part B-reps) starts to bite. Leave a core for the UI.
-const MAX_WORKERS = Math.max(1, Math.min(3, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1))
+// Use the cores (minus one for the UI). Each worker is a full OCC kernel (~23 MB WASM plus the
+// per-part B-reps), so the cap trades memory for background throughput; 8 keeps a large job from
+// queuing behind a handful of workers without exhausting memory.
+const MAX_WORKERS = Math.max(1, Math.min(8, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1))
 
 class StepWorkerPool {
   private readonly max = MAX_WORKERS
@@ -78,6 +79,7 @@ class StepWorkerPool {
       measure?: boolean
       simplify?: boolean
       measureOnly?: boolean
+      sabre?: boolean
       priority?: number
     } = {},
   ): Promise<ReconstructResult> {
@@ -89,6 +91,7 @@ class StepWorkerPool {
         measure: options.measure,
         simplify: options.simplify,
         measureOnly: options.measureOnly,
+        sabre: options.sabre,
       },
       [],
       options.priority ?? PRIORITY_BACKGROUND,

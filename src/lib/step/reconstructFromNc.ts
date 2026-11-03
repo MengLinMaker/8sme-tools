@@ -319,6 +319,8 @@ export interface ReconstructOptions {
   bevels?: boolean
   /** **Debug only:** skip the shallow (1st) face cut so the 2nd extrusion can be inspected. */
   debugSkipShallow?: boolean
+  /** Run the CUT_DEPTH sabre probe (default true; the viewer model skips it for speed). */
+  sabre?: boolean
 }
 
 export async function reconstructStepFromNc(
@@ -352,7 +354,7 @@ export async function reconstructSolidFromNc(
 
   await ensureOc()
   const { draw, drawCircle, drawRoundedRectangle, Plane } = await import('replicad')
-  const poly = (pts: Pt[], radii?: number[]) => {
+  const poly = (pts: Pt[], radii?: number[], mirrored = false) => {
     let pen = draw(pts[0])
     for (let i = 1; i < pts.length; i++) {
       const a = pts[i - 1]
@@ -361,13 +363,15 @@ export async function reconstructSolidFromNc(
       // A non-zero DSTV vertex radius is an arc to the next vertex. Draw a real arc (sagitta
       // derived from the chord + radius) instead of the straight chord that used to stand in for
       // it — the standing "end-arc radii drawn straight" deficit.
-      const radius = radii?.[i - 1] ?? 0
+      // A mirrored (across-flipped) point set reverses the chord normal, so negate the DSTV radius
+      // to keep the bulge on the same physical side as the projected cut line (`arcSamples`).
+      const radius = mirrored ? -(radii?.[i - 1] ?? 0) : (radii?.[i - 1] ?? 0)
       if (radius !== 0) {
         const chord = Math.hypot(b[0] - a[0], b[1] - a[1])
         if (chord > 0 && Math.abs(radius) > chord / 2) {
           const sagitta = Math.abs(radius) - Math.sqrt(radius * radius - (chord / 2) ** 2)
-          // Same DSTV radius-side convention as `arcSamples` in ncGeometry.ts.
-          pen = pen.sagittaArcTo(b, radius >= 0 ? sagitta : -sagitta)
+          // DSTV radius sign → bulge side, matching `arcSamples` in ncGeometry.ts.
+          pen = pen.sagittaArcTo(b, radius >= 0 ? -sagitta : sagitta)
           continue
         }
       }
@@ -492,7 +496,13 @@ export async function reconstructSolidFromNc(
   // face's cut line as an edge — the old union of `o`/`u` suppressed the shorter flange's line
   // (m127 `o[0]`).
   const channelFaces = family === 'channel'
-  const buildFaceCut = (face: NcFace, axis: Axis, pts: Pt[], radii: number[]): SolidOps | null => {
+  const buildFaceCut = (
+    face: NcFace,
+    axis: Axis,
+    pts: Pt[],
+    radii: number[],
+    mirrored: boolean,
+  ): SolidOps | null => {
     const wall = plateThicknessMm(header.profile, header.dimensions, (1 - axis) as Axis)
     if (!(wall > 0)) return null
     // Web face only: the cut follows the NC cut line (including its fillet arc) through the stock
@@ -512,7 +522,7 @@ export async function reconstructSolidFromNc(
     ])
     const notch = (() => {
       try {
-        return (rect as unknown as { cut: (o: unknown) => unknown }).cut(poly(pts, radii))
+        return (rect as unknown as { cut: (o: unknown) => unknown }).cut(poly(pts, radii, mirrored))
       } catch {
         return null
       }
@@ -599,7 +609,7 @@ export async function reconstructSolidFromNc(
     const pts = rawPts.map(([x, y]) => [x, sign * (y - half)] as Pt)
     if (channelFaces) {
       if (options.debugSkipShallow !== true) {
-        const cut = buildFaceCut(c.face, axis, pts, radii)
+        const cut = buildFaceCut(c.face, axis, pts, radii, sign < 0)
         if (cut) solid = solid.cut(cut)
       }
       for (const strip of buildFlangeFillet(c.face, axis, pts)) solid = solid.cut(strip)
@@ -623,7 +633,7 @@ export async function reconstructSolidFromNc(
     // stop OCC sharing the trim's faces with the base prism — but the inset left a 0.1 mm ledge
     // beside every real edge and mis-aligned with the end "band", walling the bevel off as a
     // staircase. stripStraySolids now absorbs any floating debris instead.
-    drawingsByAxis[axis].push(poly(pts, radii))
+    drawingsByAxis[axis].push(poly(pts, radii, sign < 0))
 
     // Reproduce welding-preparation data as true slanted cut walls. An I-section's `v`/`h` faces
     // are the interior web, whose authored across coordinate is not the section silhouette this
@@ -919,56 +929,60 @@ export async function reconstructSolidFromNc(
   // (centre-of-mass ranking), measure and export all see the manufactured body only.
   solid = (await stripStraySolids(solid as unknown as MeasurableShape)).solid as unknown as SolidOps
 
-  // Probe the manufactured solid along the **NC projection cut lines** — 1 mm samples on the
-  // actual cut path, fired along the surface normal. This is the sparse, fast path: no stock-skin
-  // or end-cap faces to produce false positives, and only the cuts are tested. The samples are in
-  // the authored stance, so they (and the failures) roll back with the solid below.
-  const projection = {
-    frame,
-    section: section.points,
-    toScene: (along: number, cross: [number, number], face: NcFace) => {
-      const n = faceNormal(frame, face, section.points)
-      const local: [number, number] = [cross[0], cross[1]]
-      local[n.axis] += n.sign * 0.4
-      return [along, local[0], local[1]] as [number, number, number]
-    },
-    normal: (face: NcFace): [number, number, number] => {
-      const n = faceNormal(frame, face, section.points)
-      return n.axis === 0 ? [0, n.sign, 0] : [0, 0, n.sign]
-    },
-  }
-  // The actual cut reaches the face thickness plus the corner (root) radius — both come from the
-  // stock section / NC header, so the projection stops at the real cut depth.
-  const rootRadius =
-    family === 'channel' || family === 'i' || family === 'tee' ? (header.dimensions[4] ?? 0) : 0
-  const cutSamples = projectNc(geo, projection)
-    .cutSamples.filter(
-      // Probe the flange cut lines only, and skip the part ends (traced by the perimeter, not bored
-      // along the member). The invalid cuts are on the flanges at the corner end, near the fillet.
-      (sample) =>
-        (sample.face === 'o' || sample.face === 'u') &&
-        sample.point[0] > 1 &&
-        sample.point[0] < maxX - 1,
-    )
-    .map((sample) => ({
-      ...sample,
-      depth: faceThickness(frame, section.points, sample.face) + rootRadius,
-    }))
-  let sabre = sabreSamples(
-    solid as unknown as Parameters<typeof sabreSamples>[0],
-    cutSamples,
-  ).failures
-  const roll = (p: [number, number, number]): [number, number, number] =>
-    family === 'channel' ? [p[0], p[2], -p[1]] : [p[0], -p[2], p[1]]
-  if (canonicalSectionFlip) {
-    sabre = sabre.map((f) => ({
-      ...f,
-      point: roll(f.point),
-      normal: roll(f.normal),
-      tri: [roll(f.tri[0]), roll(f.tri[1]), roll(f.tri[2])] as SabreFailure['tri'],
-      entry: roll(f.entry),
-      exit: roll(f.exit),
-    }))
+  let sabre: SabreFailure[] = []
+  if (options.sabre !== false) {
+    // Probe the manufactured solid along the **NC projection cut lines** — 1 mm samples on the
+    // actual cut path, fired along the surface normal. This is the sparse, fast path: no stock-skin
+    // or end-cap faces to produce false positives, and only the cuts are tested. The samples are in
+    // the authored stance, so they (and the failures) roll back with the solid below.
+    const projection = {
+      frame,
+      section: section.points,
+      toScene: (along: number, cross: [number, number], face: NcFace) => {
+        const n = faceNormal(frame, face, section.points)
+        const local: [number, number] = [cross[0], cross[1]]
+        local[n.axis] += n.sign * 0.4
+        return [along, local[0], local[1]] as [number, number, number]
+      },
+      normal: (face: NcFace): [number, number, number] => {
+        const n = faceNormal(frame, face, section.points)
+        return n.axis === 0 ? [0, n.sign, 0] : [0, 0, n.sign]
+      },
+    }
+    // The actual cut reaches the face thickness plus the corner (root) radius — both come from the
+    // stock section / NC header, so the projection stops at the real cut depth.
+    const rootRadius =
+      family === 'channel' || family === 'i' || family === 'tee' ? (header.dimensions[4] ?? 0) : 0
+    const cutSamples = projectNc(geo, projection)
+      .cutSamples.filter(
+        // Probe the flange cut lines only, and skip the part ends (traced by the perimeter, not
+        // bored along the member). The invalid cuts are on the flanges at the corner end, near the
+        // fillet.
+        (sample) =>
+          (sample.face === 'o' || sample.face === 'u') &&
+          sample.point[0] > 1 &&
+          sample.point[0] < maxX - 1,
+      )
+      .map((sample) => ({
+        ...sample,
+        depth: faceThickness(frame, section.points, sample.face) + rootRadius,
+      }))
+    sabre = sabreSamples(
+      solid as unknown as Parameters<typeof sabreSamples>[0],
+      cutSamples,
+    ).failures
+    const roll = (p: [number, number, number]): [number, number, number] =>
+      family === 'channel' ? [p[0], p[2], -p[1]] : [p[0], -p[2], p[1]]
+    if (canonicalSectionFlip) {
+      sabre = sabre.map((f) => ({
+        ...f,
+        point: roll(f.point),
+        normal: roll(f.normal),
+        tri: [roll(f.tri[0]), roll(f.tri[1]), roll(f.tri[2])] as SabreFailure['tri'],
+        entry: roll(f.entry),
+        exit: roll(f.exit),
+      }))
+    }
   }
 
   // Roll the internal (authored) stance build back to the canonical stance so the viewer, NC

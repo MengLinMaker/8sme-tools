@@ -39,6 +39,8 @@ interface ViewerReconstruct {
 }
 
 const reconstructCache = new Map<string, Promise<ViewerReconstruct>>()
+/** Resolved manufactured bytes, so a cache hit paints immediately (no "building" flash). */
+const resolvedCache = new Map<string, Uint8Array | null>()
 /**
  * Cap on cached reconstructions: each holds a full STEP text (~0.2–2 MB), so
  * an unbounded map OOMs the tab on 350-part jobs. Evicted parts rebuild on
@@ -55,9 +57,14 @@ const RECONSTRUCT_CACHE_LIMIT = 32
  */
 function reconstructDetailed(
   ncText: string,
-  options: { simplify?: boolean; priority?: number } = {},
+  options: {
+    simplify?: boolean
+    priority?: number
+    measureOnly?: boolean
+    sabre?: boolean
+  } = {},
 ): Promise<ViewerReconstruct> {
-  const key = `${options.simplify ? 1 : 0}:${ncText}`
+  const key = `${options.simplify ? 1 : 0}:${options.measureOnly ? 'm' : 'f'}:${options.sabre === false ? 'n' : 's'}:${ncText}`
   const hit = reconstructCache.get(key)
   if (hit) {
     reconstructCache.delete(key)
@@ -69,41 +76,57 @@ function reconstructDetailed(
     .reconstruct(ncText, {
       simplify: options.simplify,
       priority: options.priority ?? PRIORITY_FOREGROUND,
+      measureOnly: options.measureOnly,
+      sabre: options.sabre,
     })
-    .then((result) => ({
-      bytes: result.step ? new TextEncoder().encode(result.step) : null,
-      sabre: result.sabre ?? [],
-    }))
+    .then((result) => {
+      const value = {
+        bytes: result.step ? new TextEncoder().encode(result.step) : null,
+        sabre: result.sabre ?? [],
+      }
+      resolvedCache.set(key, value.bytes)
+      return value
+    })
     .catch((error) => {
       reconstructCache.delete(key)
+      resolvedCache.delete(key)
       throw error
     })
   reconstructCache.set(key, promise)
   const oldest = reconstructCache.keys().next()
   if (!oldest.done && reconstructCache.size > RECONSTRUCT_CACHE_LIMIT) {
     reconstructCache.delete(oldest.value)
+    resolvedCache.delete(oldest.value)
   }
   return promise
+}
+
+/** Synchronous cache peek for the viewer: cached manufactured bytes, or null if not built yet. */
+export function peekReconstructForViewer(ncText: string): Uint8Array | null {
+  return resolvedCache.get(`0:f:n:${ncText}`) ?? null
 }
 
 export function reconstructForViewer(
   ncText: string,
   options: { simplify?: boolean; priority?: number } = {},
 ): Promise<Uint8Array | null> {
-  return reconstructDetailed(ncText, options).then((result) => result.bytes)
+  return reconstructDetailed(ncText, { ...options, sabre: false }).then((result) => result.bytes)
 }
 
 /** Light-sabre failures on the same manufactured rebuild `reconstructForViewer` returns. */
 export function sabreForViewer(
   ncText: string,
-  options: { simplify?: boolean; priority?: number } = {},
+  options: { simplify?: boolean; priority?: number; measureOnly?: boolean } = {},
 ): Promise<SabreFailure[]> {
-  return reconstructDetailed(ncText, options).then((result) => result.sabre)
+  return reconstructDetailed(ncText, { ...options, sabre: true, measureOnly: true }).then(
+    (result) => result.sabre,
+  )
 }
 
 /** Drop reconstruction results for a superseded job (the mesh cache is keyed weakly, so it self-clears). */
 export function clearViewerModels(): void {
   reconstructCache.clear()
+  resolvedCache.clear()
 }
 
 /**

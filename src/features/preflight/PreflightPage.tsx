@@ -92,6 +92,7 @@ import {
 import type { SabreFailure } from '@/lib/step/sabre'
 import {
   getStepWorkerPool,
+  PRIORITY_BACKGROUND,
   PRIORITY_FOREGROUND,
   PRIORITY_NEIGHBOR,
   prebootStepWorkers,
@@ -100,6 +101,7 @@ import {
   clearViewerModels,
   diffForViewer,
   meshForViewer,
+  peekReconstructForViewer,
   reconstructForViewer,
   sabreForViewer,
 } from '@/lib/step/viewerModel'
@@ -651,10 +653,12 @@ export function PreflightPage() {
 
   // Manufactured model = the stock with the NC applied, rebuilt from the NC (T profiles only).
   const [manufactured, setManufactured] = useState<Uint8Array | null>(null)
-  const [manufacturedSabre, setManufacturedSabre] = useState<
-    import('@/lib/step/sabre').SabreFailure[] | null
-  >(null)
   const [mfgStatus, setMfgStatus] = useState<'idle' | 'pending' | 'failed'>('idle')
+  const viewingMark = viewing?.mark
+  const viewingHasStep = Boolean(viewing?.step)
+  // The viewed part's sabre comes from `sabreChecks` (analysis for STEP parts, the probe below for
+  // no-STEP parts), so there is no duplicate sabre state.
+  const manufacturedSabre = viewingMark ? (sabreChecks.get(viewingMark) ?? null) : null
   // Stable identity: a fresh `.map` each render re-runs the viewer's scene effect (rebuilding the
   // whole three.js scene) and makes orbiting lag.
   const manufacturedSabrePoints = useMemo(
@@ -668,29 +672,32 @@ export function PreflightPage() {
       })) ?? null,
     [manufacturedSabre],
   )
-  const viewingMark = viewing?.mark
   useEffect(() => {
-    setManufactured(null)
-    setManufacturedSabre(null)
     if (!ncBytes) {
+      setManufactured(null)
       setMfgStatus('idle')
       return
     }
-    setMfgStatus('pending')
+    const ncText = new TextDecoder().decode(ncBytes)
+    // A cached rebuild paints immediately; only the first open shows "building".
+    const cached = peekReconstructForViewer(ncText)
+    setManufactured(cached)
+    setMfgStatus(cached ? 'idle' : 'pending')
     let cancelled = false
-    void sabreForViewer(new TextDecoder().decode(ncBytes)).then(
-      (failures) => {
-        if (cancelled) return
-        setManufacturedSabre(failures)
-        // The viewed part's CUT_DEPTH finding is surfaced even when it has no STEP (the analysis
-        // path needs a STEP measure, so no-STEP parts would otherwise never reach `sabreChecks`).
-        if (viewingMark) {
-          setSabreChecks((prev) => new Map(prev).set(viewingMark, failures))
-        }
-      },
-      () => {},
-    )
-    void reconstructForViewer(new TextDecoder().decode(ncBytes)).then(
+    // A STEP part's sabre is already produced by its foreground analysis rebuild; only no-STEP
+    // parts need the extra probe here.
+    if (!viewingHasStep) {
+      void sabreForViewer(ncText).then(
+        (failures) => {
+          if (cancelled) return
+          if (viewingMark) {
+            setSabreChecks((prev) => new Map(prev).set(viewingMark, failures))
+          }
+        },
+        () => {},
+      )
+    }
+    void reconstructForViewer(ncText).then(
       (step) => {
         if (cancelled) return
         if (step) setManufactured(step)
@@ -704,7 +711,7 @@ export function PreflightPage() {
     return () => {
       cancelled = true
     }
-  }, [ncBytes, viewingMark])
+  }, [ncBytes, viewingMark, viewingHasStep])
 
   // Kick off the overlay diff as soon as the manufactured model lands, so it is already computed
   // (in the OCC worker) by the time the overlay pane mounts — the viewer then reads it from cache
@@ -944,8 +951,13 @@ export function PreflightPage() {
     setSectionGuesses(new Map())
     setStepLengths(new Map())
     setCutIssues(new Map())
-    // `sabreChecks` is not cleared here: the viewer fills the viewed part (even with no STEP), and
-    // marks not in the new result are simply ignored by `allFindings`.
+    // Keep only marks that exist in the new result (stale entries would leak across jobs).
+    setSabreChecks((prev) => {
+      const marks = new Set(result.parts.map((part) => part.mark))
+      const next = new Map<string, SabreFailure[]>()
+      for (const [mark, failures] of prev) if (marks.has(mark)) next.set(mark, failures)
+      return next
+    })
     setReachChecks(new Map())
     setBevelChanges(new Map())
     setUnclosedCuts(new Map())
@@ -1973,46 +1985,102 @@ export function PreflightPage() {
   // miss rebuilds on open.
   useEffect(() => {
     if (!viewing || viewingIndex < 0) return
-    for (const delta of [1, -1]) {
-      const neighbour = viewableParts[viewingIndex + delta]
-      if (!neighbour) continue
-      fastTrackPart(neighbour, PRIORITY_NEIGHBOR)
-      const stepBytes = neighbour.step ? bytesByPath.get(neighbour.step.path) : undefined
-      if (stepBytes) {
-        void meshForViewer(neighbour.step?.path ?? neighbour.mark, stepBytes, {
-          priority: PRIORITY_NEIGHBOR,
-        }).catch(() => {})
-      }
-      const ncPath = neighbour.nc?.path
-      const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
-      if (ncBytes) {
-        void reconstructForViewer(new TextDecoder().decode(ncBytes), {
-          priority: PRIORITY_NEIGHBOR,
-        })
-          .then((bytes) => {
-            // Warm the manufactured tessellation and the overlay diff too, so opening is instant.
-            if (bytes) {
-              void meshForViewer(`${neighbour.mark} · manufactured`, bytes, {
-                priority: PRIORITY_NEIGHBOR,
-              }).catch(() => {})
-              if (stepBytes) {
-                // The diff needs the same seating the viewer applies, so resolve the neighbour's
-                // section here (from its NC/part-list code — no PDF pass needed for a prefetch).
-                const profile = partSectionForCode(
-                  neighbour.expected?.profile ?? neighbour.nc?.profile ?? '',
-                  neighbour.nc?.dimensions ?? [],
-                )?.points
-                void diffForViewer(bytes, stepBytes, {
-                  profile,
+    let cancelled = false
+    // Settle first: rapid next/prev should not queue prefetches for marks the user skips over.
+    const timer = setTimeout(() => {
+      if (cancelled) return
+      for (const delta of [1, -1]) {
+        const neighbour = viewableParts[viewingIndex + delta]
+        if (!neighbour) continue
+        fastTrackPart(neighbour, PRIORITY_NEIGHBOR)
+        const stepBytes = neighbour.step ? bytesByPath.get(neighbour.step.path) : undefined
+        if (stepBytes) {
+          void meshForViewer(neighbour.step?.path ?? neighbour.mark, stepBytes, {
+            priority: PRIORITY_NEIGHBOR,
+          }).catch(() => {})
+        }
+        const ncPath = neighbour.nc?.path
+        const ncBytes = ncPath ? bytesByPath.get(ncPath) : undefined
+        if (ncBytes) {
+          // Do not add a separate sabre rebuild here: it doubles the neighbour's worker work and
+          // makes rapid next/prev navigation wait. STEP neighbours get it from `fastTrackPart`;
+          // no-STEP neighbours are filled by the sequential background pass.
+          void reconstructForViewer(new TextDecoder().decode(ncBytes), {
+            priority: PRIORITY_NEIGHBOR,
+          })
+            .then((bytes) => {
+              // Warm the manufactured tessellation and the overlay diff too, so opening is instant.
+              if (bytes) {
+                void meshForViewer(`${neighbour.mark} · manufactured`, bytes, {
                   priority: PRIORITY_NEIGHBOR,
                 }).catch(() => {})
+                if (stepBytes) {
+                  // The diff needs the same seating the viewer applies, so resolve the neighbour's
+                  // section here (from its NC/part-list code — no PDF pass needed for a prefetch).
+                  const profile = partSectionForCode(
+                    neighbour.expected?.profile ?? neighbour.nc?.profile ?? '',
+                    neighbour.nc?.dimensions ?? [],
+                  )?.points
+                  void diffForViewer(bytes, stepBytes, {
+                    profile,
+                    priority: PRIORITY_NEIGHBOR,
+                  }).catch(() => {})
+                }
               }
-            }
-          })
-          .catch(() => {})
+            })
+            .catch(() => {})
+        }
       }
+    }, 700)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
     }
   }, [viewing, viewingIndex, viewableParts, bytesByPath, fastTrackPart])
+
+  // Background CUT_DEPTH pass: parts with no STEP are skipped by the analysis rebuild, so probe
+  // their NC cut lines here too. Run a few at a time across the multi-core pool; the viewed part
+  // and its neighbours still jump ahead on priority.
+  const sabreQueued = useRef(new Set<string>())
+  const sabreChecksRef = useRef(sabreChecks)
+  sabreChecksRef.current = sabreChecks
+  useEffect(() => {
+    if (!result) return
+    let cancelled = false
+    const pending = result.parts.filter(
+      (part) => part.nc?.path && !part.step && !sabreChecksRef.current.has(part.mark),
+    )
+    let next = 0
+    // Keep the main thread clear: only this many NC decodes/tasks are in flight at once.
+    const CONCURRENCY = 4
+    const work = async () => {
+      while (!cancelled) {
+        const part = pending[next++]
+        if (!part) return
+        if (sabreChecksRef.current.has(part.mark) || sabreQueued.current.has(part.mark)) continue
+        const ncPath = part.nc?.path
+        const bytes = ncPath ? bytesByPath.get(ncPath) : undefined
+        if (!bytes) continue
+        sabreQueued.current.add(part.mark)
+        try {
+          const failures = await sabreForViewer(new TextDecoder().decode(bytes), {
+            priority: PRIORITY_BACKGROUND,
+            measureOnly: true,
+          })
+          if (cancelled) return
+          setSabreChecks((prev) => new Map(prev).set(part.mark, failures))
+        } catch {
+          // best-effort
+        } finally {
+          sabreQueued.current.delete(part.mark)
+        }
+      }
+    }
+    void Promise.all(Array.from({ length: CONCURRENCY }, work))
+    return () => {
+      cancelled = true
+    }
+  }, [result, bytesByPath])
 
   /** The override a part carries, if any (cleaned or regenerated). */
   const overrideFor = useCallback(
