@@ -53,6 +53,7 @@ import { listedProfile } from '@/lib/audit/partProfile'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
 import { assessUnclosedCuts, type UnclosedCutIssue } from '@/lib/audit/unclosedCuts'
+import { findWeldingEtchings, type WeldingEtchings } from '@/lib/audit/weldingEtchings'
 import { downloadBlob, downloadText, fileStem } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
 import { removeCutFromNc, setBevelInNc } from '@/lib/parsers/ncEdit'
@@ -317,6 +318,18 @@ interface StatusPill {
   finding: Finding
 }
 
+/** The tooltip for a part's weld-location etchings (localised). */
+function weldEtchingsTitle(t: TFunction, etchings: WeldingEtchings): string {
+  const parts = [t('preflight.status.weldTitle')]
+  if (etchings.labels.length > 0) {
+    parts.push(t('preflight.status.weldLabels', { labels: etchings.labels.join(', ') }))
+  }
+  if (etchings.scribeLines > 0) {
+    parts.push(t('preflight.status.weldScribes', { count: etchings.scribeLines }))
+  }
+  return parts.join(' · ')
+}
+
 /** Grades an NC-vs-STEP mismatch: massive = error, borderline = warning, close = ok. */
 function mismatchGrade(comparison: ModelComparison): 'ok' | 'warning' | 'error' {
   if (!comparison.sizeOk) return 'error'
@@ -390,6 +403,8 @@ export function PreflightPage() {
   const [stepLengths, setStepLengths] = useState<Map<string, number>>(new Map())
   /** Per-part laser-cut manufacturability issues (sudden thickness steps). */
   const [cutIssues, setCutIssues] = useState<Map<string, Finding[]>>(new Map())
+  /** Per-part welding-location etchings (`SI` member labels / `PU`-`KO` scribe bars). */
+  const [weldEtchings, setWeldEtchings] = useState<Map<string, WeldingEtchings>>(new Map())
   const [sabreChecks, setSabreChecks] = useState<Map<string, SabreFailure[]>>(new Map())
   /** Per-part cut-reach failures (a bevel whose bore exceeds the head's pierce cap). */
   const [reachChecks, setReachChecks] = useState<Map<string, CutReachFailure[]>>(new Map())
@@ -986,6 +1001,7 @@ export function PreflightPage() {
     setSectionGuesses(new Map())
     setStepLengths(new Map())
     setCutIssues(new Map())
+    setWeldEtchings(new Map())
     // Keep only marks that exist in the new result (stale entries would leak across jobs).
     setSabreChecks((prev) => {
       const marks = new Set(result.parts.map((part) => part.mark))
@@ -1014,6 +1030,7 @@ export function PreflightPage() {
       const reach = new Map<string, CutReachFailure[]>()
       const bevel = new Map<string, BevelChangeIssue[]>()
       const unclosed = new Map<string, UnclosedCutIssue[]>()
+      const weld = new Map<string, WeldingEtchings>()
       /** Records that cut-depth couldn't be assessed for a model, so it never passes silently. */
       const markUnchecked = (mark: string, reason: string, params?: Record<string, string>) => {
         const list = issues.get(mark) ?? []
@@ -1035,6 +1052,8 @@ export function PreflightPage() {
           continue
         }
         const ncText = new TextDecoder().decode(ncBytes)
+        const etchings = findWeldingEtchings(ncText, part.mark)
+        if (etchings) weld.set(part.mark, etchings)
         for (const issue of assessManufacturability(ncText)) {
           const list = issues.get(part.mark) ?? []
           list.push({
@@ -1072,6 +1091,7 @@ export function PreflightPage() {
       if (reach.size > 0) setReachChecks(new Map(reach))
       if (bevel.size > 0) setBevelChanges(new Map(bevel))
       if (unclosed.size > 0) setUnclosedCuts(new Map(unclosed))
+      if (weld.size > 0) setWeldEtchings(new Map(weld))
 
       // Phase 1: drawings, up to CONCURRENCY at a time.
       const materials = new Map<string, DrawingMaterial>()
@@ -2917,6 +2937,7 @@ export function PreflightPage() {
                       const mass = pieceMass(part)
                       const band = massBand(mass)
                       const pills = issuesByMark.get(part.mark) ?? []
+                      const weld = weldEtchings.get(part.mark)
                       return (
                         <TableRow
                           key={part.mark}
@@ -2968,10 +2989,19 @@ export function PreflightPage() {
                             </span>
                           </TableCell>
                           <TableCell>
-                            {pills.length === 0 ? (
+                            {pills.length === 0 && !weld ? (
                               <Badge variant="success">{t('preflight.status.ok')}</Badge>
                             ) : (
                               <div className="flex flex-wrap gap-1">
+                                {weld && (
+                                  <Badge
+                                    variant="info"
+                                    className="gap-1 font-mono"
+                                    title={weldEtchingsTitle(t, weld)}
+                                  >
+                                    {t('preflight.status.weld')}
+                                  </Badge>
+                                )}
                                 {pills.map((pill) => (
                                   <Badge
                                     key={pill.code}

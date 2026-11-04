@@ -197,6 +197,10 @@ export const en = {
       error: 'Error',
       warning: 'Warning',
       autoFix: 'one-click fix',
+      weld: 'Weld',
+      weldTitle: 'Welding-location etchings',
+      weldLabels: 'etched member marks: {{labels}}',
+      weldScribes: '{{count}} scribe line(s)',
     },
     viewer: {
       dialogTitle: '{{mark}} · drawing + 3D',
@@ -664,6 +668,10 @@ export const zh = {
       error: '错误',
       warning: '警告',
       autoFix: '可一键修复',
+      weld: '焊接',
+      weldTitle: '焊接位置刻蚀',
+      weldLabels: '刻蚀构件标记：{{labels}}',
+      weldScribes: '{{count}} 条划线',
     },
     viewer: {
       dialogTitle: '{{mark}} · 图纸 + 3D',
