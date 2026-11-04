@@ -20,7 +20,7 @@ import { measureStep } from './measure'
 import { meshStepFile } from './mesh'
 import { alignedOverlap } from './occDiff'
 import { setOcWasmUrl } from './occInit'
-import { reconstructStepFromNc } from './reconstructFromNc'
+import { reconstructSolidFromNc, reconstructStepFromNc } from './reconstructFromNc'
 import { CANONICAL_X_AXIS, CANONICAL_Y_AXIS, seatedPair, transformVertices } from './seat'
 
 const require = createRequire(import.meta.url)
@@ -406,6 +406,66 @@ describe('reconstructFromNc — I-section NC projection lands on the manufacture
     // The cuts sit on the surface (plus the 0.4 mm overlay nudge); a mirrored projection is 20+ mm off.
     expect(median).toBeLessThan(2)
   }, 120000)
+})
+
+describe('reconstructFromNc — CUT_DEPTH markers follow the NC lines', () => {
+  it('places every PFC probe failure on a projected cut line (m130)', async () => {
+    const path = nw31Top('NC files', 'm130.nc1')
+    if (!existsSync(path)) return
+    const nc = readFileSync(path, 'utf8')
+    const header = parseDstv(nc).header
+    const section = partSectionForCode(header.profile ?? '', header.dimensions ?? [])
+    if (!section) return
+    const geo = parseNcGeometry(nc)
+    const frame = resolveNcFaceFrame(section.points, geo, header.profile)
+    const length = header.length
+    const OFF = 0.4
+    const toScene = (along: number, cross: [number, number], face: 'v' | 'o' | 'u' | 'h'): Vec3 => {
+      const n = faceNormal(frame, face, section.points)
+      const local: [number, number] = [cross[0], cross[1]]
+      local[n.axis] += n.sign * OFF
+      return [
+        along - length / 2 + local[0] * CANONICAL_X_AXIS.x + local[1] * CANONICAL_Y_AXIS.x,
+        local[0] * CANONICAL_X_AXIS.y + local[1] * CANONICAL_Y_AXIS.y,
+        local[0] * CANONICAL_X_AXIS.z + local[1] * CANONICAL_Y_AXIS.z,
+      ]
+    }
+    const normal = (face: 'v' | 'o' | 'u' | 'h'): Vec3 => {
+      const n = faceNormal(frame, face, section.points)
+      const base = n.axis === 0 ? CANONICAL_X_AXIS : CANONICAL_Y_AXIS
+      return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
+    }
+    const cutPoints = projectNc(geo, {
+      frame,
+      section: section.points,
+      toScene,
+      normal,
+    }).cuts.flatMap((cut) => {
+      const points: Vec3[] = []
+      for (let i = 0; i + 2 < cut.points.length; i += 3)
+        points.push([
+          cut.points[i] as number,
+          cut.points[i + 1] as number,
+          cut.points[i + 2] as number,
+        ])
+      return points
+    })
+    expect(cutPoints.length).toBeGreaterThan(0)
+
+    const built = await reconstructSolidFromNc(nc, { measureOnly: true })
+    // The failures are in the model's canonical (post-roll) frame; the viewer seats it with the
+    // same CANONICAL_ROLL, so roll them here before comparing to the display-frame NC lines.
+    for (const failure of built?.sabre ?? []) {
+      const point: Vec3 = [failure.point[0] - length / 2, failure.point[2], -failure.point[1]]
+      let best = Number.POSITIVE_INFINITY
+      for (const cut of cutPoints)
+        best = Math.min(best, Math.hypot(point[0] - cut[0], point[1] - cut[1], point[2] - cut[2]))
+      expect(
+        best,
+        `failure ${failure.point.map((v) => v.toFixed(1)).join(',')} on a cut line`,
+      ).toBeLessThan(5)
+    }
+  }, 300000)
 })
 
 describe('reconstructFromNc — I-section cut arc side (synthetic)', () => {

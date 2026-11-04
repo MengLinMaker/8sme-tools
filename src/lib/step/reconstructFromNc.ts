@@ -942,23 +942,36 @@ export async function reconstructSolidFromNc(
   // (centre-of-mass ranking), measure and export all see the manufactured body only.
   solid = (await stripStraySolids(solid as unknown as MeasurableShape)).solid as unknown as SolidOps
 
+  // Roll the internal (authored) stance build back to the canonical stance so the viewer, NC
+  // projection and exported STEP are all canonical. 90° about the member axis (X): a channel's
+  // canonical `n` is a 90° CW rotation of the authored pose, an I-section's canonical `H` 90° CCW.
+  if (canonicalSectionFlip) {
+    const angle = family === 'channel' ? -90 : 90
+    solid = (
+      solid as unknown as { rotate: (a: number, p: number[], d: number[]) => SolidOps }
+    ).rotate(angle, [0, 0, 0], [1, 0, 0])
+  }
+
   let sabre: SabreFailure[] = []
   if (options.sabre !== false) {
     // Probe the manufactured solid along the **NC projection cut lines** — 1 mm samples on the
-    // actual cut path, fired along the surface normal. This is the sparse, fast path: no stock-skin
-    // or end-cap faces to produce false positives, and only the cuts are tested. The samples are in
-    // the authored stance, so they (and the failures) roll back with the solid below.
+    // actual cut path, fired along the surface normal. The solid has already been rolled to the
+    // canonical stance, so use the canonical section/frame here too: this is the same frame the
+    // viewer projects the NC lines in, and avoids a family-specific sample-vs-solid across-sign
+    // mismatch (a channel's `o`/`u` cuts used to be probed on the mirrored side).
+    const probeSection = rawSection.points
+    const probeFrame = resolveNcFaceFrame(probeSection, geo, header.profile)
     const projection = {
-      frame,
-      section: section.points,
+      frame: probeFrame,
+      section: probeSection,
       toScene: (along: number, cross: [number, number], face: NcFace) => {
-        const n = faceNormal(frame, face, section.points)
+        const n = faceNormal(probeFrame, face, probeSection)
         const local: [number, number] = [cross[0], cross[1]]
         local[n.axis] += n.sign * 0.4
         return [along, local[0], local[1]] as [number, number, number]
       },
       normal: (face: NcFace): [number, number, number] => {
-        const n = faceNormal(frame, face, section.points)
+        const n = faceNormal(probeFrame, face, probeSection)
         return n.axis === 0 ? [0, n.sign, 0] : [0, 0, n.sign]
       },
     }
@@ -978,7 +991,7 @@ export async function reconstructSolidFromNc(
       )
       .map((sample) => ({
         ...sample,
-        depth: faceThickness(frame, section.points, sample.face) + rootRadius,
+        depth: faceThickness(probeFrame, probeSection, sample.face) + rootRadius,
       }))
     sabre = sabreSamples(
       solid as unknown as Parameters<typeof sabreSamples>[0],
@@ -986,28 +999,6 @@ export async function reconstructSolidFromNc(
       undefined,
       options.sabreMesh,
     ).failures
-    const roll = (p: [number, number, number]): [number, number, number] =>
-      family === 'channel' ? [p[0], p[2], -p[1]] : [p[0], -p[2], p[1]]
-    if (canonicalSectionFlip) {
-      sabre = sabre.map((f) => ({
-        ...f,
-        point: roll(f.point),
-        normal: roll(f.normal),
-        tri: [roll(f.tri[0]), roll(f.tri[1]), roll(f.tri[2])] as SabreFailure['tri'],
-        entry: roll(f.entry),
-        exit: roll(f.exit),
-      }))
-    }
-  }
-
-  // Roll the internal (authored) stance build back to the canonical stance so the viewer, NC
-  // projection and exported STEP are all canonical. 90° about the member axis (X): a channel's
-  // canonical `n` is a 90° CW rotation of the authored pose, an I-section's canonical `H` 90° CCW.
-  if (canonicalSectionFlip) {
-    const angle = family === 'channel' ? -90 : 90
-    solid = (
-      solid as unknown as { rotate: (a: number, p: number[], d: number[]) => SolidOps }
-    ).rotate(angle, [0, 0, 0], [1, 0, 0])
   }
 
   // Measure-only callers (analysis phase 4) compare the live solid and discard
