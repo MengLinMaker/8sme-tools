@@ -887,6 +887,33 @@ export function PreflightPage() {
   useEffect(() => {
     writePref('showGrid', showGrid)
   }, [showGrid])
+  // Optimistic load: hovering/focusing a row starts its manufactured rebuild after a short
+  // debounce (neighbour priority). Clicking then opens from the primed cache.
+  const prefetchTimer = useRef<number | null>(null)
+  const prefetchPart = useCallback(
+    (part: PartRecord) => {
+      if (prefetchTimer.current != null) window.clearTimeout(prefetchTimer.current)
+      prefetchTimer.current = window.setTimeout(() => {
+        prefetchTimer.current = null
+        const ncPath = part.nc?.path
+        const bytes = ncPath ? bytesByPath.get(ncPath) : undefined
+        if (!bytes) return
+        const ncText = new TextDecoder().decode(bytes)
+        if (peekReconstructForViewer(ncText)) return
+        void reconstructViewerWithSabre(ncText, { priority: PRIORITY_NEIGHBOR })
+          .then(({ bytes: made }) => {
+            if (made) {
+              void meshForViewer(`${part.mark} · manufactured`, made, {
+                priority: PRIORITY_NEIGHBOR,
+              }).catch(() => {})
+            }
+          })
+          .catch(() => {})
+      }, 250)
+    },
+    [bytesByPath],
+  )
+
   const openPart = useCallback((part: PartRecord) => {
     setOrbitBus(createOrbitBus())
     setFindingFocus(null)
@@ -2895,6 +2922,8 @@ export function PreflightPage() {
                           key={part.mark}
                           tabIndex={0}
                           onClick={() => openPart(part)}
+                          onMouseEnter={() => prefetchPart(part)}
+                          onFocus={() => prefetchPart(part)}
                           onKeyDown={(event) => {
                             if (event.key === 'Enter' || event.key === ' ') {
                               event.preventDefault()
