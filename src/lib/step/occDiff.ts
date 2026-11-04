@@ -1,6 +1,6 @@
 import { BufferGeometry, Float32BufferAttribute, Matrix4, Quaternion, Vector3 } from 'three'
 import type { BooleanDiff, DiffSoup } from './booleanDiff'
-import { meshStepFile } from './mesh'
+import { MESH_OPTIONS } from './mesh'
 import { ensureOc } from './occInit'
 
 /** One diff solid serialised for the worker boundary: plain typed arrays, no `BufferGeometry`. */
@@ -88,27 +88,36 @@ interface OcShape {
   wrapped: unknown
 }
 
-/** A shape's triangles in world coordinates (concatenated bodies). */
-async function shapeToSoup(shape: unknown): Promise<DiffSoup> {
-  const { cast } = await import('replicad')
-  const wrapped = cast(shape as never) as unknown as { blobSTEP: () => Blob }
-  const blob = wrapped.blobSTEP()
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  const meshed = await meshStepFile('occ', bytes)
-  const vertices: number[] = []
-  const normals: number[] = []
-  const triangles: number[] = []
-  for (const body of meshed.bodies) {
-    const base = vertices.length / 3
-    for (const v of body.mesh.faces.vertices) vertices.push(v)
-    const faceNormals = body.mesh.faces.normals
-    if (faceNormals) for (const n of faceNormals) normals.push(n)
-    for (const t of body.mesh.faces.triangles) triangles.push(t + base)
+interface OcMeshedShape {
+  mesh(options?: { tolerance?: number; angularTolerance?: number }): {
+    vertices: number[]
+    normals?: number[]
+    triangles: number[]
   }
-  // OCC shades each surface from its own normals (smooth across curves, sharp at edges); keep them so
-  // the diff reads as a shaded solid like the base body. Only usable when every body supplied them.
-  const usableNormals = normals.length === vertices.length ? normals : undefined
-  return { vertices, triangles, normals: usableNormals }
+  delete?: () => void
+}
+
+/**
+ * A shape's triangles in world coordinates (a compound meshes all bodies in one pass).
+ * `owned` frees the shape (only for throwaway boolean results; `made`/`ideal` are reused).
+ */
+async function shapeToSoup(shape: unknown, owned = false): Promise<DiffSoup> {
+  const { cast } = await import('replicad')
+  const wrapped = cast(shape as never) as unknown as OcMeshedShape
+  try {
+    // Mesh the live OCC shape directly. Exporting each boolean result to STEP and re-importing it
+    // (the old `meshStepFile` path) wrote and parsed a full model per fuzzy retry for no gain.
+    const faces = wrapped.mesh(MESH_OPTIONS)
+    const vertices = faces.vertices
+    const triangles = faces.triangles
+    const normals = faces.normals ?? []
+    // OCC shades each surface from its own normals (smooth across curves, sharp at edges); keep them so
+    // the diff reads as a shaded solid like the base body. Only usable when every vertex supplied one.
+    const usableNormals = normals.length === vertices.length ? normals : undefined
+    return { vertices, triangles, normals: usableNormals }
+  } finally {
+    if (owned) wrapped.delete?.()
+  }
 }
 
 function geometryFromSoup(soup: DiffSoup): BufferGeometry | null {
@@ -222,17 +231,15 @@ export async function occFuzzyDiff(
     const made = move(primary, primaryMatrix)
     const ideal = move(compare, compareMatrix)
 
-    const primarySoup = await shapeToSoup(made)
-    const idealSoup = await shapeToSoup(ideal)
-
-    // Model volumes (B-rep when available, else the mesh estimate).
-    let madeVolume = signedVolume(primarySoup)
-    let idealVolume = signedVolume(idealSoup)
+    // Model volumes straight from the B-rep; fall back to a mesh estimate only if that fails.
+    let madeVolume: number
+    let idealVolume: number
     try {
       madeVolume = measureVolume(cast(made as never) as never)
       idealVolume = measureVolume(cast(ideal as never) as never)
     } catch {
-      // keep the mesh volumes
+      madeVolume = signedVolume(await shapeToSoup(made))
+      idealVolume = signedVolume(await shapeToSoup(ideal))
     }
     // A correct cut matches the common-derived volumes to tessellation precision; a merged cut does
     // not (it returns ≈ the whole operand). 5 % of the larger model absorbs tessellation drift yet
@@ -256,8 +263,17 @@ export async function occFuzzyDiff(
     // as coincident (a matching part's expected over/under is ≈ 0, not a thin shell over its whole
     // surface — that shell is the "long stretches of skin"). A kernel merge, by contrast, returns
     // ≈ the whole operand and cannot agree with the common, so it is rejected.
-    const commonVolumeAt = async (f: number): Promise<number> =>
-      signedVolume(await shapeToSoup(boolean('BRepAlgoAPI_Common', made, ideal, f)))
+    // Exact B-rep volume, no mesh: the common is only needed as a number here.
+    const commonVolumeAt = async (f: number): Promise<number> => {
+      const common = cast(
+        boolean('BRepAlgoAPI_Common', made, ideal, f) as never,
+      ) as unknown as OcShape & { delete?: () => void }
+      try {
+        return measureVolume(common as never)
+      } finally {
+        common.delete?.()
+      }
+    }
 
     // Auto-tune: scan candidate fuzzy values largest-first until both cuts agree with the common.
     // The first workable value wins, so the largest margin that does not merge.
@@ -269,8 +285,8 @@ export async function occFuzzyDiff(
         const expectedUnder = Math.max(0, madeVolume - commonVolume)
         const agrees = (value: number, expected: number): boolean =>
           Math.abs(value - expected) <= agreeTolerance
-        const overSoup = await shapeToSoup(boolean('BRepAlgoAPI_Cut', ideal, made, f))
-        const underSoup = await shapeToSoup(boolean('BRepAlgoAPI_Cut', made, ideal, f))
+        const overSoup = await shapeToSoup(boolean('BRepAlgoAPI_Cut', ideal, made, f), true)
+        const underSoup = await shapeToSoup(boolean('BRepAlgoAPI_Cut', made, ideal, f), true)
         const overVolume = signedVolume(overSoup)
         const underVolume = signedVolume(underSoup)
         const sane =
