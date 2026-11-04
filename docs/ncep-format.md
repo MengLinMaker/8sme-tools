@@ -489,7 +489,7 @@ Remaining parser gaps:
 | `technologyID` | valid GUID | **fresh random GUID** | ✅ |
 | Adobe `Length` | `3000` | `3000` | ✅ |
 | `RCornerMaxRadius` | `5` (I/U), `r` (tube) | same | ✅ |
-| Part SVG | arcs + `InnerCad` + `USERPATH` adobe | sibling `cadgroup`; polylines, no `InnerCad` | ⚠️ |
+| Part SVG | arcs + `InnerCad` + `USERPATH` adobe | sibling `cadgroup`; section `cadgroup` now uses true arcs; cuts use sampled polylines | ⚠️ |
 | ZIP flags | CAD entries flag 6; container stored | matches real (`zipQt`) | ✅ |
 | Canonical section | PFC/RHS already canonical; UB rotated `(−y,x)` | section builder emits canonical stance | ✅/⚠️ verify UB |
 | Marks | `cadtext` + `cadrectangle` bars; corrected bars layer 4 + `needSetAdobe` | text only; no `cadrectangle` bars | ⚠️ |

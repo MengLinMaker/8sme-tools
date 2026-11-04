@@ -27,8 +27,8 @@ Status legend: **SOLID** (proven on WiseCAM), **LIKELY** (strong evidence), **SU
 | Markings | **LIKELY** | Text marks load; UB real text + bars improved the result (`1316`); M-42 has no mark. Correction (layer 4 bars) and short-part auto-mark rules remain open. |
 | Exact outer section | **SOLID** | PFC/tube outer path must use exact corner vertices; dense sampled polylines fail (`1402`, `1405`, `1414`). The inner section path is irrelevant (`1404`, `1413`). |
 | PFC section style | **SOLID** | Sharp chords between exact vertices work (`1403`, `1531`); true arcs are not required for PFC because its arcs are in the hidden cavity. |
-| UB section arcs | **LIKELY** | True arcs required at the root fillets; sharp root fails even with real trims/holes/marks (`1504`). |
-| Tube section arcs | **LIKELY** | True arcs required at the corner radii; sharp outer is blocky/offset (`1530`). |
+| UB section arcs | **LIKELY** | True arcs required at the root fillets; sharp root fails even with real trims/holes/marks (`1504`). The writer now emits true `A` arcs with exact vertices (2026-11-04); WiseCAM re-check pending. |
+| Tube section arcs | **LIKELY** | True arcs required at the corner radii; sharp outer is blocky/offset (`1530`). The writer now emits true `A` arcs (2026-11-04); WiseCAM re-check pending. |
 | UB front trims/holes/marks | **LIKELY** | Real section + real trims → holes → marks loads (`1501–1503`). Our front features still glitch. |
 | M-42 mitre/end cut | **LIKELY** | Real section + real mitred trims loads (`1511`/`1513`); our section with real trims offsets the end (`1512`). |
 | Full-package container | **SOLID** | `container.xml` must have no trailing newline. The fixed writer’s improved M-1/M-3/M-35/M-42 packages all loaded; only the old-container `1618` was rejected. |

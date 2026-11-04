@@ -42,8 +42,11 @@ formats, so it is the preferred export target.
   (KO/PU duplicates collapse by points/text). Generated M-3 has
   two bars spanning `x=-125.5..125.5`, matching the real control's bars.
 - Improved M-1/M-35/M-42 NC→NCEP packages load and match controls.
-- PFC needs exact outer vertices; sharp chords are fine because its arcs are in the hidden cavity.
-- UB and tubes need **true arcs** on the developed curved edges.
+- The section `cadgroup` now emits **true arcs** (`A` commands) with exact corner vertices for
+  UB root fillets, PFC web/flange fillets and tube outer/inner radii. The old sampled polylines
+  (7 points per 90°) are gone — that form was the arc-probe load blocker.
+- PFC needs exact outer vertices; sharp chords were tolerated before, but the writer now matches
+  the real arc form too.
 - UB front trims/holes/marks are isolated by the feature matrix; M-3 real-hole probes need a retest
   after the `holeBlock` probe-generator fix.
 - M-42 needs the real section + real mitred trims; the default mark must be disabled/repositioned.
@@ -155,7 +158,8 @@ bevel/technology intent**.
 
 ## Next implementation targets
 
-1. True arc section generation in the writer (UB/tube).
+1. ~~True arc section generation in the writer (UB/tube).~~ **Implemented 2026-11-04**; needs a
+   WiseCAM import check.
 2. Accurate shaped/mitred end-cut development (M-42).
 3. Grey-strip hole filter for UB.
 4. Bevel `PosMap` cluster generation from NC.

@@ -1184,6 +1184,24 @@ sweeps`). Controls keep real marks. The M-42 part-name mark size is **not** a ta
 overwrites `Part.Name`. The production-critical markings are the `SI`/`PU`/`KO` etchings, which
 the writer now emits.
 
+## Implementation — true arc sections (2026-11-04)
+
+The arc probes established that WiseCAM's own section `cadgroup` carries **true arcs** and that
+dense sampled section polylines are the load blocker (`1402`, `1409`, `1414`, `1823`, `1902`,
+`1912`). The NC→NCEP writer now recovers each sampled arc run from the section points and emits
+an SVG `A` command between the exact corner vertices:
+
+- UB/UC root fillets (e.g. M-3 `A13,13`), PFC web/flange fillets (M-1/M-34 `A14,14`), and tube
+  outer/inner corner radii (M-35 `A12.5,12.5` / `A7.5,7.5`) all round-trip.
+- Only genuine smooth runs are converted; sharp rectangular corners that happen to share a circle
+  are rejected by an interior-angle check.
+- `truncatePath` end trims remain sampled polylines: real NCEP trims are themselves densely
+  sampled `L` paths for shaped/mitred ends, so arc recovery is limited to the section group.
+
+`fromNc.test.ts` guards the arc form and the absence of the old sampled vertices. The next
+WiseCAM check is a small UB/tube/PFC pack generated from the current writer; this is not yet a
+recorded WiseCAM result.
+
 ## Reproduce
 
 ```sh

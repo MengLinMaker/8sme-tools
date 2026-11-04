@@ -199,6 +199,149 @@ function pathFromPoints(points: [number, number][], close = true): string {
   return parts.join(' ')
 }
 
+interface ArcFit {
+  cx: number
+  cy: number
+  r: number
+}
+
+/** Circle through three points, or null when they are (near) collinear. */
+function circleThrough(
+  a: [number, number],
+  b: [number, number],
+  c: [number, number],
+): ArcFit | null {
+  const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]))
+  if (Math.abs(d) < 1e-9) return null
+  const aa = a[0] ** 2 + a[1] ** 2
+  const bb = b[0] ** 2 + b[1] ** 2
+  const cc = c[0] ** 2 + c[1] ** 2
+  const cx = (aa * (b[1] - c[1]) + bb * (c[1] - a[1]) + cc * (a[1] - b[1])) / d
+  const cy = (aa * (c[0] - b[0]) + bb * (a[0] - c[0]) + cc * (b[0] - a[0])) / d
+  const r = Math.hypot(a[0] - cx, a[1] - cy)
+  // Real section radii are small (root fillets/corners). Huge fits are straight lines.
+  if (!(r > 0.1 && r < 1e4)) return null
+  return { cx, cy, r }
+}
+
+/** Sign of the turn at `b`; 0 when the three points are collinear. */
+function turnSign(a: [number, number], b: [number, number], c: [number, number]): number {
+  const cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+  return Math.abs(cross) < 1e-9 ? 0 : Math.sign(cross)
+}
+
+/** Interior angle (radians) at `b`: a sampled arc is nearly straight (~π), a sharp corner is not. */
+function interiorAngle(a: [number, number], b: [number, number], c: [number, number]): number {
+  const v1x = a[0] - b[0]
+  const v1y = a[1] - b[1]
+  const v2x = c[0] - b[0]
+  const v2y = c[1] - b[1]
+  const length = Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y)
+  if (length === 0) return 0
+  return Math.acos(Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / length)))
+}
+
+/** A smooth point on an arc must turn gently; sharp section corners are not arc samples. */
+const MIN_ARC_INTERIOR_ANGLE = 1.9
+
+function onCircle(point: [number, number], arc: ArcFit, tolerance = 0.05): boolean {
+  return Math.abs(Math.hypot(point[0] - arc.cx, point[1] - arc.cy) - arc.r) <= tolerance
+}
+
+/** An arc sampled by the section builders: at least 4 points / 3 segments. */
+interface SectionArc {
+  end: number
+  radius: number
+  sweep: 0 | 1
+  large: 0 | 1
+}
+
+/**
+ * The longest run starting at `start` that lies on one circle, or null. The DSTV/section builders
+ * sample arcs into 7 points; WiseCAM's own section groups carry them as real `A` commands instead.
+ * Recovering the circle here keeps the exact corner vertices while dropping the intermediate
+ * samples (dense sampled section polylines are what failed the arc probes).
+ */
+function arcFrom(points: [number, number][], start: number): SectionArc | null {
+  const a = points[start]
+  const b = points[start + 1]
+  const c = points[start + 2]
+  if (!a || !b || !c) return null
+  const arc = circleThrough(a, b, c)
+  if (!arc) return null
+  const sign = turnSign(a, b, c)
+  if (sign === 0) return null
+  let end = start + 2
+  while (end + 1 < points.length) {
+    const next = points[end + 1] as [number, number]
+    const prev = points[end - 1] as [number, number]
+    const current = points[end] as [number, number]
+    if (!onCircle(next, arc) || turnSign(prev, current, next) !== sign) break
+    // A rectangle's corners also lie on one circle; a sampled arc turns only slightly per step.
+    if (interiorAngle(prev, current, next) < MIN_ARC_INTERIOR_ANGLE) break
+    end++
+  }
+  if (end - start < 3) return null
+  let turn = 0
+  for (let index = start; index < end; index++) {
+    const p = points[index] as [number, number]
+    const q = points[index + 1] as [number, number]
+    const ap = Math.atan2(p[1] - arc.cy, p[0] - arc.cx)
+    const aq = Math.atan2(q[1] - arc.cy, q[0] - arc.cx)
+    let delta = aq - ap
+    if (delta > Math.PI) delta -= Math.PI * 2
+    if (delta < -Math.PI) delta += Math.PI * 2
+    turn += delta
+  }
+  return {
+    end,
+    radius: arc.r,
+    sweep: sign > 0 ? 1 : 0,
+    large: Math.abs(turn) > Math.PI ? 1 : 0,
+  }
+}
+
+/** The section outline as SVG, with sampled arc runs emitted as real `A` commands. */
+function pathFromSection(points: [number, number][], close = true): string {
+  if (points.length < 4) return pathFromPoints(points, close)
+  let ring = points.slice()
+  if (close) {
+    const first = ring[0] as [number, number]
+    const last = ring[ring.length - 1] as [number, number]
+    if (Math.hypot(first[0] - last[0], first[1] - last[1]) < 1e-6) ring.pop()
+    if (ring.length < 4) return pathFromPoints(points, close)
+    // Rotate a closed ring to a sharp vertex so no arc wraps across the array boundary.
+    const count = ring.length
+    const offset = ring.findIndex((_, index) => {
+      const before = ring[(index - 1 + count) % count] as [number, number]
+      const at = ring[index] as [number, number]
+      const after = ring[(index + 1) % count] as [number, number]
+      return interiorAngle(before, at, after) < MIN_ARC_INTERIOR_ANGLE
+    })
+    if (offset > 0) ring = [...ring.slice(offset), ...ring.slice(0, offset)]
+  }
+  const n = ring.length
+  const parts = [`M${mm((ring[0] as [number, number])[0])},${mm((ring[0] as [number, number])[1])}`]
+  let index = 0
+  while (index < n) {
+    const arc = arcFrom(ring, index)
+    if (arc && arc.end < n) {
+      const end = ring[arc.end] as [number, number]
+      parts.push(
+        `A${mm(arc.radius)},${mm(arc.radius)} 0 ${arc.large},${arc.sweep} ${mm(end[0])},${mm(end[1])}`,
+      )
+      index = arc.end
+      continue
+    }
+    const next = ring[index + 1]
+    if (!next) break
+    parts.push(`L${mm(next[0])},${mm(next[1])}`)
+    index++
+  }
+  if (close) parts.push('Z')
+  return parts.join(' ')
+}
+
 function svgHeader(): string {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -241,7 +384,7 @@ function truncatePath(
 }
 
 function profilePath(id: number, points: [number, number][], stroke?: string): string {
-  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="0" wh:machining="1" d="${pathFromPoints(points)}" wh:params="ANGLE_DISTINGUISH_LW=1;ANGLE_DISTINGUISH_MODE=0;" wh:technical="${TECHNICAL_EMPTY}" class="layer0"${paint(stroke)}/>`
+  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="0" wh:machining="1" d="${pathFromSection(points)}" wh:params="ANGLE_DISTINGUISH_LW=1;ANGLE_DISTINGUISH_MODE=0;" wh:technical="${TECHNICAL_EMPTY}" class="layer0"${paint(stroke)}/>`
 }
 
 function innerProfilePath(
@@ -250,7 +393,8 @@ function innerProfilePath(
   stroke?: string,
   close = true,
 ): string {
-  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="0" wh:machining="1" d="${pathFromPoints(points, close)}" wh:technical="${TECHNICAL_EMPTY}" class="layer0"${paint(stroke)}/>`
+  const d = pathFromSection(points, close)
+  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="0" wh:machining="1" d="${d}" wh:technical="${TECHNICAL_EMPTY}" class="layer0"${paint(stroke)}/>`
 }
 
 function holeCircle(id: number, hole: NcexHole, stroke?: string): string {

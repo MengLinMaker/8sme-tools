@@ -65,6 +65,26 @@ describe('partFromNc / NCEP', () => {
     expect(group).toContain('-158.50,40.00')
   })
 
+  it('emits true arcs, not sampled polylines, in the section group', () => {
+    const sectionGroup = (mark: string): string => {
+      const bytes = buildNcepFromNc(readFileSync(fixture('ncep', `${mark}.nc1`), 'utf8'))
+      if (!bytes) throw new Error(`no package for ${mark}`)
+      const svg = ncepPartSvg(bytes)
+      return svg.slice(svg.indexOf('wh:class="cadgroup"'))
+    }
+
+    // UB root fillets (r13), PFC web/flange fillets (r14), SHS corners (r12.5 outer/r7.5 inner).
+    expect(sectionGroup('M-3')).toContain('A13.00,13.00')
+    expect(sectionGroup('M-1')).toContain('A14.00,14.00')
+    expect(sectionGroup('M-35')).toContain('A12.50,12.50')
+    expect(sectionGroup('M-35')).toContain('A7.50,7.50')
+
+    // The sampled interior vertices must be gone; only exact corner vertices remain.
+    expect(sectionGroup('M-3')).not.toContain('140.56,12.39')
+    expect(sectionGroup('M-1')).not.toContain('-172.02,29.62')
+    expect(sectionGroup('M-35')).not.toContain('35.24,-44.07')
+  })
+
   it('starts the unrolled surface at 0 for zero-origin tubes', () => {
     const ncText = readFileSync(fixture('ncep', 'M-35.nc1'), 'utf8')
     const part = partFromNc(ncText)
