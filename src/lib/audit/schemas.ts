@@ -20,6 +20,10 @@ export const partListRowSchema = z.object({
   grade: z.string(),
   length: z.number().nonnegative().nullable(),
   weight: z.number().nonnegative().nullable(),
+  /** The assembly this row's part belongs to (from an assembly part list). */
+  assembly: z.string().min(1).optional(),
+  /** How many copies of that assembly the job makes (the assembly row's quantity). */
+  assemblyQty: z.number().int().positive().optional(),
 })
 export type PartListRow = z.infer<typeof partListRowSchema>
 

@@ -18,11 +18,29 @@ export function findingsToCsv(result: AuditResult): string {
 
 export function partsToCsv(result: AuditResult): string {
   const rows: string[][] = [
-    ['mark', 'ncQty', 'listQty', 'profile', 'grade', 'ncLength', 'listLength', 'nc', 'step', 'pdf'],
+    [
+      'mark',
+      'assemblies',
+      'ncQty',
+      'listQty',
+      'profile',
+      'grade',
+      'ncLength',
+      'listLength',
+      'nc',
+      'step',
+      'pdf',
+    ],
   ]
   for (const part of result.parts) {
     rows.push([
       part.mark,
+      (part.assemblies ?? [])
+        .map(
+          (usage) =>
+            `${usage.assembly} x${usage.assemblyQty} (${usage.qtyPerAssembly}/asm = ${usage.total})`,
+        )
+        .join('; '),
       part.nc?.quantity?.toString() ?? '',
       part.expected?.qty?.toString() ?? '',
       part.nc?.profile ?? part.expected?.profile ?? '',

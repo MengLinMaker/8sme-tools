@@ -1,4 +1,5 @@
 import { strFromU8, unzipSync } from 'fflate'
+import * as XLSX from 'xlsx'
 import { partListRowSchema } from '@/lib/audit/schemas'
 import type { PartListRow } from '@/lib/audit/types'
 
@@ -9,6 +10,7 @@ function decodeXml(value: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&#(\d+);/g, (_, d: string) => String.fromCharCode(Number(d)))
+    .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/g, '&')
 }
 
@@ -82,6 +84,7 @@ function readCell(grid: string[][], row: number, col: number): string {
 }
 
 const HEADER_KEYS = {
+  assembly: ['assembly', 'assemblies', 'assembly mark', 'assembly no'],
   part: ['part', 'mark', 'item'],
   qty: ['qty', 'quantity', 'qty.'],
   profile: ['profile', 'section', 'type'],
@@ -97,23 +100,92 @@ function toNumber(value: string): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-/**
- * Reads a `.xlsx` part list entirely in-memory: unzips the OOXML container and
- * parses the shared-string table plus the first worksheet. No external sheet lib.
- */
-export function parsePartList(bytes: Uint8Array): PartListRow[] {
+function isZip(bytes: Uint8Array): boolean {
+  return bytes[0] === 0x50 && bytes[1] === 0x4b
+}
+
+function isOle(bytes: Uint8Array): boolean {
+  return bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0
+}
+
+function looksHtml(bytes: Uint8Array): boolean {
+  const head = new TextDecoder()
+    .decode(bytes.subarray(0, Math.min(bytes.length, 1024)))
+    .replace(/^\uFEFF/, '')
+    .trimStart()
+    .toLowerCase()
+  return head.startsWith('<')
+}
+
+/** Reads the first worksheet of an OOXML workbook with the dependency-free parser. */
+function readOoxmlGrid(bytes: Uint8Array): string[][] | null {
   const files = unzipSync(bytes)
   const decodeFile = (name: string): string | undefined =>
     files[name] ? strFromU8(files[name]) : undefined
-
   const shared = parseSharedStrings(decodeFile('xl/sharedStrings.xml'))
   const sheetXml = decodeFile('xl/worksheets/sheet1.xml')
-  if (!sheetXml) return []
+  if (!sheetXml) return null
+  return parseSheet(sheetXml, shared)
+}
 
-  const grid = parseSheet(sheetXml, shared)
+/** Reads BIFF (legacy .xls) workbooks via SheetJS. */
+function readSheetJsGrid(bytes: Uint8Array): string[][] {
+  const workbook = XLSX.read(bytes, { type: 'array', raw: true })
+  const sheet = workbook.Sheets[workbook.SheetNames[0] ?? '']
+  if (!sheet) return []
+  const rows = XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    raw: true,
+    defval: '',
+    blankrows: true,
+  }) as unknown[][]
+  return rows.map((row) => (row ?? []).map((cell) => (cell == null ? '' : String(cell))))
+}
 
-  let headerRow = -1
+/** Reads the HTML-table `.xls` files Tekla's report export writes. */
+function readHtmlGrid(html: string): string[][] {
+  const rows: string[][] = []
+  const rowRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi
+  let rowMatch: RegExpExecArray | null = rowRe.exec(html)
+  while (rowMatch) {
+    const cells: string[] = []
+    const cellRe = /<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi
+    let cellMatch: RegExpExecArray | null = cellRe.exec(rowMatch[1])
+    while (cellMatch) {
+      const text = decodeXml(cellMatch[1].replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, ' '))
+        .replace(/\u00a0/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+      cells.push(text)
+      cellMatch = cellRe.exec(rowMatch[1])
+    }
+    if (cells.some((cell) => cell !== '')) rows.push(cells)
+    rowMatch = rowRe.exec(html)
+  }
+  return rows
+}
+
+function readGrid(bytes: Uint8Array): string[][] {
+  if (isZip(bytes)) {
+    try {
+      const grid = readOoxmlGrid(bytes)
+      if (grid) return grid
+    } catch {
+      // Not the OOXML layout we expect; SheetJS can still try it.
+    }
+    return readSheetJsGrid(bytes)
+  }
+  if (isOle(bytes)) return readSheetJsGrid(bytes)
+  if (looksHtml(bytes)) return readHtmlGrid(new TextDecoder().decode(bytes))
+  throw new Error('not a spreadsheet')
+}
+
+/** Finds the report header row and returns the column indexes it names. */
+function headerColumns(
+  grid: string[][],
+): { row: number; columns: Record<keyof typeof HEADER_KEYS, number> } | null {
   const columns: Record<keyof typeof HEADER_KEYS, number> = {
+    assembly: -1,
     part: -1,
     qty: -1,
     profile: -1,
@@ -140,26 +212,55 @@ export function parsePartList(bytes: Uint8Array): PartListRow[] {
         }
       }
     }
-    if (found.part !== -1 && hits >= 3) {
-      headerRow = r
-      Object.assign(columns, found)
-      break
-    }
+    if (found.part !== -1 && hits >= 3) return { row: r, columns: found }
   }
+  return null
+}
 
-  if (headerRow === -1) return []
+function rowsFromGrid(grid: string[][]): PartListRow[] {
+  const header = headerColumns(grid)
+  if (!header) return []
+  const { row: headerRow, columns } = header
 
   const rows: PartListRow[] = []
+  let currentAssembly: string | undefined
+  let currentAssemblyQty = 1
+
   for (let r = headerRow + 1; r < grid.length; r++) {
+    const part = readCell(grid, r, columns.part)
+    const assembly = columns.assembly === -1 ? '' : readCell(grid, r, columns.assembly)
+    const qty = columns.qty === -1 ? null : toNumber(readCell(grid, r, columns.qty))
+    const grade = columns.grade === -1 ? '' : readCell(grid, r, columns.grade)
+    const length = columns.length === -1 ? null : toNumber(readCell(grid, r, columns.length))
+
+    // Assembly rows carry the assembly quantity but have no grade/length of their own. Some
+    // exports put a description ("PRIMED") in the Part column, so don't rely on it being blank.
+    if (columns.assembly !== -1 && assembly && grade === '' && length === null) {
+      currentAssembly = assembly
+      currentAssemblyQty = qty && qty > 0 ? qty : 1
+      continue
+    }
+    if (!part) continue
+
     const parsed = partListRowSchema.safeParse({
-      part: readCell(grid, r, columns.part),
-      qty: columns.qty === -1 ? null : toNumber(readCell(grid, r, columns.qty)),
+      part,
+      qty,
       profile: columns.profile === -1 ? '' : readCell(grid, r, columns.profile),
-      grade: columns.grade === -1 ? '' : readCell(grid, r, columns.grade),
-      length: columns.length === -1 ? null : toNumber(readCell(grid, r, columns.length)),
+      grade,
+      length,
       weight: columns.weight === -1 ? null : toNumber(readCell(grid, r, columns.weight)),
+      assembly: columns.assembly === -1 ? undefined : assembly || currentAssembly,
+      assemblyQty: columns.assembly === -1 ? undefined : currentAssemblyQty,
     })
     if (parsed.success) rows.push(parsed.data)
   }
   return rows
+}
+
+/**
+ * Reads a Tekla part list entirely in memory. Supports OOXML `.xlsx`, legacy BIFF `.xls`, and
+ * the HTML-table `.xls` that Tekla's report exporter writes. The first worksheet is used.
+ */
+export function parsePartList(bytes: Uint8Array): PartListRow[] {
+  return rowsFromGrid(readGrid(bytes))
 }

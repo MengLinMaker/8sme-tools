@@ -80,7 +80,7 @@ export const en = {
   preflight: {
     title: 'WiseCAM Preflight',
     subtitle:
-      'Drop a job .zip / .rar (NC + STEP + PDF, optionally a part list .xlsx). Everything is checked locally in your browser — nothing is uploaded.',
+      'Drop a job .zip / .rar (NC + STEP + PDF, optionally a part list .xlsx/.xls). Everything is checked locally in your browser — nothing is uploaded.',
     analyzing: 'Analyzing…',
     source: 'Job',
     stats: {
@@ -178,10 +178,14 @@ export const en = {
       filterHint: 'Space-separated — try error, weld, CUT_DEPTH, or a mark.',
       filterAdd: 'Filter by {{token}}',
       filterRemove: 'Remove {{token}} filter',
+      filterAssembly: 'Assembly',
+      allAssemblies: 'All assemblies',
+      assemblyEmpty: 'No parts in assembly “{{assembly}}”.',
     },
     columns: {
       mark: 'Mark',
       status: 'Status',
+      assembly: 'Assembly',
       qty: 'Qty',
       mass: 'Mass',
       profile: 'Profile',
@@ -191,6 +195,7 @@ export const en = {
     qty: {
       fallbackTitle: 'No drawing qty — showing NC qty',
       mismatchTitle: 'NC qty {{nc}} differs from drawing qty {{pdf}}',
+      assemblyTitle: '{{assembly}}: {{qty}} per assembly × {{count}} = {{total}}',
     },
     mass: {
       heavy: 'Over {{kg}} kg — plan a two-person lift or a mechanical aid',
@@ -450,7 +455,7 @@ export const en = {
     LENGTH_DIFFERENCE:
       'NC length {{nc}}mm vs part-list {{list}}mm (Δ{{diff}}mm) — verify against drawing',
     PART_LIST_NO_FILES: 'Part list lists {{part}} but no NC/STEP/PDF files were found',
-    NO_PART_LIST: 'No part list (.xlsx) found — quantity cross-checks were skipped',
+    NO_PART_LIST: 'No part list (.xlsx/.xls) found — quantity cross-checks were skipped',
     NOT_A_PART: '{{mark}} has neither an NC nor a STEP file — skipped (not a part)',
     STRAY_BODY: 'STEP has {{bodies}} solid bodies — extra floating piece(s); can be cleaned',
     CUT_END_PIECE:
@@ -556,7 +561,7 @@ export const zh = {
   preflight: {
     title: 'WiseCAM 预检',
     subtitle:
-      '拖入作业 .zip / .rar（NC + STEP + PDF，可选零件清单 .xlsx）。全部在浏览器本地检查——不会上传任何数据。',
+      '拖入作业 .zip / .rar（NC + STEP + PDF，可选零件清单 .xlsx/.xls）。全部在浏览器本地检查——不会上传任何数据。',
     analyzing: '正在分析…',
     source: '作业',
     stats: {
@@ -653,10 +658,14 @@ export const zh = {
       filterHint: '用空格分隔，例如 error、weld、CUT_DEPTH 或标记。',
       filterAdd: '按 {{token}} 筛选',
       filterRemove: '取消 {{token}} 筛选',
+      filterAssembly: '装配',
+      allAssemblies: '全部装配',
+      assemblyEmpty: '“{{assembly}}”中没有零件。',
     },
     columns: {
       mark: '标记',
       status: '状态',
+      assembly: '装配',
       qty: '数量',
       mass: '重量',
       profile: '型材',
@@ -666,6 +675,7 @@ export const zh = {
     qty: {
       fallbackTitle: '无图纸数量——显示 NC 数量',
       mismatchTitle: 'NC 数量 {{nc}} 与图纸数量 {{pdf}} 不一致',
+      assemblyTitle: '{{assembly}}：每套 {{qty}} × {{count}} = {{total}}',
     },
     mass: {
       heavy: '超过 {{kg}} kg——请安排两人搬运或使用机械辅助',
@@ -899,7 +909,7 @@ export const zh = {
     LENGTH_DIFFERENCE:
       'NC 长度 {{nc}}mm 与零件清单 {{list}}mm 不符（相差 {{diff}}mm）——请对照图纸核对',
     PART_LIST_NO_FILES: '零件清单列出了 {{part}}，但未找到对应的 NC/STEP/PDF 文件',
-    NO_PART_LIST: '未找到零件清单（.xlsx）——已跳过数量交叉核对',
+    NO_PART_LIST: '未找到零件清单（.xlsx/.xls）——已跳过数量交叉核对',
     NOT_A_PART: '{{mark}} 既无 NC 也无 STEP 文件——已跳过（非零件）',
     STRAY_BODY: 'STEP 含 {{bodies}} 个实体——存在多余悬浮件；可清理',
     CUT_END_PIECE: '直线切透会切掉图纸上保留的 {{extra}} 个小件——需要坡口/斜切（或该面不切）',

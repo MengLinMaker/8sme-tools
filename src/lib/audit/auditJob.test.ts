@@ -1,5 +1,6 @@
 import { strToU8, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
+import * as XLSX from 'xlsx'
 import type { ZipEntry } from '@/lib/zip'
 import { auditEntries, markFromFilename } from './auditJob'
 
@@ -50,6 +51,25 @@ function buildPartListZip(): Uint8Array {
   })
 }
 
+function buildAssemblyPartList(): Uint8Array {
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.aoa_to_sheet([
+      ['Assembly', 'Part', 'Qty', 'Profile', 'Grade', 'Length (mm)', 'Weight (kg)'],
+      ['A1', '', 2, 'EA75*75*6', '', '', ''],
+      ['', 'p1', 1, 'EA75*75*6', 'C300', 100, 1],
+      ['', 'p2', 3, 'EA75*75*6', 'C300', 100, 1],
+      ['A2', '', 4, 'EA75*75*6', '', '', ''],
+      ['', 'p1', 2, 'EA75*75*6', 'C300', 100, 1],
+      ['', 'p2', 1, 'EA75*75*6', 'C300', 100, 1],
+      ['', 'p3', 1, 'EA75*75*6', 'C300', 100, 1],
+    ]),
+    'Assembly Part List',
+  )
+  return new Uint8Array(XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }))
+}
+
 function makeEntries(): ZipEntry[] {
   return [
     { path: 'a1.nc1', bytes: strToU8(makeNc('a1', 1, 4165.75)) },
@@ -88,6 +108,26 @@ describe('auditEntries', () => {
       true,
     )
     expect(result.summary.errors).toBe(1)
+  })
+
+  it('totals quantities across assemblies and keeps each usage', () => {
+    const result = auditEntries('job.zip', [
+      { path: 'p1.nc1', bytes: strToU8(makeNc('p1', 10, 100)) },
+      { path: 'p2.nc1', bytes: strToU8(makeNc('p2', 10, 100)) },
+      { path: 'Assembly Part List.xlsx', bytes: buildAssemblyPartList() },
+    ])
+
+    expect(result.summary.hasPartList).toBe(true)
+    expect(result.parts.find((part) => part.mark === 'p1')?.expected?.qty).toBe(10)
+    expect(result.parts.find((part) => part.mark === 'p2')?.expected?.qty).toBe(10)
+    expect(result.parts.find((part) => part.mark === 'p1')?.assemblies).toEqual([
+      { assembly: 'A1', assemblyQty: 2, qtyPerAssembly: 1, total: 2 },
+      { assembly: 'A2', assemblyQty: 4, qtyPerAssembly: 2, total: 8 },
+    ])
+    expect(result.findings.some((finding) => finding.code === 'QTY_MISMATCH')).toBe(false)
+    expect(result.findings.filter((finding) => finding.code === 'PART_LIST_NO_FILES')).toHaveLength(
+      1,
+    )
   })
 
   it('reports the missing part list and missing companion files', () => {

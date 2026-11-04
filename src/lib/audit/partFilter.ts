@@ -120,6 +120,10 @@ export function partSearchText(part: PartRecord, context: PartFilterContext): st
     part.nc ? 'nc' : undefined,
     part.pdf ? 'pdf' : undefined,
   ]
+  if (part.assemblies && part.assemblies.length > 0) {
+    bits.push('assembly assemblies')
+    for (const usage of part.assemblies) bits.push(usage.assembly)
+  }
   for (const finding of context.findings) {
     if (finding.mark !== part.mark) continue
     bits.push(finding.code)
@@ -129,11 +133,13 @@ export function partSearchText(part: PartRecord, context: PartFilterContext): st
     bits.push('weld welding etched etching scribe')
     bits.push(context.weldingText?.(part.mark))
   }
-  return bits
+  const text = bits
     .filter((bit): bit is string => Boolean(bit))
     .join(' ')
-    .replace(/_/g, ' ')
     .toLowerCase()
+  // Keep the raw code (underscores often separate words) and a spaced copy so either
+  // "CUT_DEPTH" or "cut depth" matches.
+  return `${text} ${text.replace(/_/g, ' ')}`
 }
 
 /**

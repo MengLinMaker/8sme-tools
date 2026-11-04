@@ -88,6 +88,19 @@ describe('filterParts', () => {
     expect(marks(filterParts(parts, 'nw31 ok', context))).toEqual([])
   })
 
+  it('matches assembly names and the word assembly', () => {
+    const shaped: PartRecord[] = [
+      {
+        mark: 'A',
+        assemblies: [{ assembly: 'XP36_DF-3601', assemblyQty: 1, qtyPerAssembly: 2, total: 2 }],
+      },
+      { mark: 'B' },
+    ]
+    const context = baseContext([])
+    expect(marks(filterParts(shaped, 'xp36_df', context))).toEqual(['A'])
+    expect(marks(filterParts(shaped, 'assembly', context))).toEqual(['A'])
+  })
+
   it('matches the mark, profile and grade fields', () => {
     const shaped: PartRecord[] = [
       { mark: 'A', nc: { profile: 'BT100*15', grade: '300PLUS' } as PartRecord['nc'] },

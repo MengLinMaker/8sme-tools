@@ -34,12 +34,25 @@ export interface PdfFile {
   problems: string[]
 }
 
+/** One assembly a part is used in, and the quantities the assembly part list gives it. */
+export interface AssemblyUsage {
+  assembly: string
+  /** How many copies of the assembly the job makes. */
+  assemblyQty: number
+  /** How many of this part go into one assembly. */
+  qtyPerAssembly: number
+  /** `qtyPerAssembly × assemblyQty` across the job. */
+  total: number
+}
+
 export interface PartRecord {
   mark: string
   nc?: NcFile
   step?: StepFile
   pdf?: PdfFile
   expected?: PartListRow
+  /** Assemblies this part is used in, when the job ships an assembly part list. */
+  assemblies?: AssemblyUsage[]
 }
 
 export interface AuditSummary {

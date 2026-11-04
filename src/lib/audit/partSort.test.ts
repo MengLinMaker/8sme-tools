@@ -53,4 +53,19 @@ describe('sortParts', () => {
     expect(sortParts(parts, 'qty', 1, ctx).map((p) => p.mark)).toEqual(['b', 'a'])
     expect(sortParts(parts, 'qty', -1, ctx).map((p) => p.mark)).toEqual(['a', 'b'])
   })
+
+  it('sorts by the first assembly and puts unassembled parts last', () => {
+    const parts = [
+      { mark: 'a' },
+      {
+        mark: 'b',
+        assemblies: [{ assembly: 'B-1', assemblyQty: 1, qtyPerAssembly: 1, total: 1 }],
+      },
+      {
+        mark: 'c',
+        assemblies: [{ assembly: 'A-1', assemblyQty: 1, qtyPerAssembly: 1, total: 1 }],
+      },
+    ] as PartRecord[]
+    expect(sortParts(parts, 'assembly', 1, context([])).map((p) => p.mark)).toEqual(['c', 'b', 'a'])
+  })
 })

@@ -181,6 +181,7 @@ const SECTION_TRUST_SCORE = 0.9
 const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [
   { labelKey: 'preflight.columns.mark', key: 'mark' },
   { labelKey: 'preflight.columns.status', key: 'severity' },
+  { labelKey: 'preflight.columns.assembly', key: 'assembly' },
   { labelKey: 'preflight.columns.qty', key: 'qty' },
   { labelKey: 'preflight.columns.mass', key: 'mass' },
   { labelKey: 'preflight.columns.profile', key: 'profile' },
@@ -486,6 +487,7 @@ export function PreflightPage() {
     setSelectedMarks(new Set())
     selectAnchor.current = null
     setMarkQuery('')
+    setAssemblyFilter(null)
     setAnalyzing(true)
     clearViewerModels()
     setResult(auditEntries(input.sourceName, input.entries))
@@ -1978,6 +1980,8 @@ export function PreflightPage() {
   }, [])
   /** Free-text filter on the part mark, so a long job can be narrowed to the piece at hand. */
   const [markQuery, setMarkQuery] = useState('')
+  /** Assembly chosen in the parts table; null shows every assembly and the job totals. */
+  const [assemblyFilter, setAssemblyFilter] = useState<string | null>(null)
   const sortedParts = useMemo(
     () =>
       result
@@ -2004,11 +2008,25 @@ export function PreflightPage() {
     }),
     [allFindings, drawingMaterials, modelChecks, weldEtchings, findingText, t],
   )
+  /** Distinct assemblies in the job, for the filter and the assembly column. */
+  const assemblyOptions = useMemo(() => {
+    const names = new Set<string>()
+    for (const part of sortedParts) {
+      for (const usage of part.assemblies ?? []) names.add(usage.assembly)
+    }
+    return [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+  }, [sortedParts])
   /** The sorted parts narrowed by the tokenised search (status words + free text). */
-  const visibleParts = useMemo(
+  const searchedParts = useMemo(
     () => filterParts(sortedParts, markQuery, partFilterContext),
     [sortedParts, markQuery, partFilterContext],
   )
+  const visibleParts = useMemo(() => {
+    if (!assemblyFilter) return searchedParts
+    return searchedParts.filter((part) =>
+      part.assemblies?.some((usage) => usage.assembly === assemblyFilter),
+    )
+  }, [searchedParts, assemblyFilter])
   const parsedPartQuery = useMemo(() => parsePartQuery(markQuery), [markQuery])
   /** Status chips are single-select; "all" is the absence of a status word. */
   const activeStatus = parsedPartQuery.statuses.length === 1 ? parsedPartQuery.statuses[0] : null
@@ -2873,7 +2891,8 @@ export function PreflightPage() {
                   {t('preflight.parts.title')}
                   <span className="text-sm font-normal text-muted-foreground">
                     ({visibleParts.length}
-                    {markQuery.trim() && sortedParts.length !== visibleParts.length
+                    {(markQuery.trim() || assemblyFilter) &&
+                    sortedParts.length !== visibleParts.length
                       ? `/${sortedParts.length}`
                       : ''}
                     )
@@ -3009,6 +3028,23 @@ export function PreflightPage() {
                       <span className="font-mono opacity-60">{count}</span>
                     </Toggle>
                   ))}
+                  {assemblyOptions.length > 0 && (
+                    <label className="ml-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <span>{t('preflight.parts.filterAssembly')}</span>
+                      <select
+                        value={assemblyFilter ?? ''}
+                        onChange={(event) => setAssemblyFilter(event.target.value || null)}
+                        className="h-7 max-w-56 rounded-md border border-border bg-background px-1.5 text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <option value="">{t('preflight.parts.allAssemblies')}</option>
+                        {assemblyOptions.map((assembly) => (
+                          <option key={assembly} value={assembly}>
+                            {assembly}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                   <span className="ml-auto text-[11px] text-muted-foreground">
                     {t('preflight.parts.filterHint')}
                   </span>
@@ -3042,7 +3078,9 @@ export function PreflightPage() {
                           colSpan={PART_COLUMNS.length + 1}
                           className="text-center text-sm text-muted-foreground"
                         >
-                          {t('preflight.parts.searchEmpty', { query: markQuery.trim() })}
+                          {assemblyFilter && !markQuery.trim()
+                            ? t('preflight.parts.assemblyEmpty', { assembly: assemblyFilter })
+                            : t('preflight.parts.searchEmpty', { query: markQuery.trim() })}
                         </TableCell>
                       </TableRow>
                     )}
@@ -3056,6 +3094,9 @@ export function PreflightPage() {
                       const band = massBand(mass)
                       const pills = issuesByMark.get(part.mark) ?? []
                       const weld = weldEtchings.get(part.mark)
+                      const assemblyUsage = assemblyFilter
+                        ? part.assemblies?.find((usage) => usage.assembly === assemblyFilter)
+                        : undefined
                       return (
                         <TableRow
                           key={part.mark}
@@ -3159,21 +3200,68 @@ export function PreflightPage() {
                               </div>
                             )}
                           </TableCell>
+                          <TableCell className="text-xs">
+                            {part.assemblies && part.assemblies.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {part.assemblies.map((usage) => (
+                                  <button
+                                    key={usage.assembly}
+                                    type="button"
+                                    aria-pressed={assemblyFilter === usage.assembly}
+                                    title={t('preflight.qty.assemblyTitle', {
+                                      assembly: usage.assembly,
+                                      qty: usage.qtyPerAssembly,
+                                      count: usage.assemblyQty,
+                                      total: usage.total,
+                                    })}
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      setAssemblyFilter((current) =>
+                                        current === usage.assembly ? null : usage.assembly,
+                                      )
+                                    }}
+                                    className={cn(
+                                      'cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                      assemblyFilter === usage.assembly &&
+                                        'ring-2 ring-ring ring-offset-1 ring-offset-card',
+                                    )}
+                                  >
+                                    <Badge variant="muted" className="font-mono">
+                                      {usage.assembly}
+                                    </Badge>
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
                           <TableCell
                             className={cn(
-                              qtyMismatch && 'font-semibold text-destructive-foreground',
+                              !assemblyUsage &&
+                                qtyMismatch &&
+                                'font-semibold text-destructive-foreground',
                             )}
                             title={
-                              qtyMismatch
-                                ? t('preflight.qty.mismatchTitle', { nc: ncQty, pdf: pdfQty })
-                                : qtyFallback
-                                  ? t('preflight.qty.fallbackTitle')
-                                  : undefined
+                              assemblyUsage
+                                ? t('preflight.qty.assemblyTitle', {
+                                    assembly: assemblyUsage.assembly,
+                                    qty: assemblyUsage.qtyPerAssembly,
+                                    count: assemblyUsage.assemblyQty,
+                                    total: assemblyUsage.total,
+                                  })
+                                : qtyMismatch
+                                    ? t('preflight.qty.mismatchTitle', { nc: ncQty, pdf: pdfQty })
+                                    : qtyFallback
+                                      ? t('preflight.qty.fallbackTitle')
+                                      : undefined
                             }
                           >
-                            {pdfQty ?? ncQty ?? partQty(part)}
-                            {qtyMismatch && <span className="ml-1 text-xs">≠ {ncQty}</span>}
-                            {qtyFallback && (
+                            {assemblyUsage?.total ?? pdfQty ?? ncQty ?? partQty(part)}
+                            {!assemblyUsage && qtyMismatch && (
+                              <span className="ml-1 text-xs">≠ {ncQty}</span>
+                            )}
+                            {!assemblyUsage && qtyFallback && (
                               <span className="ml-1 text-xs text-muted-foreground">(NC)</span>
                             )}
                           </TableCell>

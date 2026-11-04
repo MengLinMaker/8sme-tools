@@ -3,6 +3,7 @@ import { parsePdfFile } from '@/lib/parsers/pdf'
 import { parseStepFile } from '@/lib/parsers/step'
 import { parsePartList } from '@/lib/parsers/xlsx'
 import type { ZipEntry } from '@/lib/zip'
+import { aggregatePartList } from './partList'
 import type { AuditResult, AuditSummary, Finding, PartListRow, PartRecord, Severity } from './types'
 
 const LENGTH_TOLERANCE_ABS = 50
@@ -28,7 +29,7 @@ function classify(path: string): Kind {
   if (ext === 'nc1' || ext === 'nc') return 'nc'
   if (ext === 'stp' || ext === 'step') return 'step'
   if (ext === 'pdf') return 'pdf'
-  if (ext === 'xlsx') return 'xlsx'
+  if (ext === 'xlsx' || ext === 'xls') return 'xlsx'
   return 'other'
 }
 
@@ -51,11 +52,24 @@ function decodeText(bytes: Uint8Array): string {
   return decoder.decode(bytes)
 }
 
+/** FNV-1a over the bytes, so a report copied into two folders is only counted once. */
+function bytesKey(bytes: Uint8Array): string {
+  let hash = 2166136261
+  for (const byte of bytes) {
+    hash ^= byte
+    hash = Math.imul(hash, 16777619)
+  }
+  return `${bytes.length}:${hash >>> 0}`
+}
+
 export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResult {
   const findings: Finding[] = []
   const parts = new Map<string, PartRecord>()
   const counts = { nc: 0, step: 0, pdf: 0 }
-  let partList: PartListRow[] = []
+  /** Plain part lists (one row per mark) and assembly part lists are kept apart. */
+  let plainPartList: PartListRow[] = []
+  const assemblyPartList: PartListRow[] = []
+  const seenPartLists = new Set<string>()
 
   const getPart = (mark: string): PartRecord => {
     let part = parts.get(mark)
@@ -71,16 +85,22 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
     if (kind === 'other') continue
 
     if (kind === 'xlsx') {
+      const key = bytesKey(entry.bytes)
+      if (seenPartLists.has(key)) continue
+      seenPartLists.add(key)
       try {
         const rows = parsePartList(entry.bytes)
-        if (rows.length > 0) partList = rows
-        else
+        if (rows.length > 0) {
+          if (rows.some((row) => row.assembly)) assemblyPartList.push(...rows)
+          else plainPartList = rows
+        } else {
           findings.push({
             severity: 'warning',
             code: 'PART_LIST_UNREADABLE',
             message: `${baseName(entry.path)} has no recognisable part list rows`,
             params: { file: baseName(entry.path) },
           })
+        }
       } catch {
         findings.push({
           severity: 'warning',
@@ -108,13 +128,17 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
     }
   }
 
+  // An assembly part list wins over a plain one: it carries the assembly grouping and can be
+  // totalled across every assembly. Several reports (e.g. one per wall) are combined.
+  const partList = assemblyPartList.length > 0 ? assemblyPartList : plainPartList
   const hasPartList = partList.length > 0
-  const expected = new Map<string, PartListRow>()
-  for (const row of partList) expected.set(row.part.toLowerCase(), row)
+  const { expected, assemblies } = aggregatePartList(partList)
 
   for (const part of parts.values()) {
     const exp = expected.get(part.mark)
     if (exp) part.expected = exp
+    const usage = assemblies.get(part.mark)
+    if (usage) part.assemblies = usage
 
     // A mark with neither an NC nor a STEP is almost certainly not a laser part
     // (e.g. a stray drawing or an assembly), so skip it rather than flag missing files.
@@ -255,12 +279,12 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
     }
   }
 
-  for (const row of partList) {
-    if (!parts.has(row.part.toLowerCase())) {
+  for (const [mark, row] of expected) {
+    if (!parts.has(mark)) {
       findings.push({
         severity: 'warning',
         code: 'PART_LIST_NO_FILES',
-        mark: row.part.toLowerCase(),
+        mark,
         message: `Part list lists ${row.part} but no NC/STEP/PDF files were found`,
         params: { part: row.part },
       })
@@ -271,7 +295,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
     findings.push({
       severity: 'info',
       code: 'NO_PART_LIST',
-      message: 'No part list (.xlsx) found — quantity cross-checks were skipped',
+      message: 'No part list (.xlsx/.xls) found — quantity cross-checks were skipped',
     })
   }
 

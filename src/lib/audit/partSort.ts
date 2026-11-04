@@ -1,7 +1,7 @@
 import type { DrawingMaterial } from '@/lib/parsers/pdfText'
 import type { Finding, PartRecord, Severity } from './types'
 
-export type PartSortKey = 'severity' | 'mark' | 'qty' | 'mass' | 'profile' | 'model'
+export type PartSortKey = 'severity' | 'mark' | 'assembly' | 'qty' | 'mass' | 'profile' | 'model'
 
 export interface PartSortContext {
   findings: Finding[]
@@ -38,6 +38,8 @@ function partValue(
       return severityRank(part, context)
     case 'mark':
       return part.mark
+    case 'assembly':
+      return part.assemblies?.[0]?.assembly ?? null
     case 'profile':
       return part.nc?.profile ?? part.expected?.profile ?? ''
     case 'qty':
