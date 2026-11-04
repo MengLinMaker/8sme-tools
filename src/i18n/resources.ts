@@ -425,9 +425,6 @@ export const en = {
   },
   findings: {
     PART_LIST_UNREADABLE: '{{file}} has no recognisable part list rows',
-    DUPLICATE_NC: 'Duplicate NC for {{mark}}: {{a}} and {{b}}',
-    DUPLICATE_STEP: 'Duplicate STEP for {{mark}}: {{a}} and {{b}}',
-    DUPLICATE_PDF: 'Duplicate PDF for {{mark}}: {{a}} and {{b}}',
     NC_INVALID: '{{file}} may not open: {{problems}}',
     STEP_INVALID: '{{file}} may not open: {{problems}}',
     PDF_INVALID: '{{file}} may not open: {{problems}}',
@@ -869,9 +866,6 @@ export const zh = {
   },
   findings: {
     PART_LIST_UNREADABLE: '{{file}} 没有可识别的零件清单行',
-    DUPLICATE_NC: '{{mark}} 存在重复 NC：{{a}} 与 {{b}}',
-    DUPLICATE_STEP: '{{mark}} 存在重复 STEP：{{a}} 与 {{b}}',
-    DUPLICATE_PDF: '{{mark}} 存在重复 PDF：{{a}} 与 {{b}}',
     NC_INVALID: '{{file}} 可能无法打开：{{problems}}',
     STEP_INVALID: '{{file}} 可能无法打开：{{problems}}',
     PDF_INVALID: '{{file}} 可能无法打开：{{problems}}',

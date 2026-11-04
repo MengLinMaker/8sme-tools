@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
 import { createOrbitBus } from '@/features/preflight/orbitSync'
-import { auditEntries } from '@/lib/audit/auditJob'
+import { auditEntries, markFromFilename } from '@/lib/audit/auditJob'
 import { downloadBlob } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
 import { buildBarNc, buildStitchedBeamNc, stitchBeamGeometry } from '@/lib/nesting/nc'
@@ -167,8 +167,7 @@ export function NestingPage() {
       const dot = entry.path.lastIndexOf('.')
       const ext = dot >= 0 ? entry.path.slice(dot + 1).toLowerCase() : ''
       if (ext !== 'stp' && ext !== 'step') continue
-      const base = (entry.path.split('/').pop() ?? entry.path).replace(/\.[^.]+$/, '')
-      const mark = (base.match(/^[A-Za-z]+\d+/)?.[0] ?? base).toLowerCase()
+      const mark = markFromFilename(entry.path)
       if (!map.has(mark)) map.set(mark, entry.bytes)
     }
     return map
@@ -188,8 +187,7 @@ export function NestingPage() {
       const dot = entry.path.lastIndexOf('.')
       const ext = dot >= 0 ? entry.path.slice(dot + 1).toLowerCase() : ''
       if (ext !== 'nc1' && ext !== 'nc') continue
-      const base = (entry.path.split('/').pop() ?? entry.path).replace(/\.[^.]+$/, '')
-      const mark = (base.match(/^[A-Za-z]+\d+/)?.[0] ?? base).toLowerCase()
+      const mark = markFromFilename(entry.path)
       if (!map.has(mark)) {
         try {
           map.set(mark, decoder.decode(entry.bytes))

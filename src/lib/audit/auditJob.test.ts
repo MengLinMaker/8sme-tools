@@ -1,7 +1,7 @@
 import { strToU8, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import type { ZipEntry } from '@/lib/zip'
-import { auditEntries } from './auditJob'
+import { auditEntries, markFromFilename } from './auditJob'
 
 function makeNc(mark: string, qty: number, length: number): string {
   return `ST
@@ -62,6 +62,18 @@ function makeEntries(): ZipEntry[] {
   ]
 }
 
+describe('markFromFilename', () => {
+  it('strips leading dots from hidden/AppleDouble filenames', () => {
+    expect(markFromFilename('.a1.nc1')).toBe('a1')
+    expect(markFromFilename('._M-1.nc1')).toBe('m-1')
+  })
+
+  it('leaves normal marks alone', () => {
+    expect(markFromFilename('a1.nc1')).toBe('a1')
+    expect(markFromFilename('M-1.nc1')).toBe('m-1')
+  })
+})
+
 describe('auditEntries', () => {
   it('cross-checks quantities against the part list', () => {
     const result = auditEntries('job.zip', makeEntries())
@@ -90,6 +102,22 @@ describe('auditEntries', () => {
     const missingStep = stepOnly.findings.find((f) => f.code === 'MISSING_STEP' && f.mark === 'b1')
     expect(missingStep?.severity).toBe('info')
     expect(stepOnly.findings.some((f) => f.code === 'MISSING_PDF' && f.mark === 'b1')).toBe(true)
+  })
+
+  it('ignores duplicate NC/STEP/PDF copies and keeps the first', () => {
+    const result = auditEntries('job.zip', [
+      { path: 'a1.nc1', bytes: strToU8(makeNc('a1', 4, 100)) },
+      { path: 'duplicate/a1.nc1', bytes: strToU8(makeNc('a1', 4, 100)) },
+      { path: 'a1.stp', bytes: strToU8(VALID_STEP) },
+      { path: 'duplicate/a1.stp', bytes: strToU8(VALID_STEP) },
+      { path: 'a1 - ANGLE.pdf', bytes: PDF_BYTES },
+      { path: 'duplicate/a1 - ANGLE.pdf', bytes: PDF_BYTES },
+    ])
+    expect(result.findings.some((f) => f.code.startsWith('DUPLICATE_'))).toBe(false)
+    expect(result.parts).toHaveLength(1)
+    expect(result.parts[0]?.nc?.path).toBe('a1.nc1')
+    expect(result.parts[0]?.step?.path).toBe('a1.stp')
+    expect(result.parts[0]?.pdf?.path).toBe('a1 - ANGLE.pdf')
   })
 
   it('ignores slash/underscore differences in the NC internal mark', () => {

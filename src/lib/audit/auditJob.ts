@@ -33,7 +33,10 @@ function classify(path: string): Kind {
 }
 
 export function markFromFilename(path: string): string {
-  const base = baseName(path).replace(/\.[^.]+$/, '')
+  // Hidden/system names (`._M-1.nc1`, `.M-1.nc1`) carry a leading dot that is not part of the mark.
+  const base = baseName(path)
+    .replace(/\.[^.]+$/, '')
+    .replace(/^[^A-Za-z0-9]+/, '')
   const match = base.match(/^[A-Za-z]+\d+/)
   return (match ? match[0] : base).toLowerCase()
 }
@@ -94,40 +97,14 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
 
     if (kind === 'nc') {
       counts.nc++
-      if (part.nc) {
-        findings.push({
-          severity: 'warning',
-          code: 'DUPLICATE_NC',
-          mark,
-          message: `Duplicate NC for ${mark}: ${baseName(part.nc.path)} and ${baseName(entry.path)}`,
-          params: { mark, a: baseName(part.nc.path), b: baseName(entry.path) },
-        })
-      }
-      part.nc = parseNcFile(entry.path, decodeText(entry.bytes))
+      // Duplicate copies of a part's files are harmless: keep the first and ignore the rest.
+      part.nc ??= parseNcFile(entry.path, decodeText(entry.bytes))
     } else if (kind === 'step') {
       counts.step++
-      if (part.step) {
-        findings.push({
-          severity: 'warning',
-          code: 'DUPLICATE_STEP',
-          mark,
-          message: `Duplicate STEP for ${mark}: ${baseName(part.step.path)} and ${baseName(entry.path)}`,
-          params: { mark, a: baseName(part.step.path), b: baseName(entry.path) },
-        })
-      }
-      part.step = parseStepFile(entry.path, decodeText(entry.bytes))
+      part.step ??= parseStepFile(entry.path, decodeText(entry.bytes))
     } else {
       counts.pdf++
-      if (part.pdf) {
-        findings.push({
-          severity: 'warning',
-          code: 'DUPLICATE_PDF',
-          mark,
-          message: `Duplicate PDF for ${mark}: ${baseName(part.pdf.path)} and ${baseName(entry.path)}`,
-          params: { mark, a: baseName(part.pdf.path), b: baseName(entry.path) },
-        })
-      }
-      part.pdf = parsePdfFile(entry.path, entry.bytes)
+      part.pdf ??= parsePdfFile(entry.path, entry.bytes)
     }
   }
 
