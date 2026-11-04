@@ -49,6 +49,15 @@ import {
 } from '@/lib/audit/cutReach'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { MASS_BAND_CLASS, MASS_RED_KG, MASS_YELLOW_KG, massBand } from '@/lib/audit/mass'
+import {
+  filterParts,
+  type PartFilterContext,
+  type PartStatus,
+  parsePartQuery,
+  statusForPart,
+  toggleQueryToken,
+  withStatusFilter,
+} from '@/lib/audit/partFilter'
 import { listedProfile } from '@/lib/audit/partProfile'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
@@ -200,6 +209,43 @@ const SEVERITY_VARIANT = {
   warning: 'warning',
   info: 'info',
 } as const
+
+/** A parts-table pill that toggles its search token when clicked, so the table filters itself. */
+function FilterPill({
+  token,
+  active,
+  title,
+  onToggle,
+  children,
+}: {
+  token: string
+  active: boolean
+  title: string
+  onToggle: (token: string) => void
+  children: ReactNode
+}) {
+  const { t } = useTranslation()
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      title={`${title} · ${t(
+        active ? 'preflight.parts.filterRemove' : 'preflight.parts.filterAdd',
+        { token },
+      )}`}
+      onClick={(event) => {
+        event.stopPropagation()
+        onToggle(token)
+      }}
+      className={cn(
+        'cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        active && 'ring-2 ring-ring ring-offset-1 ring-offset-card',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
 
 const PREF_PREFIX = '8sme.preflight.'
 /**
@@ -1943,12 +1989,51 @@ export function PreflightPage() {
         : [],
     [result, sort, allFindings, drawingMaterials, modelChecks],
   )
-  /** The sorted parts narrowed by the mark search (case-insensitive substring). */
-  const visibleParts = useMemo(() => {
-    const query = markQuery.trim().toLowerCase()
-    if (!query) return sortedParts
-    return sortedParts.filter((part) => part.mark.toLowerCase().includes(query))
-  }, [sortedParts, markQuery])
+  /** Everything the parts search can match: mark, profile/grade, findings and weld etchings. */
+  const partFilterContext = useMemo<PartFilterContext>(
+    () => ({
+      findings: allFindings,
+      materials: drawingMaterials,
+      modelChecks,
+      weldingMarks: new Set(weldEtchings.keys()),
+      findingText,
+      weldingText: (mark) => {
+        const etchings = weldEtchings.get(mark)
+        return etchings ? weldEtchingsTitle(t, etchings) : ''
+      },
+    }),
+    [allFindings, drawingMaterials, modelChecks, weldEtchings, findingText, t],
+  )
+  /** The sorted parts narrowed by the tokenised search (status words + free text). */
+  const visibleParts = useMemo(
+    () => filterParts(sortedParts, markQuery, partFilterContext),
+    [sortedParts, markQuery, partFilterContext],
+  )
+  const parsedPartQuery = useMemo(() => parsePartQuery(markQuery), [markQuery])
+  /** Status chips are single-select; "all" is the absence of a status word. */
+  const activeStatus = parsedPartQuery.statuses.length === 1 ? parsedPartQuery.statuses[0] : null
+  const statusCounts = useMemo(() => {
+    const counts: Record<PartStatus, number> = { error: 0, warning: 0, info: 0, ok: 0 }
+    for (const part of sortedParts) counts[statusForPart(part, partFilterContext)]++
+    return counts
+  }, [sortedParts, partFilterContext])
+  const setStatusFilter = useCallback((status: PartStatus | 'all') => {
+    setMarkQuery((query) => withStatusFilter(query, status))
+  }, [])
+  /** True when a pill's token is already narrowing the table, so it can be clicked off. */
+  const isFilterTokenActive = useCallback(
+    (token: string) => {
+      const needle = token.toLowerCase() as PartStatus
+      if (needle === 'ok' || needle === 'error' || needle === 'warning' || needle === 'info') {
+        return parsedPartQuery.statuses.includes(needle)
+      }
+      return parsedPartQuery.terms.includes(needle)
+    },
+    [parsedPartQuery],
+  )
+  const toggleFilterToken = useCallback((token: string) => {
+    setMarkQuery((query) => toggleQueryToken(query, token))
+  }, [])
 
   /** Toggle one mark; shift extends the selection from the last anchor over the visible order. */
   const toggleMark = useCallback(
@@ -2828,7 +2913,8 @@ export function PreflightPage() {
                     onChange={(event) => setMarkQuery(event.target.value)}
                     placeholder={t('preflight.parts.searchPlaceholder')}
                     aria-label={t('preflight.parts.searchPlaceholder')}
-                    className="h-8 w-44 rounded-md border border-border bg-background pl-7 pr-7 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+                    title={t('preflight.parts.filterHint')}
+                    className="h-8 w-56 rounded-md border border-border bg-background pl-7 pr-7 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
                   />
                   {markQuery && (
                     <button
@@ -2895,6 +2981,38 @@ export function PreflightPage() {
             </CardHeader>
             {partsOpen && (
               <CardContent>
+                <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-muted-foreground">
+                    {t('preflight.parts.filterStatus')}
+                  </span>
+                  <Toggle
+                    size="xs"
+                    pressed={activeStatus === null}
+                    onPressedChange={() => setStatusFilter('all')}
+                  >
+                    {t('preflight.filters.all')}
+                  </Toggle>
+                  {(
+                    [
+                      ['error', t('preflight.filters.error'), statusCounts.error],
+                      ['warning', t('preflight.filters.warning'), statusCounts.warning],
+                      ['ok', t('preflight.status.ok'), statusCounts.ok],
+                    ] as const
+                  ).map(([status, label, count]) => (
+                    <Toggle
+                      key={status}
+                      size="xs"
+                      pressed={activeStatus === status}
+                      onPressedChange={() => setStatusFilter(status)}
+                    >
+                      {label}
+                      <span className="font-mono opacity-60">{count}</span>
+                    </Toggle>
+                  ))}
+                  <span className="ml-auto text-[11px] text-muted-foreground">
+                    {t('preflight.parts.filterHint')}
+                  </span>
+                </div>
                 <Table containerClassName="max-h-[70vh] overflow-auto">
                   <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:border-b [&_th]:border-border [&_th]:bg-card [&_th:first-child]:left-0 [&_th:first-child]:z-30 [&_th:nth-child(2)]:left-8 [&_th:nth-child(2)]:z-30">
                     <TableRow className="hover:bg-transparent">
@@ -2990,34 +3108,53 @@ export function PreflightPage() {
                           </TableCell>
                           <TableCell>
                             {pills.length === 0 && !weld ? (
-                              <Badge variant="success">{t('preflight.status.ok')}</Badge>
+                              <FilterPill
+                                token="ok"
+                                active={isFilterTokenActive('ok')}
+                                title={t('preflight.status.ok')}
+                                onToggle={toggleFilterToken}
+                              >
+                                <Badge variant="success">{t('preflight.status.ok')}</Badge>
+                              </FilterPill>
                             ) : (
                               <div className="flex flex-wrap gap-1">
                                 {weld && (
-                                  <Badge
-                                    variant="info"
-                                    className="gap-1 font-mono"
+                                  <FilterPill
+                                    token="weld"
+                                    active={isFilterTokenActive('weld')}
                                     title={weldEtchingsTitle(t, weld)}
+                                    onToggle={toggleFilterToken}
                                   >
-                                    {t('preflight.status.weld')}
-                                  </Badge>
+                                    <Badge variant="info" className="gap-1 font-mono">
+                                      {t('preflight.status.weld')}
+                                    </Badge>
+                                  </FilterPill>
                                 )}
                                 {pills.map((pill) => (
-                                  <Badge
+                                  <FilterPill
                                     key={pill.code}
-                                    variant={SEVERITY_VARIANT[pill.severity]}
-                                    className={cn('gap-1 font-mono', pill.resolved && 'opacity-50')}
+                                    token={pill.code}
+                                    active={isFilterTokenActive(pill.code)}
                                     title={
                                       findingText(pill.finding) +
                                       (pill.fixable ? ` · ${t('preflight.status.autoFix')}` : '')
                                     }
+                                    onToggle={toggleFilterToken}
                                   >
-                                    {pill.fixable && (
-                                      <Wrench className="size-3 shrink-0" aria-hidden />
-                                    )}
-                                    {pill.code}
-                                    {pill.count > 1 && ` ×${pill.count}`}
-                                  </Badge>
+                                    <Badge
+                                      variant={SEVERITY_VARIANT[pill.severity]}
+                                      className={cn(
+                                        'gap-1 font-mono',
+                                        pill.resolved && 'opacity-50',
+                                      )}
+                                    >
+                                      {pill.fixable && (
+                                        <Wrench className="size-3 shrink-0" aria-hidden />
+                                      )}
+                                      {pill.code}
+                                      {pill.count > 1 && ` ×${pill.count}`}
+                                    </Badge>
+                                  </FilterPill>
                                 ))}
                               </div>
                             )}
