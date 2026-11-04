@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { cleanStep } from './clean'
-import { setOcWasmUrl } from './occInit'
+import { ensureOc, setOcWasmUrl } from './occInit'
 
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
@@ -41,5 +41,43 @@ describe.skipIf(!HAVE)('cleanStep', () => {
     const result = await cleanStep(new Uint8Array(readFileSync(join(STP, 'm170.stp'))))
     // m170 has a single sliver: nothing to remove, and nothing should be lost silently
     expect(result).toBeNull()
+  }, 300000)
+
+  it('drops a large stray body, keeping only the main solid', async () => {
+    await ensureOc()
+    const { makeBox, compoundShapes } = await import('replicad')
+    const main = makeBox([0, 0, 0], [100, 50, 20])
+    const stray = makeBox([0, 0, 0], [10, 10, 10]).translate(200, 0, 0)
+    const compound = compoundShapes([main, stray])
+    const bytes = new Uint8Array(
+      await (compound as unknown as { blobSTEP: () => Blob }).blobSTEP().arrayBuffer(),
+    )
+
+    const result = await cleanStep(bytes)
+    expect(result?.kept).toBe(1)
+    expect(result?.removed).toBe(1)
+    const [x] = await size(result?.bytes ?? new Uint8Array())
+    expect(x).toBeCloseTo(100, 0)
+  }, 300000)
+
+  it('punches a hole capped by a thin skin', async () => {
+    await ensureOc()
+    const { makeBox, makeCylinder, importSTEP, measureVolume } = await import('replicad')
+    const plate = makeBox([0, 0, 0], [100, 50, 10])
+    const blind = makeCylinder(5, 9, [50, 25, 0], [0, 0, 1])
+    const part = plate.cut(blind)
+    const bytes = new Uint8Array(await part.blobSTEP().arrayBuffer())
+
+    const result = await cleanStep(bytes)
+    expect(result?.opened).toBe(1)
+    if (!result) return
+
+    const cleaned = await importSTEP(
+      new Blob([new Uint8Array(result.bytes)], { type: 'model/step' }),
+    )
+    // The punch cuts slightly oversize (0.1 mm radius) to avoid a coincident bore wall, so the
+    // hole is the nominal through-hole within a few mm³.
+    expect(measureVolume(cleaned as never)).toBeCloseTo(100 * 50 * 10 - Math.PI * 25 * 10, -1)
+    cleaned.delete()
   }, 300000)
 })

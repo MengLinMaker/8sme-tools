@@ -18,6 +18,8 @@ export const en = {
       remove: 'Remove',
       clean: 'Clean',
       cleanStep: 'Clean STEP',
+      repairStep: 'Repair STEP…',
+      cleanTekla: 'Clean Tekla',
       regenerate: 'Regenerate',
       regenerateStep: 'Regenerate STEP',
       simplify: 'Simplify STEP (flat)',
@@ -298,6 +300,7 @@ export const en = {
       colSeverity: 'Severity',
       colType: 'Type',
       colLocation: 'Location',
+      colFix: 'Fix',
       colIssue: 'Issue',
       sevError: 'Error',
       sevWarning: 'Warning',
@@ -305,6 +308,7 @@ export const en = {
       prevIssue: 'Previous issue',
       nextIssue: 'Next issue',
       stepCleaned: 'STEP cleaned — this is what the export ships.',
+      stepRepaired: 'STEP repaired — this is what the export ships.',
       stepRegenerated: 'STEP regenerated — this is what the export ships.',
       stepSimplified:
         'STEP simplified (bevel-cut surface left flat) — this is what the export ships.',
@@ -458,7 +462,7 @@ export const en = {
     PART_LIST_NO_FILES: 'Part list lists {{part}} but no NC/STEP/PDF files were found',
     NO_PART_LIST: 'No part list (.xlsx/.xls) found — quantity cross-checks were skipped',
     NOT_A_PART: '{{mark}} has neither an NC nor a STEP file — skipped (not a part)',
-    STRAY_BODY: 'STEP has {{bodies}} solid bodies — extra floating piece(s); can be cleaned',
+    STRAY_BODY: 'Found {{bodies}} detached solid bodies',
     CUT_END_PIECE:
       'Cutting straight through would detach {{extra}} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)',
     CUT_STEP:
@@ -501,6 +505,8 @@ export const zh = {
       remove: '移除',
       clean: '清理',
       cleanStep: '清理 STEP',
+      repairStep: '修复 STEP…',
+      cleanTekla: '清理 Tekla',
       regenerate: '重建',
       regenerateStep: '重建 STEP',
       simplify: '简化 STEP（平面）',
@@ -767,6 +773,7 @@ export const zh = {
     warnings: {
       cancelFix: '撤销',
       stepCleaned: 'STEP 已清理——导出的即为该文件。',
+      stepRepaired: 'STEP 已修复——导出的即为该文件。',
       stepRegenerated: 'STEP 已重建——导出的即为该文件。',
       stepSimplified: 'STEP 已简化（坡口面保留为平面）——导出的即为该文件。',
       strayBodies: '橙色显示的是多余悬浮实体——清理会保留真实几何。',
@@ -912,7 +919,7 @@ export const zh = {
     PART_LIST_NO_FILES: '零件清单列出了 {{part}}，但未找到对应的 NC/STEP/PDF 文件',
     NO_PART_LIST: '未找到零件清单（.xlsx/.xls）——已跳过数量交叉核对',
     NOT_A_PART: '{{mark}} 既无 NC 也无 STEP 文件——已跳过（非零件）',
-    STRAY_BODY: 'STEP 含 {{bodies}} 个实体——存在多余悬浮件；可清理',
+    STRAY_BODY: '发现 {{bodies}} 个分离实体',
     CUT_END_PIECE: '直线切透会切掉图纸上保留的 {{extra}} 个小件——需要坡口/斜切（或该面不切）',
     CUT_STEP:
       '不可制造：{{faces}} 面上 {{depth}} mm 的厚度突变超出了机头约 30 mm 的加工范围——会损坏机器。需在圆弧处斜切（人工判断），无法一次扫切成型',

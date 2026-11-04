@@ -99,6 +99,7 @@ import {
   type StepMeasure,
   stepOnlySizeCheck,
 } from '@/lib/step/measure'
+import { repairStep } from '@/lib/step/repair'
 import type { SabreFailure } from '@/lib/step/sabre'
 import {
   getStepWorkerPool,
@@ -296,7 +297,7 @@ function writePrefString(key: string, value: string): void {
  * There is deliberately no auto "simplify" fix for CUT_STEP — a sudden uncuttable step is a
  * judgement call (cut at an angle on the radius), so it is flagged as an error and left alone.
  */
-type StepFixKind = 'cleaned' | 'regenerated' | 'simplified'
+type StepFixKind = 'cleaned' | 'regenerated' | 'simplified' | 'repaired'
 interface StepOverride {
   bytes: Uint8Array
   kind: StepFixKind
@@ -331,7 +332,7 @@ function exportStepPath(part: PartRecord): string {
 
 /** A finding an override resolves — greyed out in the list, with an undo. */
 function resolvedFindings(kind: StepFixKind): string[] {
-  if (kind === 'regenerated')
+  if (kind === 'regenerated' || kind === 'repaired')
     return ['STRAY_BODY', 'MANUFACTURE_MISMATCH', 'MANUFACTURE_BORDERLINE']
   if (kind === 'simplified') return ['CUT_END_PIECE']
   return ['STRAY_BODY']
@@ -1497,7 +1498,7 @@ export function PreflightPage() {
           severity: 'warning',
           code: 'STRAY_BODY',
           mark: part.mark,
-          message: `STEP has ${check.bodies ?? '2+'} solid bodies — extra floating piece(s); can be cleaned`,
+          message: `Found ${check.bodies ?? '2+'} detached solid bodies`,
           params: { bodies: check.bodies ?? '2+' },
         })
       }
@@ -2361,6 +2362,42 @@ export function PreflightPage() {
       }
     },
     [bytesByPath, setOverride],
+  )
+
+  /**
+   * One-click Tekla repair: rebuild the clean base from the NC, then re-drill the intended holes
+   * from the part's real STEP into it. The result is a viewable (and exportable) solid. Falls back
+   * to the in-place clean when the part has no NC to build a clean base from.
+   */
+  const cleanTeklaPart = useCallback(
+    async (part: PartRecord) => {
+      const path = part.step?.path
+      const featureBytes = path ? bytesByPath.get(path) : undefined
+      if (!featureBytes) return
+      setFixingMark(part.mark)
+      try {
+        const ncPath = part.nc?.path
+        const ncBytes =
+          ncOverrides.get(part.mark)?.bytes ?? (ncPath ? bytesByPath.get(ncPath) : undefined)
+        if (ncBytes) {
+          const base = await reconstructForViewer(new TextDecoder().decode(ncBytes))
+          if (base) {
+            const repaired = await repairStep(base, featureBytes)
+            if (repaired.valid) {
+              setOverride(part.mark, repaired.bytes, 'repaired')
+              return
+            }
+          }
+        }
+        const cleaned = await cleanStep(featureBytes)
+        if (cleaned) setOverride(part.mark, cleaned.bytes, 'cleaned')
+      } catch {
+        // leave the original in place if the repair fails
+      } finally {
+        setFixingMark(null)
+      }
+    },
+    [bytesByPath, ncOverrides, setOverride],
   )
 
   /** Rebuilds a part's STEP from its NC, so the viewer + export match what will be manufactured. */
@@ -3741,6 +3778,8 @@ export function PreflightPage() {
                         canClean: isCleanable(viewing),
                         canRegenerate: isRegeneratable(viewing),
                         canSimplify: isSimplifiable(viewing),
+                        canRepair:
+                          Boolean(viewing.step) && modelChecks.get(viewing.mark)?.stray === true,
                         canRemoveCut: Boolean(viewing.nc),
                         canSetBevel: Boolean(viewing.nc),
                         ncEdit: ncOverrides.get(viewing.mark),
@@ -3748,6 +3787,7 @@ export function PreflightPage() {
                         onClean: () => void cleanPart(viewing),
                         onRegenerate: () => void regeneratePart(viewing),
                         onSimplify: () => void simplifyPart(viewing),
+                        onRepair: () => void cleanTeklaPart(viewing),
                         onRemoveCut: (finding) => void removeCut(viewing, finding),
                         onSetBevel: (finding) => openBevelEdit(viewing, finding),
                         onUndo: () => undoOverride(viewing.mark),
@@ -3852,6 +3892,8 @@ interface ViewerFix {
   canClean: boolean
   canRegenerate: boolean
   canSimplify: boolean
+  /** A STEP repair is possible when the part has a real STEP to harvest features from. */
+  canRepair: boolean
   /** A `CUT_UNCLOSED` finding can be resolved by editing the NC. */
   canRemoveCut: boolean
   /** A `CUT_BEVEL_CHANGE` finding can be resolved by unifying the cut line's bevel via the NC. */
@@ -3862,6 +3904,7 @@ interface ViewerFix {
   onClean: () => void
   onRegenerate: () => void
   onSimplify: () => void
+  onRepair: () => void
   onRemoveCut: (finding: Finding) => void
   onSetBevel: (finding: Finding) => void
   onUndo: () => void
@@ -3940,17 +3983,34 @@ function ViewerWarnings({
   const { t } = useTranslation()
   // Sortable issues table: defaults to location along the member (grouped by where you'd walk
   // the beam), and can be re-sorted by severity (worst first) or by type (code).
-  const [sort, setSort] = useState<{ key: 'severity' | 'code' | 'location'; dir: 1 | -1 }>({
+  const [sort, setSort] = useState<{
+    key: 'severity' | 'code' | 'location' | 'fix'
+    dir: 1 | -1
+  }>({
     key: 'location',
     dir: 1,
   })
-  const toggleSort = (key: 'severity' | 'code' | 'location') =>
+  const toggleSort = (key: 'severity' | 'code' | 'location' | 'fix') =>
     setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 1 ? -1 : 1 } : { key, dir: 1 }))
   /** Location along the member (mm) a finding sits at, or null when it has none. */
   const locationOf = findingLocationOf
+  /** Whether a finding can be fixed with the actions currently available for this part. */
+  const fixableFinding = (finding: Finding): boolean => {
+    if (!fix) return false
+    if (finding.code === 'STRAY_BODY') return fix.canClean || fix.canRepair
+    if (fix.override && resolvedFindings(fix.override).includes(finding.code)) return false
+    const kind = fixForFinding(finding.code)
+    return Boolean(kind && viewerFixAvailable(fix, kind))
+  }
   const rows = findings
     .map((finding, index) => ({ finding, index }))
     .sort((a, b) => {
+      if (sort.key === 'fix') {
+        const fa = fixableFinding(a.finding) ? 1 : 0
+        const fb = fixableFinding(b.finding) ? 1 : 0
+        if (fa !== fb) return (fa - fb) * sort.dir
+        return SEVERITY_ORDER[a.finding.severity] - SEVERITY_ORDER[b.finding.severity]
+      }
       if (sort.key === 'location') {
         const xa = locationOf(a.finding) ?? Number.POSITIVE_INFINITY
         const xb = locationOf(b.finding) ?? Number.POSITIVE_INFINITY
@@ -3973,7 +4033,13 @@ function ViewerWarnings({
       defaultValue: finding.message,
     })
   /** A sortable column header, with an up/down arrow when it's the active sort. */
-  const SortHead = ({ k, label }: { k: 'severity' | 'code' | 'location'; label: string }) => (
+  const SortHead = ({
+    k,
+    label,
+  }: {
+    k: 'severity' | 'code' | 'location' | 'fix'
+    label: string
+  }) => (
     <button
       type="button"
       className="inline-flex items-center gap-1 uppercase transition-colors hover:text-foreground"
@@ -3985,9 +4051,7 @@ function ViewerWarnings({
     </button>
   )
   const invalid = step && !step.valid ? step.problems.join('; ') : null
-  const hasFixRow = Boolean(
-    fix?.override || fix?.canClean || fix?.canRegenerate || fix?.canSimplify || fix?.ncEdit,
-  )
+  const hasFixRow = Boolean(fix?.override || fix?.canRegenerate || fix?.canSimplify || fix?.ncEdit)
   if (findings.length === 0 && !invalid && !hasFixRow) return null
   const errors = findings.filter((finding) => finding.severity === 'error').length
   const warnings = findings.filter((finding) => finding.severity === 'warning').length
@@ -4041,7 +4105,9 @@ function ViewerWarnings({
                 <SortHead k="location" label={t('preflight.warnings.colLocation')} />
               </TableHead>
               <TableHead>{t('preflight.warnings.colIssue')}</TableHead>
-              <TableHead className="w-24" />
+              <TableHead className="w-32">
+                <SortHead k="fix" label={t('preflight.warnings.colFix')} />
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -4130,6 +4196,43 @@ function ViewerWarnings({
                       <Badge variant="success">
                         {fix?.override ? t(`common.fix.${fix.override}`) : ''}
                       </Badge>
+                    ) : finding.code === 'STRAY_BODY' && fix && (fix.canClean || fix.canRepair) ? (
+                      <div className="flex justify-end gap-1">
+                        {fix.canClean && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7"
+                            disabled={fix.pending}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              fix.onClean()
+                            }}
+                            onKeyDown={(event) => event.stopPropagation()}
+                          >
+                            {fix.pending
+                              ? t('common.actions.cleaning')
+                              : t('common.actions.cleanStep')}
+                          </Button>
+                        )}
+                        {fix.canRepair && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7"
+                            disabled={fix.pending}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              fix.onRepair()
+                            }}
+                            onKeyDown={(event) => event.stopPropagation()}
+                          >
+                            {fix.pending
+                              ? t('common.actions.working')
+                              : t('common.actions.cleanTekla')}
+                          </Button>
+                        )}
+                      </div>
                     ) : fixable && action ? (
                       <Button
                         variant="outline"
@@ -4144,7 +4247,9 @@ function ViewerWarnings({
                       >
                         {fix?.pending ? action.pendingLabel : action.label}
                       </Button>
-                    ) : null}
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                 </TableRow>
               )
@@ -4177,9 +4282,11 @@ function ViewerWarnings({
           <span>
             {fix.override === 'cleaned'
               ? t('preflight.warnings.stepCleaned')
-              : fix.override === 'simplified'
-                ? t('preflight.warnings.stepSimplified')
-                : t('preflight.warnings.stepRegenerated')}
+              : fix.override === 'repaired'
+                ? t('preflight.warnings.stepRepaired')
+                : fix.override === 'simplified'
+                  ? t('preflight.warnings.stepSimplified')
+                  : t('preflight.warnings.stepRegenerated')}
           </span>
           <Button variant="ghost" size="sm" onClick={fix.onUndo}>
             <Undo2 />
@@ -4188,14 +4295,6 @@ function ViewerWarnings({
         </div>
       ) : (
         <>
-          {fix?.canClean && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-              <span>{t('preflight.warnings.strayBodies')}</span>
-              <Button variant="outline" size="sm" disabled={fix.pending} onClick={fix.onClean}>
-                {fix.pending ? t('common.actions.cleaning') : t('common.actions.cleanStep')}
-              </Button>
-            </div>
-          )}
           {fix?.canRegenerate && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
               <span>{t('preflight.warnings.ncMismatch')}</span>

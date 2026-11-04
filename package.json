@@ -13,7 +13,9 @@
     "lint": "tsr generate && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "nc-to-ncep": "node tools/nc-to-ncep.mjs"
+    "nc-to-ncep": "node tools/nc-to-ncep.mjs",
+    "clean-step": "node tools/clean-step.mjs",
+    "repair-step": "node tools/repair-step.mjs"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm run format",
