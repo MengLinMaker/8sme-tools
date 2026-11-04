@@ -162,13 +162,6 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           message: `${baseName(part.nc.path)} may not open: ${part.nc.problems.join('; ')}`,
           params: { file: baseName(part.nc.path), problems: part.nc.problems.join('; ') },
         })
-      } else if (part.nc.quantity === null) {
-        findings.push({
-          severity: 'warning',
-          code: 'QTY_MISSING',
-          mark: part.mark,
-          message: `NC has no usable quantity`,
-        })
       }
       if (part.nc.mark && normalizeMark(part.nc.mark) !== normalizeMark(part.mark)) {
         findings.push({
@@ -179,14 +172,6 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           params: { internal: part.nc.mark, mark: part.mark },
         })
       }
-    } else {
-      findings.push({
-        severity: 'warning',
-        code: 'MISSING_NC',
-        mark: part.mark,
-        message: `No NC file found for ${part.mark}`,
-        params: { mark: part.mark },
-      })
     }
 
     if (part.step) {

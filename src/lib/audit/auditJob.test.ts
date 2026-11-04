@@ -144,6 +144,11 @@ describe('auditEntries', () => {
     expect(stepOnly.findings.some((f) => f.code === 'MISSING_PDF' && f.mark === 'b1')).toBe(true)
   })
 
+  it('does not flag a missing NC — only quantity matters', () => {
+    const result = auditEntries('job.zip', [{ path: 's1.stp', bytes: strToU8(VALID_STEP) }])
+    expect(result.findings.some((f) => f.code === 'MISSING_NC')).toBe(false)
+  })
+
   it('ignores duplicate NC/STEP/PDF copies and keeps the first', () => {
     const result = auditEntries('job.zip', [
       { path: 'a1.nc1', bytes: strToU8(makeNc('a1', 4, 100)) },

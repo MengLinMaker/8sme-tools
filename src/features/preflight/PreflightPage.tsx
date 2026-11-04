@@ -1471,6 +1471,17 @@ export function PreflightPage() {
     const extra: Finding[] = []
     for (const part of result.parts) {
       const material = drawingMaterials.get(part.mark)
+      const qtyKnown = material != null || part.expected?.qty != null || part.nc?.quantity != null
+      const qtyPending = !qtyKnown && part.pdf != null && drawingChecking
+      if (!qtyKnown && !qtyPending) {
+        extra.push({
+          severity: 'warning',
+          code: 'QTY_UNKNOWN',
+          mark: part.mark,
+          message: `Quantity for ${part.mark} cannot be determined — no drawing, part list or NC quantity`,
+          params: { mark: part.mark },
+        })
+      }
       if (material && part.nc?.quantity != null && material.qty !== part.nc.quantity) {
         extra.push({
           severity: 'error',
@@ -1652,6 +1663,7 @@ export function PreflightPage() {
   }, [
     result,
     drawingMaterials,
+    drawingChecking,
     modelChecks,
     manufactureChecks,
     geometryChecks,
@@ -3097,6 +3109,7 @@ export function PreflightPage() {
                       const assemblyUsage = assemblyFilter
                         ? part.assemblies?.find((usage) => usage.assembly === assemblyFilter)
                         : undefined
+                      const qtyKnown = assemblyUsage != null || pdfQty != null || ncQty != null
                       return (
                         <TableRow
                           key={part.mark}
@@ -3250,14 +3263,16 @@ export function PreflightPage() {
                                     count: assemblyUsage.assemblyQty,
                                     total: assemblyUsage.total,
                                   })
-                                : qtyMismatch
+                                : !qtyKnown
+                                  ? t('preflight.qty.unknownTitle')
+                                  : qtyMismatch
                                     ? t('preflight.qty.mismatchTitle', { nc: ncQty, pdf: pdfQty })
                                     : qtyFallback
                                       ? t('preflight.qty.fallbackTitle')
                                       : undefined
                             }
                           >
-                            {assemblyUsage?.total ?? pdfQty ?? ncQty ?? partQty(part)}
+                            {assemblyUsage?.total ?? pdfQty ?? ncQty ?? '?'}
                             {!assemblyUsage && qtyMismatch && (
                               <span className="ml-1 text-xs">≠ {ncQty}</span>
                             )}
