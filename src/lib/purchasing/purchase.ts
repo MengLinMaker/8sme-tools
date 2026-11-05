@@ -123,7 +123,10 @@ export interface PurchasePlan {
   bars: PurchaseBar[]
   purchases: PurchaseQuantity[]
   purchasedMm: number
+  /** Weight of the stock to buy (kg), for payload / storage planning. */
+  purchasedKg: number | null
   wasteMm: number
+
   /** Total offcut weight, or null when the section mass is unknown. */
   wasteKg: number | null
   /** Offcuts shorter than `REUSABLE_OFFCUT_MM` (they go in the bin, not the rack). */
@@ -132,6 +135,8 @@ export interface PurchasePlan {
   /** Offcuts long enough to keep as reusable stock. */
   reusableOffcutMm: number
   reusableOffcutKg: number | null
+  /** Waste from offcuts light enough to lift under the configured limit. */
+  underLimitWasteKg: number | null
   /** Heaviest single offcut piece, or null when the section mass is unknown. */
   maxWastePieceKg: number | null
   /** Offcut pieces heavier than the waste-removal limit. */
@@ -512,6 +517,7 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
 
   const purchases = best?.purchases ?? []
   const purchasedMm = best?.purchasedMm ?? 0
+  const purchasedKg = group.massPerMetre == null ? null : (purchasedMm / 1000) * group.massPerMetre
   const capacityMm = group.tee ? purchasedMm * 2 : purchasedMm
   const oversizedMm = oversized.reduce((sum, unit) => sum + unit.lengthMm, 0)
   const coveredMm = Math.max(0, requiredMm - oversizedMm)
@@ -533,6 +539,15 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
       : (reusableOffcutMm / 1000) * group.massPerMetre * massFactor(group)
   const maxWastePieceKg = best ? planMaxWastePieceKg(best, group) : null
   const overLimitPieces = best ? planOverLimit(best, group, limitKg) : 0
+  const kgPerMm =
+    group.massPerMetre == null ? null : (group.massPerMetre / 1000) * massFactor(group)
+  let underLimitWasteKg: number | null = kgPerMm == null ? null : 0
+  if (kgPerMm != null) {
+    for (const bar of best?.bars ?? []) {
+      const barKg = bar.wasteMm * kgPerMm
+      if (barKg > 0 && barKg <= limitKg) underLimitWasteKg = (underLimitWasteKg ?? 0) + barKg
+    }
+  }
 
   return {
     key: group.key,
@@ -544,12 +559,14 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
     bars: best?.bars ?? [],
     purchases,
     purchasedMm,
+    purchasedKg,
     wasteMm,
     wasteKg,
     binWasteMm,
     binWasteKg,
     reusableOffcutMm,
     reusableOffcutKg,
+    underLimitWasteKg,
     maxWastePieceKg,
     overLimitPieces,
     utilisation: capacityMm > 0 ? coveredMm / capacityMm : 0,

@@ -195,6 +195,14 @@ describe('planPurchase', () => {
     expect(bin.binWasteMm).toBe(500)
     expect(bin.binWasteKg).toBeCloseTo(50)
     expect(bin.reusableOffcutMm).toBe(0)
+
+    const light = planPurchase(group([[5800, 1]], false, 100), {
+      stockLengthsMm: STOCK,
+      marginMm: DEFAULT_CHUCK_MARGIN_MM,
+      priority: 'length',
+    })
+    expect(light.binWasteKg).toBeCloseTo(20)
+    expect(light.underLimitWasteKg).toBeCloseTo(20)
   })
 
   it('weights a T offcut with half the parent UB mass', () => {
@@ -205,6 +213,7 @@ describe('planPurchase', () => {
     })
     expect(plan.maxWastePieceKg).toBeCloseTo(100)
     expect(plan.wasteKg).toBeCloseTo(200)
+    expect(plan.purchasedKg).toBeCloseTo(600)
   })
 
   it('weight priority buys the least offcut weight', () => {

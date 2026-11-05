@@ -32,7 +32,6 @@ import {
   type PurchaseSearchEffort,
   planPurchases,
   totalCapacityMm,
-  totalPurchasedMm,
   usableStockLengthMm,
 } from '@/lib/purchasing/purchase'
 import { cn } from '@/lib/utils'
@@ -190,19 +189,19 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   )
 
   const buyable = plans.filter((plan) => plan.pieceCount > 0)
-  const purchasedMm = totalPurchasedMm(plans)
   const capacity = totalCapacityMm(plans)
+  const totalPurchasedKg = plans.every((plan) => plan.purchasedKg != null)
+    ? plans.reduce((sum, plan) => sum + (plan.purchasedKg ?? 0), 0)
+    : null
   const totalWasteKg = plans.every((plan) => plan.wasteKg != null)
     ? plans.reduce((sum, plan) => sum + (plan.wasteKg ?? 0), 0)
     : null
   const totalBinWasteKg = plans.every((plan) => plan.binWasteKg != null)
     ? plans.reduce((sum, plan) => sum + (plan.binWasteKg ?? 0), 0)
     : null
-  const largestWasteKg = plans.reduce<number | null>((max, plan) => {
-    if (plan.maxWastePieceKg == null) return max
-    return max == null ? plan.maxWastePieceKg : Math.max(max, plan.maxWastePieceKg)
-  }, null)
-  const overLimitPieces = plans.reduce((sum, plan) => sum + plan.overLimitPieces, 0)
+  const totalUnderLimitWasteKg = plans.every((plan) => plan.underLimitWasteKg != null)
+    ? plans.reduce((sum, plan) => sum + (plan.underLimitWasteKg ?? 0), 0)
+    : null
   const oversized = plans.flatMap((plan) => plan.oversized)
   const coveredMm = Math.max(
     0,
@@ -295,7 +294,10 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
         ) : (
           <>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <Summary label={t('preflight.purchase.buy')} value={metres(purchasedMm)} />
+              <Summary
+                label={t('preflight.purchase.totalWeight')}
+                value={kilograms(totalPurchasedKg)}
+              />
               <Summary
                 label={t('preflight.purchase.wasteWeight')}
                 value={kilograms(totalWasteKg)}
@@ -305,21 +307,12 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
                 value={kilograms(totalBinWasteKg)}
               />
               <Summary
-                label={t('preflight.purchase.largestPiece')}
-                value={kilograms(largestWasteKg)}
+                label={t('preflight.purchase.wasteUnderLimit', { limit: wasteLimitKg })}
+                value={kilograms(totalUnderLimitWasteKg)}
               />
             </div>
 
-            {priority === 'waste-removal' && overLimitPieces > 0 && (
-              <p className="text-xs text-amber-300">
-                {t('preflight.purchase.overLimit', {
-                  count: overLimitPieces,
-                  limit: wasteLimitKg,
-                })}
-              </p>
-            )}
-
-            {priority !== 'length' && totalWasteKg == null && (
+            {totalWasteKg == null && (
               <p className="text-xs text-muted-foreground">{t('preflight.purchase.noMass')}</p>
             )}
 
@@ -343,7 +336,7 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
             )}
 
             {view === 'buy' ? (
-              <BuyList rows={buyRows} purchasedMm={purchasedMm} jobName={jobName} />
+              <BuyList rows={buyRows} jobName={jobName} />
             ) : (
               <>
                 <details className="rounded-lg border border-border bg-muted/20">
@@ -506,7 +499,7 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
                           {t('preflight.purchase.binWaste')}
                         </TableHead>
                         <TableHead className="text-right">
-                          {t('preflight.purchase.largestPiece')}
+                          {t('preflight.purchase.wasteUnderLimit', { limit: wasteLimitKg })}
                         </TableHead>
                         <TableHead className="text-right">{t('preflight.purchase.use')}</TableHead>
                       </TableRow>
@@ -582,16 +575,8 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
                               '—'
                             )}
                           </TableCell>
-                          <TableCell
-                            className={cn(
-                              'text-right align-top font-mono text-xs',
-                              priority === 'waste-removal' &&
-                                plan.maxWastePieceKg != null &&
-                                plan.maxWastePieceKg > wasteLimitKg &&
-                                'text-destructive',
-                            )}
-                          >
-                            {plan.purchasedMm > 0 ? kilograms(plan.maxWastePieceKg) : '—'}
+                          <TableCell className="text-right align-top font-mono text-xs">
+                            {plan.purchasedMm > 0 ? kilograms(plan.underLimitWasteKg) : '—'}
                           </TableCell>
                           <TableCell className="text-right align-top font-mono text-xs">
                             {plan.purchasedMm > 0 ? `${(plan.utilisation * 100).toFixed(0)}%` : '—'}
@@ -639,15 +624,7 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   )
 }
 
-function BuyList({
-  rows,
-  purchasedMm,
-  jobName,
-}: {
-  rows: BuyRow[]
-  purchasedMm: number
-  jobName?: string
-}) {
+function BuyList({ rows, jobName }: { rows: BuyRow[]; jobName?: string }) {
   const { t } = useTranslation()
   const groups = useMemo(() => groupBuyRows(rows), [rows])
   const tableRows = useMemo(
@@ -694,14 +671,9 @@ function BuyList({
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-sm font-medium">{t('preflight.purchase.buyListTitle')}</span>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-muted-foreground">
-            {t('preflight.purchase.buyListHint', { length: metres(purchasedMm) })}
-          </span>
-          <Button variant="outline" size="sm" onClick={download} disabled={rows.length === 0}>
-            {t('preflight.purchase.downloadCsv')}
-          </Button>
-        </div>
+        <Button variant="outline" size="sm" onClick={download} disabled={rows.length === 0}>
+          {t('preflight.purchase.downloadCsv')}
+        </Button>
       </div>
       <div className="overflow-x-auto rounded-lg border border-border">
         <Table className="[&_td]:border-r [&_td]:border-border/50 [&_td:last-child]:border-r-0 [&_th]:border-r [&_th]:border-border/50 [&_th:last-child]:border-r-0">
