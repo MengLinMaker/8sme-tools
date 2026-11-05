@@ -177,6 +177,26 @@ describe('planPurchase', () => {
     expect(easy.overLimitPieces).toBe(0)
   })
 
+  it('splits offcuts into bin waste (<2 m) and reusable stock', () => {
+    const reusable = planPurchase(group([[4000, 1]], false, 100), {
+      stockLengthsMm: STOCK,
+      marginMm: DEFAULT_CHUCK_MARGIN_MM,
+      priority: 'length',
+    })
+    expect(reusable.reusableOffcutMm).toBe(2000)
+    expect(reusable.reusableOffcutKg).toBeCloseTo(200)
+    expect(reusable.binWasteMm).toBe(0)
+
+    const bin = planPurchase(group([[5500, 1]], false, 100), {
+      stockLengthsMm: STOCK,
+      marginMm: DEFAULT_CHUCK_MARGIN_MM,
+      priority: 'length',
+    })
+    expect(bin.binWasteMm).toBe(500)
+    expect(bin.binWasteKg).toBeCloseTo(50)
+    expect(bin.reusableOffcutMm).toBe(0)
+  })
+
   it('weights a T offcut with half the parent UB mass', () => {
     const plan = planPurchase(group([[4000, 2]], true, 100), {
       stockLengthsMm: STOCK,

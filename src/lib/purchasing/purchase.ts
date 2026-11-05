@@ -71,8 +71,14 @@ export interface PurchaseGroupInput {
 /** What the calculator should minimise when several nestings are possible. */
 export type PurchasePriority = 'length' | 'weight' | 'waste-removal'
 
+/** How hard the beam search looks for a better nesting. */
+export type PurchaseSearchEffort = 'fast' | 'balanced' | 'thorough'
+
 /** Default hard-ish limit for one offcut that has to be lifted off the machine. */
 export const DEFAULT_WASTE_PIECE_KG = 30
+
+/** Offcuts shorter than this are treated as bin waste, not reusable stock. */
+export const REUSABLE_OFFCUT_MM = 2000
 
 export interface PurchaseOptions {
   /** Bars the supplier keeps, in mm. */
@@ -85,6 +91,8 @@ export interface PurchaseOptions {
   priority?: PurchasePriority
   /** Max weight of one leftover piece when `priority` is `waste-removal` (kg). */
   maxWastePieceKg?: number
+  /** Beam-search effort. Defaults to balanced. */
+  searchEffort?: PurchaseSearchEffort
 }
 
 export interface PurchaseUnit {
@@ -118,6 +126,12 @@ export interface PurchasePlan {
   wasteMm: number
   /** Total offcut weight, or null when the section mass is unknown. */
   wasteKg: number | null
+  /** Offcuts shorter than `REUSABLE_OFFCUT_MM` (they go in the bin, not the rack). */
+  binWasteMm: number
+  binWasteKg: number | null
+  /** Offcuts long enough to keep as reusable stock. */
+  reusableOffcutMm: number
+  reusableOffcutKg: number | null
   /** Heaviest single offcut piece, or null when the section mass is unknown. */
   maxWastePieceKg: number | null
   /** Offcut pieces heavier than the waste-removal limit. */
@@ -280,9 +294,15 @@ function beamKey(bars: BeamBar[]): string {
  * Beam search is worth its cost only on the small groups (a handful of marks). Larger jobs use
  * the much faster first-fit plans below; the two are compared and the cheaper one wins.
  */
-function beamWidthFor(pieceCount: number): number {
-  if (pieceCount <= 24) return 600
-  if (pieceCount <= 48) return 200
+function beamWidthFor(pieceCount: number, effort: PurchaseSearchEffort): number {
+  const widths = {
+    fast: { small: 120, medium: 40, large: 0 },
+    balanced: { small: 600, medium: 200, large: 0 },
+    thorough: { small: 2000, medium: 800, large: 200 },
+  }[effort]
+  if (pieceCount <= 24) return widths.small
+  if (pieceCount <= 48) return widths.medium
+  if (effort === 'thorough' && pieceCount <= 72) return widths.large
   return 0
 }
 
@@ -317,8 +337,9 @@ function beamSearch(
   marginMm: number,
   kerfMm: number,
   tee: boolean,
+  effort: PurchaseSearchEffort,
 ): PackedPlan | null {
-  const width = beamWidthFor(units.length)
+  const width = beamWidthFor(units.length, effort)
   if (width <= 0 || units.length === 0 || lengths.length === 0) return null
   const maxCapacity = usableStockLengthMm(lengths[lengths.length - 1], marginMm)
   if (maxCapacity <= 0) return null
@@ -478,7 +499,8 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
   const priority = options.priority ?? 'length'
   const limitKg = options.maxWastePieceKg == null ? DEFAULT_WASTE_PIECE_KG : options.maxWastePieceKg
 
-  let best = beamSearch(fittable, lengths, marginMm, kerfMm, group.tee)
+  const searchEffort = options.searchEffort ?? 'balanced'
+  let best = beamSearch(fittable, lengths, marginMm, kerfMm, group.tee, searchEffort)
   for (const length of lengths) {
     const drafts = packFixed(fittable, length, marginMm, kerfMm)
     if (!drafts) continue
@@ -496,6 +518,19 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
   const wasteMm = Math.max(0, capacityMm - coveredMm)
   const wasteKg =
     group.massPerMetre == null ? null : (wasteMm / 1000) * group.massPerMetre * massFactor(group)
+  let binWasteMm = 0
+  let reusableOffcutMm = 0
+  for (const bar of best?.bars ?? []) {
+    if (bar.wasteMm <= 0) continue
+    if (bar.wasteMm < REUSABLE_OFFCUT_MM) binWasteMm += bar.wasteMm
+    else reusableOffcutMm += bar.wasteMm
+  }
+  const binWasteKg =
+    group.massPerMetre == null ? null : (binWasteMm / 1000) * group.massPerMetre * massFactor(group)
+  const reusableOffcutKg =
+    group.massPerMetre == null
+      ? null
+      : (reusableOffcutMm / 1000) * group.massPerMetre * massFactor(group)
   const maxWastePieceKg = best ? planMaxWastePieceKg(best, group) : null
   const overLimitPieces = best ? planOverLimit(best, group, limitKg) : 0
 
@@ -511,6 +546,10 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
     purchasedMm,
     wasteMm,
     wasteKg,
+    binWasteMm,
+    binWasteKg,
+    reusableOffcutMm,
+    reusableOffcutKg,
     maxWastePieceKg,
     overLimitPieces,
     utilisation: capacityMm > 0 ? coveredMm / capacityMm : 0,

@@ -3947,6 +3947,7 @@ export function PreflightPage() {
         open={purchaseOpen}
         onClose={() => setPurchaseOpen(false)}
         groups={purchaseGroups}
+        jobName={result?.sourceName}
       />
 
       <ProfileSettingsDialog
