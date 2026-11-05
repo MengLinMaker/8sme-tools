@@ -1425,8 +1425,10 @@ function mountScene(
   // to judge how the beam sits on the roller bed). Placed just under the base and depth-tested, so
   // the part occludes it and it never hides a diff; hidden until the toggle turns it on.
   const snapMetre = (span: number): number => Math.max(1000, Math.ceil(span / 1000) * 1000)
-  const gridHalfX = snapMetre(fitSize.x) / 2
+  const gridLength = snapMetre(fitSize.x)
   const gridHalfZ = snapMetre(fitSize.z) / 2
+  /** Local X of the member's midpoint — a major line so the centre is easy to read. */
+  const gridCentreX = fitSize.x / 2
   /** Widest tiers keep their lines at least this far apart (px); finer ones drop out as you zoom out. */
   const GRID_MIN_PX = 7
   const gridMaterials: LineMaterial[] = []
@@ -1439,13 +1441,18 @@ function mountScene(
     const nz = Math.round((gridHalfZ * 2) / step)
     for (let i = 0; i <= nz; i++) {
       const z = -gridHalfZ + i * step
-      points.push(-gridHalfX, 0, z, gridHalfX, 0, z)
+      points.push(0, 0, z, gridLength, 0, z)
     }
-    // Lines parallel to the width (Z), one at each x along the length.
-    const nx = Math.round((gridHalfX * 2) / step)
+    // Lines parallel to the width (Z), starting flush at the member start (X = 0).
+    const nx = Math.round(gridLength / step)
     for (let i = 0; i <= nx; i++) {
-      const x = -gridHalfX + i * step
+      const x = i * step
       points.push(x, 0, -gridHalfZ, x, 0, gridHalfZ)
+    }
+    // Major centre cross, aligned with the member midpoint (not necessarily a metre line).
+    if (step === 1000) {
+      points.push(gridCentreX, 0, -gridHalfZ, gridCentreX, 0, gridHalfZ)
+      points.push(0, 0, 0, gridLength, 0, 0)
     }
     const line = ncLineObject(points, color, gridResolution, gridMaterials, false, linewidth)
     if (!line) return
@@ -1457,8 +1464,8 @@ function mountScene(
   makeGridTier(10, 0x1e2a38, 1, 0.5)
   makeGridTier(100, 0x33495e, 1.5, 0.6)
   makeGridTier(1000, 0x4b6a8a, 2.4, 0.85)
-  const gridDrop = Math.max(Math.max(gridHalfX, gridHalfZ) * 2e-4, 0.02)
-  gridGroup.position.set(fitCentre.x, fit.min.y - gridDrop, fitCentre.z)
+  const gridDrop = Math.max(Math.max(gridLength, gridHalfZ) * 2e-4, 0.02)
+  gridGroup.position.set(fit.min.x, fit.min.y - gridDrop, fitCentre.z)
   gridGroup.visible = false
   scene.add(gridGroup)
 
