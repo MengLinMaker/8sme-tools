@@ -24,6 +24,7 @@ import {
   DEFAULT_CHUCK_MARGIN_MM,
   DEFAULT_STOCK_LENGTHS_MM,
   DEFAULT_WASTE_PIECE_KG,
+  type PurchaseBar,
   type PurchaseGroupInput,
   type PurchasePlan,
   type PurchasePriority,
@@ -55,6 +56,16 @@ function kilograms(kg: number | null, digits = 1): string {
   return kg == null ? '—' : `${kg.toFixed(digits)} kg`
 }
 
+function keyed<T>(items: readonly T[], base: (item: T) => string): { id: string; item: T }[] {
+  const counts = new Map<string, number>()
+  return items.map((item) => {
+    const key = base(item)
+    const count = counts.get(key) ?? 0
+    counts.set(key, count + 1)
+    return { id: `${key}#${count}`, item }
+  })
+}
+
 function capacityMm(plan: PurchasePlan): number {
   return plan.tee ? plan.purchasedMm * 2 : plan.purchasedMm
 }
@@ -71,6 +82,7 @@ export function PurchaseDialog({ open, onClose, groups }: PurchaseDialogProps) {
   const [stockLengthsMm, setStockLengthsMm] = useState<number[]>([...DEFAULT_STOCK_LENGTHS_MM])
   const [priority, setPriority] = useState<PurchasePriority>('waste-removal')
   const [wasteLimitKg, setWasteLimitKg] = useState(DEFAULT_WASTE_PIECE_KG)
+  const [showNesting, setShowNesting] = useState(true)
 
   const plans = useMemo(
     () =>
@@ -375,6 +387,22 @@ export function PurchaseDialog({ open, onClose, groups }: PurchaseDialogProps) {
               <span>{t('preflight.purchase.teeNote')}</span>
             </div>
 
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-medium">{t('preflight.purchase.nestingTitle')}</div>
+                <div className="text-xs text-muted-foreground">
+                  {t('preflight.purchase.nestingHint')}
+                </div>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setShowNesting((value) => !value)}>
+                {showNesting
+                  ? t('preflight.purchase.hideNesting')
+                  : t('preflight.purchase.showNesting')}
+              </Button>
+            </div>
+
+            {showNesting && <NestingSolution plans={buyable} />}
+
             {priority === 'waste-removal' && overLimitPieces > 0 && (
               <p className="text-xs text-amber-300">
                 {t('preflight.purchase.overLimit', {
@@ -410,6 +438,139 @@ export function PurchaseDialog({ open, onClose, groups }: PurchaseDialogProps) {
         )}
       </div>
     </Dialog>
+  )
+}
+
+function NestingSolution({ plans }: { plans: PurchasePlan[] }) {
+  const { t } = useTranslation()
+  return (
+    <div className="flex flex-col gap-4">
+      {plans.map((plan) => {
+        const kgPerMm =
+          plan.wasteKg != null && plan.wasteMm > 0 ? plan.wasteKg / plan.wasteMm : null
+        const beamList: { stockLengthMm: number; bars: PurchaseBar[] }[] = []
+        if (plan.tee) {
+          for (let i = 0; i < plan.bars.length; i += 2) {
+            const pair = plan.bars.slice(i, i + 2)
+            beamList.push({ stockLengthMm: plan.bars[i].stockLengthMm, bars: pair })
+          }
+        } else {
+          for (const bar of plan.bars) {
+            beamList.push({ stockLengthMm: bar.stockLengthMm, bars: [bar] })
+          }
+        }
+        const beams = keyed(
+          beamList,
+          (beam) =>
+            `${beam.stockLengthMm}|${beam.bars
+              .map((bar) => bar.units.map((unit) => `${unit.mark}@${unit.lengthMm}`).join(','))
+              .join(';')}`,
+        )
+
+        return (
+          <div key={plan.key} className="rounded-lg border border-border p-3">
+            <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+              <span className="font-mono text-xs font-medium">{plan.stock}</span>
+              <span className="text-[11px] text-muted-foreground">
+                {t('preflight.purchase.nestingPieces', { count: plan.pieceCount })} ·{' '}
+                {t('preflight.purchase.nestingPurchased', {
+                  length: metres(plan.purchasedMm),
+                })}
+              </span>
+            </div>
+            <div className="flex flex-col gap-2">
+              {beams.map(({ id: beamId, item: beam }, index) => {
+                const sides = keyed(
+                  beam.bars,
+                  (bar) =>
+                    `${bar.stockLengthMm}|${bar.usedMm}|${bar.units
+                      .map((unit) => `${unit.mark}@${unit.lengthMm}`)
+                      .join(',')}`,
+                )
+                return (
+                  <div key={beamId} className="flex flex-col gap-1">
+                    <div className="flex items-baseline justify-between gap-2 text-[11px] text-muted-foreground">
+                      <span>
+                        {plan.tee
+                          ? t('preflight.purchase.nestingBeamT', {
+                              index: index + 1,
+                              length: metres(beam.stockLengthMm),
+                            })
+                          : t('preflight.purchase.nestingBeam', {
+                              index: index + 1,
+                              length: metres(beam.stockLengthMm),
+                            })}
+                      </span>
+                    </div>
+                    {sides.map(({ id: sideId, item: bar }, side) => (
+                      <div key={sideId} className="flex flex-col gap-0.5">
+                        {plan.tee && (
+                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                            {t('preflight.purchase.nestingSide', { index: side + 1 })}
+                          </span>
+                        )}
+                        <BarStrip bar={bar} />
+                        <div className="flex flex-wrap justify-between gap-2 text-[10px] text-muted-foreground">
+                          <span className="font-mono">
+                            {bar.units.length > 0
+                              ? bar.units
+                                  .map((unit) => `${unit.mark} ${metres(unit.lengthMm, 2)}`)
+                                  .join(' · ')
+                              : t('preflight.purchase.nestingEmpty')}
+                          </span>
+                          <span className="font-mono">
+                            {t('preflight.purchase.nestingWaste', {
+                              length: metres(bar.wasteMm, 2),
+                              weight: kilograms(kgPerMm == null ? null : bar.wasteMm * kgPerMm),
+                            })}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function BarStrip({ bar }: { bar: PurchaseBar }) {
+  const total = bar.stockLengthMm
+  let cursor = 0
+  const units = keyed(bar.units, (unit) => `${unit.mark}|${unit.lengthMm}`)
+  return (
+    <div className="relative h-6 w-full overflow-hidden rounded border border-border bg-muted/40">
+      {units.map(({ id, item: unit }) => {
+        const left = (cursor / total) * 100
+        const width = (unit.lengthMm / total) * 100
+        cursor += unit.lengthMm
+        return (
+          <div
+            key={id}
+            style={{ left: `${left}%`, width: `${width}%` }}
+            className="absolute inset-y-0 flex items-center overflow-hidden border-r border-background/70 bg-primary/30 px-1"
+            title={`${unit.mark} · ${metres(unit.lengthMm, 2)}`}
+          >
+            <span className="truncate text-[9px] leading-none">{unit.mark}</span>
+          </div>
+        )
+      })}
+      {bar.wasteMm > 0 && (
+        <div
+          style={{
+            left: `${(bar.usedMm / total) * 100}%`,
+            width: `${(bar.wasteMm / total) * 100}%`,
+          }}
+          className="absolute inset-y-0 flex items-center justify-end overflow-hidden bg-amber-500/20 px-1 text-[9px] text-amber-200"
+        >
+          <span className="truncate">{metres(bar.wasteMm, 2)}</span>
+        </div>
+      )}
+    </div>
   )
 }
 
