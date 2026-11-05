@@ -257,12 +257,32 @@ interface ShapeOps {
 
 const ETCH_FONT = 'etch'
 let fontReady: Promise<boolean> | null = null
+let fontBinaryOverride: Uint8Array | undefined
+let fontBinaryProvider: (() => Promise<Uint8Array>) | undefined
+
+/** Supply the etch font directly (single-file build / embedded worker assets). */
+export function setEtchFontBinary(binary: Uint8Array): void {
+  fontBinaryOverride = binary
+}
+
+/** Lazy version of {@link setEtchFontBinary}, for browser boot code that only decodes on first use. */
+export function setEtchFontProvider(provider: () => Promise<Uint8Array>): void {
+  fontBinaryProvider = provider
+}
 
 export async function ensureFont(): Promise<boolean> {
   if (!fontReady) {
     fontReady = (async () => {
       try {
         const { loadFont } = await import('replicad')
+        const binary =
+          fontBinaryOverride ?? (fontBinaryProvider ? await fontBinaryProvider() : undefined)
+        if (binary) {
+          fontBinaryOverride = binary
+          const font = binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.byteLength)
+          await loadFont(font as ArrayBuffer, ETCH_FONT)
+          return true
+        }
         const response = await fetch(`${import.meta.env.BASE_URL}fonts/LiberationSans-Regular.ttf`)
         if (!response.ok) return false
         await loadFont(await response.arrayBuffer(), ETCH_FONT)

@@ -1,11 +1,12 @@
 import type { AnyShape } from 'replicad'
 import { Matrix4 } from 'three'
+import { gunzipBase64 } from '@/lib/gzip'
 import { cleanStep } from './clean'
 import { type MeasurableShape, measureShape, type StepMeasure } from './measure'
 import { meshStepFile } from './mesh'
-import { applyRigid, writeStep } from './occ'
+import { applyRigid, setEtchFontBinary, writeStep } from './occ'
 import { occFuzzyDiff, serializeDiff } from './occDiff'
-import { ensureOc } from './occInit'
+import { ensureOc, setOcWasmBinary } from './occInit'
 import { inferStepSection, type SectionShape } from './readSection'
 import { reconstructSolidFromNc } from './reconstructFromNc'
 import { baseMatchesFeatures, buildFaceFilledBase, repairStep } from './repair'
@@ -16,6 +17,7 @@ import type {
   SeatResult,
   StepRequest,
   StepResponse,
+  StepWorkerInit,
 } from './stepWorkerProtocol'
 
 /**
@@ -25,14 +27,45 @@ import type {
  */
 
 interface WorkerScope {
-  onmessage: ((event: MessageEvent<StepRequest>) => void) | null
+  onmessage: ((event: MessageEvent<StepRequest | StepWorkerInit>) => void) | null
   postMessage: (message: StepResponse) => void
 }
 
 const scope = self as unknown as WorkerScope
 
+let resolveInit: () => void = () => {}
+const initReady = new Promise<void>((resolve) => {
+  resolveInit = resolve
+})
+let initError: string | null = null
+
 scope.onmessage = (event) => {
-  void handle(event.data)
+  const message = event.data
+  if (message.kind === 'init') {
+    void applyInit(message).then(
+      () => resolveInit(),
+      (error) => {
+        initError = error instanceof Error ? error.message : String(error)
+        resolveInit()
+      },
+    )
+    return
+  }
+  void initReady.then(() => {
+    if (initError) {
+      scope.postMessage({ id: message.id, kind: 'error', ok: false, error: initError })
+      return
+    }
+    return handle(message)
+  })
+}
+
+/** Apply the embedded assets (single-file build) before the first real request. */
+async function applyInit(init: StepWorkerInit): Promise<void> {
+  const jobs: Promise<void>[] = []
+  if (init.ocWasmGzip) jobs.push(gunzipBase64(init.ocWasmGzip).then(setOcWasmBinary))
+  if (init.fontGzip) jobs.push(gunzipBase64(init.fontGzip).then(setEtchFontBinary))
+  await Promise.all(jobs)
 }
 
 async function handle(request: StepRequest): Promise<void> {

@@ -4,6 +4,7 @@
  */
 
 import type { PDFWorker } from 'pdfjs-dist'
+import { configurePdfWorker } from '@/lib/parsers/pdfWorkerConfig'
 
 type PdfjsModule = typeof import('pdfjs-dist')
 
@@ -11,10 +12,7 @@ let enginePromise: Promise<{ pdfjs: PdfjsModule; pool: PdfWorkerPool }> | null =
 
 async function loadPdfjs(): Promise<PdfjsModule> {
   const pdfjs = await import('pdfjs-dist')
-  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-    const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
-    pdfjs.GlobalWorkerOptions.workerSrc = worker.default
-  }
+  await configurePdfWorker(pdfjs)
   return pdfjs
 }
 

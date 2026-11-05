@@ -1,11 +1,15 @@
 import { createRouter, RouterProvider } from '@tanstack/react-router'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { appHistory } from '@/lib/single/history'
+import { installSingleFileAssets } from '@/lib/single/install'
 import { routeTree } from './routeTree.gen'
 import './i18n'
 import './styles/global.css'
 
-const router = createRouter({ routeTree })
+installSingleFileAssets()
+
+const router = createRouter({ routeTree, history: appHistory })
 
 declare module '@tanstack/react-router' {
   interface Register {

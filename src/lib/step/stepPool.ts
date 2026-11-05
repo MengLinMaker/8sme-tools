@@ -1,4 +1,5 @@
 import type { Matrix4 } from 'three'
+import { createStepWorker } from '@/lib/step/stepWorkerFactory'
 import type { MeshedStep } from './mesh'
 import type { DiffPayload } from './occDiff'
 import type {
@@ -266,7 +267,10 @@ class StepWorkerPool {
 
   private spawn(): WorkerHandle | null {
     if (this.workers.length >= this.max) return null
-    const worker = new Worker(new URL('./stepWorker.ts', import.meta.url), { type: 'module' })
+    const { worker, init } = createStepWorker()
+    // Always initialise first: in the single-file build this carries the embedded WASM + font,
+    // and the worker queues every request until the init message has been applied.
+    worker.postMessage(init)
     const handle: WorkerHandle = { worker, task: null }
     worker.onmessage = (event: MessageEvent<StepResponse>) => this.onMessage(handle, event.data)
     worker.onerror = (event) => this.onError(handle, event)

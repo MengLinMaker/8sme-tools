@@ -8,6 +8,7 @@
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { configurePdfWorker } from '@/lib/parsers/pdfWorkerConfig'
 import { cn } from '@/lib/utils'
 
 type PdfjsModule = typeof import('pdfjs-dist')
@@ -18,10 +19,7 @@ let pdfjsPromise: Promise<PdfjsModule> | null = null
 function loadPdfjs(): Promise<PdfjsModule> {
   pdfjsPromise ??= (async () => {
     const pdfjs = await import('pdfjs-dist')
-    if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-      const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
-      pdfjs.GlobalWorkerOptions.workerSrc = worker.default
-    }
+    await configurePdfWorker(pdfjs)
     return pdfjs
   })()
   return pdfjsPromise

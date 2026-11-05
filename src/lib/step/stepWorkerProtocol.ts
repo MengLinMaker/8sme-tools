@@ -41,6 +41,15 @@ export interface RepairResult {
   cleaned: boolean
 }
 
+/** First message a worker receives; carries embedded assets in the single-file build. */
+export interface StepWorkerInit {
+  kind: 'init'
+  /** gzip-compressed OpenCASCADE WASM, base64 encoded. */
+  ocWasmGzip?: string
+  /** gzip-compressed etch font, base64 encoded. */
+  fontGzip?: string
+}
+
 export type StepRequest =
   | {
       id: number

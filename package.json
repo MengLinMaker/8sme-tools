@@ -8,6 +8,7 @@
     "dev": "vite",
     "generate": "tsr generate",
     "build": "tsr generate && tsc --noEmit && vite build",
+    "build:single": "tsr generate && tsc --noEmit && node tools/build-single.mjs",
     "preview": "vite preview",
     "format": "biome check --write",
     "lint": "tsr generate && tsc --noEmit",
@@ -62,6 +63,7 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "vite-plugin-pwa": "^2.0.0",
+    "vite-plugin-singlefile": "2.3.4",
     "vitest": "^5.0.3",
     "wrangler": "^4.149.0"
   }

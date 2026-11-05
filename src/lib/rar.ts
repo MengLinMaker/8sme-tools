@@ -11,8 +11,28 @@ export function isRar(bytes: Uint8Array): boolean {
 }
 
 let wasmBinaryPromise: Promise<ArrayBuffer> | undefined
+let wasmBinaryOverride: ArrayBuffer | undefined
+let wasmBinaryProvider: (() => Promise<ArrayBuffer>) | undefined
+
+/** Supply the unrar WASM bytes directly (used by the single-file build). */
+export function setUnrarWasmBinary(binary: ArrayBuffer): void {
+  wasmBinaryOverride = binary
+}
+
+/** Lazy version of {@link setUnrarWasmBinary}, for browser boot code that only decodes on first use. */
+export function setUnrarWasmProvider(provider: () => Promise<ArrayBuffer>): void {
+  wasmBinaryProvider = provider
+}
 
 function loadWasmBinary(): Promise<ArrayBuffer> {
+  if (wasmBinaryOverride) return Promise.resolve(wasmBinaryOverride)
+  if (wasmBinaryProvider) {
+    wasmBinaryPromise ??= wasmBinaryProvider().then((binary) => {
+      wasmBinaryOverride = binary
+      return binary
+    })
+    return wasmBinaryPromise
+  }
   wasmBinaryPromise ??= import('node-unrar-js/esm/js/unrar.wasm?url').then((url) =>
     fetch(url.default).then((response) => response.arrayBuffer()),
   )
