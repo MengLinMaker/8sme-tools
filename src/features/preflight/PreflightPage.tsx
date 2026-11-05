@@ -77,9 +77,11 @@ import {
 } from '@/lib/parsers/ncProject'
 import { reemitPartNc } from '@/lib/parsers/ncReemit'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
+import type { PurchaseGroupInput } from '@/lib/purchasing/purchase'
 import type { InputBundle } from '@/lib/readInput'
 import { CUT_FACES, profileFamily } from '@/lib/sections/canonical'
 import type { SectionGuess } from '@/lib/sections/detect'
+import { inferTee } from '@/lib/sections/infer'
 import {
   partSectionForCode,
   resolveStockOutline,
@@ -131,6 +133,7 @@ import {
   ProfileSettingsDialog,
   SectionPreview,
 } from './ProfileSettingsDialog'
+import { PurchaseDialog } from './PurchaseDialog'
 
 const PartViewer = lazy(() => import('./PartViewer'))
 
@@ -1838,6 +1841,56 @@ export function PreflightPage() {
       .sort((a, b) => b.lengthMm - a.lengthMm || b.pieces - a.pieces)
   }, [result, pieceMass, sectionLabel, partQty, partLength, sectionGuesses])
 
+  /**
+   * Purchase groups for the stock calculator. A T is bought as its parent UB (one beam gives two
+   * T bars), so all T profiles that resolve to the same UB are nested together; every other
+   * profile is nested on its own.
+   */
+  const purchaseGroups = useMemo(() => {
+    if (!result) return []
+    const map = new Map<string, PurchaseGroupInput>()
+    for (const part of result.parts) {
+      const length = partLength(part)
+      const quantity = partQty(part)
+      if (length == null || length <= 0 || quantity <= 0) continue
+
+      const profile = sectionLabel(part)
+      const code =
+        part.nc?.profile ?? listedProfile(part) ?? sectionGuesses.get(part.mark)?.code ?? ''
+      const dims = part.nc?.dimensions ?? sectionGuesses.get(part.mark)?.dims ?? []
+      const tee = code ? inferTee(code, dims) : null
+      const key = tee ? `tee:${tee.section.designation}` : `profile:${profile}`
+      const massPerMetre = tee
+        ? tee.section.mass
+        : (part.nc?.weightPerMetre ??
+          sectionMassPerMetre(profile, dims) ??
+          sectionGuesses.get(part.mark)?.mass ??
+          null)
+
+      let group = map.get(key)
+      if (!group) {
+        group = {
+          key,
+          stock: tee ? tee.section.designation : profile,
+          sources: [],
+          tee: Boolean(tee),
+          massPerMetre,
+          pieces: [],
+        }
+        map.set(key, group)
+      } else if (massPerMetre != null) {
+        group.massPerMetre =
+          group.massPerMetre == null ? massPerMetre : Math.max(group.massPerMetre, massPerMetre)
+      }
+      if (profile !== '—' && !group.sources.includes(profile)) group.sources.push(profile)
+      group.pieces.push({ mark: part.mark, lengthMm: length, quantity })
+    }
+
+    const totalLength = (group: PurchaseGroupInput) =>
+      group.pieces.reduce((sum, piece) => sum + piece.lengthMm * piece.quantity, 0)
+    return [...map.values()].sort((a, b) => totalLength(b) - totalLength(a))
+  }, [result, partLength, partQty, sectionLabel, sectionGuesses])
+
   /** One status pill per distinct finding code, so the parts table carries its own triage. */
   const issuesByMark = useMemo(() => {
     const map = new Map<string, StatusPill[]>()
@@ -1973,6 +2026,7 @@ export function PreflightPage() {
   const [partsOpen, setPartsOpen] = useState(true)
   /** Index into `profileGroups` of the profile whose cut-settings dialog is open. */
   const [settingsProfileIndex, setSettingsProfileIndex] = useState<number | null>(null)
+  const [purchaseOpen, setPurchaseOpen] = useState(false)
   const settingsGroup =
     settingsProfileIndex === null ? null : (profileGroups[settingsProfileIndex] ?? null)
   /** Previous/next profile while the dialog is open (arrow keys or the header buttons). */
@@ -2901,7 +2955,7 @@ export function PreflightPage() {
           </section>
 
           <Card>
-            <CardHeader>
+            <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
               <button
                 type="button"
                 onClick={() => setProfilesOpen((open) => !open)}
@@ -2921,6 +2975,14 @@ export function PreflightPage() {
                   </span>
                 </CardTitle>
               </button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPurchaseOpen(true)}
+                disabled={purchaseGroups.length === 0}
+              >
+                {t('preflight.purchase.open')}
+              </Button>
             </CardHeader>
             {profilesOpen && (
               <CardContent>
@@ -3880,6 +3942,12 @@ export function PreflightPage() {
           </div>
         )}
       </Dialog>
+
+      <PurchaseDialog
+        open={purchaseOpen}
+        onClose={() => setPurchaseOpen(false)}
+        groups={purchaseGroups}
+      />
 
       <ProfileSettingsDialog
         open={settingsProfileIndex !== null}
