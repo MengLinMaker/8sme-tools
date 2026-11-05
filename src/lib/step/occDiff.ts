@@ -197,13 +197,33 @@ function impliedThickness(volume: number, soup: DiffSoup): number {
   return area > 0 ? (2 * volume) / area : Number.POSITIVE_INFINITY
 }
 
+/** One boolean phase of the fuzzy scan — for profiling which fuzzy values cost the time. */
+export interface OccDiffAttempt {
+  fuzzy: number
+  phase: 'common' | 'over' | 'under'
+  ms: number
+}
+
+export interface OccDiffOptions {
+  /** Per-boolean timing hook (benchmarks only — it never changes the result). */
+  trace?: (attempt: OccDiffAttempt) => void
+  /**
+   * Boolean order per fuzzy attempt. `cuts-first` (default) checks the cheap cut-result sanity
+   * before paying for the B-rep Common, and skips that Common entirely on an attempt the cuts
+   * already reject. `common-first` is the historical order, kept for A/B benchmarks. Both orders
+   * run the same checks on the same values, so the returned diff is identical — only the wasted
+   * work differs.
+   */
+  order?: 'common-first' | 'cuts-first'
+}
+
 /**
  * Runs the fuzzy boolean between the manufactured (`primaryBytes`) and STEP (`compareBytes`) models.
  * Each is seated by its viewer matrix; both default to identity. The NC and STEP are independent
  * pipelines built in their own frames, so the viewer passes the seating that maps the STEP onto the
  * manufactured model (the same canonical frame it draws both in, see `seat.ts`) as `compareMatrix` —
  * the diff never reorients on its own. Returns the same shape as {@link BooleanDiff}, or null when
- * the kernel fails (the caller falls back to surface flagging).
+ * the kernel fails (the caller then falls back to surface flagging).
  */
 export async function occFuzzyDiff(
   primaryBytes: Uint8Array,
@@ -211,7 +231,9 @@ export async function occFuzzyDiff(
   primaryMatrix: Matrix4 = new Matrix4(),
   compareMatrix: Matrix4 = new Matrix4(),
   fuzzy = OCC_FUZZY_MM,
+  options: OccDiffOptions = {},
 ): Promise<BooleanDiff | null> {
+  const { trace, order = 'cuts-first' } = options
   await ensureOc()
   const { cast, getOC, importSTEP, measureVolume } = await import('replicad')
   // The OCC instance is untyped in the bindings; the boolean classes are used directly.
@@ -265,11 +287,14 @@ export async function occFuzzyDiff(
     // ≈ the whole operand and cannot agree with the common, so it is rejected.
     // Exact B-rep volume, no mesh: the common is only needed as a number here.
     const commonVolumeAt = async (f: number): Promise<number> => {
+      const started = performance.now()
       const common = cast(
         boolean('BRepAlgoAPI_Common', made, ideal, f) as never,
       ) as unknown as OcShape & { delete?: () => void }
       try {
-        return measureVolume(common as never)
+        const volume = measureVolume(common as never)
+        trace?.({ fuzzy: f, phase: 'common', ms: performance.now() - started })
+        return volume
       } finally {
         common.delete?.()
       }
@@ -277,44 +302,57 @@ export async function occFuzzyDiff(
 
     // Auto-tune: scan candidate fuzzy values largest-first until both cuts agree with the common.
     // The first workable value wins, so the largest margin that does not merge.
+    const agrees = (value: number, expected: number): boolean =>
+      Math.abs(value - expected) <= agreeTolerance
+    const attempt = async (f: number): Promise<BooleanDiff | null> => {
+      let commonVolume: number | null = null
+      if (order === 'common-first') commonVolume = await commonVolumeAt(f)
+      const overStarted = performance.now()
+      const overSoup = await shapeToSoup(boolean('BRepAlgoAPI_Cut', ideal, made, f), true)
+      trace?.({ fuzzy: f, phase: 'over', ms: performance.now() - overStarted })
+      const underStarted = performance.now()
+      const underSoup = await shapeToSoup(boolean('BRepAlgoAPI_Cut', made, ideal, f), true)
+      trace?.({ fuzzy: f, phase: 'under', ms: performance.now() - underStarted })
+      const overVolume = signedVolume(overSoup)
+      const underVolume = signedVolume(underSoup)
+      // The cheap checks need only the cuts: a failed/merged cut or a paper-thin skin is rejected
+      // before the Common is paid for. A `cuts-first` pass still runs the Common once the cuts look
+      // plausible, because that is what validates them against the exact volume identity.
+      const cutsSane =
+        Number.isFinite(overVolume) &&
+        Number.isFinite(underVolume) &&
+        // A failed cut returns ≈ the whole operand ("over" ≈ ideal, "under" ≈ manufactured);
+        // a real difference is strictly smaller than the model it is taken from.
+        overVolume < idealVolume * 0.99 &&
+        underVolume < madeVolume * 0.99 &&
+        // ...it must not be a paper-thin membrane over the whole part (the "skin" artifact) — a
+        // near-coincident pair can cut to a huge-area, near-zero-volume shell that the volume
+        // checks below sail through. Reject by implied thickness so the scan falls through to the
+        // fuzzy that leaves real material (m180: f=1 → 0.035 mm shell; f=0.2 → 3.4 mm real diff).
+        impliedThickness(overVolume, overSoup) >= MIN_SOLID_THICKNESS_MM &&
+        impliedThickness(underVolume, underSoup) >= MIN_SOLID_THICKNESS_MM
+      if (!cutsSane) return null
+      if (commonVolume == null) commonVolume = await commonVolumeAt(f)
+      const expectedOver = Math.max(0, idealVolume - commonVolume)
+      const expectedUnder = Math.max(0, madeVolume - commonVolume)
+      // ...and it must agree with the common-derived truth (rejects a ~95 % merge).
+      if (!agrees(overVolume, expectedOver) || !agrees(underVolume, expectedUnder)) return null
+      return {
+        over: geometryFromSoup(overSoup),
+        under: geometryFromSoup(underSoup),
+        overDistance: new Array<number>(Math.floor(overSoup.triangles.length / 3)).fill(f),
+        underDistance: new Array<number>(Math.floor(underSoup.triangles.length / 3)).fill(f),
+        overVolume,
+        underVolume,
+        primaryVolume: madeVolume,
+      }
+    }
+
     for (const f of OCC_FUZZY_STEPS) {
       if (f > fuzzy) continue
       try {
-        const commonVolume = await commonVolumeAt(f)
-        const expectedOver = Math.max(0, idealVolume - commonVolume)
-        const expectedUnder = Math.max(0, madeVolume - commonVolume)
-        const agrees = (value: number, expected: number): boolean =>
-          Math.abs(value - expected) <= agreeTolerance
-        const overSoup = await shapeToSoup(boolean('BRepAlgoAPI_Cut', ideal, made, f), true)
-        const underSoup = await shapeToSoup(boolean('BRepAlgoAPI_Cut', made, ideal, f), true)
-        const overVolume = signedVolume(overSoup)
-        const underVolume = signedVolume(underSoup)
-        const sane =
-          Number.isFinite(overVolume) &&
-          Number.isFinite(underVolume) &&
-          // A failed cut returns ≈ the whole operand ("over" ≈ ideal, "under" ≈ manufactured);
-          // a real difference is strictly smaller than the model it is taken from.
-          overVolume < idealVolume * 0.99 &&
-          underVolume < madeVolume * 0.99 &&
-          // ...it must not be a paper-thin membrane over the whole part (the "skin" artifact) — a
-          // near-coincident pair can cut to a huge-area, near-zero-volume shell that the volume
-          // checks below sail through. Reject by implied thickness so the scan falls through to the
-          // fuzzy that leaves real material (m180: f=1 → 0.035 mm shell; f=0.2 → 3.4 mm real diff).
-          impliedThickness(overVolume, overSoup) >= MIN_SOLID_THICKNESS_MM &&
-          impliedThickness(underVolume, underSoup) >= MIN_SOLID_THICKNESS_MM &&
-          // ...and it must agree with the common-derived truth (rejects a ~95 % merge).
-          agrees(overVolume, expectedOver) &&
-          agrees(underVolume, expectedUnder)
-        if (!sane) continue
-        return {
-          over: geometryFromSoup(overSoup),
-          under: geometryFromSoup(underSoup),
-          overDistance: new Array<number>(Math.floor(overSoup.triangles.length / 3)).fill(f),
-          underDistance: new Array<number>(Math.floor(underSoup.triangles.length / 3)).fill(f),
-          overVolume,
-          underVolume,
-          primaryVolume: madeVolume,
-        }
+        const result = await attempt(f)
+        if (result) return result
       } catch {
         // Try a smaller fuzzy.
       }
