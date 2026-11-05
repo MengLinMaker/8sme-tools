@@ -42,6 +42,7 @@ export const en = {
     },
     fix: {
       cleaned: 'cleaned',
+      repaired: 'Tekla repaired',
       regenerated: 'regenerated',
       simplified: 'simplified',
     },
@@ -301,6 +302,7 @@ export const en = {
       colType: 'Type',
       colLocation: 'Location',
       colFix: 'Fix',
+      solved: 'Solved ({{count}})',
       colIssue: 'Issue',
       sevError: 'Error',
       sevWarning: 'Warning',
@@ -529,6 +531,7 @@ export const zh = {
     },
     fix: {
       cleaned: '已清理',
+      repaired: 'Tekla 已修复',
       regenerated: '已重建',
       simplified: '已简化',
     },
@@ -771,6 +774,7 @@ export const zh = {
       apply: '应用坡口',
     },
     warnings: {
+      solved: '已解决（{{count}}）',
       cancelFix: '撤销',
       stepCleaned: 'STEP 已清理——导出的即为该文件。',
       stepRepaired: 'STEP 已修复——导出的即为该文件。',

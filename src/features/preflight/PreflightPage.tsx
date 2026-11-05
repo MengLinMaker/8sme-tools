@@ -99,7 +99,6 @@ import {
   type StepMeasure,
   stepOnlySizeCheck,
 } from '@/lib/step/measure'
-import { repairStep } from '@/lib/step/repair'
 import type { SabreFailure } from '@/lib/step/sabre'
 import {
   getStepWorkerPool,
@@ -301,6 +300,8 @@ type StepFixKind = 'cleaned' | 'regenerated' | 'simplified' | 'repaired'
 interface StepOverride {
   bytes: Uint8Array
   kind: StepFixKind
+  /** Bytes are already in the canonical frame (NC-derived); skip export re-seating. */
+  seated?: boolean
 }
 
 /**
@@ -2294,13 +2295,16 @@ export function PreflightPage() {
     [cutIssues, stepOverrides],
   )
 
-  const setOverride = useCallback((mark: string, bytes: Uint8Array, kind: StepFixKind) => {
-    setStepOverrides((prev) => {
-      const next = new Map(prev)
-      next.set(mark, { bytes, kind })
-      return next
-    })
-  }, [])
+  const setOverride = useCallback(
+    (mark: string, bytes: Uint8Array, kind: StepFixKind, seated = false) => {
+      setStepOverrides((prev) => {
+        const next = new Map(prev)
+        next.set(mark, { bytes, kind, seated })
+        return next
+      })
+    },
+    [],
+  )
 
   const undoOverride = useCallback((mark: string) => {
     setStepOverrides((prev) => {
@@ -2365,39 +2369,107 @@ export function PreflightPage() {
   )
 
   /**
-   * One-click Tekla repair: rebuild the clean base from the NC, then re-drill the intended holes
-   * from the part's real STEP into it. The result is a viewable (and exportable) solid. Falls back
-   * to the in-place clean when the part has no NC to build a clean base from.
+   * The clean base bundled with the job, if any: a second STEP whose name matches the part mark
+   * (e.g. `GB8(3).stp`, `corrected/GB8.stp`, `GB8.fixed.stp`). Non-technical users just drop the
+   * corrected export into the job; the button finds it automatically — no picker, no script.
+   */
+  const jobBaseFor = useCallback(
+    (part: PartRecord): Uint8Array | undefined => {
+      const own = part.step?.path
+      const mark = part.mark.toLowerCase().replace(/[^a-z0-9]/g, '')
+      let best: { score: number; bytes: Uint8Array } | null = null
+      for (const entry of bundle?.entries ?? []) {
+        if (!/\.(stp|step)$/i.test(entry.path)) continue
+        if (entry.path === own) continue
+        const stem =
+          entry.path
+            .split(/[\\/]/)
+            .pop()
+            ?.replace(/\.[^.]+$/, '') ?? ''
+        const norm = stem.toLowerCase().replace(/[^a-z0-9]/g, '')
+        if (!mark || !norm.startsWith(mark)) continue
+        let score = 0
+        if (/correct|fix|clean|repair/i.test(entry.path)) score += 10
+        if (norm !== mark) score += 1
+        if (!best || score > best.score) best = { score, bytes: entry.bytes }
+      }
+      return best?.bytes
+    },
+    [bundle],
+  )
+
+  /**
+   * Tekla repair preview: use a clean base bundled with the job (corrected STEP) or rebuilt from
+   * the NC, then re-drill the part's real STEP holes into it. The result becomes the viewer/export
+   * override — no save dialog, no script.
    */
   const cleanTeklaPart = useCallback(
     async (part: PartRecord) => {
       const path = part.step?.path
       const featureBytes = path ? bytesByPath.get(path) : undefined
       if (!featureBytes) return
+      const ncPath = part.nc?.path
+      const ncBytes =
+        ncOverrides.get(part.mark)?.bytes ?? (ncPath ? bytesByPath.get(ncPath) : undefined)
+      const jobBase = ncBytes ? undefined : jobBaseFor(part)
       setFixingMark(part.mark)
       try {
-        const ncPath = part.nc?.path
-        const ncBytes =
-          ncOverrides.get(part.mark)?.bytes ?? (ncPath ? bytesByPath.get(ncPath) : undefined)
         if (ncBytes) {
-          const base = await reconstructForViewer(new TextDecoder().decode(ncBytes))
-          if (base) {
-            const repaired = await repairStep(base, featureBytes)
-            if (repaired.valid) {
-              setOverride(part.mark, repaired.bytes, 'repaired')
-              return
+          // NC rebuild is canonical; seat the raw STEP features into that frame first.
+          let features = featureBytes
+          const code =
+            part.nc?.profile ?? listedProfile(part) ?? sectionGuesses.get(part.mark)?.code
+          const dims = part.nc?.dimensions ?? sectionGuesses.get(part.mark)?.dims ?? []
+          const profile = code ? (partSectionForCode(code, dims)?.points ?? null) : null
+          if (profile) {
+            try {
+              const seated = await getStepWorkerPool().seat(featureBytes, profile, {
+                priority: PRIORITY_FOREGROUND,
+              })
+              features = new TextEncoder().encode(seated.step)
+            } catch {
+              // use the raw STEP if seating fails
             }
           }
+          let base: Uint8Array | null = null
+          try {
+            base = await reconstructForViewer(new TextDecoder().decode(ncBytes))
+          } catch {
+            base = null
+          }
+          const result = await getStepWorkerPool().repair(base, features, {
+            priority: PRIORITY_FOREGROUND,
+          })
+          if (result.valid) {
+            setOverride(
+              part.mark,
+              result.bytes,
+              result.cleaned ? 'cleaned' : 'repaired',
+              !result.cleaned,
+            )
+          }
+        } else {
+          // A corrected base in the job wins; otherwise the worker rebuilds the stock base
+          // from the part's own faces before re-drilling (auto repair, no external file).
+          const result = await getStepWorkerPool().repair(jobBase ?? null, featureBytes, {
+            priority: PRIORITY_FOREGROUND,
+          })
+          if (result.valid) {
+            setOverride(part.mark, result.bytes, result.cleaned ? 'cleaned' : 'repaired')
+          }
         }
-        const cleaned = await cleanStep(featureBytes)
-        if (cleaned) setOverride(part.mark, cleaned.bytes, 'cleaned')
       } catch {
-        // leave the original in place if the repair fails
+        try {
+          const cleaned = await cleanStep(featureBytes)
+          if (cleaned) setOverride(part.mark, cleaned.bytes, 'cleaned')
+        } catch {
+          // leave the original in place
+        }
       } finally {
         setFixingMark(null)
       }
     },
-    [bytesByPath, ncOverrides, setOverride],
+    [bytesByPath, jobBaseFor, ncOverrides, sectionGuesses, setOverride],
   )
 
   /** Rebuilds a part's STEP from its NC, so the viewer + export match what will be manufactured. */
@@ -2588,7 +2660,8 @@ export function PreflightPage() {
       const path = part.step?.path
       const base = override?.bytes ?? (path ? bytesByPath.get(path) : undefined)
       if (!base) return undefined
-      if (override?.kind === 'regenerated' || override?.kind === 'simplified') return base
+      if (override?.kind === 'regenerated' || override?.kind === 'simplified' || override?.seated)
+        return base
       const profile = exportProfile(part)
       if (!profile) return base
       try {
@@ -4027,6 +4100,13 @@ function ViewerWarnings({
       if (bySeverity !== 0) return bySeverity * sort.dir
       return a.finding.code.localeCompare(b.finding.code)
     })
+  const isResolved = (finding: Finding): boolean => {
+    if (fix?.override && resolvedFindings(fix.override).includes(finding.code)) return true
+    if (fix?.ncEdit?.kind === 'removeCut')
+      return finding.code === 'CUT_UNCLOSED' || finding.code === 'CUT_CUTOUT'
+    if (fix?.ncEdit?.kind === 'setBevel') return finding.code === 'CUT_BEVEL_CHANGE'
+    return false
+  }
   const findingText = (finding: Finding) =>
     t(finding.params?.nc === 1 ? 'findings.CUT_DEPTH_NC' : `findings.${finding.code}`, {
       ...finding.params,
@@ -4056,7 +4136,7 @@ function ViewerWarnings({
   const errors = findings.filter((finding) => finding.severity === 'error').length
   const warnings = findings.filter((finding) => finding.severity === 'warning').length
   return (
-    <div className="flex h-full min-h-0 flex-col gap-1.5 bg-card px-4 py-2">
+    <div className="flex h-full min-h-0 flex-col gap-1.5 overflow-auto bg-card px-4 py-2">
       {findings.length > 0 && (
         <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
           <span className="font-semibold">
@@ -4073,245 +4153,220 @@ function ViewerWarnings({
           </span>
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-auto">
-        <Table>
-          <TableHeader className="sticky top-0 z-10 bg-card">
-            <TableRow className="hover:bg-transparent">
-              <TableHead className="h-auto w-8 px-3 py-1">
-                {onToggleAll ? (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-5 p-0.5 text-muted-foreground hover:text-foreground"
-                    onClick={onToggleAll}
-                    title={
-                      allShown ? t('preflight.warnings.hideAll') : t('preflight.warnings.showAll')
-                    }
-                    aria-label={
-                      allShown ? t('preflight.warnings.hideAll') : t('preflight.warnings.showAll')
-                    }
-                  >
-                    {allShown ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
-                  </Button>
-                ) : null}
-              </TableHead>
-              <TableHead className="w-24">
-                <SortHead k="severity" label={t('preflight.warnings.colSeverity')} />
-              </TableHead>
-              <TableHead className="w-28">
-                <SortHead k="code" label={t('preflight.warnings.colType')} />
-              </TableHead>
-              <TableHead className="w-24">
-                <SortHead k="location" label={t('preflight.warnings.colLocation')} />
-              </TableHead>
-              <TableHead>{t('preflight.warnings.colIssue')}</TableHead>
-              <TableHead className="w-32">
-                <SortHead k="fix" label={t('preflight.warnings.colFix')} />
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map(({ finding, index }) => {
-              const resolved = Boolean(
-                fix?.override && resolvedFindings(fix.override).includes(finding.code),
-              )
-              const fixKind = fix && !resolved ? fixForFinding(finding.code) : null
-              const fixable = Boolean(fixKind && fix && viewerFixAvailable(fix, fixKind))
-              const action = fixKind && fix ? viewerFixAction(t, fix, fixKind, finding) : null
-              // Only findings the viewer can point at in 3D get an eye toggle / are clickable.
-              const showable = isVisualisable(finding)
-              return (
-                <TableRow
-                  key={`${finding.code}-${finding.params?.index ?? finding.message}`}
-                  tabIndex={showable ? 0 : undefined}
-                  onClick={showable && onActivate ? () => onActivate(index) : undefined}
-                  onKeyDown={
-                    showable
-                      ? (event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault()
-                            onActivate?.(index)
-                          }
-                        }
-                      : undefined
-                  }
-                  className={cn(
-                    'outline-none focus-visible:bg-accent/60',
-                    showable && 'cursor-pointer',
-                  )}
-                  onMouseEnter={showable && onHover ? () => onHover(index) : undefined}
-                  onMouseLeave={showable && onHover ? () => onHover(null) : undefined}
-                >
-                  <TableCell className="py-1">
-                    {showable ? (
-                      <button
-                        type="button"
-                        title={t('preflight.warnings.toggleIssue')}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          onToggleCheck?.(index)
-                        }}
-                        className={cn(
-                          'inline-flex rounded p-0.5',
-                          isChecked?.(index) ? 'text-primary' : 'text-muted-foreground',
-                        )}
-                      >
-                        {isChecked?.(index) ? (
-                          <Eye className="size-4" />
-                        ) : (
-                          <EyeOff className="size-4" />
-                        )}
-                      </button>
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="py-1">
-                    <span
-                      className={cn(
-                        'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-                        finding.severity === 'error'
-                          ? 'border-destructive/50 bg-destructive/15 text-destructive-foreground'
-                          : finding.severity === 'warning'
-                            ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
-                            : 'border-sky-500/50 bg-sky-500/15 text-sky-300',
-                      )}
+      {findings.length > 0 && (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <Table>
+            <TableHeader className="sticky top-0 z-10 bg-card">
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="h-auto w-8 px-3 py-1">
+                  {onToggleAll ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-5 p-0.5 text-muted-foreground hover:text-foreground"
+                      onClick={onToggleAll}
+                      title={
+                        allShown ? t('preflight.warnings.hideAll') : t('preflight.warnings.showAll')
+                      }
+                      aria-label={
+                        allShown ? t('preflight.warnings.hideAll') : t('preflight.warnings.showAll')
+                      }
                     >
-                      {finding.severity === 'error'
-                        ? t('preflight.warnings.sevError')
-                        : finding.severity === 'warning'
-                          ? t('preflight.warnings.sevWarning')
-                          : t('preflight.warnings.sevInfo')}
-                    </span>
-                  </TableCell>
-                  <TableCell className="py-1 font-mono text-[11px]">{finding.code}</TableCell>
-                  <TableCell className="py-1 font-mono text-[11px] text-muted-foreground">
-                    {locationOf(finding) != null ? `${locationOf(finding)} mm` : '—'}
-                  </TableCell>
-                  <TableCell
-                    className={cn('py-1', resolved && 'line-through', resolved && 'opacity-50')}
-                  >
-                    {findingText(finding)}
-                  </TableCell>
-                  <TableCell className="py-1 text-right">
-                    {resolved ? (
-                      <Badge variant="success">
-                        {fix?.override ? t(`common.fix.${fix.override}`) : ''}
-                      </Badge>
-                    ) : finding.code === 'STRAY_BODY' && fix && (fix.canClean || fix.canRepair) ? (
-                      <div className="flex justify-end gap-1">
-                        {fix.canClean && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7"
-                            disabled={fix.pending}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              fix.onClean()
-                            }}
-                            onKeyDown={(event) => event.stopPropagation()}
-                          >
-                            {fix.pending
-                              ? t('common.actions.cleaning')
-                              : t('common.actions.cleanStep')}
-                          </Button>
-                        )}
-                        {fix.canRepair && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7"
-                            disabled={fix.pending}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              fix.onRepair()
-                            }}
-                            onKeyDown={(event) => event.stopPropagation()}
-                          >
-                            {fix.pending
-                              ? t('common.actions.working')
-                              : t('common.actions.cleanTekla')}
-                          </Button>
-                        )}
-                      </div>
-                    ) : fixable && action ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7"
-                        disabled={fix?.pending}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          action.run()
-                        }}
-                        onKeyDown={(event) => event.stopPropagation()}
-                      >
-                        {fix?.pending ? action.pendingLabel : action.label}
-                      </Button>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
+                      {allShown ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
+                    </Button>
+                  ) : null}
+                </TableHead>
+                <TableHead className="w-24">
+                  <SortHead k="severity" label={t('preflight.warnings.colSeverity')} />
+                </TableHead>
+                <TableHead className="w-28">
+                  <SortHead k="code" label={t('preflight.warnings.colType')} />
+                </TableHead>
+                <TableHead className="w-24">
+                  <SortHead k="location" label={t('preflight.warnings.colLocation')} />
+                </TableHead>
+                <TableHead>{t('preflight.warnings.colIssue')}</TableHead>
+                <TableHead className="w-32">
+                  <SortHead k="fix" label={t('preflight.warnings.colFix')} />
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map(({ finding, index }) => {
+                const resolved = isResolved(finding)
+                const fixKind = fix && !resolved ? fixForFinding(finding.code) : null
+                const fixable = Boolean(fixKind && fix && viewerFixAvailable(fix, fixKind))
+                const action = fixKind && fix ? viewerFixAction(t, fix, fixKind, finding) : null
+                // Only findings the viewer can point at in 3D get an eye toggle / are clickable.
+                const showable = isVisualisable(finding)
+                return (
+                  <TableRow
+                    key={`${finding.code}-${finding.params?.index ?? finding.message}`}
+                    tabIndex={showable ? 0 : undefined}
+                    onClick={showable && onActivate ? () => onActivate(index) : undefined}
+                    onKeyDown={
+                      showable
+                        ? (event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              onActivate?.(index)
+                            }
+                          }
+                        : undefined
+                    }
+                    className={cn(
+                      'outline-none focus-visible:bg-accent/60',
+                      showable && 'cursor-pointer',
                     )}
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
-      </div>
+                    onMouseEnter={showable && onHover ? () => onHover(index) : undefined}
+                    onMouseLeave={showable && onHover ? () => onHover(null) : undefined}
+                  >
+                    <TableCell className="py-1">
+                      {showable ? (
+                        <button
+                          type="button"
+                          title={t('preflight.warnings.toggleIssue')}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            onToggleCheck?.(index)
+                          }}
+                          className={cn(
+                            'inline-flex rounded p-0.5',
+                            isChecked?.(index) ? 'text-primary' : 'text-muted-foreground',
+                          )}
+                        >
+                          {isChecked?.(index) ? (
+                            <Eye className="size-4" />
+                          ) : (
+                            <EyeOff className="size-4" />
+                          )}
+                        </button>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="py-1">
+                      <span
+                        className={cn(
+                          'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                          resolved && 'opacity-40 saturate-0',
+                          finding.severity === 'error'
+                            ? 'border-destructive/50 bg-destructive/15 text-destructive-foreground'
+                            : finding.severity === 'warning'
+                              ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
+                              : 'border-sky-500/50 bg-sky-500/15 text-sky-300',
+                        )}
+                      >
+                        {finding.severity === 'error'
+                          ? t('preflight.warnings.sevError')
+                          : finding.severity === 'warning'
+                            ? t('preflight.warnings.sevWarning')
+                            : t('preflight.warnings.sevInfo')}
+                      </span>
+                    </TableCell>
+                    <TableCell className="py-1 font-mono text-[11px]">{finding.code}</TableCell>
+                    <TableCell className="py-1 font-mono text-[11px] text-muted-foreground">
+                      {locationOf(finding) != null ? `${locationOf(finding)} mm` : '—'}
+                    </TableCell>
+                    <TableCell
+                      className={cn('py-1', resolved && 'line-through', resolved && 'opacity-50')}
+                    >
+                      {findingText(finding)}
+                    </TableCell>
+                    <TableCell className="py-1 text-right">
+                      {resolved ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7"
+                          disabled={fix?.pending}
+                          onClick={() => (fix?.ncEdit ? fix.onUndoNc() : fix?.onUndo())}
+                        >
+                          <Undo2 />
+                          {t('common.actions.undo')}
+                        </Button>
+                      ) : finding.code === 'STRAY_BODY' &&
+                        fix &&
+                        (fix.canClean || fix.canRepair) ? (
+                        <div className="flex justify-end gap-1">
+                          {fix.canClean && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7"
+                              disabled={fix.pending}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                fix.onClean()
+                              }}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
+                              {fix.pending
+                                ? t('common.actions.cleaning')
+                                : t('common.actions.cleanStep')}
+                            </Button>
+                          )}
+                          {fix.canRepair && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7"
+                              disabled={fix.pending}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                fix.onRepair()
+                              }}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
+                              {fix.pending
+                                ? t('common.actions.working')
+                                : t('common.actions.cleanTekla')}
+                            </Button>
+                          )}
+                        </div>
+                      ) : fixable && action ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7"
+                          disabled={fix?.pending}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            action.run()
+                          }}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          {fix?.pending ? action.pendingLabel : action.label}
+                        </Button>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
       {invalid && (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive-foreground">
           {invalid}
         </div>
       )}
-      {fix?.ncEdit && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-          <span>
-            {fix.ncEdit.kind === 'setBevel'
-              ? fix.ncEdit.angle
-                ? t('preflight.warnings.bevelSet', { angle: fix.ncEdit.angle })
-                : t('preflight.warnings.bevelRemoved')
-              : t('preflight.warnings.cutRemoved')}
-          </span>
-          <Button variant="ghost" size="sm" onClick={fix.onUndoNc}>
-            <Undo2 />
-            {t('common.actions.undo')}
+      {fix?.canRegenerate && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          <span>{t('preflight.warnings.ncMismatch')}</span>
+          <Button variant="outline" size="sm" disabled={fix.pending} onClick={fix.onRegenerate}>
+            {fix.pending ? t('common.actions.working') : t('common.actions.regenerateStep')}
           </Button>
         </div>
       )}
-      {fix?.override ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-          <span>
-            {fix.override === 'cleaned'
-              ? t('preflight.warnings.stepCleaned')
-              : fix.override === 'repaired'
-                ? t('preflight.warnings.stepRepaired')
-                : fix.override === 'simplified'
-                  ? t('preflight.warnings.stepSimplified')
-                  : t('preflight.warnings.stepRegenerated')}
-          </span>
-          <Button variant="ghost" size="sm" onClick={fix.onUndo}>
-            <Undo2 />
-            {t('common.actions.undo')}
+      {fix?.canSimplify && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          <span>{t('preflight.warnings.cutEndPiece')}</span>
+          <Button variant="outline" size="sm" disabled={fix.pending} onClick={fix.onSimplify}>
+            {fix.pending ? t('common.actions.working') : t('common.actions.simplify')}
           </Button>
         </div>
-      ) : (
-        <>
-          {fix?.canRegenerate && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-              <span>{t('preflight.warnings.ncMismatch')}</span>
-              <Button variant="outline" size="sm" disabled={fix.pending} onClick={fix.onRegenerate}>
-                {fix.pending ? t('common.actions.working') : t('common.actions.regenerateStep')}
-              </Button>
-            </div>
-          )}
-          {fix?.canSimplify && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-              <span>{t('preflight.warnings.cutEndPiece')}</span>
-              <Button variant="outline" size="sm" disabled={fix.pending} onClick={fix.onSimplify}>
-                {fix.pending ? t('common.actions.working') : t('common.actions.simplify')}
-              </Button>
-            </div>
-          )}
-        </>
       )}
     </div>
   )

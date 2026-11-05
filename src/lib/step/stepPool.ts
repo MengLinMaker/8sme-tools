@@ -4,6 +4,7 @@ import type { DiffPayload } from './occDiff'
 import type {
   InspectResult,
   ReconstructResult,
+  RepairResult,
   SeatResult,
   StepRequest,
   StepResponse,
@@ -114,6 +115,29 @@ class StepWorkerPool {
     return this.run<SeatResult>(
       { id: this.nextId++, kind: 'seat', step: copy, profile },
       [copy.buffer],
+      options.priority ?? PRIORITY_BACKGROUND,
+    )
+  }
+
+  /** Repair a corrupt Tekla STEP against a clean base (or clean it in place) in the OCC worker. */
+  repair(
+    base: Uint8Array | null,
+    features: Uint8Array,
+    options: { overrun?: number; priority?: number } = {},
+  ): Promise<RepairResult> {
+    const baseCopy = base ? new Uint8Array(base) : null
+    const featureCopy = new Uint8Array(features)
+    const transfer: Transferable[] = [featureCopy.buffer]
+    if (baseCopy) transfer.push(baseCopy.buffer)
+    return this.run<RepairResult>(
+      {
+        id: this.nextId++,
+        kind: 'repair',
+        base: baseCopy,
+        features: featureCopy,
+        overrun: options.overrun,
+      },
+      transfer,
       options.priority ?? PRIORITY_BACKGROUND,
     )
   }

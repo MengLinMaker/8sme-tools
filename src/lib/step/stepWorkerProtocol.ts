@@ -32,6 +32,15 @@ export interface SeatResult {
   step: string
 }
 
+/** Result of a Tekla repair; falls back to an in-place clean when no valid repair is possible. */
+export interface RepairResult {
+  bytes: Uint8Array
+  valid: boolean
+  redrilled: number
+  /** True when `bytes` came from {@link cleanStep} instead of a re-drill repair. */
+  cleaned: boolean
+}
+
 export type StepRequest =
   | {
       id: number
@@ -63,6 +72,15 @@ export type StepRequest =
       /** Canonical cross-section points to seat the real part against. */
       profile: [number, number][]
     }
+  | {
+      id: number
+      kind: 'repair'
+      /** Clean base in the canonical frame, or null when no NC base is available. */
+      base: Uint8Array | null
+      /** The real part STEP (already seated into the canonical frame). */
+      features: Uint8Array
+      overrun?: number
+    }
   | { id: number; kind: 'mesh'; step: Uint8Array; name: string }
   | {
       id: number
@@ -81,6 +99,7 @@ export type StepResponse =
   | { id: number; kind: 'inspect'; ok: true; value: InspectResult }
   | { id: number; kind: 'reconstruct'; ok: true; value: ReconstructResult }
   | { id: number; kind: 'seat'; ok: true; value: SeatResult }
+  | { id: number; kind: 'repair'; ok: true; value: RepairResult }
   | { id: number; kind: 'mesh'; ok: true; value: MeshedStep }
   | { id: number; kind: 'diff'; ok: true; value: DiffPayload | null }
   | { id: number; kind: 'warm'; ok: true; value: null }

@@ -1,5 +1,6 @@
 import type { AnyShape } from 'replicad'
 import { Matrix4 } from 'three'
+import { cleanStep } from './clean'
 import { type MeasurableShape, measureShape, type StepMeasure } from './measure'
 import { meshStepFile } from './mesh'
 import { applyRigid, writeStep } from './occ'
@@ -7,6 +8,7 @@ import { occFuzzyDiff, serializeDiff } from './occDiff'
 import { ensureOc } from './occInit'
 import { inferStepSection, type SectionShape } from './readSection'
 import { reconstructSolidFromNc } from './reconstructFromNc'
+import { baseMatchesFeatures, buildFaceFilledBase, repairStep } from './repair'
 import { rigidFromMatrix, seatedStepProfile } from './seat'
 import type {
   InspectResult,
@@ -44,6 +46,50 @@ async function handle(request: StepRequest): Promise<void> {
     } else if (request.kind === 'seat') {
       const value = await seat(request.step, request.profile)
       scope.postMessage({ id: request.id, kind: 'seat', ok: true, value })
+    } else if (request.kind === 'repair') {
+      let value: import('./stepWorkerProtocol').RepairResult | null = null
+      let base = request.base
+      if (base) {
+        // A corrected base can have moved end/step geometry (a dimensionally wrong Tekla edit).
+        // Reject it rather than re-drilling into a part of the wrong size.
+        try {
+          if (!(await baseMatchesFeatures(base, request.features))) base = null
+        } catch {
+          base = null
+        }
+      }
+      if (!base) {
+        // No usable base: rebuild the stock base from the part's own faces (keeps its dimensions).
+        try {
+          base = await buildFaceFilledBase(request.features)
+        } catch {
+          base = null
+        }
+      }
+      if (base) {
+        try {
+          const repaired = await repairStep(base, request.features, {
+            overrun: request.overrun,
+          })
+          if (repaired.valid) {
+            value = {
+              bytes: repaired.bytes,
+              valid: true,
+              redrilled: repaired.redrilled,
+              cleaned: false,
+            }
+          }
+        } catch {
+          // fall through to the clean fallback
+        }
+      }
+      if (!value) {
+        const cleaned = await cleanStep(request.features)
+        value = cleaned
+          ? { bytes: cleaned.bytes, valid: true, redrilled: 0, cleaned: true }
+          : { bytes: request.features, valid: false, redrilled: 0, cleaned: false }
+      }
+      scope.postMessage({ id: request.id, kind: 'repair', ok: true, value })
     } else if (request.kind === 'warm') {
       await ensureOc()
       scope.postMessage({ id: request.id, kind: 'warm', ok: true, value: null })
