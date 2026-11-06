@@ -135,21 +135,24 @@ now lower priority — no evidence they are blocking.
 **Status: LIKELY / partly untested.**
 
 - Text marks load; UB real text + bars improved the result (`1316`).
-- Corrected marking moves bars to **layer 4** and adds `needSetAdobe=true`.
-- The writer now emits NC `SI` text and `PU`/`KO` bars; M-3 generated bars match the real control
-  (`x=-125.5..125.5`, two 251 mm bars). KO/PU duplicates collapse by points/text.
-- Still unproven on WiseCAM: whether corrected layer-4 bars etch/persist and whether text angle is
-  right for sloped marks. Mark-write probe group `2201–2206` tests this.
+- **Marking ≠ etching.** Auto part-name marking is overwritten; do not generate it.
+- Round-5–7: text alone did not etch (`2020`, `2023`); uncorrected layer-6 bars etched (`2121`,
+  `2125`), but layer-4 **rectangles/lead-line technicals became cuts** (`2122–2124`,
+  `2201–2206`).
+- Round 9 settles the layer: **layer 6 is the etch; layer 4 is a cut**. Rect, outline and line
+  forms on layer 4 all became cuts (`2411–2413`, `2416`); layer-6 rectangles etched (`2414`,
+  `2415`). "Corrected etching" therefore means corrected position/shape on **layer 6**, not a
+  layer change. The writer default is back to layer 6.
+- Sloped/reversed `SI` text angle remains unproven.
 - M-42 is 106 mm; our default part-name mark is overwritten by WiseCAM. **Do not pursue mark size**; the etchings are what matter.
 - M-1/M-35 default marks at `x=0` load, but the real exports place the text on a face/station,
   not always the seam.
 
 **Next tests**
 
-- Add real layer-4 bars to a generated part; compare with `PFC/UB corrected marking`.
-- Round-6 `2020–2025` isolates our text, uncorrected layer-6 bars, and corrected layer-4 +
-  `needSetAdobe` bars. `Part.Name` is overwritten; etchings must survive on the corrected layer.
-- Confirm `2201`/`2202`/`2204`/`2206` show the writer's NC bars/etchings in WiseCAM.
+- Confirm the writer's layer-4 open etch lines etch (`round 8`).
+- Test `SI` text at 0°/45°/90° and reversed; current fixtures mostly carry bars.
+- Choose between layer-4 line centerline and outline for a closed `PU`/`KO` rectangle.
 - Determine whether the writer should keep the default part-name text when an `SI` mark exists.
 - Determine the auto-mark length threshold and whether short parts should omit the mark.
 - Compare mark placement at `x=0` vs the real face/station for M-1/M-3/M-35.

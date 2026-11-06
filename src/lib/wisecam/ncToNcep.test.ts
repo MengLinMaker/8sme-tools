@@ -64,8 +64,8 @@ describe('NC -> NCEP conversion gate', () => {
       const root = strFromU8(files['CAD/CadRoot.xml'] as Uint8Array)
       expect(root).toContain(`Name=${testCase.mark}-gate`)
       expect(svg).toContain(`Part=${testCase.mark}-gate`)
-      expect(svg).toContain(`LabelContent=${testCase.mark}-gate`)
-      expect(svg).toContain(`>${testCase.mark}-gate</text>`)
+      // Auto marking is deliberately not generated: WiseCAM overwrites Part.Name.
+      expect(svg).not.toContain('LabelContent=')
     })
   }
 

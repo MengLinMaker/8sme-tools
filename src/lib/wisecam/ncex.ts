@@ -112,8 +112,6 @@ export interface NcexPart {
   holes?: NcexHole[]
   /** Layout marks (`SI` etch text / `PU`-`KO` scribe lines) in unrolled coordinates. */
   marks?: NcexMark[]
-  /** Emit scribe/bars on the corrected layer 4 with `needSetAdobe=true` (default true). */
-  correctMarks?: boolean
   /** Developed cut contours (`AK`/`IK`) in unrolled coordinates (preview only). */
   cuts?: NcexCut[]
   /**
@@ -367,7 +365,10 @@ const TECHNICAL_CIRCLE =
 const TECHNICAL_TRUNCATE = 'T={};InnerT={};'
 const TECHNICAL_EMPTY = 'T={};'
 
-/** Copied from a real corrected UB marking bar; WiseCAM expects the lead-line block. */
+/**
+ * Copied from a real UB marking bar. Our writer emits negative-x bars without a 180° transform;
+ * the exemplar uses Segment=1 for that orientation (positive-x + rotate(180) uses Segment=3).
+ */
 const MARK_BAR_TECHNICAL =
   'T={LeadLine={Pos={Segment=1,Ratio=0.5,},LeadInBreak=0,Radius = 0,Seal=0,LeadIn={Type=0,Length=3,Angle=0.5235987755982988,Radius=3,AbsoluteAngle=1,},LeadOut={Type=0,Length=3,Angle=0.5235987755982988,Radius=0.1,},},};'
 
@@ -450,13 +451,14 @@ function markPolyline(
   points: [number, number][],
   layer: 4 | 6,
   params: string,
+  technical: string,
   stroke?: string,
 ): string {
   const closed =
     points.length > 2 &&
     sameMarkPoint(points[0] as [number, number], points[points.length - 1] as [number, number])
   const body = closed ? points.slice(0, -1) : points
-  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="${layer}" wh:isfill="0" wh:machining="1" d="${pathFromPoints(body, closed)}" wh:params="${params}" wh:technical="${MARK_BAR_TECHNICAL}" class="layer${layer}"${paint(stroke)}/>`
+  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="${layer}" wh:isfill="0" wh:machining="1" d="${pathFromPoints(body, closed)}" wh:params="${params}" wh:technical="${technical}" class="layer${layer}"${paint(stroke)}/>`
 }
 
 function ncTextMark(
@@ -471,12 +473,7 @@ function ncTextMark(
   return `<text wh:id="${id}" wh:class="cadtext" wh:layer="6" wh:isfill="0" wh:machining="1" x="${mm(x)}" y="${mm(y)}" font-family="Arial" font-size="${mm(height)}" font-size-adjust="1" letter-spacing="0" word-spacing="0" font-weight="normal" font-style="normal" wh:font-shxfont="txt.shx" wh:font-bigfont="gbcbig.shx" wh:font-isvertrical="0" wh:font-isshape="0" wh:font-obliqueangle="0" wh:font-charset="134" wh:font-pitchandfamily="32" wh:params="IsLabel=true;LabelType=0;LabelContent=${xml(value)};LabelWidth=1.000000;LabelHeight=${mm(height)};LabelRotate=${angle};LabelSource=1;" wh:technical="${TECHNICAL_EMPTY}" class="layer6"${paint(stroke)} transform="rotate(${angle} ${mm(x)},${mm(y)})">${xml(value)}</text>`
 }
 
-function ncMarkElements(
-  part: NcexPart,
-  next: () => number,
-  correct: boolean,
-  palette?: NcexPalette,
-): string[] {
+function ncMarkElements(part: NcexPart, next: () => number, palette?: NcexPalette): string[] {
   const out: string[] = []
   for (const mark of part.marks ?? []) {
     if (mark.kind === 'etch' && mark.text) {
@@ -487,19 +484,11 @@ function ncMarkElements(
       continue
     }
     if (mark.kind !== 'marking' || mark.points.length < 2) continue
-    const layer: 4 | 6 = correct ? 4 : 6
-    const params = correct ? 'needSetAdobe=true;' : ''
     const rect = axisAlignedRect(mark.points)
-    if (rect) out.push(markRect(next(), rect, layer, params, palette?.mark))
-    else out.push(markPolyline(next(), mark.points, layer, params, palette?.mark))
+    if (rect) out.push(markRect(next(), rect, 6, '', palette?.mark))
+    else out.push(markPolyline(next(), mark.points, 6, '', MARK_BAR_TECHNICAL, palette?.mark))
   }
   return out
-}
-
-function markText(id: number, part: NcexPart, stroke?: string): string {
-  const x = 0
-  const y = part.length / 2
-  return `<text wh:id="${id}" wh:class="cadtext" wh:layer="6" wh:isfill="0" wh:machining="1" x="${mm(x)}" y="${mm(y)}" font-family="Arial" font-size="40" font-size-adjust="1" letter-spacing="0" word-spacing="0" font-weight="normal" font-style="normal" wh:font-shxfont="txt.shx" wh:font-bigfont="gbcbig.shx" wh:font-isvertrical="0" wh:font-isshape="0" wh:font-obliqueangle="0" wh:font-charset="134" wh:font-pitchandfamily="32" wh:params="IsLabel=true;LabelType=0;LabelContent=${xml(part.mark)};LabelWidth=1.000000;LabelHeight=40.000000;LabelRotate=90.0;LabelSource=1;" wh:technical="${TECHNICAL_EMPTY}" class="layer6"${paint(stroke)} transform="rotate(90 ${mm(x)},${mm(y)})">${xml(part.mark)}</text>`
 }
 
 /** The unrolled seam half-width: stations are centred on 0 like WiseCAM's own SVGs. */
@@ -552,8 +541,7 @@ function partSvg(part: NcexPart, refId: number, palette?: NcexPalette): string {
   for (const hole of part.holes ?? []) {
     body.push(holeCircle(next(), hole, palette?.hole?.(hole)))
   }
-  body.push(...ncMarkElements(part, next, part.correctMarks ?? true, palette))
-  body.push(markText(next(), part, palette?.mark))
+  body.push(...ncMarkElements(part, next, palette))
   body.push(truncatePath(next(), end, 1, part.mark, palette?.outline))
   const section: string[] = [profilePath(next(), part.section, palette?.outline)]
   if (part.innerSection)

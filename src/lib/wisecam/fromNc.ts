@@ -179,12 +179,17 @@ function developEndCut(
       developed.push([station, x])
     }
     if (developed.length < 2) return null
-    developed.sort((a, b) => a[0] - b[0])
     arcs.push(developed)
   }
   if (arcs.length === 0) return null
 
   if (layout.origin === 'centered') {
+    // A notched end is not a function of station (two vertices can share a station), so sorting
+    // by station moves its steps. Preserve the per-face contour order for those ends only.
+    if (hasRepeatedStation(arcs)) {
+      const stitched = stitchEndArcs(arcs)
+      if (stitched) return inRange(dedupePoints(stitched), -layout.seam / 2, layout.seam / 2)
+    }
     const points = simplifyCollinear(dedupePoints(arcs.flat().sort((a, b) => a[0] - b[0])))
     return inRange(points, -layout.seam / 2, layout.seam / 2)
   }
@@ -221,6 +226,66 @@ function developEndCut(
   left.sort((a, b) => a[0] - b[0])
   const points = simplifyCollinear(dedupePoints([...dedupePoints(right), ...dedupePoints(left)]))
   return inRange(points, 0, seam)
+}
+
+function hasRepeatedStation(arcs: [number, number][][]): boolean {
+  const seen = new Map<string, number>()
+  for (const arc of arcs) {
+    for (const [station, along] of arc) {
+      const key = station.toFixed(6)
+      const existing = seen.get(key)
+      if (existing != null && Math.abs(existing - along) > 1e-6) return true
+      seen.set(key, along)
+    }
+  }
+  return false
+}
+function markPointDistance(a: [number, number], b: [number, number]): number {
+  return Math.hypot(a[0] - b[0], a[1] - b[1])
+}
+
+/**
+ * Joins the per-face end arcs by their shared endpoints, preserving the contour order. Sorting
+ * all points by station destroys small steps at a notched end: two vertices at the same station
+ * can belong to different sides of a notch. Returns null if the pieces do not meet.
+ */
+function stitchEndArcs(arcs: [number, number][][]): [number, number][] | null {
+  const remaining = arcs.filter((arc) => arc.length > 0).map((arc) => arc.slice())
+  // Start at the leftmost piece so the path runs left-to-right across the developed net.
+  remaining.sort(
+    (a, b) =>
+      Math.min(...a.map(([station]) => station)) - Math.min(...b.map(([station]) => station)),
+  )
+  const path = remaining.shift()
+  if (!path) return null
+  if ((path[0] as [number, number])[0] > (path[path.length - 1] as [number, number])[0]) {
+    path.reverse()
+  }
+  while (remaining.length > 0) {
+    const head = path[0] as [number, number]
+    const tail = path[path.length - 1] as [number, number]
+    let best: { index: number; distance: number; reverse: boolean; atTail: boolean } | null = null
+    for (let index = 0; index < remaining.length; index++) {
+      const arc = remaining[index] as [number, number][]
+      const first = arc[0] as [number, number]
+      const last = arc[arc.length - 1] as [number, number]
+      const options = [
+        { distance: markPointDistance(tail, first), reverse: false, atTail: true },
+        { distance: markPointDistance(tail, last), reverse: true, atTail: true },
+        { distance: markPointDistance(head, last), reverse: false, atTail: false },
+        { distance: markPointDistance(head, first), reverse: true, atTail: false },
+      ]
+      for (const option of options) {
+        if (!best || option.distance < best.distance) best = { index, ...option }
+      }
+    }
+    if (!best || best.distance > 10) return null
+    const arc = remaining.splice(best.index, 1)[0] as [number, number][]
+    if (best.reverse) arc.reverse()
+    if (best.atTail) path.push(...arc.slice(1))
+    else path.unshift(...arc.slice(0, -1))
+  }
+  return dedupePoints(path)
 }
 
 export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPart | null {

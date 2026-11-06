@@ -18,7 +18,7 @@ formats, so it is the preferred export target.
 3. **Remove unmanufacturable UB holes.** Apply the grey-strip column rule to the UB hole set.
 4. **Preserve bevels.** Keep the nested `PosMap`/`needSetAdobe` end-trim cluster, and generate it
    from the NC bevel columns.
-5. **Preserve welding-location etchings.** `Part.Name` is overwritten by WiseCAM, so the target is the **etchings**: `SI` text, `PU`/`KO` scribe lines/bars, and corrected layer-4 bars with `needSetAdobe=true`. Part-name mark size is not a target.
+5. **Preserve welding-location etchings.** `Part.Name` is auto marking and is overwritten by WiseCAM — do not generate it. The target is the **etchings**: `SI` text plus `PU`/`KO` corrected **layer-4 open lines** with `needSetAdobe=true` and `T={};`, matching the real corrected-etch exports. Layer-4 rectangles/lead-line technicals became cuts in the probes. Part-name mark size is not a target.
 6. **Quantity.** Preserve the NC/job quantity in `Part.TotalCount` and verify it survives import
    and export.
 7. **Part marks vs etchings.** The part-name mark is overwritten; weld/scribe etchings are the
@@ -37,10 +37,11 @@ formats, so it is the preferred export target.
 ## Current known-good
 
 - `container.xml` must have **no trailing newline** (fixed).
-- NC marks are now emitted by `partSvg`: `SI` text on layer 6, `PU`/`KO` scribe bars/polylines on
-  layer 4 with `needSetAdobe=true` and a real bar lead-line `wh:technical` block
-  (KO/PU duplicates collapse by points/text). Generated M-3 has
-  two bars spanning `x=-125.5..125.5`, matching the real control's bars.
+- Auto marking is no longer emitted from `partSvg` (`Part.Name` is overwritten). NC etchings:
+  `SI` text on layer 6, `PU`/`KO` corrected **layer-4 open lines** with `needSetAdobe=true` and
+  `T={};`; KO/PU duplicates collapse by points/text. Rectangles and lead-line technicals on
+  layer 4 became cuts (`2122–2124`, `2201–2206`); the line form is the current hypothesis,
+  tested by round 8.
 - Improved M-1/M-35/M-42 NC→NCEP packages load and match controls.
 - The section `cadgroup` now emits **true arcs** (`A` commands) with exact corner vertices for
   UB root fillets, PFC web/flange fillets and tube outer/inner radii. The old sampled polylines
@@ -58,14 +59,17 @@ formats, so it is the preferred export target.
 `partFromNc` collects `geometry.marks`; `partSvg` now emits them:
 
 - `SI` etch text -> layer-6 `cadtext`.
-- `PU`/`KO` scribe geometry -> layer-4 `cadrectangle`/`cadpolyline` with
-  `wh:params="needSetAdobe=true;"`.
+- `PU`/`KO` scribe geometry -> corrected layer-4 **`cadline`** (open, `T={};`,
+  `needSetAdobe=true`). Auto marking is not emitted.
 - KO/PU duplicates collapse by text + points (kind is intentionally not part of the key).
 - The default part-name text is still emitted, but `Part.Name` remains overwritten by WiseCAM.
 
 M-3 is the first check: generated NC marks are two bars at `x=-125.5..125.5`,
-`y=169.2..179.2` and `y=2266.95..2276.95`, matching the real control's two bars. Probe pack
-`2201–2206` tests the writer's marks in WiseCAM; `2120–2125` tests layer-4/6 correction semantics.
+`y=169.2..179.2` and `y=2266.95..2276.95`, matching the real control's two bars. Round-5–7
+WiseCAM results: uncorrected layer-6 bars etch (`2121`, `2125`) but are not corrected;
+layer-4 rectangles/lead-line technicals become cuts (`2122–2124`, `2201–2206`). Text without
+bars does not etch (`2020`, `2023`). The writer now emits corrected layer-4 lines and no auto
+marking; round 8 tests this (`2303/2305/2306`).
 
 ## Probe naming convention
 
@@ -89,8 +93,8 @@ M-3 is the first check: generated NC marks are two bars at `x=-125.5..125.5`,
 - `Part.Name` is the authoritative mark and is overwritten by WiseCAM.
 - The etched text/bars must persist independently; losing them means the marking encoding or layer
   is wrong.
-- Corrected marking means bars on **layer 4** with `needSetAdobe=true`; uncorrected bars are
-  layer 6. Text stays layer 6.
+- Uncorrected bars are **layer 6** and etch. Moving the same bars to **layer 4** with
+  `needSetAdobe=true` made WiseCAM treat them as cuts in the probes. Text stays layer 6.
 - Probe `2020–2025` / `2120–2125` isolates text, uncorrected bars and corrected bars.
 
 ## Round-trip acceptance protocol

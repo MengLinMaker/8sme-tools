@@ -95,17 +95,17 @@ describe('partFromNc / NCEP', () => {
     expect(ncepPartSvg(bytes)).toContain(`M0.00,0.00 L${seam.toFixed(2)},0.00`)
   })
 
-  it('emits NC scribe marks as corrected layer-4 bars', () => {
+  it('emits NC scribe marks on the layer-6 etch layer', () => {
     const part = partFromNc(readFileSync(fixture('ncep', 'M-3.nc1'), 'utf8'))
     expect(part?.marks).toHaveLength(2)
     const bytes = buildNcepFromNc(readFileSync(fixture('ncep', 'M-3.nc1'), 'utf8'))
     if (!bytes) throw new Error('no package')
     const svg = ncepPartSvg(bytes)
     expect((svg.match(/<rect\b/g) ?? []).length).toBe(2)
-    expect(svg).toContain('wh:layer="4"')
-    expect(svg).toContain('needSetAdobe=true')
+    expect(svg).toContain('wh:layer="6"')
+    expect(svg).not.toContain('needSetAdobe=true')
     expect(svg).toContain('LeadLine=')
-    expect(svg).toContain('width="251.00" height="10.00"')
+    expect(svg).not.toContain('LabelContent=M-3')
   })
 
   it('develops layout markings onto the unrolled surface', () => {
@@ -130,6 +130,19 @@ describe('partFromNc / NCEP', () => {
     const svg = ncepPartSvg(bytes)
     expect(svg).toContain('LabelContent=TEST')
     expect(svg).toContain('>TEST</text>')
+  })
+
+  it('keeps notched end-cut steps in contour order along the beam', () => {
+    const part = partFromNc(readFileSync(fixture('ncep', 'M-34.nc1'), 'utf8'))
+    if (!part) throw new Error('no part')
+    const points = part.startCut ?? []
+    const at = (station: number, along: number): number =>
+      points.findIndex(([s, a]) => Math.abs(s - station) < 0.01 && Math.abs(a - along) < 0.01)
+    // Real M-34 start trim: left side goes 79 → 0; right side goes 0 → 79.
+    expect(at(-125, 79)).toBeGreaterThanOrEqual(0)
+    expect(at(-125, 0)).toBeGreaterThan(at(-125, 79))
+    expect(at(125, 0)).toBeGreaterThanOrEqual(0)
+    expect(at(125, 79)).toBeGreaterThan(at(125, 0))
   })
 
   it('develops the NC cut contours onto the net', () => {

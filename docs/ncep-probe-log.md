@@ -1167,15 +1167,14 @@ Latest round-4/5 results:
 `partFromNc` already collected NC marks; `partSvg` now writes them:
 
 - `SI` text -> layer-6 `cadtext`.
-- `PU`/`KO` scribe bars -> layer-4 `cadrectangle`/`cadpolyline` with `needSetAdobe=true` and
-  the real corrected-bar `LeadLine` technical block.
+- `PU`/`KO` scribe bars -> corrected **layer-4 open `cadline`** with `needSetAdobe=true` and
+  `T={};` (rectangles/lead-line technicals later tested as cuts).
 - KO/PU duplicates collapse by text + points, not kind.
 - M-3 writes two bars at `x=-125.5..125.5`, matching the real control.
 - Unit tests: `fromNc.test.ts` checks M-3 mark count/geometry and an `SI` text mark in the SVG.
 
-Probe group `2201–2206` uses improved packages (real section/trims/holes) with the writer's NC
-marks instead of injected real marks; `2202` is the standard M-3 package. If the bars/etchings
-show, NC mark emission is confirmed.
+Probe group `2201–2206` used improved packages (real section/trims/holes) with the writer's NC
+marks. Results: layer-4 bars became cuts; the writer now defaults to layer 6 and needs a re-test.
 
 Current pack: `~/Downloads/ncep-probes-round5-7-20261030-f9721f3.zip` (44 probes + 5 controls).
 
@@ -1183,6 +1182,97 @@ Probe naming: file and `CadRoot.Name` use `<code> <description>` (e.g. `2101 ori
 sweeps`). Controls keep real marks. The M-42 part-name mark size is **not** a target; WiseCAM
 overwrites `Part.Name`. The production-critical markings are the `SI`/`PU`/`KO` etchings, which
 the writer now emits.
+
+## Round 5–7 results (2026-11-06)
+
+Pack: `~/Downloads/ncep-probes-round5-7-20261030-f9721f3 result/` (44 probes + 5 controls).
+
+| Group | Result |
+| --- | --- |
+| `2001–2008` UB clean arcs | `2001/2004/2005` similar; `2002/2003/2006/2007/2008` end cut in the invalid grey zone. Arc indices **0 and 1 are load-bearing**; 2/3 are not. |
+| `2011–2017` tube clean arcs | `2011/2013/2014/2015/2017` similar; sharp outer 0 (`2012`) and all-outer (`2016`) put the mark on the x-positive face instead of bottom z-negative. Outer arc 0 is load-bearing; inner arcs are not. |
+| `2020–2023` UB marking | Our text only (`2020`) and real text only (`2023`) = **no etching**. Real text + bars (`2021`) and our text + real bars (`2022`) = **etching**. Bars are required; text alone is not enough. |
+| `2120–2125` marking layer | Uncorrected layer-6 bars (`2121`, `2125`) are similar/etch. Corrected layer-4 + `needSetAdobe` (`2122–2124`) = **bars changed to cuts**. |
+| `2101–2107` UB sweeps | All similar; original/rotated/all-0/all-1 all acceptable. |
+| `2111–2117` tube sweeps | `2111–2114/2116` similar; `2115` flip-all and `2117` all-sweep-1 have an inverted section radius. Keep the original sweep. |
+| `2031` our M-34 trims | Lines along the zero end are offset. Root cause: per-face end arcs were sorted by station, scrambling same-station notch vertices along the beam. |
+| `2201/2202/2204/2206` writer marks | Writer emitted layer-4 corrected bars -> **changed to cuts**. `2202` (standard M-3) also has invalid inner cuts, a separate geometry issue. |
+
+Fixes applied after the results:
+
+- `partSvg` no longer emits auto marking. NC etch is emitted as corrected **layer-4 open lines**
+  (`needSetAdobe=true`, `T={};`), matching the `item 30 corrected.ncexa` example. Layer-4
+  rectangles/lead-line technicals are not emitted.
+- `developEndCut` preserves per-face contour order for notched ends with repeated stations; M-34
+  start trim now matches the real 79→0 / 0→79 order. Regression test added.
+- RHS `M-42` remains the open end-cut case: its per-face end segments are disconnected and the
+  zero-origin path still needs section-corner connectors. The current fix covers the PFC/M-34
+  notched end, not the RHS mitre.
+
+## Round 8 results (2026-11-06)
+
+Pack: `~/Downloads/ncep-probes-round8-20261106 result/`.
+
+- **`2301` fixed M-34 trim:** looks similar; the zero-end tab is no longer offset. The end-cut
+  order fix is confirmed.
+- **`2303` M-3 layer-4 centerline:** wrong shape and still imported as a cut. A 251×10 scribe is
+  not a single 251 mm centerline.
+- **`2305` M-1 layer-4 line:** treated as a cut; WiseCAM removed `needSetAdobe`. No etch.
+- **`2306` M-34 layer-4 line:** no etch to correct; package looks similar.
+- Controls `2300/2302/2304` are unchanged.
+
+The corrected-etch form is therefore **not** a long layer-4 line. The `item 30 corrected.ncexa`
+example uses short layer-4 lines, so the exact geometry/form still needs isolation. Next etch
+matrix should compare short line / rectangle / outline with `T={};` and `needSetAdobe`, using the
+same mark geometry and a real text control.
+
+## Round 9 probes generated (2026-11-06)
+
+Pack: `~/Downloads/ncep-probes-round9-20261106.zip` (23 probes/controls).
+
+- **End section:** `2400/2401` re-confirm M-34 fixed trims against the control.
+- **Corrected-etch form matrix:** `2410` control; `2411` layer-4 rect + `T={}`; `2412`
+  layer-4 rect + lead-line (known cut); `2413` layer-4 open outline + `T={}`; `2414` layer-6
+  rect; `2415` layer-6 rect + text; `2416` layer-4 line + `T={}`.
+- **Bevel nesting:** `2420` real Beveled PFC; `2421` no-bevel control; `2422` children hoisted;
+  `2423` outer trim removed (intentional negative); `2424` first child only.
+- **New shapes/sizes:** `2430/2440/2450` controls for M-39 **UB410×60**, M-43
+  **RHS100×50×5** (490.5 mm), M-51 **SHS89×89×3.5**; `xx31` standard NC→NCEP and `xx32`
+  improved (real section/trims/holes) for each.
+
+The new NC fixtures `M-39.nc1`, `M-43.nc1`, `M-51.nc1` were added from the Hidden Grove job.
+
+## Round 9 results (2026-11-06)
+
+Pack: `~/Downloads/ncep-probes-round9-20261106 result/`.
+
+- **Etching layer is settled:** every layer-4 form (`2411` rect `T={}`, `2412` rect+lead,
+  `2413` outline, `2416` line) imported as **cuts**. Layer-6 rectangles (`2414`, `2415`) are the
+  etch. The writer now defaults back to layer-6 rectangles; "corrected etch" must mean corrected
+  **position/shape on layer 6**, not moving to layer 4.
+- **RHS/SHS end cuts:** improved packages with real trims (`2441`, `2451`) match the controls;
+  the standard writer trims are chords. Root cause is the bevel/mitre end plane and section
+  corner arcs: our `developEndCut` joins per-face vertices directly and never develops the
+  bevel-plane intersection. This is the remaining end-cut fix.
+- **M-39 UB410×60 standard:** etch removed and markings land on the inside/grey face; improved
+  has no etch. A new-size issue, separate from the tube bevel.
+- **Bevels:** `2422` children hoisted removes the bevel; `2423` outer trim removed gives an
+  offset cut outside the stock; `2424` first child only activates one line. The full outer+nested
+  `PosMap` cluster is still required.
+- **M-34 end:** `2401` looks similar; fixed.
+
+## Round 12 probes generated (2026-11-06)
+
+Pack: `~/Downloads/ncep-probes-round12-20261106.zip` (43 probes/controls).
+
+- **RHS/SHS end isolation:** `2700–2706` M-43 and `2710–2716` M-51: control, standard, real
+  section only, real trims only, both, real start only, real end only. This separates section
+  from trim and start from end.
+- **M-39 new-size isolation:** `2720–2724`: control, standard, real section, real trims, both.
+- **Layer-6 etch forms:** `2730–2736`: control; L6 rect/line/outline/needSetAdobe/T; text layer 4.
+- **Etch position:** `2740–2744` M-1: control, NC position, exemplar `y=3306`, centre, exemplar bar.
+- **Bar orientation/Segment (round 11):** `2500–2503` real corrected-marking exemplars + L6
+  controls; `2600–2607` negative-x/no-transform and positive-x/rotate(180) with Segment 1/3.
 
 ## Implementation — true arc sections (2026-11-04)
 
