@@ -1,7 +1,15 @@
-import { type DragEvent, type InputHTMLAttributes, useRef, useState } from 'react'
+import { type DragEvent, type InputHTMLAttributes, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
-import { type InputBundle, readDataTransfer, readDirectoryHandle, readFiles } from '@/lib/readInput'
+import { onGlobalDrop } from '@/lib/dropTarget'
+import {
+  type DroppedInput,
+  type InputBundle,
+  readDirectoryHandle,
+  readDroppedInput,
+  readFiles,
+  snapshotDataTransfer,
+} from '@/lib/readInput'
 import { cn } from '@/lib/utils'
 
 const DIRECTORY_INPUT_PROPS = {
@@ -23,12 +31,12 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
   const folderRef = useRef<HTMLInputElement>(null)
   const dragDepth = useRef(0)
 
-  const ingest = async (read: () => Promise<InputBundle>) => {
+  const ingest = async (read: () => Promise<InputBundle>, emptyMessage?: string) => {
     setReading(true)
     try {
       const bundle = await read()
       if (bundle.entries.length === 0) {
-        onError?.(t('dropzone.noFiles'))
+        onError?.(emptyMessage ?? t('dropzone.noFiles'))
         return
       }
       onBundle(bundle)
@@ -39,11 +47,25 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
     }
   }
 
+  const acceptDrop = (input: DroppedInput) => {
+    if (reading) return
+    const hasPayload =
+      input.files.length > 0 || input.entries.length > 0 || input.handles.length > 0
+    void ingest(() => readDroppedInput(input), hasPayload ? undefined : t('dropzone.unreadable'))
+  }
+
+  // Keep the latest render's handler reachable from the window-level drop listener.
+  const acceptDropRef = useRef(acceptDrop)
+  acceptDropRef.current = acceptDrop
+  useEffect(() => onGlobalDrop((input) => acceptDropRef.current(input)), [])
+
   const onDrop = (event: DragEvent<HTMLFieldSetElement>) => {
     event.preventDefault()
     dragDepth.current = 0
     setDragging(false)
-    void ingest(() => readDataTransfer(event.dataTransfer))
+    // Snapshot the DataTransfer synchronously — it is invalidated once this handler returns, and
+    // lazily reading it later is what breaks folder / zip drops on Windows.
+    acceptDrop(snapshotDataTransfer(event.dataTransfer))
   }
 
   const chooseFolder = async () => {
@@ -63,6 +85,7 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
 
   return (
     <fieldset
+      data-dropzone=""
       aria-label={t('dropzone.aria')}
       className={cn(
         'flex flex-col items-center gap-3 rounded-xl border border-dashed px-5 py-9 text-center transition-colors',
@@ -76,10 +99,17 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
         dragDepth.current++
         setDragging(true)
       }}
-      onDragOver={(event) => event.preventDefault()}
+      onDragOver={(event) => {
+        event.preventDefault()
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+      }}
       onDragLeave={() => {
-        dragDepth.current--
-        if (dragDepth.current <= 0) setDragging(false)
+        dragDepth.current = Math.max(0, dragDepth.current - 1)
+        if (dragDepth.current === 0) setDragging(false)
+      }}
+      onDragEnd={() => {
+        dragDepth.current = 0
+        setDragging(false)
       }}
       onDrop={onDrop}
     >

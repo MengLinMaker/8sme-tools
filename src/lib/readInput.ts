@@ -60,6 +60,54 @@ interface DroppedFile {
   file: File
 }
 
+/**
+ * A synchronous snapshot of a `drop` event's `DataTransfer`.
+ *
+ * The browser invalidates `DataTransfer.items` / `.files` as soon as the event handler returns, and
+ * `webkitGetAsEntry` / `getAsFileSystemHandle` must be called while the event is still live. Taking
+ * everything up front (and resolving paths afterwards) keeps drops working on Windows, where a
+ * lazily-read `DataTransfer` often comes back empty or with shell items that no longer resolve.
+ */
+export interface DroppedInput {
+  files: File[]
+  entries: FileSystemEntry[]
+  handles: Promise<FileSystemHandle | null>[]
+  /** `text/uri-list` from shell items (e.g. dragged shortcuts / virtual archive paths). */
+  uriList: string[]
+}
+
+type ItemWithHandle = DataTransferItem & {
+  getAsFileSystemHandle?: () => Promise<FileSystemHandle | null>
+}
+
+export function snapshotDataTransfer(dataTransfer: DataTransfer): DroppedInput {
+  const files = Array.from(dataTransfer.files ?? [])
+  const entries: FileSystemEntry[] = []
+  const handles: Promise<FileSystemHandle | null>[] = []
+  const items = dataTransfer.items
+  if (items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item?.kind !== 'file') continue
+      const entry = item.webkitGetAsEntry?.()
+      if (entry) entries.push(entry)
+      const getHandle = (item as ItemWithHandle).getAsFileSystemHandle
+      if (typeof getHandle === 'function') {
+        try {
+          handles.push(getHandle.call(item))
+        } catch {
+          // Older Chromium can throw for shell items backed by a virtual archive path.
+        }
+      }
+    }
+  }
+  const uriList = (dataTransfer.getData?.('text/uri-list') ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'))
+  return { files, entries, handles, uriList }
+}
+
 function readDirectoryEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
   return new Promise((resolve, reject) => {
     const all: FileSystemEntry[] = []
@@ -97,17 +145,6 @@ async function walkEntry(
     const children = await readDirectoryEntries(reader)
     for (const child of children) await walkEntry(child, `${prefix}${entry.name}/`, out)
   }
-}
-
-function entriesFromDataTransfer(dataTransfer: DataTransfer): FileSystemEntry[] {
-  const entries: FileSystemEntry[] = []
-  const items = dataTransfer.items
-  if (!items) return entries
-  for (let i = 0; i < items.length; i++) {
-    const entry = items[i]?.webkitGetAsEntry?.()
-    if (entry) entries.push(entry)
-  }
-  return entries
 }
 
 function deriveSourceName(dropped: DroppedFile[]): string {
@@ -166,12 +203,56 @@ export async function readDirectoryHandle(dir: FileSystemDirectoryHandle): Promi
   return bundleFromDropped(dropped)
 }
 
-export async function readDataTransfer(dataTransfer: DataTransfer): Promise<InputBundle> {
-  const dataEntries = entriesFromDataTransfer(dataTransfer)
-  if (dataEntries.length > 0) {
-    const dropped: DroppedFile[] = []
-    for (const entry of dataEntries) await walkEntry(entry, '', dropped)
+async function droppedFromHandles(handles: FileSystemHandle[]): Promise<DroppedFile[]> {
+  const out: DroppedFile[] = []
+  for (const handle of handles) {
+    try {
+      if (handle.kind === 'file') {
+        out.push({ path: handle.name, file: await (handle as FileSystemFileHandle).getFile() })
+      } else {
+        await walkDirectoryHandle(handle as FileSystemDirectoryHandle, `${handle.name}/`, out)
+      }
+    } catch {
+      // A shell item can resolve to a handle whose backing file has gone (cloud placeholder, zip
+      // member). Let the other items contribute; the caller reports if nothing at all was read.
+    }
+  }
+  return out
+}
+
+async function droppedFromEntries(entries: FileSystemEntry[]): Promise<DroppedFile[]> {
+  const out: DroppedFile[] = []
+  for (const entry of entries) {
+    try {
+      await walkEntry(entry, '', out)
+    } catch {
+      // Same as above: skip a single unreadable entry rather than aborting the whole drop.
+    }
+  }
+  return out
+}
+
+/**
+ * Reads a drop snapshot in order of reliability: the modern File System Access handles first
+ * (they work for Windows folders and archives), then `webkitGetAsEntry`, then the plain `File`
+ * snapshot. Each path is best-effort so one bad shell item cannot sink the whole drop.
+ */
+export async function readDroppedInput(input: DroppedInput): Promise<InputBundle> {
+  const settled = await Promise.allSettled(input.handles)
+  const handles = settled.flatMap((result) =>
+    result.status === 'fulfilled' && result.value ? [result.value] : [],
+  )
+  if (handles.length > 0) {
+    const dropped = await droppedFromHandles(handles)
     if (dropped.length > 0) return bundleFromDropped(dropped)
   }
-  return readFiles(Array.from(dataTransfer.files))
+  if (input.entries.length > 0) {
+    const dropped = await droppedFromEntries(input.entries)
+    if (dropped.length > 0) return bundleFromDropped(dropped)
+  }
+  return bundleFromDropped(droppedFromFiles(input.files))
+}
+
+export async function readDataTransfer(dataTransfer: DataTransfer): Promise<InputBundle> {
+  return readDroppedInput(snapshotDataTransfer(dataTransfer))
 }

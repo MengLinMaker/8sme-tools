@@ -1,6 +1,7 @@
 import { createRouter, RouterProvider } from '@tanstack/react-router'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { installGlobalDropGuard } from '@/lib/dropTarget'
 import { appHistory } from '@/lib/single/history'
 import { installSingleFileAssets } from '@/lib/single/install'
 import { routeTree } from './routeTree.gen'
@@ -8,6 +9,7 @@ import './i18n'
 import './styles/global.css'
 
 installSingleFileAssets()
+installGlobalDropGuard()
 
 const router = createRouter({ routeTree, history: appHistory })
 
