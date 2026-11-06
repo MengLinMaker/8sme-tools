@@ -532,37 +532,101 @@ function NestingSolution({
   twoPersonKg: number
 }) {
   const { t } = useTranslation()
+  const [filter, setFilter] = useState<'all' | 'heavy' | 'reusable'>('all')
+  const kgPerMmFor = (plan: PurchasePlan) =>
+    plan.wasteKg != null && plan.wasteMm > 0 ? plan.wasteKg / plan.wasteMm : null
+  const attention = (bars: PurchaseBar[], kgPerMm: number | null) => {
+    let priority = 0
+    let amount = 0
+    for (const bar of bars) {
+      if (bar.wasteMm <= 0) continue
+      const kg = kgPerMm == null ? 0 : bar.wasteMm * kgPerMm
+      if (bar.wasteMm >= REUSABLE_OFFCUT_MM) {
+        priority = Math.max(priority, 2)
+      } else if (kg > twoPersonKg) {
+        priority = Math.max(priority, 3)
+      } else if (kg > onePersonKg) {
+        priority = Math.max(priority, 1)
+      }
+      amount = Math.max(amount, bar.wasteMm)
+    }
+    return priority * 1_000_000_000 + amount
+  }
+  const longestReusable = (bars: PurchaseBar[]) =>
+    bars.reduce(
+      (max, bar) => (bar.wasteMm >= REUSABLE_OFFCUT_MM ? Math.max(max, bar.wasteMm) : max),
+      0,
+    )
+  const orderedPlans = [...plans].sort((a, b) =>
+    filter === 'reusable'
+      ? longestReusable(b.bars) - longestReusable(a.bars)
+      : attention(b.bars, kgPerMmFor(b)) - attention(a.bars, kgPerMmFor(a)),
+  )
+  const visiblePlans = orderedPlans.filter((plan) => {
+    if (filter === 'all') return true
+    if (filter === 'reusable') {
+      return plan.bars.some((bar) => bar.wasteMm >= REUSABLE_OFFCUT_MM)
+    }
+    const kgPerMm = kgPerMmFor(plan)
+    return plan.bars.some((bar) => {
+      if (bar.wasteMm <= 0 || bar.wasteMm >= REUSABLE_OFFCUT_MM) return false
+      const kg = kgPerMm == null ? 0 : bar.wasteMm * kgPerMm
+      return kg > twoPersonKg
+    })
+  })
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <span className="size-3.5 rounded-full bg-slate-600" />
-          {t('preflight.purchase.beamPieces')}
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="size-3.5 rounded-full bg-emerald-500/70" />
-          {t('preflight.purchase.onePerson')}
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="size-3.5 rounded-full bg-amber-500/70" />
-          {t('preflight.purchase.twoPerson')}
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="size-3.5 rounded-full bg-red-500/70" />
-          {t('preflight.purchase.equipment')}
-        </span>
-        <span className="flex items-center gap-1">
-          <span
-            className="size-3.5 rounded-sm bg-slate-400/50"
-            style={{
-              backgroundImage:
-                'repeating-linear-gradient(45deg, rgba(255,255,255,0.55) 0 2px, transparent 2px 4px)',
-            }}
-          />
-          {t('preflight.purchase.binLegend')}
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <span className="size-3.5 rounded-full bg-slate-600" />
+            {t('preflight.purchase.beamPieces')}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="size-3.5 rounded-full bg-emerald-500/70" />
+            {t('preflight.purchase.onePerson')}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="size-3.5 rounded-full bg-amber-500/70" />
+            {t('preflight.purchase.twoPerson')}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="size-3.5 rounded-full bg-red-500/70" />
+            {t('preflight.purchase.equipment')}
+          </span>
+          <span className="flex items-center gap-1">
+            <span
+              className="size-3.5 rounded-sm bg-slate-400/50"
+              style={{
+                backgroundImage:
+                  'repeating-linear-gradient(45deg, rgba(255,255,255,0.55) 0 2px, transparent 2px 4px)',
+              }}
+            />
+            {t('preflight.purchase.binLegend')}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {(
+            [
+              ['all', 'filterAll'],
+              ['heavy', 'filterHeavyBin'],
+              ['reusable', 'filterReusable'],
+            ] as const
+          ).map(([value, key]) => (
+            <Button
+              key={value}
+              variant={filter === value ? 'default' : 'outline'}
+              size="sm"
+              className="h-7 px-2 text-[10px]"
+              onClick={() => setFilter(value)}
+            >
+              {t(`preflight.purchase.${key}`)}
+            </Button>
+          ))}
+        </div>
       </div>
-      {plans.map((plan) => {
+      {visiblePlans.length === 0 && <p className="text-sm text-muted-foreground">—</p>}
+      {visiblePlans.map((plan) => {
         const kgPerMm =
           plan.wasteKg != null && plan.wasteMm > 0 ? plan.wasteKg / plan.wasteMm : null
         const beamList: { stockLengthMm: number; bars: PurchaseBar[] }[] = []
@@ -576,13 +640,18 @@ function NestingSolution({
             beamList.push({ stockLengthMm: bar.stockLengthMm, bars: [bar] })
           }
         }
-        beamList.sort(
-          (a, b) =>
-            a.bars.reduce((sum, bar) => sum + bar.wasteMm, 0) -
-            b.bars.reduce((sum, bar) => sum + bar.wasteMm, 0),
-        )
+        const matchingBeams = beamList.filter((beam) => {
+          if (filter === 'all') return true
+          return beam.bars.some((bar) => {
+            if (bar.wasteMm <= 0) return false
+            if (filter === 'reusable') return bar.wasteMm >= REUSABLE_OFFCUT_MM
+            const kg = kgPerMm == null ? 0 : bar.wasteMm * kgPerMm
+            return bar.wasteMm < REUSABLE_OFFCUT_MM && kg > twoPersonKg
+          })
+        })
+        matchingBeams.sort((a, b) => attention(b.bars, kgPerMm) - attention(a.bars, kgPerMm))
         const beams = keyed(
-          beamList,
+          matchingBeams,
           (beam) =>
             `${beam.stockLengthMm}|${beam.bars
               .map((bar) => bar.units.map((unit) => `${unit.mark}@${unit.lengthMm}`).join(','))
