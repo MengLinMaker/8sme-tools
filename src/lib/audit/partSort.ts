@@ -8,18 +8,23 @@ export interface PartSortContext {
   materials: Map<string, DrawingMaterial>
   /** `error` lets a STEP-only (`stepOnly`) or NC-only (`ncOnly`) size count as no problem. */
   modelChecks: Map<string, { ok: boolean; error?: string }>
+  /** Marks whose NC carries welding-location etchings; sorted just above clean parts. */
+  weldingMarks?: ReadonlySet<string>
 }
 
 const SEVERITY_RANK: Record<Severity, number> = { error: 0, warning: 1, info: 2 }
+/** Weld etchings are informational, but rank above a part with no status at all. */
+const WELD_RANK = SEVERITY_RANK.info
 /** ok = 3, so ascending order puts the worst problems first. */
 const OK_RANK = 3
 
-/** Worst problem affecting a part: error < warning < info < ok. */
+/** Worst problem affecting a part: error < warning < info/weld < ok. */
 export function severityRank(part: PartRecord, context: PartSortContext): number {
   let rank = OK_RANK
   for (const finding of context.findings) {
     if (finding.mark === part.mark) rank = Math.min(rank, SEVERITY_RANK[finding.severity])
   }
+  if (context.weldingMarks?.has(part.mark)) rank = Math.min(rank, WELD_RANK)
   const model = context.modelChecks.get(part.mark)
   if (model && !model.ok && model.error !== 'stepOnly' && model.error !== 'ncOnly') {
     rank = Math.min(rank, SEVERITY_RANK.warning)
@@ -69,8 +74,18 @@ export function sortParts(
     if (av === null && bv === null) return 0
     if (av === null) return 1 // nulls last
     if (bv === null) return -1
-    if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv)
-    return (av as number) - (bv as number)
+    const compared =
+      typeof av === 'string' && typeof bv === 'string'
+        ? av.localeCompare(bv)
+        : (av as number) - (bv as number)
+    if (compared !== 0) return compared
+    // A weld mark can block production, so within the same status it comes first.
+    if (key === 'severity') {
+      const aw = context.weldingMarks?.has(a.mark) ? 0 : 1
+      const bw = context.weldingMarks?.has(b.mark) ? 0 : 1
+      return aw - bw
+    }
+    return 0
   })
   return direction === 1 ? sorted : sorted.reverse()
 }

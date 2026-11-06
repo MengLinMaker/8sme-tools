@@ -126,6 +126,10 @@ describe('statusForPart', () => {
     }
     expect(statusForPart(part('A'), context)).toBe('warning')
   })
+
+  it('treats weld etchings as info, not ok', () => {
+    expect(statusForPart(part('A'), { findings: [], weldingMarks: new Set(['A']) })).toBe('info')
+  })
 })
 
 describe('partSearchText', () => {

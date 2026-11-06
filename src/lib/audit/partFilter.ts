@@ -96,6 +96,7 @@ export function statusForPart(part: PartRecord, context: PartFilterContext): Par
     findings: context.findings,
     materials: context.materials ?? new Map(),
     modelChecks: context.modelChecks ?? new Map(),
+    weldingMarks: context.weldingMarks,
   }
   const rank = severityRank(part, sortContext)
   if (rank === 0) return 'error'

@@ -31,6 +31,12 @@ describe('severityRank', () => {
     }
     expect(severityRank(part('m1'), ctx)).toBeLessThan(3)
   })
+
+  it('ranks weld etchings with info, above clean parts', () => {
+    const ctx = { ...context([]), weldingMarks: new Set(['weld']) }
+    expect(severityRank(part('weld'), ctx)).toBe(2)
+    expect(severityRank(part('clean'), ctx)).toBe(3)
+  })
 })
 
 describe('sortParts', () => {
@@ -41,6 +47,23 @@ describe('sortParts', () => {
       'err',
       'warn',
       'clean',
+    ])
+  })
+
+  it('puts parts with both an issue and a weld mark first within that status', () => {
+    const parts = [part('warn'), part('warn-weld'), part('err')]
+    const ctx = {
+      ...context([
+        finding('warning', 'warn'),
+        finding('warning', 'warn-weld'),
+        finding('error', 'err'),
+      ]),
+      weldingMarks: new Set(['warn-weld']),
+    }
+    expect(sortParts(parts, 'severity', 1, ctx).map((p) => p.mark)).toEqual([
+      'err',
+      'warn-weld',
+      'warn',
     ])
   })
 
