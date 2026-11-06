@@ -23,13 +23,12 @@ import { MACHINE } from '@/lib/machine/profile'
 import {
   AU_STOCK_LENGTHS_MM,
   DEFAULT_CHUCK_MARGIN_MM,
+  DEFAULT_ONE_PERSON_KG,
   DEFAULT_STOCK_LENGTHS_MM,
-  DEFAULT_WASTE_PIECE_KG,
+  DEFAULT_TWO_PERSON_KG,
   type PurchaseBar,
   type PurchaseGroupInput,
   type PurchasePlan,
-  type PurchasePriority,
-  type PurchaseSearchEffort,
   planPurchases,
   totalCapacityMm,
   usableStockLengthMm,
@@ -39,19 +38,6 @@ import { cn } from '@/lib/utils'
 const MACHINE_MAX_MM = MACHINE.envelope.maxLengthMm
 
 const MARGIN_PRESETS = [100, 150, 200]
-const WASTE_LIMIT_PRESETS = [25, 30]
-
-const PRIORITIES: { id: PurchasePriority; labelKey: string }[] = [
-  { id: 'waste-removal', labelKey: 'preflight.purchase.priorities.wasteRemoval' },
-  { id: 'length', labelKey: 'preflight.purchase.priorities.length' },
-  { id: 'weight', labelKey: 'preflight.purchase.priorities.weight' },
-]
-
-const SEARCH_EFFORTS: { id: PurchaseSearchEffort; labelKey: string }[] = [
-  { id: 'fast', labelKey: 'preflight.purchase.searchEfforts.fast' },
-  { id: 'balanced', labelKey: 'preflight.purchase.searchEfforts.balanced' },
-  { id: 'thorough', labelKey: 'preflight.purchase.searchEfforts.thorough' },
-]
 
 function metres(mm: number, digits = 1): string {
   return `${(mm / 1000).toFixed(digits)} m`
@@ -168,9 +154,8 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   const { t } = useTranslation()
   const [marginMm, setMarginMm] = useState(DEFAULT_CHUCK_MARGIN_MM)
   const [stockLengthsMm, setStockLengthsMm] = useState<number[]>([...DEFAULT_STOCK_LENGTHS_MM])
-  const [priority, setPriority] = useState<PurchasePriority>('waste-removal')
-  const [wasteLimitKg, setWasteLimitKg] = useState(DEFAULT_WASTE_PIECE_KG)
-  const [searchEffort, setSearchEffort] = useState<PurchaseSearchEffort>('balanced')
+  const [onePersonKg, setOnePersonKg] = useState(DEFAULT_ONE_PERSON_KG)
+  const [twoPersonKg, setTwoPersonKg] = useState(DEFAULT_TWO_PERSON_KG)
   const [view, setView] = useState<'buy' | 'optimise'>('buy')
   const [showNesting, setShowNesting] = useState(false)
 
@@ -181,11 +166,10 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
         : planPurchases(groups, {
             stockLengthsMm,
             marginMm: Math.max(0, marginMm),
-            priority,
-            maxWastePieceKg: wasteLimitKg,
-            searchEffort,
+            onePersonKg,
+            twoPersonKg,
           }),
-    [groups, marginMm, stockLengthsMm, priority, searchEffort, wasteLimitKg],
+    [groups, marginMm, onePersonKg, stockLengthsMm, twoPersonKg],
   )
 
   const buyable = plans.filter((plan) => plan.pieceCount > 0)
@@ -199,8 +183,14 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   const totalBinWasteKg = plans.every((plan) => plan.binWasteKg != null)
     ? plans.reduce((sum, plan) => sum + (plan.binWasteKg ?? 0), 0)
     : null
-  const totalUnderLimitWasteKg = plans.every((plan) => plan.underLimitWasteKg != null)
-    ? plans.reduce((sum, plan) => sum + (plan.underLimitWasteKg ?? 0), 0)
+  const totalCarryOne = plans.every((plan) => plan.carryOnePieces != null)
+    ? plans.reduce((sum, plan) => sum + (plan.carryOnePieces ?? 0), 0)
+    : null
+  const totalCarryTwo = plans.every((plan) => plan.carryTwoPieces != null)
+    ? plans.reduce((sum, plan) => sum + (plan.carryTwoPieces ?? 0), 0)
+    : null
+  const totalOverTwo = plans.every((plan) => plan.overTwoPieces != null)
+    ? plans.reduce((sum, plan) => sum + (plan.overTwoPieces ?? 0), 0)
     : null
   const oversized = plans.flatMap((plan) => plan.oversized)
   const coveredMm = Math.max(
@@ -223,10 +213,6 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   const preCutPurchased = plans.some((plan) =>
     plan.purchases.some((item) => item.lengthMm > MACHINE_MAX_MM),
   )
-  const priorityLabel = t(
-    PRIORITIES.find((item) => item.id === priority)?.labelKey ?? PRIORITIES[0].labelKey,
-  )
-
   const buyRows = useMemo(() => {
     const map = new Map<string, BuyRow>()
     for (const plan of plans) {
@@ -282,9 +268,6 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
               {t('preflight.purchase.viewOptimise')}
             </Button>
           </div>
-          <span className="text-xs text-muted-foreground">
-            {t('preflight.purchase.optimisedFor', { mode: priorityLabel })}
-          </span>
         </div>
 
         {stockLengthsMm.length === 0 ? (
@@ -293,7 +276,7 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
           <p className="text-sm text-muted-foreground">{t('preflight.purchase.noLengths')}</p>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               <Summary
                 label={t('preflight.purchase.totalWeight')}
                 value={kilograms(totalPurchasedKg)}
@@ -307,8 +290,19 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
                 value={kilograms(totalBinWasteKg)}
               />
               <Summary
-                label={t('preflight.purchase.wasteUnderLimit', { limit: wasteLimitKg })}
-                value={kilograms(totalUnderLimitWasteKg)}
+                label={t('preflight.purchase.carryOne', { limit: onePersonKg })}
+                value={totalCarryOne == null ? '—' : String(totalCarryOne)}
+              />
+              <Summary
+                label={t('preflight.purchase.carryTwo', {
+                  one: onePersonKg,
+                  two: twoPersonKg,
+                })}
+                value={totalCarryTwo == null ? '—' : String(totalCarryTwo)}
+              />
+              <Summary
+                label={t('preflight.purchase.carryOver', { limit: twoPersonKg })}
+                value={totalOverTwo == null ? '—' : String(totalOverTwo)}
               />
             </div>
 
@@ -372,73 +366,43 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="mr-1 text-sm text-muted-foreground">
-                        {t('preflight.purchase.priority')}
-                      </span>
-                      {PRIORITIES.map((item) => (
-                        <Button
-                          key={item.id}
-                          variant={priority === item.id ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setPriority(item.id)}
-                        >
-                          {t(item.labelKey)}
-                        </Button>
-                      ))}
+                    <div className="flex flex-wrap items-end gap-3">
+                      <label className="flex flex-col gap-1 text-sm">
+                        <span className="text-muted-foreground">
+                          {t('preflight.purchase.onePersonCarry')}
+                        </span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={onePersonKg}
+                          onChange={(event) => {
+                            const value = Number(event.target.value) || 0
+                            setOnePersonKg(value)
+                            setTwoPersonKg((current) => Math.max(current, value))
+                          }}
+                          className="h-9 w-28 rounded-md border border-input bg-transparent px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1 text-sm">
+                        <span className="text-muted-foreground">
+                          {t('preflight.purchase.twoPersonCarry')}
+                        </span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={twoPersonKg}
+                          onChange={(event) =>
+                            setTwoPersonKg(Math.max(onePersonKg, Number(event.target.value) || 0))
+                          }
+                          className="h-9 w-28 rounded-md border border-input bg-transparent px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        />
+                      </label>
+                      <p className="pb-2 text-xs text-muted-foreground">
+                        {t('preflight.purchase.wasteRemovalHint')}
+                      </p>
                     </div>
-
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="mr-1 text-sm text-muted-foreground">
-                        {t('preflight.purchase.searchEffort')}
-                      </span>
-                      {SEARCH_EFFORTS.map((item) => (
-                        <Button
-                          key={item.id}
-                          variant={searchEffort === item.id ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setSearchEffort(item.id)}
-                        >
-                          {t(item.labelKey)}
-                        </Button>
-                      ))}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {t('preflight.purchase.searchEffortHint')}
-                    </p>
-
-                    {priority === 'waste-removal' && (
-                      <div className="flex flex-wrap items-end gap-3">
-                        <label className="flex flex-col gap-1 text-sm">
-                          <span className="text-muted-foreground">
-                            {t('preflight.purchase.maxWastePiece')}
-                          </span>
-                          <input
-                            type="number"
-                            min={0}
-                            step={1}
-                            value={wasteLimitKg}
-                            onChange={(event) => setWasteLimitKg(Number(event.target.value) || 0)}
-                            className="h-9 w-28 rounded-md border border-input bg-transparent px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          />
-                        </label>
-                        <div className="flex flex-wrap gap-1.5 pb-1">
-                          {WASTE_LIMIT_PRESETS.map((preset) => (
-                            <Button
-                              key={preset}
-                              variant={wasteLimitKg === preset ? 'default' : 'outline'}
-                              size="sm"
-                              onClick={() => setWasteLimitKg(preset)}
-                            >
-                              {preset} kg
-                            </Button>
-                          ))}
-                        </div>
-                        <p className="pb-2 text-xs text-muted-foreground">
-                          {t('preflight.purchase.wasteRemovalHint')}
-                        </p>
-                      </div>
-                    )}
 
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="mr-1 text-sm text-muted-foreground">
@@ -499,7 +463,7 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
                           {t('preflight.purchase.binWaste')}
                         </TableHead>
                         <TableHead className="text-right">
-                          {t('preflight.purchase.wasteUnderLimit', { limit: wasteLimitKg })}
+                          {t('preflight.purchase.carry')}
                         </TableHead>
                         <TableHead className="text-right">{t('preflight.purchase.use')}</TableHead>
                       </TableRow>
@@ -576,7 +540,9 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
                             )}
                           </TableCell>
                           <TableCell className="text-right align-top font-mono text-xs">
-                            {plan.purchasedMm > 0 ? kilograms(plan.underLimitWasteKg) : '—'}
+                            {plan.carryOnePieces == null
+                              ? '—'
+                              : `${plan.carryOnePieces} · ${plan.carryTwoPieces ?? 0} · ${plan.overTwoPieces ?? 0}`}
                           </TableCell>
                           <TableCell className="text-right align-top font-mono text-xs">
                             {plan.purchasedMm > 0 ? `${(plan.utilisation * 100).toFixed(0)}%` : '—'}

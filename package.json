@@ -14,6 +14,7 @@
     "lint": "tsr generate && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench:purchase": "PURCHASE_BENCH=1 vitest run src/lib/purchasing/purchase.bench.test.ts",
     "nc-to-ncep": "node tools/nc-to-ncep.mjs",
     "clean-step": "node tools/clean-step.mjs",
     "repair-step": "node tools/repair-step.mjs"

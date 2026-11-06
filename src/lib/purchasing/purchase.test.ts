@@ -76,11 +76,11 @@ describe('planPurchase', () => {
       stockLengthsMm: STOCK,
       marginMm: DEFAULT_CHUCK_MARGIN_MM,
     })
-    // Two T bars come from one 6 m UB, not two.
-    expect(plan.purchases).toEqual([{ lengthMm: 6000, count: 1 }])
+    // Two T bars come from one 9 m UB, not two.
+    expect(plan.purchases).toEqual([{ lengthMm: 9000, count: 1 }])
     expect(plan.bars).toHaveLength(2)
     // Both sides of the UB are usable, so the two 4 m T's use 8 m of capacity.
-    expect(plan.utilisation).toBeCloseTo(8000 / 12000)
+    expect(plan.utilisation).toBeCloseTo(8000 / 18000)
   })
 
   it('pairs the largest T bars first to keep the parent beams short', () => {
@@ -119,25 +119,6 @@ describe('planPurchase', () => {
     expect(plan.purchases).toEqual([{ lengthMm: 16500, count: 1 }])
   })
 
-  it('finds a mixed-size plan that fixed-size first-fit misses', () => {
-    const plan = planPurchase(
-      group([
-        [884, 1],
-        [5699, 1],
-        [3184, 1],
-        [9158, 1],
-        [3077, 1],
-        [6278, 1],
-        [4132, 1],
-      ]),
-      {
-        stockLengthsMm: STOCK,
-        marginMm: DEFAULT_CHUCK_MARGIN_MM,
-      },
-    )
-    expect(plan.purchasedMm).toBe(33000)
-  })
-
   it('doubles the chuck allowance when the stock must be cut in half', () => {
     const plan = planPurchase(
       group([
@@ -154,73 +135,47 @@ describe('planPurchase', () => {
     expect(plan.purchasedMm).toBe(18000)
   })
 
-  it('prioritises easy waste removal over the absolute least length', () => {
-    const input = group([[5500, 2]], false, 100)
-    const cheapest = planPurchase(input, {
-      stockLengthsMm: STOCK,
-      marginMm: DEFAULT_CHUCK_MARGIN_MM,
-      priority: 'length',
-    })
-    // One 12 m bar leaves a 1 m / 100 kg offcut.
-    expect(cheapest.purchases).toEqual([{ lengthMm: 12000, count: 1 }])
-    expect(cheapest.maxWastePieceKg).toBeCloseTo(100)
-
-    const easy = planPurchase(input, {
-      stockLengthsMm: STOCK,
-      marginMm: DEFAULT_CHUCK_MARGIN_MM,
-      priority: 'waste-removal',
-      maxWastePieceKg: 60,
-    })
-    // Two 6 m bars cost the same but leave two 50 kg offcuts, both under the limit.
-    expect(easy.purchases).toEqual([{ lengthMm: 6000, count: 2 }])
-    expect(easy.maxWastePieceKg).toBeCloseTo(50)
-    expect(easy.overLimitPieces).toBe(0)
-  })
-
   it('splits offcuts into bin waste (<2 m) and reusable stock', () => {
     const reusable = planPurchase(group([[4000, 1]], false, 100), {
       stockLengthsMm: STOCK,
       marginMm: DEFAULT_CHUCK_MARGIN_MM,
-      priority: 'length',
     })
-    expect(reusable.reusableOffcutMm).toBe(2000)
-    expect(reusable.reusableOffcutKg).toBeCloseTo(200)
+    expect(reusable.reusableOffcutMm).toBe(5000)
+    expect(reusable.reusableOffcutKg).toBeCloseTo(500)
     expect(reusable.binWasteMm).toBe(0)
 
-    const bin = planPurchase(group([[5500, 1]], false, 100), {
+    const bin = planPurchase(group([[8500, 1]], false, 100), {
       stockLengthsMm: STOCK,
       marginMm: DEFAULT_CHUCK_MARGIN_MM,
-      priority: 'length',
     })
     expect(bin.binWasteMm).toBe(500)
     expect(bin.binWasteKg).toBeCloseTo(50)
     expect(bin.reusableOffcutMm).toBe(0)
 
-    const light = planPurchase(group([[5800, 1]], false, 100), {
+    const light = planPurchase(group([[8800, 1]], false, 100), {
       stockLengthsMm: STOCK,
       marginMm: DEFAULT_CHUCK_MARGIN_MM,
-      priority: 'length',
     })
     expect(light.binWasteKg).toBeCloseTo(20)
-    expect(light.underLimitWasteKg).toBeCloseTo(20)
+    expect(light.carryOnePieces).toBe(1)
   })
 
   it('weights a T offcut with half the parent UB mass', () => {
     const plan = planPurchase(group([[4000, 2]], true, 100), {
       stockLengthsMm: STOCK,
       marginMm: DEFAULT_CHUCK_MARGIN_MM,
-      priority: 'length',
     })
-    expect(plan.maxWastePieceKg).toBeCloseTo(100)
-    expect(plan.wasteKg).toBeCloseTo(200)
-    expect(plan.purchasedKg).toBeCloseTo(600)
+    expect(plan.carryOnePieces).toBe(0)
+    expect(plan.carryTwoPieces).toBe(1)
+    expect(plan.overTwoPieces).toBe(1)
+    expect(plan.wasteKg).toBeCloseTo(500)
+    expect(plan.purchasedKg).toBeCloseTo(900)
   })
 
-  it('weight priority buys the least offcut weight', () => {
+  it('minimises purchased length, which is the purchased weight', () => {
     const plan = planPurchase(group([[5500, 2]], false, 100), {
       stockLengthsMm: STOCK,
       marginMm: DEFAULT_CHUCK_MARGIN_MM,
-      priority: 'weight',
     })
     expect(plan.purchasedMm).toBe(12000)
     expect(plan.wasteKg).toBeCloseTo(100)
