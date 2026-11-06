@@ -31,8 +31,6 @@ import {
   type PurchasePlan,
   planPurchases,
   REUSABLE_OFFCUT_MM,
-  totalCapacityMm,
-  usableStockLengthMm,
 } from '@/lib/purchasing/purchase'
 import { cn } from '@/lib/utils'
 
@@ -157,8 +155,6 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   const [stockLengthsMm, setStockLengthsMm] = useState<number[]>([...DEFAULT_STOCK_LENGTHS_MM])
   const [onePersonKg, setOnePersonKg] = useState(DEFAULT_ONE_PERSON_KG)
   const [twoPersonKg, setTwoPersonKg] = useState(DEFAULT_TWO_PERSON_KG)
-  const [view, setView] = useState<'buy' | 'optimise'>('buy')
-  const [showNesting, setShowNesting] = useState(false)
 
   const plans = useMemo(
     () =>
@@ -174,7 +170,6 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   )
 
   const buyable = plans.filter((plan) => plan.pieceCount > 0)
-  const capacity = totalCapacityMm(plans)
   const totalPurchasedKg = plans.every((plan) => plan.purchasedKg != null)
     ? plans.reduce((sum, plan) => sum + (plan.purchasedKg ?? 0), 0)
     : null
@@ -183,6 +178,9 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
     : null
   const totalBinWasteKg = plans.every((plan) => plan.binWasteKg != null)
     ? plans.reduce((sum, plan) => sum + (plan.binWasteKg ?? 0), 0)
+    : null
+  const totalReusableWasteKg = plans.every((plan) => plan.reusableOffcutKg != null)
+    ? plans.reduce((sum, plan) => sum + (plan.reusableOffcutKg ?? 0), 0)
     : null
   const totalCarryOne = plans.every((plan) => plan.carryOnePieces != null)
     ? plans.reduce((sum, plan) => sum + (plan.carryOnePieces ?? 0), 0)
@@ -198,12 +196,6 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   const totalLoadingTwo = plans.reduce((sum, plan) => sum + plan.loadingTwoPersonMoves, 0)
   const totalLoadingEquipment = plans.reduce((sum, plan) => sum + plan.loadingEquipmentMoves, 0)
   const oversized = plans.flatMap((plan) => plan.oversized)
-  const coveredMm = Math.max(
-    0,
-    plans.reduce((sum, plan) => sum + plan.requiredMm, 0) -
-      oversized.reduce((sum, unit) => sum + unit.lengthMm, 0),
-  )
-  const overall = capacity > 0 ? coveredMm / capacity : 0
   const oversizedCount = oversized.length
   const machineTooLong = groups.reduce(
     (sum, group) =>
@@ -213,10 +205,6 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
         0,
       ),
     0,
-  )
-  const preCutSelected = stockLengthsMm.some((length) => length > MACHINE_MAX_MM)
-  const preCutPurchased = plans.some((plan) =>
-    plan.purchases.some((item) => item.lengthMm > MACHINE_MAX_MM),
   )
   const buyRows = useMemo(() => {
     const map = new Map<string, BuyRow>()
@@ -256,22 +244,127 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
       className="max-w-4xl"
     >
       <div className="flex flex-col gap-4 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex rounded-lg border border-border bg-muted/20 p-0.5">
-            <Button
-              variant={view === 'buy' ? 'secondary' : 'ghost'}
-              size="sm"
-              onClick={() => setView('buy')}
-            >
-              {t('preflight.purchase.viewBuy')}
-            </Button>
-            <Button
-              variant={view === 'optimise' ? 'secondary' : 'ghost'}
-              size="sm"
-              onClick={() => setView('optimise')}
-            >
-              {t('preflight.purchase.viewOptimise')}
-            </Button>
+        <div className="sticky top-0 z-20 -mx-5 -mt-5 border-b border-border bg-card px-5 pb-3 pt-5">
+          {buyable.length > 0 && (
+            <div className="grid gap-3 md:grid-cols-[minmax(10rem,2fr)_minmax(0,3fr)]">
+              <OverallStatsTable
+                purchasedKg={totalPurchasedKg}
+                wasteKg={totalWasteKg}
+                binKg={totalBinWasteKg}
+                reusableKg={totalReusableWasteKg}
+              />
+              <MovementTable
+                loadingOne={totalLoadingOne}
+                loadingTwo={totalLoadingTwo}
+                loadingEquipment={totalLoadingEquipment}
+                wasteOne={totalCarryOne}
+                wasteTwo={totalCarryTwo}
+                wasteEquipment={totalOverTwo}
+              />
+            </div>
+          )}
+
+          <div className="mt-3">
+            <details className="rounded-lg border border-border bg-muted/20">
+              <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium">
+                {t('preflight.purchase.settings')}
+              </summary>
+              <div className="grid gap-3 border-t border-border p-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center sm:gap-x-4">
+                <span className="text-sm text-muted-foreground">
+                  {t('preflight.purchase.margin')}
+                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={0}
+                    step={10}
+                    value={marginMm}
+                    onChange={(event) => setMarginMm(Number(event.target.value) || 0)}
+                    className="h-8 w-24 rounded-md border border-input bg-transparent px-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                  {MARGIN_PRESETS.map((preset) => (
+                    <Button
+                      key={preset}
+                      variant={marginMm === preset ? 'default' : 'outline'}
+                      size="sm"
+                      className="h-8 min-w-18"
+                      onClick={() => setMarginMm(preset)}
+                    >
+                      {preset} mm
+                    </Button>
+                  ))}
+                </div>
+
+                <span className="text-sm text-muted-foreground">
+                  {t('preflight.purchase.carryLimits')}
+                </span>
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-1.5">
+                    <span className="text-xs text-muted-foreground">
+                      {t('preflight.purchase.onePerson')}
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={onePersonKg}
+                      onChange={(event) => {
+                        const value = Number(event.target.value) || 0
+                        setOnePersonKg(value)
+                        setTwoPersonKg((current) => Math.max(current, value))
+                      }}
+                      className="h-8 w-20 rounded-md border border-input bg-transparent px-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5">
+                    <span className="text-xs text-muted-foreground">
+                      {t('preflight.purchase.twoPerson')}
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={twoPersonKg}
+                      onChange={(event) =>
+                        setTwoPersonKg(Math.max(onePersonKg, Number(event.target.value) || 0))
+                      }
+                      className="h-8 w-20 rounded-md border border-input bg-transparent px-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  </label>
+                </div>
+
+                <span className="text-sm text-muted-foreground">
+                  {t('preflight.purchase.stockLengths')}
+                </span>
+                <div className="flex flex-col gap-1">
+                  <div className="flex flex-wrap gap-1.5">
+                    {AU_STOCK_LENGTHS_MM.map((length) => {
+                      const selected = stockLengthsMm.includes(length)
+                      const needsPreCut = length > MACHINE_MAX_MM
+                      return (
+                        <button
+                          key={length}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => toggleStock(length)}
+                          title={needsPreCut ? t('preflight.purchase.preCutShort') : undefined}
+                          className={cn(
+                            'inline-flex h-8 min-w-14 items-center justify-center rounded-md border px-2 font-mono text-xs transition-colors',
+                            selected
+                              ? needsPreCut
+                                ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
+                                : 'border-primary bg-primary/15 text-foreground'
+                              : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                          )}
+                        >
+                          {(length / 1000).toFixed(1)}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -281,36 +374,8 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
           <p className="text-sm text-muted-foreground">{t('preflight.purchase.noLengths')}</p>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              <Summary
-                label={t('preflight.purchase.totalWeight')}
-                value={kilograms(totalPurchasedKg)}
-              />
-              <Summary
-                label={t('preflight.purchase.wasteWeight')}
-                value={kilograms(totalWasteKg)}
-              />
-              <Summary
-                label={t('preflight.purchase.binWaste')}
-                value={kilograms(totalBinWasteKg)}
-              />
-            </div>
-
-            <MovementTable
-              loadingOne={totalLoadingOne}
-              loadingTwo={totalLoadingTwo}
-              loadingEquipment={totalLoadingEquipment}
-              wasteOne={totalCarryOne}
-              wasteTwo={totalCarryTwo}
-              wasteEquipment={totalOverTwo}
-            />
-
             {totalWasteKg == null && (
               <p className="text-xs text-muted-foreground">{t('preflight.purchase.noMass')}</p>
-            )}
-
-            {preCutPurchased && (
-              <p className="text-xs text-amber-300">{t('preflight.purchase.preCutPurchased')}</p>
             )}
 
             {machineTooLong > 0 && (
@@ -334,271 +399,11 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
               </p>
             )}
 
-            {view === 'buy' ? (
-              <BuyList rows={buyRows} jobName={jobName} />
-            ) : (
-              <>
-                <details className="rounded-lg border border-border bg-muted/20">
-                  <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium">
-                    {t('preflight.purchase.settings')}
-                  </summary>
-                  <div className="flex flex-col gap-3 border-t border-border p-3">
-                    <div className="flex flex-wrap items-end gap-4">
-                      <label className="flex flex-col gap-1 text-sm">
-                        <span className="text-muted-foreground">
-                          {t('preflight.purchase.margin')}
-                        </span>
-                        <input
-                          type="number"
-                          min={0}
-                          step={10}
-                          value={marginMm}
-                          onChange={(event) => setMarginMm(Number(event.target.value) || 0)}
-                          className="h-9 w-32 rounded-md border border-input bg-transparent px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        />
-                      </label>
-                      <div className="flex flex-wrap gap-1.5 pb-1">
-                        {MARGIN_PRESETS.map((preset) => (
-                          <Button
-                            key={preset}
-                            variant={marginMm === preset ? 'default' : 'outline'}
-                            size="sm"
-                            onClick={() => setMarginMm(preset)}
-                          >
-                            {preset} mm
-                          </Button>
-                        ))}
-                      </div>
-                    </div>
+            <BuyList rows={buyRows} jobName={jobName} />
 
-                    <div className="flex flex-wrap items-end gap-3">
-                      <label className="flex flex-col gap-1 text-sm">
-                        <span className="text-muted-foreground">
-                          {t('preflight.purchase.onePersonCarry')}
-                        </span>
-                        <input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={onePersonKg}
-                          onChange={(event) => {
-                            const value = Number(event.target.value) || 0
-                            setOnePersonKg(value)
-                            setTwoPersonKg((current) => Math.max(current, value))
-                          }}
-                          className="h-9 w-28 rounded-md border border-input bg-transparent px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        />
-                      </label>
-                      <label className="flex flex-col gap-1 text-sm">
-                        <span className="text-muted-foreground">
-                          {t('preflight.purchase.twoPersonCarry')}
-                        </span>
-                        <input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={twoPersonKg}
-                          onChange={(event) =>
-                            setTwoPersonKg(Math.max(onePersonKg, Number(event.target.value) || 0))
-                          }
-                          className="h-9 w-28 rounded-md border border-input bg-transparent px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        />
-                      </label>
-                      <p className="pb-2 text-xs text-muted-foreground">
-                        {t('preflight.purchase.wasteRemovalHint')}
-                      </p>
-                    </div>
+            <div className="text-sm font-medium">{t('preflight.purchase.nestingTitle')}</div>
 
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="mr-1 text-sm text-muted-foreground">
-                        {t('preflight.purchase.stockLengths')}
-                      </span>
-                      {AU_STOCK_LENGTHS_MM.map((length) => {
-                        const selected = stockLengthsMm.includes(length)
-                        const needsPreCut = length > MACHINE_MAX_MM
-                        return (
-                          <button
-                            key={length}
-                            type="button"
-                            aria-pressed={selected}
-                            onClick={() => toggleStock(length)}
-                            title={needsPreCut ? t('preflight.purchase.preCutShort') : undefined}
-                            className={cn(
-                              'rounded-md border px-2.5 py-1 font-mono text-xs transition-colors',
-                              selected
-                                ? needsPreCut
-                                  ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
-                                  : 'border-primary bg-primary/15 text-foreground'
-                                : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                            )}
-                          >
-                            {metres(length)}
-                            {needsPreCut ? '*' : ''}
-                          </button>
-                        )
-                      })}
-                    </div>
-
-                    <div className="flex flex-col gap-0.5">
-                      <p className="text-xs text-muted-foreground">
-                        {t('preflight.purchase.stockHint')}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {t('preflight.purchase.marginHint')}
-                      </p>
-                      {preCutSelected && (
-                        <p className="text-xs text-amber-300">
-                          {t('preflight.purchase.preCutNote')}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </details>
-
-                <div className="overflow-x-auto rounded-lg border border-border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="hover:bg-transparent">
-                        <TableHead>{t('preflight.purchase.stock')}</TableHead>
-                        <TableHead>{t('preflight.purchase.buy')}</TableHead>
-                        <TableHead className="text-right">
-                          {t('preflight.purchase.wasteWeight')}
-                        </TableHead>
-                        <TableHead className="text-right">
-                          {t('preflight.purchase.binWaste')}
-                        </TableHead>
-                        <TableHead className="text-right">
-                          {t('preflight.purchase.carry')}
-                        </TableHead>
-                        <TableHead className="text-right">{t('preflight.purchase.use')}</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {buyable.map((plan) => (
-                        <TableRow key={plan.key}>
-                          <TableCell className="align-top">
-                            <div className="font-mono text-xs">{plan.stock}</div>
-                            {plan.tee ? (
-                              <div className="text-[11px] text-muted-foreground">
-                                {t('preflight.purchase.tee')}
-                                {plan.sources.length > 0 ? ` · ${plan.sources.join(', ')}` : ''}
-                              </div>
-                            ) : null}
-                            <div className="text-[11px] text-muted-foreground">
-                              {t('preflight.purchase.pieceRequired', {
-                                count: plan.pieceCount,
-                                length: metres(plan.requiredMm),
-                              })}
-                            </div>
-                            {plan.oversized.length > 0 ? (
-                              <div className="mt-1 text-[11px] text-destructive">
-                                {t('preflight.purchase.oversized', {
-                                  count: plan.oversized.length,
-                                  length: metres(
-                                    usableStockLengthMm(Math.max(...stockLengthsMm), marginMm),
-                                  ),
-                                })}
-                              </div>
-                            ) : null}
-                          </TableCell>
-                          <TableCell className="align-top">
-                            {plan.purchases.length === 0 ? (
-                              <span className="text-xs text-muted-foreground">—</span>
-                            ) : (
-                              <div className="flex flex-col gap-0.5 font-mono text-xs">
-                                {plan.purchases.map((item) => (
-                                  <span
-                                    key={item.lengthMm}
-                                    className={cn(
-                                      item.lengthMm > MACHINE_MAX_MM && 'text-amber-300',
-                                    )}
-                                  >
-                                    {item.count} × {metres(item.lengthMm)}
-                                    {item.lengthMm > MACHINE_MAX_MM ? '*' : ''}
-                                  </span>
-                                ))}
-                                <span className="text-[11px] text-muted-foreground">
-                                  {metres(plan.purchasedMm)} total
-                                </span>
-                              </div>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right align-top font-mono text-xs">
-                            {plan.purchasedMm > 0 ? (
-                              <>
-                                <div>{kilograms(plan.wasteKg)}</div>
-                                <div className="text-[11px] text-muted-foreground">
-                                  {metres(plan.wasteMm)}
-                                </div>
-                              </>
-                            ) : (
-                              '—'
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right align-top font-mono text-xs">
-                            {plan.purchasedMm > 0 ? (
-                              <>
-                                <div>{kilograms(plan.binWasteKg)}</div>
-                                <div className="text-[11px] text-muted-foreground">
-                                  {t('preflight.purchase.reusableShort', {
-                                    weight: kilograms(plan.reusableOffcutKg),
-                                  })}
-                                </div>
-                              </>
-                            ) : (
-                              '—'
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right align-top font-mono text-xs">
-                            {plan.carryOnePieces == null
-                              ? '—'
-                              : `${plan.carryOnePieces} · ${plan.carryTwoPieces ?? 0} · ${plan.overTwoPieces ?? 0}`}
-                          </TableCell>
-                          <TableCell className="text-right align-top font-mono text-xs">
-                            {plan.purchasedMm > 0 ? `${(plan.utilisation * 100).toFixed(0)}%` : '—'}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <span>
-                    {t('preflight.purchase.overallUse', { pct: (overall * 100).toFixed(0) })}
-                  </span>
-                  <span>{t('preflight.purchase.teeNote')}</span>
-                </div>
-
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-medium">
-                      {t('preflight.purchase.nestingTitle')}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {t('preflight.purchase.nestingHint')}
-                    </div>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setShowNesting((value) => !value)}
-                  >
-                    {showNesting
-                      ? t('preflight.purchase.hideNesting')
-                      : t('preflight.purchase.showNesting')}
-                  </Button>
-                </div>
-
-                {showNesting && (
-                  <NestingSolution
-                    plans={buyable}
-                    onePersonKg={onePersonKg}
-                    twoPersonKg={twoPersonKg}
-                  />
-                )}
-              </>
-            )}
+            <NestingSolution plans={buyable} onePersonKg={onePersonKg} twoPersonKg={twoPersonKg} />
           </>
         )}
       </div>
@@ -702,7 +507,6 @@ function BuyList({ rows, jobName }: { rows: BuyRow[]; jobName?: string }) {
                     )}
                   >
                     {metres(row.lengthMm)}
-                    {row.lengthMm > MACHINE_MAX_MM ? '*' : ''}
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">{row.count}</TableCell>
                 </TableRow>
@@ -732,25 +536,32 @@ function NestingSolution({
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
         <span className="flex items-center gap-1">
-          <span className="size-2 rounded-full bg-slate-600" />
+          <span className="size-3.5 rounded-full bg-slate-600" />
           {t('preflight.purchase.beamPieces')}
         </span>
         <span className="flex items-center gap-1">
-          <span className="size-2 rounded-full bg-emerald-500/70" />
+          <span className="size-3.5 rounded-full bg-emerald-500/70" />
           {t('preflight.purchase.onePerson')}
         </span>
         <span className="flex items-center gap-1">
-          <span className="size-2 rounded-full bg-amber-500/70" />
+          <span className="size-3.5 rounded-full bg-amber-500/70" />
           {t('preflight.purchase.twoPerson')}
         </span>
         <span className="flex items-center gap-1">
-          <span className="size-2 rounded-full bg-red-500/70" />
+          <span className="size-3.5 rounded-full bg-red-500/70" />
           {t('preflight.purchase.equipment')}
         </span>
+        <span className="flex items-center gap-1">
+          <span
+            className="size-3.5 rounded-sm bg-slate-400/50"
+            style={{
+              backgroundImage:
+                'repeating-linear-gradient(45deg, rgba(255,255,255,0.55) 0 2px, transparent 2px 4px)',
+            }}
+          />
+          {t('preflight.purchase.binLegend')}
+        </span>
       </div>
-      <p className="text-[10px] text-muted-foreground">
-        {t('preflight.purchase.wastePatternLegend')}
-      </p>
       {plans.map((plan) => {
         const kgPerMm =
           plan.wasteKg != null && plan.wasteMm > 0 ? plan.wasteKg / plan.wasteMm : null
@@ -782,12 +593,21 @@ function NestingSolution({
           <div key={plan.key} className="rounded-lg border border-border p-3">
             <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
               <span className="font-mono text-xs font-medium">{plan.stock}</span>
-              <span className="text-[11px] text-muted-foreground">
-                {t('preflight.purchase.nestingPieces', { count: plan.pieceCount })} ·{' '}
-                {t('preflight.purchase.nestingPurchased', {
-                  length: metres(plan.purchasedMm),
-                })}
-              </span>
+              <div className="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                <span>
+                  {t('preflight.purchase.nestingPieces', { count: plan.pieceCount })} ·{' '}
+                  {t('preflight.purchase.nestingPurchased', {
+                    length: metres(plan.purchasedMm),
+                  })}
+                </span>
+                <span>
+                  {t('preflight.purchase.nestingMetrics', {
+                    waste: kilograms(plan.wasteKg),
+                    bin: kilograms(plan.binWasteKg),
+                    reusable: kilograms(plan.reusableOffcutKg),
+                  })}
+                </span>
+              </div>
             </div>
             <div className="flex flex-col gap-2">
               {beams.map(({ id: beamId, item: beam }, index) => {
@@ -799,39 +619,45 @@ function NestingSolution({
                       .join(',')}`,
                 )
                 return (
-                  <div key={beamId} className="flex flex-col gap-1">
-                    <div className="flex items-baseline justify-between gap-2 text-[11px] text-muted-foreground">
-                      <span
-                        className={
-                          beam.stockLengthMm > MACHINE_MAX_MM ? 'text-amber-300' : undefined
-                        }
-                      >
-                        {plan.tee
-                          ? t('preflight.purchase.nestingBeamT', {
-                              index: index + 1,
-                              length: metres(beam.stockLengthMm),
-                            })
-                          : t('preflight.purchase.nestingBeam', {
-                              index: index + 1,
-                              length: metres(beam.stockLengthMm),
-                            })}
-                      </span>
+                  <div key={beamId} className="flex items-start gap-2">
+                    <span
+                      className={cn(
+                        'w-24 shrink-0 pt-1 text-[10px] leading-tight text-muted-foreground',
+                        beam.stockLengthMm > MACHINE_MAX_MM && 'text-amber-300',
+                      )}
+                    >
+                      {plan.tee
+                        ? t('preflight.purchase.nestingBeamT', {
+                            index: index + 1,
+                            length: metres(beam.stockLengthMm),
+                          })
+                        : t('preflight.purchase.nestingBeam', {
+                            index: index + 1,
+                            length: metres(beam.stockLengthMm),
+                          })}
+                    </span>
+                    <div className="flex min-w-0 flex-1 flex-col gap-1">
+                      {sides.map(({ id: sideId, item: bar }, side) => (
+                        <div key={sideId} className="flex items-center gap-1">
+                          {plan.tee && (
+                            <span
+                              className="w-4 shrink-0 text-center text-[9px] text-muted-foreground"
+                              title={t('preflight.purchase.nestingSide', { index: side + 1 })}
+                            >
+                              {side + 1}
+                            </span>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <BarStrip
+                              bar={bar}
+                              kgPerMm={kgPerMm}
+                              onePersonKg={onePersonKg}
+                              twoPersonKg={twoPersonKg}
+                            />
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    {sides.map(({ id: sideId, item: bar }, side) => (
-                      <div key={sideId} className="flex flex-col gap-0.5">
-                        {plan.tee && (
-                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                            {t('preflight.purchase.nestingSide', { index: side + 1 })}
-                          </span>
-                        )}
-                        <BarStrip
-                          bar={bar}
-                          kgPerMm={kgPerMm}
-                          onePersonKg={onePersonKg}
-                          twoPersonKg={twoPersonKg}
-                        />
-                      </div>
-                    ))}
                   </div>
                 )
               })}
@@ -931,57 +757,75 @@ function MovementTable({
   const count = (value: number | null) => (value == null ? '—' : String(value))
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="text-sm font-medium">{t('preflight.purchase.movement')}</div>
-      <div className="overflow-x-auto rounded-lg border border-border">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead>{t('preflight.purchase.movement')}</TableHead>
-              <TableHead className="text-right">{t('preflight.purchase.onePerson')}</TableHead>
-              <TableHead className="text-right">{t('preflight.purchase.twoPerson')}</TableHead>
-              <TableHead className="text-right">{t('preflight.purchase.equipment')}</TableHead>
-              <TableHead className="text-right">{t('preflight.purchase.total')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow>
-              <TableCell>{t('preflight.purchase.loading')}</TableCell>
-              <TableCell className="text-right font-mono text-xs">{loadingOne}</TableCell>
-              <TableCell className="text-right font-mono text-xs">{loadingTwo}</TableCell>
-              <TableCell className="text-right font-mono text-xs">{loadingEquipment}</TableCell>
-              <TableCell className="text-right font-mono text-xs">{loadingTotal}</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell>{t('preflight.purchase.waste')}</TableCell>
-              <TableCell className="text-right font-mono text-xs">{count(wasteOne)}</TableCell>
-              <TableCell className="text-right font-mono text-xs">{count(wasteTwo)}</TableCell>
-              <TableCell className="text-right font-mono text-xs">
-                {count(wasteEquipment)}
-              </TableCell>
-              <TableCell className="text-right font-mono text-xs">{count(wasteTotal)}</TableCell>
-            </TableRow>
-            <TableRow className="font-semibold">
-              <TableCell>{t('preflight.purchase.total')}</TableCell>
-              <TableCell className="text-right font-mono text-xs">{count(totalOne)}</TableCell>
-              <TableCell className="text-right font-mono text-xs">{count(totalTwo)}</TableCell>
-              <TableCell className="text-right font-mono text-xs">
-                {count(totalEquipment)}
-              </TableCell>
-              <TableCell className="text-right font-mono text-xs">{count(grandTotal)}</TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      </div>
+    <div className="overflow-x-auto rounded-lg border border-border">
+      <Table className="[&_tr]:h-9">
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead />
+            <TableHead className="text-right">{t('preflight.purchase.onePerson')}</TableHead>
+            <TableHead className="text-right">{t('preflight.purchase.twoPerson')}</TableHead>
+            <TableHead className="text-right">{t('preflight.purchase.equipment')}</TableHead>
+            <TableHead className="text-right">{t('preflight.purchase.total')}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow>
+            <TableCell>{t('preflight.purchase.loading')}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{loadingOne}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{loadingTwo}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{loadingEquipment}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{loadingTotal}</TableCell>
+          </TableRow>
+          <TableRow>
+            <TableCell>{t('preflight.purchase.waste')}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{count(wasteOne)}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{count(wasteTwo)}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{count(wasteEquipment)}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{count(wasteTotal)}</TableCell>
+          </TableRow>
+          <TableRow className="font-semibold">
+            <TableCell>{t('preflight.purchase.total')}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{count(totalOne)}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{count(totalTwo)}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{count(totalEquipment)}</TableCell>
+            <TableCell className="text-right font-mono text-xs">{count(grandTotal)}</TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
     </div>
   )
 }
 
-function Summary({ label, value }: { label: string; value: string }) {
+function OverallStatsTable({
+  purchasedKg,
+  wasteKg,
+  binKg,
+  reusableKg,
+}: {
+  purchasedKg: number | null
+  wasteKg: number | null
+  binKg: number | null
+  reusableKg: number | null
+}) {
+  const { t } = useTranslation()
+  const rows: [string, number | null][] = [
+    [t('preflight.purchase.totalWeight'), purchasedKg],
+    [t('preflight.purchase.wasteWeight'), wasteKg],
+    [t('preflight.purchase.binWaste'), binKg],
+    [t('preflight.purchase.reusableWaste'), reusableKg],
+  ]
   return (
-    <div className="rounded-lg border border-border bg-card px-3 py-2">
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="font-mono text-sm">{value}</div>
+    <div className="overflow-x-auto rounded-lg border border-border">
+      <Table className="[&_tr]:h-9">
+        <TableBody>
+          {rows.map(([label, value]) => (
+            <TableRow key={label}>
+              <TableCell className="text-xs text-muted-foreground">{label}</TableCell>
+              <TableCell className="text-right font-mono text-xs">{kilograms(value)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </div>
   )
 }

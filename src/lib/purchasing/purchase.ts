@@ -475,6 +475,29 @@ function planCarryCounts(
   return counts
 }
 
+function planWasteSquareSum(plan: PackedPlan): number {
+  return plan.bars.reduce((sum, bar) => sum + bar.wasteMm * bar.wasteMm, 0)
+}
+
+function planBinCarryCounts(
+  plan: PackedPlan,
+  group: PurchaseGroupInput,
+  onePersonKg: number,
+  twoPersonKg: number,
+): CarryCounts | null {
+  if (group.massPerMetre == null) return null
+  const kgPerMm = (group.massPerMetre / 1000) * massFactor(group)
+  const counts: CarryCounts = { one: 0, two: 0, over: 0 }
+  for (const bar of plan.bars) {
+    if (bar.wasteMm <= 0 || bar.wasteMm >= REUSABLE_OFFCUT_MM) continue
+    const kg = bar.wasteMm * kgPerMm
+    if (kg <= onePersonKg) counts.one++
+    else if (kg <= twoPersonKg) counts.two++
+    else counts.over++
+  }
+  return counts
+}
+
 function betterPlan(
   candidate: PackedPlan,
   current: PackedPlan | null,
@@ -484,21 +507,25 @@ function betterPlan(
 ): boolean {
   if (!current) return true
 
-  // Stage 1: minimum purchased length = minimum waste weight.
+  // Phase 1: minimum purchased length = minimum waste weight.
   if (candidate.purchasedMm !== current.purchasedMm) {
     return candidate.purchasedMm < current.purchasedMm
   }
 
-  // Stage 2: prefer easy one-person offcuts, avoid the awkward 2-person middle, then
-  // reduce equipment lifts last.
-  const candidateCounts = planCarryCounts(candidate, group, onePersonKg, twoPersonKg)
-  const currentCounts = planCarryCounts(current, group, onePersonKg, twoPersonKg)
+  // Phase 2: concentrate waste onto as few beams as possible.
+  const candidateSquares = planWasteSquareSum(candidate)
+  const currentSquares = planWasteSquareSum(current)
+  if (candidateSquares !== currentSquares) return candidateSquares > currentSquares
+
+  // Phase 3: for non-reusable (bin) waste, prefer more 1-person then 2-person pieces.
+  const candidateCounts = planBinCarryCounts(candidate, group, onePersonKg, twoPersonKg)
+  const currentCounts = planBinCarryCounts(current, group, onePersonKg, twoPersonKg)
   if (candidateCounts && currentCounts) {
     if (candidateCounts.one !== currentCounts.one) {
       return candidateCounts.one > currentCounts.one
     }
     if (candidateCounts.two !== currentCounts.two) {
-      return candidateCounts.two < currentCounts.two
+      return candidateCounts.two > currentCounts.two
     }
     if (candidateCounts.over !== currentCounts.over) {
       return candidateCounts.over < currentCounts.over
@@ -557,13 +584,95 @@ function repackLinear(
   return best
 }
 
+function rebuildBar(bar: PurchaseBar, units: PurchaseUnit[], kerfMm: number): PurchaseBar {
+  const sorted = [...units].sort((a, b) => a.lengthMm - b.lengthMm)
+  const usedMm = sorted.reduce(
+    (sum, unit, index) => sum + unit.lengthMm + (index > 0 ? kerfMm : 0),
+    0,
+  )
+  const last = sorted.at(-1)
+  return {
+    ...bar,
+    units: sorted,
+    usedMm,
+    wasteMm: bar.stockLengthMm - usedMm,
+    supportOk: !last || usedMm - last.lengthMm < bar.stockLengthMm - MACHINE.minEndSupportMm,
+  }
+}
+
+/** Move one small piece to a bar with space; keep the change if the objective improves. */
+function tryMovePieces(
+  plan: PackedPlan,
+  marginMm: number,
+  kerfMm: number,
+  group: PurchaseGroupInput,
+  onePersonKg: number,
+  twoPersonKg: number,
+): PackedPlan {
+  let best = plan
+  for (let pass = 0; pass < 2; pass++) {
+    const sources = best.bars
+      .map((bar, index) => ({ bar, index }))
+      .filter(({ bar }) => bar.wasteMm > 0 && bar.units.length > 0)
+      .sort((a, b) => b.bar.wasteMm - a.bar.wasteMm)
+      .slice(0, 20)
+    const destinations = best.bars
+      .map((bar, index) => ({ bar, index }))
+      .sort((a, b) => b.bar.wasteMm - a.bar.wasteMm)
+      .slice(0, 20)
+    let improved = false
+    let attempts = 0
+    for (let s = 0; s < sources.length && !improved && attempts < 400; s++) {
+      const source = sources[s]
+      const units = [...source.bar.units].sort((a, b) => a.lengthMm - b.lengthMm).slice(0, 5)
+      for (const unit of units) {
+        if (improved || attempts >= 400) break
+        for (const destination of destinations) {
+          if (improved || attempts >= 400) break
+          if (destination.index === source.index) continue
+          const destBar = best.bars[destination.index]
+          const gap = destBar.units.length > 0 ? kerfMm : 0
+          if (
+            destBar.usedMm + gap + unit.lengthMm >
+            usableStockLengthMm(destBar.stockLengthMm, marginMm)
+          ) {
+            continue
+          }
+          attempts++
+          const bars = best.bars.map((bar) => ({ ...bar, units: [...bar.units] }))
+          bars[source.index] = rebuildBar(
+            bars[source.index],
+            bars[source.index].units.filter((candidate) => candidate !== unit),
+            kerfMm,
+          )
+          bars[destination.index] = rebuildBar(
+            bars[destination.index],
+            [...bars[destination.index].units, unit],
+            kerfMm,
+          )
+          const finalBars = bars.filter((bar) => bar.units.length > 0)
+          const candidate = planFromBars(finalBars)
+          const currentInvalid = best.bars.some((bar) => !bar.supportOk)
+          if (!currentInvalid && candidate.bars.some((bar) => !bar.supportOk)) continue
+          if (betterPlan(candidate, best, group, onePersonKg, twoPersonKg)) {
+            best = candidate
+            improved = true
+          }
+        }
+      }
+    }
+    if (!improved) break
+  }
+  return best
+}
+
 /** Small local search: repack pairs of waste-bearing bars, keeping the rest fixed. */
 function improveLinearPlan(
   plan: PackedPlan,
-  group: PurchaseGroupInput,
   lengths: number[],
   marginMm: number,
   kerfMm: number,
+  group: PurchaseGroupInput,
   onePersonKg: number,
   twoPersonKg: number,
 ): PackedPlan {
@@ -602,7 +711,7 @@ function improveLinearPlan(
     }
     if (!improved) break
   }
-  return best
+  return tryMovePieces(best, marginMm, kerfMm, group, onePersonKg, twoPersonKg)
 }
 
 export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions): PurchasePlan {
@@ -637,30 +746,40 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
     }
   }
 
-  for (const length of lengths) {
-    const drafts = packFixed(fittable, length, marginMm, kerfMm)
-    if (!drafts) continue
-    consider(
-      group.tee
-        ? finalizeTee(drafts, lengths, marginMm)
-        : finalizeLinear(drafts, lengths, marginMm),
-    )
+  // A tighter selected margin can otherwise miss plans found at a larger reserve. Pack with
+  // the selected margin and the standard larger reserves, then re-shrink with the selected one.
+  const reserves = [marginMm]
+  for (const reserve of [150, 200]) {
+    const candidate = Math.max(marginMm, reserve)
+    if (!reserves.includes(candidate)) reserves.push(candidate)
   }
 
-  for (const strategy of ['smallest', 'largest', 'fit'] as const) {
-    const drafts = packMixed(fittable, lengths, marginMm, kerfMm, group.tee, strategy)
-    if (!drafts) continue
-    consider(
-      group.tee
-        ? finalizeTee(drafts, lengths, marginMm)
-        : finalizeLinear(drafts, lengths, marginMm),
-    )
+  for (const reserve of reserves) {
+    for (const length of lengths) {
+      const drafts = packFixed(fittable, length, reserve, kerfMm)
+      if (!drafts) continue
+      consider(
+        group.tee
+          ? finalizeTee(drafts, lengths, marginMm)
+          : finalizeLinear(drafts, lengths, marginMm),
+      )
+    }
+
+    for (const strategy of ['smallest', 'largest', 'fit'] as const) {
+      const drafts = packMixed(fittable, lengths, reserve, kerfMm, group.tee, strategy)
+      if (!drafts) continue
+      consider(
+        group.tee
+          ? finalizeTee(drafts, lengths, marginMm)
+          : finalizeLinear(drafts, lengths, marginMm),
+      )
+    }
   }
 
   const initialBest = (bestValid ?? bestInvalid) as PackedPlan | null
   const best =
     initialBest && !group.tee
-      ? improveLinearPlan(initialBest, group, lengths, marginMm, kerfMm, onePersonKg, twoPersonKg)
+      ? improveLinearPlan(initialBest, lengths, marginMm, kerfMm, group, onePersonKg, twoPersonKg)
       : initialBest
 
   const purchases = best?.purchases ?? []
