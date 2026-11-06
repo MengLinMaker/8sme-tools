@@ -26,6 +26,7 @@ import {
   DEFAULT_ONE_PERSON_KG,
   DEFAULT_STOCK_LENGTHS_MM,
   DEFAULT_TWO_PERSON_KG,
+  LARGE_REUSABLE_OFFCUT_MM,
   type PurchaseBar,
   type PurchaseGroupInput,
   type PurchasePlan,
@@ -237,12 +238,7 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   }
 
   return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title={t('preflight.purchase.title')}
-      className="max-w-4xl"
-    >
+    <Dialog open={open} onClose={onClose} title={t('preflight.purchase.title')} fullscreen>
       <div className="flex flex-col gap-4 p-5">
         <div className="sticky top-0 z-20 -mx-5 -mt-5 border-b border-border bg-card px-5 pb-3 pt-5">
           {buyable.length > 0 && (
@@ -403,7 +399,12 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
 
             <div className="text-sm font-medium">{t('preflight.purchase.nestingTitle')}</div>
 
-            <NestingSolution plans={buyable} onePersonKg={onePersonKg} twoPersonKg={twoPersonKg} />
+            <NestingSolution
+              plans={buyable}
+              onePersonKg={onePersonKg}
+              twoPersonKg={twoPersonKg}
+              marginMm={marginMm}
+            />
           </>
         )}
       </div>
@@ -526,13 +527,15 @@ function NestingSolution({
   plans,
   onePersonKg,
   twoPersonKg,
+  marginMm,
 }: {
   plans: PurchasePlan[]
   onePersonKg: number
   twoPersonKg: number
+  marginMm: number
 }) {
   const { t } = useTranslation()
-  const [filter, setFilter] = useState<'all' | 'heavy' | 'reusable'>('all')
+  const [filter, setFilter] = useState<'all' | 'heavy' | 'reusable' | 'large'>('all')
   const kgPerMmFor = (plan: PurchasePlan) =>
     plan.wasteKg != null && plan.wasteMm > 0 ? plan.wasteKg / plan.wasteMm : null
   const attention = (bars: PurchaseBar[], kgPerMm: number | null) => {
@@ -557,15 +560,51 @@ function NestingSolution({
       (max, bar) => (bar.wasteMm >= REUSABLE_OFFCUT_MM ? Math.max(max, bar.wasteMm) : max),
       0,
     )
-  const orderedPlans = [...plans].sort((a, b) =>
-    filter === 'reusable'
+  const suggestedScrapMm = (plan: PurchasePlan) => {
+    let bestWaste = -1
+    let bestUsed = 0
+    if (plan.tee) {
+      for (let i = 0; i < plan.bars.length; i += 2) {
+        const left = plan.bars[i]
+        const right = plan.bars[i + 1]
+        const waste = Math.max(left?.wasteMm ?? 0, right?.wasteMm ?? 0)
+        if (waste < LARGE_REUSABLE_OFFCUT_MM) continue
+        const used = Math.max(
+          left.stockLengthMm - left.wasteMm,
+          right ? right.stockLengthMm - right.wasteMm : 0,
+        )
+        if (waste > bestWaste) {
+          bestWaste = waste
+          bestUsed = used
+        }
+      }
+    } else {
+      for (const bar of plan.bars) {
+        if (bar.wasteMm < LARGE_REUSABLE_OFFCUT_MM) continue
+        if (bar.wasteMm > bestWaste) {
+          bestWaste = bar.wasteMm
+          bestUsed = bar.stockLengthMm - bar.wasteMm
+        }
+      }
+    }
+    return bestWaste >= 0 ? bestUsed + marginMm : null
+  }
+  const hasSubstitute = (bars: PurchaseBar[]) =>
+    bars.some((bar) => bar.wasteMm >= LARGE_REUSABLE_OFFCUT_MM)
+  const orderedPlans = [...plans].sort((a, b) => {
+    const substituteDelta = Number(hasSubstitute(b.bars)) - Number(hasSubstitute(a.bars))
+    if (substituteDelta !== 0) return substituteDelta
+    return filter === 'reusable' || filter === 'large'
       ? longestReusable(b.bars) - longestReusable(a.bars)
-      : attention(b.bars, kgPerMmFor(b)) - attention(a.bars, kgPerMmFor(a)),
-  )
+      : attention(b.bars, kgPerMmFor(b)) - attention(a.bars, kgPerMmFor(a))
+  })
   const visiblePlans = orderedPlans.filter((plan) => {
     if (filter === 'all') return true
     if (filter === 'reusable') {
       return plan.bars.some((bar) => bar.wasteMm >= REUSABLE_OFFCUT_MM)
+    }
+    if (filter === 'large') {
+      return plan.bars.some((bar) => bar.wasteMm >= LARGE_REUSABLE_OFFCUT_MM)
     }
     const kgPerMm = kgPerMmFor(plan)
     return plan.bars.some((bar) => {
@@ -645,6 +684,7 @@ function NestingSolution({
           return beam.bars.some((bar) => {
             if (bar.wasteMm <= 0) return false
             if (filter === 'reusable') return bar.wasteMm >= REUSABLE_OFFCUT_MM
+            if (filter === 'large') return bar.wasteMm >= LARGE_REUSABLE_OFFCUT_MM
             const kg = kgPerMm == null ? 0 : bar.wasteMm * kgPerMm
             return bar.wasteMm < REUSABLE_OFFCUT_MM && kg > twoPersonKg
           })
@@ -657,11 +697,21 @@ function NestingSolution({
               .map((bar) => bar.units.map((unit) => `${unit.mark}@${unit.lengthMm}`).join(','))
               .join(';')}`,
         )
+        const scrapMm = suggestedScrapMm(plan)
 
         return (
           <div key={plan.key} className="rounded-lg border border-border p-3">
             <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-              <span className="font-mono text-xs font-medium">{plan.stock}</span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-mono text-xs font-medium">{plan.stock}</span>
+                {scrapMm != null && (
+                  <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300">
+                    {t('preflight.purchase.largeReusableBadge', {
+                      length: metres(scrapMm),
+                    })}
+                  </span>
+                )}
+              </div>
               <div className="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
                 <span>
                   {t('preflight.purchase.nestingPieces', { count: plan.pieceCount })} ·{' '}
@@ -722,6 +772,7 @@ function NestingSolution({
                               kgPerMm={kgPerMm}
                               onePersonKg={onePersonKg}
                               twoPersonKg={twoPersonKg}
+                              marginMm={marginMm}
                             />
                           </div>
                         </div>
@@ -743,11 +794,13 @@ function BarStrip({
   kgPerMm,
   onePersonKg,
   twoPersonKg,
+  marginMm,
 }: {
   bar: PurchaseBar
   kgPerMm: number | null
   onePersonKg: number
   twoPersonKg: number
+  marginMm: number
 }) {
   const total = bar.stockLengthMm
   const wasteKg = kgPerMm == null ? null : bar.wasteMm * kgPerMm
@@ -795,6 +848,14 @@ function BarStrip({
         >
           <span className="truncate">{metres(bar.wasteMm, 2)}</span>
         </div>
+      )}
+      {bar.wasteMm >= LARGE_REUSABLE_OFFCUT_MM && (
+        <div
+          className="absolute inset-y-0 z-10 w-px bg-yellow-400"
+          style={{
+            left: `${(Math.min(bar.stockLengthMm, bar.usedMm + marginMm) / total) * 100}%`,
+          }}
+        />
       )}
     </div>
   )

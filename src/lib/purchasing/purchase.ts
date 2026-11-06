@@ -108,6 +108,9 @@ export const DEFAULT_TWO_PERSON_KG = 50
 /** Offcuts shorter than this are treated as bin waste, not reusable stock. */
 export const REUSABLE_OFFCUT_MM = 2000
 
+/** Reusable offcuts at least this long are worth checking against existing scrap stock. */
+export const LARGE_REUSABLE_OFFCUT_MM = 3000
+
 export interface PurchaseOptions {
   /** Bars the supplier keeps, in mm. */
   stockLengthsMm: readonly number[]
