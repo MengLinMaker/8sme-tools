@@ -30,6 +30,7 @@ import {
   type PurchaseGroupInput,
   type PurchasePlan,
   planPurchases,
+  REUSABLE_OFFCUT_MM,
   totalCapacityMm,
   usableStockLengthMm,
 } from '@/lib/purchasing/purchase'
@@ -192,6 +193,10 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   const totalOverTwo = plans.every((plan) => plan.overTwoPieces != null)
     ? plans.reduce((sum, plan) => sum + (plan.overTwoPieces ?? 0), 0)
     : null
+  const invalidSupportBars = plans.reduce((sum, plan) => sum + plan.invalidSupportBars, 0)
+  const totalLoadingOne = plans.reduce((sum, plan) => sum + plan.loadingOnePersonMoves, 0)
+  const totalLoadingTwo = plans.reduce((sum, plan) => sum + plan.loadingTwoPersonMoves, 0)
+  const totalLoadingEquipment = plans.reduce((sum, plan) => sum + plan.loadingEquipmentMoves, 0)
   const oversized = plans.flatMap((plan) => plan.oversized)
   const coveredMm = Math.max(
     0,
@@ -289,22 +294,16 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
                 label={t('preflight.purchase.binWaste')}
                 value={kilograms(totalBinWasteKg)}
               />
-              <Summary
-                label={t('preflight.purchase.carryOne', { limit: onePersonKg })}
-                value={totalCarryOne == null ? '—' : String(totalCarryOne)}
-              />
-              <Summary
-                label={t('preflight.purchase.carryTwo', {
-                  one: onePersonKg,
-                  two: twoPersonKg,
-                })}
-                value={totalCarryTwo == null ? '—' : String(totalCarryTwo)}
-              />
-              <Summary
-                label={t('preflight.purchase.carryOver', { limit: twoPersonKg })}
-                value={totalOverTwo == null ? '—' : String(totalOverTwo)}
-              />
             </div>
+
+            <MovementTable
+              loadingOne={totalLoadingOne}
+              loadingTwo={totalLoadingTwo}
+              loadingEquipment={totalLoadingEquipment}
+              wasteOne={totalCarryOne}
+              wasteTwo={totalCarryTwo}
+              wasteEquipment={totalOverTwo}
+            />
 
             {totalWasteKg == null && (
               <p className="text-xs text-muted-foreground">{t('preflight.purchase.noMass')}</p>
@@ -326,6 +325,12 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
             {oversizedCount > 0 && (
               <p className="text-xs text-destructive">
                 {t('preflight.purchase.oversizedTotal', { count: oversizedCount })}
+              </p>
+            )}
+
+            {invalidSupportBars > 0 && (
+              <p className="text-xs text-destructive">
+                {t('preflight.purchase.supportWarning', { count: invalidSupportBars })}
               </p>
             )}
 
@@ -502,7 +507,12 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
                             ) : (
                               <div className="flex flex-col gap-0.5 font-mono text-xs">
                                 {plan.purchases.map((item) => (
-                                  <span key={item.lengthMm}>
+                                  <span
+                                    key={item.lengthMm}
+                                    className={cn(
+                                      item.lengthMm > MACHINE_MAX_MM && 'text-amber-300',
+                                    )}
+                                  >
                                     {item.count} × {metres(item.lengthMm)}
                                     {item.lengthMm > MACHINE_MAX_MM ? '*' : ''}
                                   </span>
@@ -580,7 +590,13 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
                   </Button>
                 </div>
 
-                {showNesting && <NestingSolution plans={buyable} />}
+                {showNesting && (
+                  <NestingSolution
+                    plans={buyable}
+                    onePersonKg={onePersonKg}
+                    twoPersonKg={twoPersonKg}
+                  />
+                )}
               </>
             )}
           </>
@@ -679,7 +695,12 @@ function BuyList({ rows, jobName }: { rows: BuyRow[]; jobName?: string }) {
                       ) : null}
                     </TableCell>
                   )}
-                  <TableCell className="text-right font-mono text-sm">
+                  <TableCell
+                    className={cn(
+                      'text-right font-mono text-sm',
+                      row.lengthMm > MACHINE_MAX_MM && 'text-amber-300',
+                    )}
+                  >
                     {metres(row.lengthMm)}
                     {row.lengthMm > MACHINE_MAX_MM ? '*' : ''}
                   </TableCell>
@@ -697,10 +718,39 @@ function BuyList({ rows, jobName }: { rows: BuyRow[]; jobName?: string }) {
   )
 }
 
-function NestingSolution({ plans }: { plans: PurchasePlan[] }) {
+function NestingSolution({
+  plans,
+  onePersonKg,
+  twoPersonKg,
+}: {
+  plans: PurchasePlan[]
+  onePersonKg: number
+  twoPersonKg: number
+}) {
   const { t } = useTranslation()
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1">
+          <span className="size-2 rounded-full bg-slate-600" />
+          {t('preflight.purchase.beamPieces')}
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="size-2 rounded-full bg-emerald-500/70" />
+          {t('preflight.purchase.onePerson')}
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="size-2 rounded-full bg-amber-500/70" />
+          {t('preflight.purchase.twoPerson')}
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="size-2 rounded-full bg-red-500/70" />
+          {t('preflight.purchase.equipment')}
+        </span>
+      </div>
+      <p className="text-[10px] text-muted-foreground">
+        {t('preflight.purchase.wastePatternLegend')}
+      </p>
       {plans.map((plan) => {
         const kgPerMm =
           plan.wasteKg != null && plan.wasteMm > 0 ? plan.wasteKg / plan.wasteMm : null
@@ -715,6 +765,11 @@ function NestingSolution({ plans }: { plans: PurchasePlan[] }) {
             beamList.push({ stockLengthMm: bar.stockLengthMm, bars: [bar] })
           }
         }
+        beamList.sort(
+          (a, b) =>
+            a.bars.reduce((sum, bar) => sum + bar.wasteMm, 0) -
+            b.bars.reduce((sum, bar) => sum + bar.wasteMm, 0),
+        )
         const beams = keyed(
           beamList,
           (beam) =>
@@ -746,7 +801,11 @@ function NestingSolution({ plans }: { plans: PurchasePlan[] }) {
                 return (
                   <div key={beamId} className="flex flex-col gap-1">
                     <div className="flex items-baseline justify-between gap-2 text-[11px] text-muted-foreground">
-                      <span>
+                      <span
+                        className={
+                          beam.stockLengthMm > MACHINE_MAX_MM ? 'text-amber-300' : undefined
+                        }
+                      >
                         {plan.tee
                           ? t('preflight.purchase.nestingBeamT', {
                               index: index + 1,
@@ -765,22 +824,12 @@ function NestingSolution({ plans }: { plans: PurchasePlan[] }) {
                             {t('preflight.purchase.nestingSide', { index: side + 1 })}
                           </span>
                         )}
-                        <BarStrip bar={bar} />
-                        <div className="flex flex-wrap justify-between gap-2 text-[10px] text-muted-foreground">
-                          <span className="font-mono">
-                            {bar.units.length > 0
-                              ? bar.units
-                                  .map((unit) => `${unit.mark} ${metres(unit.lengthMm, 2)}`)
-                                  .join(' · ')
-                              : t('preflight.purchase.nestingEmpty')}
-                          </span>
-                          <span className="font-mono">
-                            {t('preflight.purchase.nestingWaste', {
-                              length: metres(bar.wasteMm, 2),
-                              weight: kilograms(kgPerMm == null ? null : bar.wasteMm * kgPerMm),
-                            })}
-                          </span>
-                        </div>
+                        <BarStrip
+                          bar={bar}
+                          kgPerMm={kgPerMm}
+                          onePersonKg={onePersonKg}
+                          twoPersonKg={twoPersonKg}
+                        />
                       </div>
                     ))}
                   </div>
@@ -794,8 +843,27 @@ function NestingSolution({ plans }: { plans: PurchasePlan[] }) {
   )
 }
 
-function BarStrip({ bar }: { bar: PurchaseBar }) {
+function BarStrip({
+  bar,
+  kgPerMm,
+  onePersonKg,
+  twoPersonKg,
+}: {
+  bar: PurchaseBar
+  kgPerMm: number | null
+  onePersonKg: number
+  twoPersonKg: number
+}) {
   const total = bar.stockLengthMm
+  const wasteKg = kgPerMm == null ? null : bar.wasteMm * kgPerMm
+  const wasteTone =
+    wasteKg == null
+      ? 'bg-amber-500/20 text-amber-200'
+      : wasteKg <= onePersonKg
+        ? 'bg-emerald-500/25 text-emerald-200'
+        : wasteKg <= twoPersonKg
+          ? 'bg-amber-500/25 text-amber-200'
+          : 'bg-red-500/25 text-red-200'
   let cursor = 0
   const units = keyed(bar.units, (unit) => `${unit.mark}|${unit.lengthMm}`)
   return (
@@ -808,7 +876,7 @@ function BarStrip({ bar }: { bar: PurchaseBar }) {
           <div
             key={id}
             style={{ left: `${left}%`, width: `${width}%` }}
-            className="absolute inset-y-0 flex items-center overflow-hidden border-r border-background/70 bg-primary/30 px-1"
+            className="absolute inset-y-0 flex items-center overflow-hidden border-r border-background/70 bg-slate-700/70 px-1 text-slate-100"
             title={`${unit.mark} · ${metres(unit.lengthMm, 2)}`}
           >
             <span className="truncate text-[9px] leading-none">{unit.mark}</span>
@@ -820,12 +888,91 @@ function BarStrip({ bar }: { bar: PurchaseBar }) {
           style={{
             left: `${(bar.usedMm / total) * 100}%`,
             width: `${(bar.wasteMm / total) * 100}%`,
+            backgroundImage:
+              bar.wasteMm < REUSABLE_OFFCUT_MM
+                ? 'repeating-linear-gradient(45deg, rgba(255,255,255,0.28) 0 2px, transparent 2px 6px)'
+                : undefined,
           }}
-          className="absolute inset-y-0 flex items-center justify-end overflow-hidden bg-amber-500/20 px-1 text-[9px] text-amber-200"
+          className={cn(
+            'absolute inset-y-0 flex items-center justify-end overflow-hidden px-1 text-[9px]',
+            wasteTone,
+          )}
         >
           <span className="truncate">{metres(bar.wasteMm, 2)}</span>
         </div>
       )}
+    </div>
+  )
+}
+
+function MovementTable({
+  loadingOne,
+  loadingTwo,
+  loadingEquipment,
+  wasteOne,
+  wasteTwo,
+  wasteEquipment,
+}: {
+  loadingOne: number
+  loadingTwo: number
+  loadingEquipment: number
+  wasteOne: number | null
+  wasteTwo: number | null
+  wasteEquipment: number | null
+}) {
+  const { t } = useTranslation()
+  const loadingTotal = loadingOne + loadingTwo + loadingEquipment
+  const wasteKnown = wasteOne != null && wasteTwo != null && wasteEquipment != null
+  const wasteTotal = wasteKnown ? wasteOne + wasteTwo + wasteEquipment : null
+  const totalOne = wasteOne == null ? null : loadingOne + wasteOne
+  const totalTwo = wasteTwo == null ? null : loadingTwo + wasteTwo
+  const totalEquipment = wasteEquipment == null ? null : loadingEquipment + wasteEquipment
+  const grandTotal = wasteTotal == null ? null : loadingTotal + wasteTotal
+  const count = (value: number | null) => (value == null ? '—' : String(value))
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-sm font-medium">{t('preflight.purchase.movement')}</div>
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>{t('preflight.purchase.movement')}</TableHead>
+              <TableHead className="text-right">{t('preflight.purchase.onePerson')}</TableHead>
+              <TableHead className="text-right">{t('preflight.purchase.twoPerson')}</TableHead>
+              <TableHead className="text-right">{t('preflight.purchase.equipment')}</TableHead>
+              <TableHead className="text-right">{t('preflight.purchase.total')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow>
+              <TableCell>{t('preflight.purchase.loading')}</TableCell>
+              <TableCell className="text-right font-mono text-xs">{loadingOne}</TableCell>
+              <TableCell className="text-right font-mono text-xs">{loadingTwo}</TableCell>
+              <TableCell className="text-right font-mono text-xs">{loadingEquipment}</TableCell>
+              <TableCell className="text-right font-mono text-xs">{loadingTotal}</TableCell>
+            </TableRow>
+            <TableRow>
+              <TableCell>{t('preflight.purchase.waste')}</TableCell>
+              <TableCell className="text-right font-mono text-xs">{count(wasteOne)}</TableCell>
+              <TableCell className="text-right font-mono text-xs">{count(wasteTwo)}</TableCell>
+              <TableCell className="text-right font-mono text-xs">
+                {count(wasteEquipment)}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs">{count(wasteTotal)}</TableCell>
+            </TableRow>
+            <TableRow className="font-semibold">
+              <TableCell>{t('preflight.purchase.total')}</TableCell>
+              <TableCell className="text-right font-mono text-xs">{count(totalOne)}</TableCell>
+              <TableCell className="text-right font-mono text-xs">{count(totalTwo)}</TableCell>
+              <TableCell className="text-right font-mono text-xs">
+                {count(totalEquipment)}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs">{count(grandTotal)}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
     </div>
   )
 }

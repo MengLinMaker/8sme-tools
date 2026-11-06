@@ -13,9 +13,44 @@
  */
 
 import { MACHINE } from '@/lib/machine/profile'
+import { profileFamily } from '@/lib/sections/canonical'
 
-/** Standard Australian structural-steel stock lengths stocked by Surdex. */
-export const AU_STOCK_LENGTHS_MM = [9000, 10500, 12000, 13500, 15000, 16500, 18000, 20000] as const
+/** Beam / channel stock lengths (Surdex). */
+export const BEAM_STOCK_LENGTHS_MM = [
+  9000, 10500, 12000, 13500, 15000, 16500, 18000, 20000,
+] as const
+
+/** RHS / SHS stock lengths (Surdex: 8 m and 12 m). */
+export const TUBE_STOCK_LENGTHS_MM = [8000, 12000] as const
+
+/** Equal / unequal angle stock lengths. */
+export const ANGLE_STOCK_LENGTHS_MM = [6000, 9000, 12000] as const
+
+/** CHS stock lengths. */
+export const CHS_STOCK_LENGTHS_MM = [6000, 9000] as const
+
+/** Union of every family, used for the UI's length toggles. */
+export const AU_STOCK_LENGTHS_MM = [
+  6000, 8000, 9000, 10500, 12000, 13500, 15000, 16500, 18000, 20000,
+] as const
+
+/** Supplier lengths that actually apply to a section. */
+export function stockLengthsForStock(stock: string): readonly number[] {
+  switch (profileFamily(stock)) {
+    case 'i':
+    case 'channel':
+    case 'tee':
+      return BEAM_STOCK_LENGTHS_MM
+    case 'tube':
+      return TUBE_STOCK_LENGTHS_MM
+    case 'angle':
+      return ANGLE_STOCK_LENGTHS_MM
+    case 'round':
+      return CHS_STOCK_LENGTHS_MM
+    default:
+      return AU_STOCK_LENGTHS_MM
+  }
+}
 
 /**
  * Default selection: lengths the KL-90010-T can take in a single pass. Longer bars are still
@@ -97,6 +132,8 @@ export interface PurchaseBar {
   usedMm: number
   /** Stock length minus the pieces on this bar (includes the reserved margin). */
   wasteMm: number
+  /** False when the last piece starts inside the final support zone. */
+  supportOk: boolean
 }
 
 export interface PurchaseQuantity {
@@ -132,11 +169,20 @@ export interface PurchasePlan {
   carryTwoPieces: number | null
   /** Offcuts that need lifting equipment. */
   overTwoPieces: number | null
+  /** Bars whose last piece starts inside the final support zone. */
+  invalidSupportBars: number
+  /** Purchased beams light enough for one person to load. */
+  loadingOnePersonMoves: number
+  /** Purchased beams needing two people to load (weight or length). */
+  loadingTwoPersonMoves: number
+  /** Purchased beams too heavy to load manually. */
+  loadingEquipmentMoves: number
   utilisation: number
   oversized: PurchaseUnit[]
 }
 
 interface DraftBar {
+  stockLengthMm: number
   units: PurchaseUnit[]
   usedMm: number
 }
@@ -182,14 +228,114 @@ function packFixed(
       bar.usedMm += (bar.units.length > 0 ? kerfMm : 0) + unit.lengthMm
       bar.units.push(unit)
     } else {
-      bars.push({ units: [unit], usedMm: unit.lengthMm })
+      bars.push({ stockLengthMm, units: [unit], usedMm: unit.lengthMm })
     }
   }
   return bars
 }
 
-/** Shortest available bar that still fits `usedMm` with the margin reserved. */
-function stockFor(usedMm: number, lengths: number[], marginMm: number): number | null {
+type PackStrategy = 'smallest' | 'largest' | 'fit'
+
+/**
+ * Mixed-size best-fit: open whatever stock length fits, not one fixed primary length.
+ * The finalise pass still re-shrinks every bar to the shortest support-valid stock.
+ */
+function packMixed(
+  units: PurchaseUnit[],
+  lengths: number[],
+  marginMm: number,
+  kerfMm: number,
+  tee: boolean,
+  strategy: PackStrategy,
+): DraftBar[] | null {
+  const bars: DraftBar[] = []
+
+  for (let index = 0; index < units.length; index++) {
+    const unit = units[index]
+    let best = -1
+    let bestFree = Number.POSITIVE_INFINITY
+    for (let i = 0; i < bars.length; i++) {
+      const bar = bars[i]
+      const gap = bar.units.length > 0 ? kerfMm : 0
+      const free =
+        usableStockLengthMm(bar.stockLengthMm, marginMm) - bar.usedMm - gap - unit.lengthMm
+      if (free >= 0 && free < bestFree) {
+        bestFree = free
+        best = i
+      }
+    }
+    if (best >= 0) {
+      const bar = bars[best]
+      bar.usedMm += (bar.units.length > 0 ? kerfMm : 0) + unit.lengthMm
+      bar.units.push(unit)
+      continue
+    }
+
+    const candidates = lengths.filter(
+      (length) => usableStockLengthMm(length, marginMm) >= unit.lengthMm,
+    )
+    if (candidates.length === 0) return null
+
+    let chosen = candidates[0]
+    if (strategy === 'largest') {
+      chosen = candidates[candidates.length - 1]
+    } else if (strategy === 'fit') {
+      let bestUsed = -1
+      for (const length of candidates) {
+        const capacity = usableStockLengthMm(length, marginMm)
+        let used = unit.lengthMm
+        let secondUsed = 0
+        let onSecond = false
+        for (const next of units.slice(index + 1)) {
+          if (!onSecond) {
+            const gap = used > 0 ? kerfMm : 0
+            if (used + gap + next.lengthMm <= capacity) {
+              used += gap + next.lengthMm
+              continue
+            }
+            if (!tee) continue
+            onSecond = true
+          }
+          const gap = secondUsed > 0 ? kerfMm : 0
+          if (secondUsed + gap + next.lengthMm <= capacity) {
+            secondUsed += gap + next.lengthMm
+          }
+        }
+        const filled = tee ? used + secondUsed : used
+        if (filled > bestUsed) {
+          bestUsed = filled
+          chosen = length
+        }
+      }
+    }
+
+    bars.push({ stockLengthMm: chosen, units: [unit], usedMm: unit.lengthMm })
+    if (tee) bars.push({ stockLengthMm: chosen, units: [], usedMm: 0 })
+  }
+
+  return bars
+}
+
+/**
+ * Shortest available bar that fits the pieces and keeps the last piece's start out of the final
+ * support zone. `lastStartMm` is the start of the last piece in cut order (or -Infinity for an
+ * empty bar).
+ */
+function stockFor(
+  usedMm: number,
+  lastStartMm: number,
+  lengths: number[],
+  marginMm: number,
+): number | null {
+  for (const length of lengths) {
+    if (usableStockLengthMm(length, marginMm) < usedMm) continue
+    if (lastStartMm < length - MACHINE.minEndSupportMm) return length
+  }
+  return null
+}
+
+/** Fallback when no length can satisfy the support zone: shortest bar that fits the pieces. */
+function stockForUsed(usedMm: number, lengths: number[], marginMm: number): number | null {
   for (const length of lengths) {
     if (usableStockLengthMm(length, marginMm) >= usedMm) return length
   }
@@ -208,6 +354,13 @@ interface PackedPlan {
   purchasedMm: number
 }
 
+function supportOk(bar: PurchaseBar): boolean {
+  const last = bar.units.at(-1)
+  if (!last) return true
+  const start = bar.usedMm - last.lengthMm
+  return start < bar.stockLengthMm - MACHINE.minEndSupportMm
+}
+
 function finalizeLinear(
   drafts: DraftBar[],
   lengths: number[],
@@ -218,14 +371,22 @@ function finalizeLinear(
   let purchasedMm = 0
 
   for (const draft of drafts) {
-    const stockLengthMm = stockFor(draft.usedMm, lengths, marginMm)
+    const units = [...draft.units].sort((a, b) => a.lengthMm - b.lengthMm)
+    const lastStartMm =
+      units.length > 0 ? draft.usedMm - units[units.length - 1].lengthMm : -Infinity
+    const stockLengthMm =
+      stockFor(draft.usedMm, lastStartMm, lengths, marginMm) ??
+      stockForUsed(draft.usedMm, lengths, marginMm)
     if (stockLengthMm == null) return null
-    bars.push({
+    const bar: PurchaseBar = {
       stockLengthMm,
-      units: draft.units,
+      units,
       usedMm: draft.usedMm,
       wasteMm: stockLengthMm - draft.usedMm,
-    })
+      supportOk: true,
+    }
+    bar.supportOk = supportOk(bar)
+    bars.push(bar)
     counts.set(stockLengthMm, (counts.get(stockLengthMm) ?? 0) + 1)
     purchasedMm += stockLengthMm
   }
@@ -243,25 +404,42 @@ function finalizeTee(drafts: DraftBar[], lengths: number[], marginMm: number): P
   for (let i = 0; i < sorted.length; i += 2) {
     const left = sorted[i]
     const right = sorted[i + 1] as DraftBar | undefined
-    const stockLengthMm = stockFor(Math.max(left.usedMm, right?.usedMm ?? 0), lengths, marginMm)
+    left.units.sort((a, b) => a.lengthMm - b.lengthMm)
+    right?.units.sort((a, b) => a.lengthMm - b.lengthMm)
+    const leftStart =
+      left.units.length > 0 ? left.usedMm - left.units[left.units.length - 1].lengthMm : -Infinity
+    const rightStart =
+      right && right.units.length > 0
+        ? right.usedMm - right.units[right.units.length - 1].lengthMm
+        : -Infinity
+    const usedMm = Math.max(left.usedMm, right?.usedMm ?? 0)
+    const stockLengthMm =
+      stockFor(usedMm, Math.max(leftStart, rightStart), lengths, marginMm) ??
+      stockForUsed(usedMm, lengths, marginMm)
     if (stockLengthMm == null) return null
     counts.set(stockLengthMm, (counts.get(stockLengthMm) ?? 0) + 1)
     purchasedMm += stockLengthMm
-    bars.push({
+    const leftBar: PurchaseBar = {
       stockLengthMm,
-      units: left.units,
+      units: [...left.units].sort((a, b) => a.lengthMm - b.lengthMm),
       usedMm: left.usedMm,
       wasteMm: stockLengthMm - left.usedMm,
-    })
+      supportOk: true,
+    }
+    leftBar.supportOk = supportOk(leftBar)
+    bars.push(leftBar)
     if (right) {
-      bars.push({
+      const rightBar: PurchaseBar = {
         stockLengthMm,
-        units: right.units,
+        units: [...right.units].sort((a, b) => a.lengthMm - b.lengthMm),
         usedMm: right.usedMm,
         wasteMm: stockLengthMm - right.usedMm,
-      })
+        supportOk: true,
+      }
+      rightBar.supportOk = supportOk(rightBar)
+      bars.push(rightBar)
     } else {
-      bars.push({ stockLengthMm, units: [], usedMm: 0, wasteMm: stockLengthMm })
+      bars.push({ stockLengthMm, units: [], usedMm: 0, wasteMm: stockLengthMm, supportOk: true })
     }
   }
 
@@ -297,6 +475,39 @@ function planCarryCounts(
   return counts
 }
 
+function betterPlan(
+  candidate: PackedPlan,
+  current: PackedPlan | null,
+  group: PurchaseGroupInput,
+  onePersonKg: number,
+  twoPersonKg: number,
+): boolean {
+  if (!current) return true
+
+  // Stage 1: minimum purchased length = minimum waste weight.
+  if (candidate.purchasedMm !== current.purchasedMm) {
+    return candidate.purchasedMm < current.purchasedMm
+  }
+
+  // Stage 2: prefer easy one-person offcuts, avoid the awkward 2-person middle, then
+  // reduce equipment lifts last.
+  const candidateCounts = planCarryCounts(candidate, group, onePersonKg, twoPersonKg)
+  const currentCounts = planCarryCounts(current, group, onePersonKg, twoPersonKg)
+  if (candidateCounts && currentCounts) {
+    if (candidateCounts.one !== currentCounts.one) {
+      return candidateCounts.one > currentCounts.one
+    }
+    if (candidateCounts.two !== currentCounts.two) {
+      return candidateCounts.two < currentCounts.two
+    }
+    if (candidateCounts.over !== currentCounts.over) {
+      return candidateCounts.over < currentCounts.over
+    }
+  }
+
+  return lengthBetter(candidate, current)
+}
+
 function lengthBetter(candidate: PackedPlan, current: PackedPlan): boolean {
   if (candidate.purchasedMm !== current.purchasedMm) {
     return candidate.purchasedMm < current.purchasedMm
@@ -309,9 +520,95 @@ function lengthBetter(candidate: PackedPlan, current: PackedPlan): boolean {
   return candidateStock < currentStock
 }
 
+function planFromBars(bars: PurchaseBar[]): PackedPlan {
+  const counts = new Map<number, number>()
+  let purchasedMm = 0
+  for (const bar of bars) {
+    counts.set(bar.stockLengthMm, (counts.get(bar.stockLengthMm) ?? 0) + 1)
+    purchasedMm += bar.stockLengthMm
+  }
+  return { bars, purchases: quantityList(counts), purchasedMm }
+}
+
+function repackLinear(
+  units: PurchaseUnit[],
+  lengths: number[],
+  marginMm: number,
+  kerfMm: number,
+  group: PurchaseGroupInput,
+  onePersonKg: number,
+  twoPersonKg: number,
+): PackedPlan | null {
+  const sorted = [...units].sort((a, b) => b.lengthMm - a.lengthMm)
+  let best: PackedPlan | null = null
+  const consider = (packed: PackedPlan | null) => {
+    if (packed && betterPlan(packed, best, group, onePersonKg, twoPersonKg)) best = packed
+  }
+  for (const length of lengths) {
+    const drafts = packFixed(sorted, length, marginMm, kerfMm)
+    if (!drafts) continue
+    consider(finalizeLinear(drafts, lengths, marginMm))
+  }
+  for (const strategy of ['smallest', 'largest', 'fit'] as const) {
+    const drafts = packMixed(sorted, lengths, marginMm, kerfMm, false, strategy)
+    if (!drafts) continue
+    consider(finalizeLinear(drafts, lengths, marginMm))
+  }
+  return best
+}
+
+/** Small local search: repack pairs of waste-bearing bars, keeping the rest fixed. */
+function improveLinearPlan(
+  plan: PackedPlan,
+  group: PurchaseGroupInput,
+  lengths: number[],
+  marginMm: number,
+  kerfMm: number,
+  onePersonKg: number,
+  twoPersonKg: number,
+): PackedPlan {
+  let best = plan
+  for (let pass = 0; pass < 2; pass++) {
+    const candidates = best.bars
+      .map((bar, index) => ({ bar, index }))
+      .filter(({ bar }) => bar.wasteMm > 0)
+      .sort((a, b) => b.bar.wasteMm - a.bar.wasteMm)
+      .slice(0, 30)
+    let improved = false
+    for (let a = 0; a < candidates.length && !improved; a++) {
+      for (let b = a + 1; b < candidates.length && !improved; b++) {
+        const first = candidates[a].index
+        const second = candidates[b].index
+        const units = [...best.bars[first].units, ...best.bars[second].units]
+        const repacked = repackLinear(
+          units,
+          lengths,
+          marginMm,
+          kerfMm,
+          group,
+          onePersonKg,
+          twoPersonKg,
+        )
+        if (!repacked) continue
+        const bars = best.bars.filter((_, index) => index !== first && index !== second)
+        const candidate = planFromBars([...bars, ...repacked.bars])
+        const currentInvalid = best.bars.some((bar) => !bar.supportOk)
+        if (!currentInvalid && candidate.bars.some((bar) => !bar.supportOk)) continue
+        if (betterPlan(candidate, best, group, onePersonKg, twoPersonKg)) {
+          best = candidate
+          improved = true
+        }
+      }
+    }
+    if (!improved) break
+  }
+  return best
+}
+
 export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions): PurchasePlan {
+  const allowed = new Set(stockLengthsForStock(group.stock))
   const lengths = [...new Set(options.stockLengthsMm)]
-    .filter((length) => length > 0)
+    .filter((length) => length > 0 && allowed.has(length))
     .sort((a, b) => a - b)
   const marginMm = Math.max(0, options.marginMm)
   const kerfMm = Math.max(0, options.kerfMm ?? 0)
@@ -326,18 +623,66 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
   const onePersonKg = Math.max(0, options.onePersonKg ?? DEFAULT_ONE_PERSON_KG)
   const twoPersonKg = Math.max(onePersonKg, options.twoPersonKg ?? DEFAULT_TWO_PERSON_KG)
 
-  let best: PackedPlan | null = null
+  let bestValid: PackedPlan | null = null
+  let bestInvalid: PackedPlan | null = null
+  const consider = (packed: PackedPlan | null) => {
+    if (!packed) return
+    const invalid = packed.bars.some((bar) => !bar.supportOk)
+    if (invalid) {
+      if (betterPlan(packed, bestInvalid, group, onePersonKg, twoPersonKg)) {
+        bestInvalid = packed
+      }
+    } else if (betterPlan(packed, bestValid, group, onePersonKg, twoPersonKg)) {
+      bestValid = packed
+    }
+  }
+
   for (const length of lengths) {
     const drafts = packFixed(fittable, length, marginMm, kerfMm)
     if (!drafts) continue
-    const packed = group.tee
-      ? finalizeTee(drafts, lengths, marginMm)
-      : finalizeLinear(drafts, lengths, marginMm)
-    if (packed && (!best || lengthBetter(packed, best))) best = packed
+    consider(
+      group.tee
+        ? finalizeTee(drafts, lengths, marginMm)
+        : finalizeLinear(drafts, lengths, marginMm),
+    )
   }
+
+  for (const strategy of ['smallest', 'largest', 'fit'] as const) {
+    const drafts = packMixed(fittable, lengths, marginMm, kerfMm, group.tee, strategy)
+    if (!drafts) continue
+    consider(
+      group.tee
+        ? finalizeTee(drafts, lengths, marginMm)
+        : finalizeLinear(drafts, lengths, marginMm),
+    )
+  }
+
+  const initialBest = (bestValid ?? bestInvalid) as PackedPlan | null
+  const best =
+    initialBest && !group.tee
+      ? improveLinearPlan(initialBest, group, lengths, marginMm, kerfMm, onePersonKg, twoPersonKg)
+      : initialBest
 
   const purchases = best?.purchases ?? []
   const purchasedMm = best?.purchasedMm ?? 0
+  let loadingOnePersonMoves = 0
+  let loadingTwoPersonMoves = 0
+  let loadingEquipmentMoves = 0
+  for (const item of purchases) {
+    if (item.lengthMm > MACHINE.envelope.maxLengthMm) {
+      // Cut in half before machining, so it is moved to the chuck twice.
+      loadingEquipmentMoves += item.count * 2
+      continue
+    }
+    const weightKg = group.massPerMetre == null ? null : (item.lengthMm / 1000) * group.massPerMetre
+    if (weightKg != null && weightKg > twoPersonKg) {
+      loadingEquipmentMoves += item.count
+    } else if (weightKg == null || weightKg > onePersonKg) {
+      loadingTwoPersonMoves += item.count
+    } else {
+      loadingOnePersonMoves += item.count
+    }
+  }
   const purchasedKg = group.massPerMetre == null ? null : (purchasedMm / 1000) * group.massPerMetre
   const capacityMm = group.tee ? purchasedMm * 2 : purchasedMm
   const oversizedMm = oversized.reduce((sum, unit) => sum + unit.lengthMm, 0)
@@ -359,6 +704,7 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
       ? null
       : (reusableOffcutMm / 1000) * group.massPerMetre * massFactor(group)
   const carryCounts = best ? planCarryCounts(best, group, onePersonKg, twoPersonKg) : null
+  const invalidSupportBars = (best?.bars ?? []).filter((bar) => !bar.supportOk).length
 
   return {
     key: group.key,
@@ -380,6 +726,10 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
     carryOnePieces: carryCounts?.one ?? null,
     carryTwoPieces: carryCounts?.two ?? null,
     overTwoPieces: carryCounts?.over ?? null,
+    invalidSupportBars,
+    loadingOnePersonMoves,
+    loadingTwoPersonMoves,
+    loadingEquipmentMoves,
     utilisation: capacityMm > 0 ? coveredMm / capacityMm : 0,
     oversized,
   }

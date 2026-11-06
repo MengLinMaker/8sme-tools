@@ -74,6 +74,8 @@ export interface MachineProfile {
   placementToleranceMm: number
   /** Raw/stock bar length assumed when none is chosen (mm). */
   defaultStockLengthMm: number
+  /** Uncut tail left at the outfeed end so the beam stays supported (mm). */
+  minEndSupportMm: number
 }
 
 /** A cross-section / part size to test against an envelope (any field may be omitted). */
@@ -112,6 +114,7 @@ export const KL90010T: MachineProfile = {
   unmachinableDepthMm: 30,
   placementToleranceMm: 1,
   defaultStockLengthMm: 12_000,
+  minEndSupportMm: 2_000,
 }
 
 /** The machine the workshop runs. */

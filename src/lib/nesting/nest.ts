@@ -1,4 +1,5 @@
 import type { AuditResult } from '@/lib/audit/types'
+import { MACHINE } from '@/lib/machine/profile'
 import { inferParentUb } from '@/lib/sections/infer'
 
 export interface TeePart {
@@ -34,6 +35,8 @@ export interface TeeBar {
   units: TeeUnit[]
   used: number
   waste: number
+  /** False when the last piece starts inside the final support zone. */
+  supportOk: boolean
 }
 
 /** One stock UB beam: split lengthwise into two independent T bars (left & right). */
@@ -69,6 +72,8 @@ export interface NestResult {
   totalTeeLength: number
   totalWaste: number
   utilisation: number
+  /** T bars whose last piece starts inside the final support zone. */
+  invalidSupportBars: number
   oversized: TeeUnit[]
 }
 
@@ -131,6 +136,8 @@ function finalize(bar: TeeBar, kerf: number): void {
   bar.units.sort((a, b) => a.length - b.length)
   bar.used = bar.units.reduce((sum, unit, index) => sum + unit.length + (index > 0 ? kerf : 0), 0)
   bar.waste = bar.stockLength - bar.used
+  const last = bar.units.at(-1)
+  bar.supportOk = !last || bar.used - last.length < bar.stockLength - MACHINE.minEndSupportMm
 }
 
 export function nestGroup(group: TeeGroup, options: NestOptions): NestResult {
@@ -183,8 +190,16 @@ export function nestGroup(group: TeeGroup, options: NestOptions): NestResult {
       units: [unit],
       used: unit.length,
       waste: 0,
+      supportOk: true,
     }
-    const right: TeeBar = { stockLength: length, reserved: leftover, units: [], used: 0, waste: 0 }
+    const right: TeeBar = {
+      stockLength: length,
+      reserved: leftover,
+      units: [],
+      used: 0,
+      waste: 0,
+      supportOk: true,
+    }
     teeBars.push(left, right)
     ubBars.push({ stockLength: length, reserved: leftover, teeBars: [left, right] })
   }
@@ -193,6 +208,7 @@ export function nestGroup(group: TeeGroup, options: NestOptions): NestResult {
 
   const totalStock = teeBars.reduce((sum, bar) => sum + bar.stockLength, 0)
   const totalWaste = teeBars.reduce((sum, bar) => sum + bar.waste, 0)
+  const invalidSupportBars = teeBars.filter((bar) => !bar.supportOk).length
 
   return {
     parentUb: group.parentUb,
@@ -207,6 +223,7 @@ export function nestGroup(group: TeeGroup, options: NestOptions): NestResult {
     totalTeeLength: group.totalLength,
     totalWaste,
     utilisation: totalStock > 0 ? (totalStock - totalWaste) / totalStock : 0,
+    invalidSupportBars,
     oversized,
   }
 }

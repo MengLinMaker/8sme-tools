@@ -18,6 +18,7 @@ describe('KL-90010-T machine profile', () => {
     expect(KL90010T.bottomCutMaxGrams).toBe(10)
     expect(KL90010T.unmachinableDepthMm).toBe(30)
     expect(KL90010T.defaultStockLengthMm).toBe(12_000)
+    expect(KL90010T.minEndSupportMm).toBe(2_000)
   })
 
   it('defaults checks to the workshop machine', () => {

@@ -88,6 +88,11 @@ single-pass is the unusual part (most peers cap at 12 m), consistent with "12 m 
   inside the `400 × 400` square limit.
 - The **bottom-cut mass guard** (`BOTTOM_CUT_MAX_GRAMS = 10`) is a *head-safety* rule, not an
   envelope rule — see `docs/canonical-orientation.md` §4.
+- **Outfeed support — final 2 m.** Keep the last ~1.5 m free of finished parts; 2 m is the safe
+  supported length. A part that sits **entirely** inside the final 2 m can drop where the laser
+  head is. A part may partially enter the zone. Waste/offcut may be dropped in the zone. This is
+  the same 2 m threshold used for reusable vs bin waste. `MACHINE.minEndSupportMm` holds the
+  value; purchase and T-nesting plans flag bars whose last part starts inside the zone.
 
 ## Relationship to the tools
 
@@ -98,6 +103,7 @@ single-pass is the unusual part (most peers cap at 12 m), consistent with "12 m 
 | Thickness-change reach (head can't clear large steps) | `src/lib/audit/manufacturability.ts` (`UNMANUFACTURABLE_DEPTH`) |
 | Section stance / cross-section dims | `src/lib/sections/stock.ts`, `docs/canonical-orientation.md` |
 | Cut-side priority & bottom-cut mass guard | `src/lib/sections/canonical.ts` |
+| Outfeed support / last-2-m validation | `MACHINE.minEndSupportMm`; `supportOk` on purchase/nesting bars |
 
 ## Machine-profile + checks lib
 

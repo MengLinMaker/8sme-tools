@@ -6,6 +6,7 @@ import {
   marginForStockLength,
   type PurchaseGroupInput,
   planPurchase,
+  stockLengthsForStock,
 } from './purchase'
 
 const STOCK = DEFAULT_STOCK_LENGTHS_MM
@@ -34,6 +35,18 @@ describe('marginForStockLength', () => {
     expect(marginForStockLength(13500, 150)).toBe(150)
     expect(marginForStockLength(16500, 150)).toBe(300)
     expect(marginForStockLength(20000, 100)).toBe(200)
+  })
+})
+
+describe('stockLengthsForStock', () => {
+  it('uses the supplier lengths for each section family', () => {
+    expect(stockLengthsForStock('200UB29.8')).toEqual([
+      9000, 10500, 12000, 13500, 15000, 16500, 18000, 20000,
+    ])
+    expect(stockLengthsForStock('RHS100*50*3.0')).toEqual([8000, 12000])
+    expect(stockLengthsForStock('SHS100*100*6.0')).toEqual([8000, 12000])
+    expect(stockLengthsForStock('EA50*50*5')).toEqual([6000, 9000, 12000])
+    expect(stockLengthsForStock('CHS100*3.2')).toEqual([6000, 9000])
   })
 })
 
@@ -111,12 +124,39 @@ describe('planPurchase', () => {
   })
 
   it('can use supplier lengths beyond the machine single pass when selected', () => {
-    const plan = planPurchase(group([[8000, 2]]), {
+    const plan = planPurchase(group([[8000, 2]], false, 30), {
       stockLengthsMm: AU_STOCK_LENGTHS_MM,
       marginMm: DEFAULT_CHUCK_MARGIN_MM,
     })
     // Two 8 m pieces fit one 16.5 m bar, which must be cut down before loading.
     expect(plan.purchases).toEqual([{ lengthMm: 16500, count: 1 }])
+    expect(plan.loadingOnePersonMoves).toBe(0)
+    expect(plan.loadingTwoPersonMoves).toBe(0)
+    // Cut in half before machining -> two equipment loads.
+    expect(plan.loadingEquipmentMoves).toBe(2)
+  })
+
+  it('classifies loading by the full beam weight', () => {
+    const light = planPurchase(group([[8000, 1]], false, 2.5), {
+      stockLengthsMm: STOCK,
+      marginMm: DEFAULT_CHUCK_MARGIN_MM,
+    })
+    // 9 m beam x 2.5 kg/m = 22.5 kg -> one person.
+    expect(light.loadingOnePersonMoves).toBe(1)
+
+    const two = planPurchase(group([[8000, 1]], false, 4), {
+      stockLengthsMm: STOCK,
+      marginMm: DEFAULT_CHUCK_MARGIN_MM,
+    })
+    // 9 m beam x 4 kg/m = 36 kg -> two people.
+    expect(two.loadingTwoPersonMoves).toBe(1)
+
+    const equipment = planPurchase(group([[8000, 1]], false, 10), {
+      stockLengthsMm: STOCK,
+      marginMm: DEFAULT_CHUCK_MARGIN_MM,
+    })
+    // 9 m beam x 10 kg/m = 90 kg -> equipment.
+    expect(equipment.loadingEquipmentMoves).toBe(1)
   })
 
   it('doubles the chuck allowance when the stock must be cut in half', () => {
@@ -179,6 +219,29 @@ describe('planPurchase', () => {
     })
     expect(plan.purchasedMm).toBe(12000)
     expect(plan.wasteKg).toBeCloseTo(100)
+  })
+
+  it('flags a bar whose last piece starts inside the support zone', () => {
+    const plan = planPurchase(group([[1000, 8]], false, 30), {
+      stockLengthsMm: [9000],
+      marginMm: DEFAULT_CHUCK_MARGIN_MM,
+    })
+    // 8 x 1 m on a 9 m bar: the last 1 m piece starts at 7 m, inside the 7–9 m zone.
+    expect(plan.invalidSupportBars).toBe(1)
+
+    const valid = planPurchase(group([[1000, 8]], false, 30), {
+      stockLengthsMm: [10500],
+      marginMm: DEFAULT_CHUCK_MARGIN_MM,
+    })
+    expect(valid.invalidSupportBars).toBe(0)
+
+    const preferred = planPurchase(group([[1000, 8]], false, 30), {
+      stockLengthsMm: [9000, 10500],
+      marginMm: DEFAULT_CHUCK_MARGIN_MM,
+    })
+    // The 10.5 m bar is longer but keeps the last piece out of the support zone.
+    expect(preferred.purchases).toEqual([{ lengthMm: 10500, count: 1 }])
+    expect(preferred.invalidSupportBars).toBe(0)
   })
 
   it('accounts for pieces in every quantity', () => {

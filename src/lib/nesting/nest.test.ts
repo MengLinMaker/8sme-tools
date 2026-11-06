@@ -106,6 +106,22 @@ describe('nestGroup', () => {
   })
 })
 
+describe('support zone', () => {
+  it('flags a bar whose last piece starts inside the final 2 m', () => {
+    const result = nestGroup(makeGroup([[1000, 8]]), {
+      stock: [{ length: 9000, count: UNLIMITED }],
+      kerf: 0,
+    })
+    expect(result.invalidSupportBars).toBe(1)
+
+    const valid = nestGroup(makeGroup([[1000, 8]]), {
+      stock: [{ length: 10500, count: UNLIMITED }],
+      kerf: 0,
+    })
+    expect(valid.invalidSupportBars).toBe(0)
+  })
+})
+
 describe('regression: NW31 top frames T lengths', () => {
   // Real T lengths (mm) from the NW31 Top frames job — 31 T's, total 67631 mm.
   const LENGTHS = [

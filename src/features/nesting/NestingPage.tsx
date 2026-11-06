@@ -762,6 +762,11 @@ export function NestingPage() {
                     })}
                   </div>
                 )}
+                {result.invalidSupportBars > 0 && (
+                  <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive-foreground">
+                    {t('nesting.supportWarning', { count: result.invalidSupportBars })}
+                  </div>
+                )}
                 {ubLayouts(result).map((layout, index) => (
                   <UbDiagram
                     key={

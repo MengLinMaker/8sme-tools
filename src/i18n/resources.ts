@@ -127,6 +127,8 @@ export const en = {
       stockLengths: 'Stock lengths',
       stockHint:
         'Standard Australian stock lengths. The KL-90010-T takes up to 13.5 m in a single pass.',
+      stockFamilyHint:
+        'Lengths vary by section: beams/channels 9–20 m; RHS/SHS 8/12 m; angles 6/9/12 m; CHS 6/9 m.',
       preCutShort: 'Longer than the machine — cut in half before loading',
       preCutNote:
         'Sizes marked * are cut in half before loading, so they reserve twice the chuck / error allowance.',
@@ -143,6 +145,7 @@ export const en = {
       lengthM: 'Length (m)',
       qtyShort: 'Qty',
       pieces: 'Pieces',
+      beamPieces: 'Beam pieces',
       required: 'Required',
       pieceRequired: '{{count}} pcs · {{length}} required',
       buy: 'Buy',
@@ -153,11 +156,17 @@ export const en = {
       totalWeight: 'Total steel',
       wasteWeight: 'Waste weight',
       binWaste: 'Bin waste (<2 m)',
-      carryOne: '1-person offcuts (≤ {{limit}} kg)',
-      carryTwo: '2-person offcuts ({{one}}–{{two}} kg)',
-      carryOver: 'Equipment offcuts (> {{limit}} kg)',
+      movement: 'Movement',
+      loading: 'Loading',
+      onePerson: '1-person',
+      twoPerson: '2-person',
+      equipment: 'Equipment',
+      total: 'Total',
+      loadingHint:
+        'Loading uses the full beam weight: heavy beams need equipment, and beams over 13.5 m need two people.',
       carry: 'Carry (1P·2P·>2P)',
       reusableShort: 'reuse {{weight}}',
+      wastePatternLegend: 'Solid waste = reusable (≥ 2 m) · hatched = bin (< 2 m)',
       use: 'Use',
       profiles: 'Stock profiles',
       tee: 'T · parent UB',
@@ -174,10 +183,10 @@ export const en = {
       nestingBeam: 'Beam {{index}} · {{length}}',
       nestingBeamT: 'Beam {{index}} · {{length}} UB',
       nestingSide: 'Side {{index}}',
-      nestingEmpty: 'empty',
-      nestingWaste: 'waste {{length}} · {{weight}}',
       oversized: '{{count}} piece(s) longer than {{length}}',
       oversizedTotal: '{{count}} piece(s) exceed every selected stock length.',
+      supportWarning:
+        '{{count}} bar(s) start their last piece inside the final 2 m support zone — it can drop where the head is. Move short pieces forward or leave more tail.',
       noMass: 'Section mass is unavailable, so weight and carry metrics cannot be calculated.',
     },
     profileSettings: {
@@ -421,6 +430,8 @@ export const en = {
     downloadCutBeam: 'Download cut-beam STEP (.zip)',
     generating: 'Generating…',
     oversized: '{{count}} T(s) could not be placed (too long or stock exhausted): {{lengths}} mm',
+    supportWarning:
+      '{{count}} T bar(s) place their last piece inside the final 2 m support zone — it may drop where the head is. Move short pieces forward or leave more tail.',
     stepNote:
       'STEP: one file per distinct layout (AP214) — the UB’s left/right T bars packed tight, each part written as its own solid (joins are disabled for now). The dialog lists the separate bodies for debugging. NC: the experimental Weihong .nc1 per beam, kept in a separate download so it is only run on purpose.',
     noTees: 'No T-sections (halved-UB parts) were found in this job.',
@@ -683,6 +694,8 @@ export const zh = {
         '先减少需设备和双人搬运的余料，再优先增加单人可搬的余料；可能多采购材料以避免重件。',
       stockLengths: '原材长度',
       stockHint: '澳洲标准原材长度。KL-90010-T 单次装夹最大 13.5 m。',
+      stockFamilyHint:
+        '不同型材的原材长度不同：梁/槽钢 9–20 m；RHS/SHS 8/12 m；角钢 6/9/12 m；CHS 6/9 m。',
       preCutShort: '超过机床单次装夹长度——装夹前需对半截断',
       preCutNote: '带 * 的长度需对半截断后装夹，因此预留双倍的卡盘 / 误差余量。',
       preCutPurchased: '带 * 的钢梁需对半截断后装夹；已包含双倍余量。',
@@ -696,6 +709,7 @@ export const zh = {
       lengthM: '长度 (m)',
       qtyShort: '数量',
       pieces: '件数',
+      beamPieces: '钢梁件',
       required: '需求',
       pieceRequired: '{{count}} 件 · 需求 {{length}}',
       buy: '采购',
@@ -706,11 +720,17 @@ export const zh = {
       totalWeight: '钢材总重',
       wasteWeight: '余料重量',
       binWaste: '废料（<2 m）',
-      carryOne: '单人余料（≤ {{limit}} kg）',
-      carryTwo: '双人余料（{{one}}–{{two}} kg）',
-      carryOver: '需设备余料（> {{limit}} kg）',
+      movement: '搬运次数',
+      loading: '装料',
+      onePerson: '单人',
+      twoPerson: '双人',
+      equipment: '设备',
+      total: '合计',
+      loadingHint:
+        '装料按钢梁全长重量计算：重梁需要设备，超过 13.5 m 需要两人；只有很轻的型材才由单人搬运。',
       carry: '搬运（1人·2人·设备）',
       reusableShort: '可复用 {{weight}}',
+      wastePatternLegend: '实心余料 = 可复用（≥ 2 m）· 斜线 = 废料（< 2 m）',
       use: '利用率',
       profiles: '原材规格',
       tee: 'T · 母材 UB',
@@ -726,10 +746,10 @@ export const zh = {
       nestingBeam: '第 {{index}} 根 · {{length}}',
       nestingBeamT: '第 {{index}} 根 · {{length}} UB',
       nestingSide: '第 {{index}} 面',
-      nestingEmpty: '空',
-      nestingWaste: '余料 {{length}} · {{weight}}',
       oversized: '{{count}} 件超过 {{length}}',
       oversizedTotal: '{{count}} 件超过所有已选原材长度。',
+      supportWarning:
+        '{{count}} 根钢梁的最后一件从末端 2 m 支撑区内开始——可能掉落在激光头区域。请将短件前移或预留更长尾料。',
       noMass: '无法确定型材单位重量，重量和搬运指标无法计算。',
     },
     profileSettings: {
@@ -947,6 +967,8 @@ export const zh = {
     downloadCutBeam: '下载剖切钢梁 STEP (.zip)',
     generating: '生成中…',
     oversized: '{{count}} 根 T 件无法排入（过长或原材不足）：{{lengths}} mm',
+    supportWarning:
+      '{{count}} 根 T 型杆的最后一件位于末端 2 m 支撑区内——可能掉落在激光头区域。请将短件前移或预留更长尾料。',
     stepNote:
       'STEP：每种排布输出一个文件（AP214）——UB 的左右 T 型杆紧密排布，每个零件写为独立实体（目前暂不合并）。对话框列出各个独立实体以便调试。NC：实验性的 Weihong .nc1，每根钢梁一个，单独下载，仅在需要时运行。',
     noTees: '此作业中未找到 T 型截面（对半剖开的 UB 零件）。',
