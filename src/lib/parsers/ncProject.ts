@@ -38,6 +38,7 @@ import {
   type BevelPolicy,
   defaultBevelPolicy,
   outOfRangeCouples,
+  selectDrawnPrep,
   selectWeldingPrep,
 } from './weldingPrep'
 
@@ -199,13 +200,13 @@ function arrow(target: number[], at: Vec3, dir: Vec3, spread: Vec3): void {
  * carry a prep on both sides of the plate; only a couple within the head's range is a cut the head
  * makes (see `selectWeldingPrep`). `0` = no bevel.
  */
-function bevelAngle(bevel: number[] | undefined): number {
-  return selectWeldingPrep(bevel, true).angle
+function bevelAngle(bevel: number[] | undefined, drawn: boolean): number {
+  return (drawn ? selectDrawnPrep(bevel) : selectWeldingPrep(bevel, true)).angle
 }
 
 /** Bevel distance to draw for a vertex, or 0 when the vertex is a plain cut. */
-function bevelDistance(bevel: number[] | undefined): number {
-  const { angle, distance } = selectWeldingPrep(bevel, true)
+function bevelDistance(bevel: number[] | undefined, drawn: boolean): number {
+  const { angle, distance } = drawn ? selectDrawnPrep(bevel) : selectWeldingPrep(bevel, true)
   if (distance > 0) return distance
   return angle !== 0 ? DEFAULT_BEVEL_SPUR : 0
 }
@@ -401,6 +402,8 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
   const policy =
     projection.bevelPolicy ??
     defaultBevelPolicy(frame.profile ? profileFamily(frame.profile) : null)
+  // Kept preps are drawn as the NC has them (steepest side, out of range included), on the original cut.
+  const showAsDrawn = policy === 'asDrawn'
   const drawn = nc.contours.map((c) => ({
     ...c,
     bevels: c.bevels.map((b) => applyBevelPolicy(b, policy)),
@@ -461,11 +464,12 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
         continue
       }
       const deg =
-        Math.abs(bevelAngle(contour.bevels[i])) >= Math.abs(bevelAngle(contour.bevels[i + 1]))
-          ? bevelAngle(contour.bevels[i])
-          : bevelAngle(contour.bevels[i + 1])
-      const d0 = bevelDistance(contour.bevels[i])
-      const d1 = bevelDistance(contour.bevels[i + 1])
+        Math.abs(bevelAngle(contour.bevels[i], showAsDrawn)) >=
+        Math.abs(bevelAngle(contour.bevels[i + 1], showAsDrawn))
+          ? bevelAngle(contour.bevels[i], showAsDrawn)
+          : bevelAngle(contour.bevels[i + 1], showAsDrawn)
+      const d0 = bevelDistance(contour.bevels[i], showAsDrawn)
+      const d1 = bevelDistance(contour.bevels[i + 1], showAsDrawn)
       // A bevel is a slanted cut **surface**, not a square wall-piercing cut: the face normal is
       // not its cut path, so the CUT_DEPTH probe (which follows the normal for T + r) does not
       // apply. Sampling it reported "overcuts" on plain beveled end cuts.

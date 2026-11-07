@@ -104,3 +104,20 @@ export function applyBevelPolicy(bevel: number[] | undefined, policy: BevelPolic
   }
   return next
 }
+
+/**
+ * The bevel as the NC writes it, for drawing a kept prep: the steepest nonzero couple, whether or not
+ * the head can cut it. Used only when the policy keeps out-of-range preps (`asDrawn`).
+ */
+export function selectDrawnPrep(bevel: number[] | undefined): WeldingPrep {
+  if (!bevel) return NO_PREP
+  let best = NO_PREP
+  for (const couple of [
+    { angle: bevel[0] ?? 0, distance: bevel[1] ?? 0 },
+    { angle: bevel[2] ?? 0, distance: bevel[3] ?? 0 },
+  ]) {
+    if (!Number.isFinite(couple.angle) || couple.angle === 0) continue
+    if (Math.abs(couple.angle) > Math.abs(best.angle)) best = couple
+  }
+  return best
+}
