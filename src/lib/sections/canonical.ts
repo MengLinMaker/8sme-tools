@@ -108,6 +108,68 @@ export function faceRole(family: ProfileFamily, face: NcFace): MachineRole {
   return FACE_ROLES[family][face]
 }
 
+/** A DSTV face's unit direction in the canonical section frame (`+x` right, `+y` up). */
+export interface FaceDirection {
+  dx: -1 | 0 | 1
+  dy: -1 | 0 | 1
+}
+
+/**
+ * Which edge of the canonical cross-section each DSTV letter sits on, for the viewer's static face
+ * map (see `docs/canonical-orientation.md` figures for an I, channel, angle and tube). This is the
+ * *letter → physical edge* table, independent of where material happens to reach: on a channel both
+ * web letters are on the top/bottom axis (`h` top, `v` the open bottom), and on a T the flange ends
+ * (`o`/`u`) are the two sides. Do not build this from `faceNormal`/`resolveFaceSign` — those project
+ * an NC cut onto the material side and collapse a one-sided section's opposite letters onto it.
+ *
+ * The `tee` row follows the doc's rotation of the DSTV reference pose (flange-vertical → our
+ * flange-down/web-up): `v` = web end (top), `h` = flange back (bottom), `o`/`u` = the flange ends
+ * (left/right). It is still flagged as an open issue against `FACE_ROLES` in the doc.
+ */
+export const FACE_DIRECTIONS: Record<ProfileFamily, Record<NcFace, FaceDirection>> = {
+  i: {
+    o: { dx: 1, dy: 0 },
+    u: { dx: -1, dy: 0 },
+    v: { dx: 0, dy: 1 },
+    h: { dx: 0, dy: -1 },
+  },
+  channel: {
+    o: { dx: 1, dy: 0 },
+    u: { dx: -1, dy: 0 },
+    v: { dx: 0, dy: -1 },
+    h: { dx: 0, dy: 1 },
+  },
+  tube: {
+    o: { dx: 1, dy: 0 },
+    u: { dx: -1, dy: 0 },
+    v: { dx: 0, dy: -1 },
+    h: { dx: 0, dy: 1 },
+  },
+  angle: {
+    o: { dx: 0, dy: 1 },
+    u: { dx: 0, dy: -1 },
+    v: { dx: 1, dy: 0 },
+    h: { dx: -1, dy: 0 },
+  },
+  tee: {
+    o: { dx: -1, dy: 0 },
+    u: { dx: 1, dy: 0 },
+    v: { dx: 0, dy: 1 },
+    h: { dx: 0, dy: -1 },
+  },
+  round: {
+    o: { dx: 0, dy: 1 },
+    u: { dx: 0, dy: -1 },
+    v: { dx: 1, dy: 0 },
+    h: { dx: -1, dy: 0 },
+  },
+}
+
+/** Edge of the canonical cross-section a DSTV face sits on (for the static face map). */
+export function faceDirection(family: ProfileFamily, face: NcFace): FaceDirection {
+  return FACE_DIRECTIONS[family][face]
+}
+
 /**
  * DSTV faces whose cut lines the STEP viewer extracts, per family. Open sections use the two sides
  * plus the top; a **closed hollow** (SHS/RHS) is machined all round, so all four faces count —

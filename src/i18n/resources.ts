@@ -349,6 +349,7 @@ export const en = {
       locationHint:
         'Position (mm) of the orbit centre along the member — the reticle in the 3D. Type a number and press Enter to jump there',
       locationDirection: 'Positive direction along the member',
+      faceMap: 'DSTV faces (o/u/v/h) as they sit in the current view',
       drawingError: 'Could not display drawing.',
       ncMissingFile: 'No NC file matched mark {{mark}} in this job',
       ncMissingBytes: 'NC for {{mark}} could not be read from this job',
@@ -913,6 +914,7 @@ export const zh = {
       locationHint:
         '旋转中心沿构件方向的位置（mm）——即 3D 中的十字准星。输入数字并按回车跳转到该处',
       locationDirection: '沿构件的正方向',
+      faceMap: '当前视角下的 DSTV 面（o/u/v/h）',
       drawingError: '无法显示图纸。',
       ncMissingFile: '本任务中未找到标记 {{mark}} 的 NC 文件',
       ncMissingBytes: '无法从本任务读取 {{mark}} 的 NC',

@@ -67,7 +67,7 @@ import { downloadBlob, downloadText, fileStem } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
 import { removeCutFromNc, setBevelInNc } from '@/lib/parsers/ncEdit'
 import { frameForProfile, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
-import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import {
   cutThicknesses,
   ETCH_COLOR,
@@ -79,7 +79,7 @@ import { reemitPartNc } from '@/lib/parsers/ncReemit'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
 import type { PurchaseGroupInput } from '@/lib/purchasing/purchase'
 import type { InputBundle } from '@/lib/readInput'
-import { CUT_FACES, profileFamily } from '@/lib/sections/canonical'
+import { CUT_FACES, FACE_DIRECTIONS, profileFamily } from '@/lib/sections/canonical'
 import type { SectionGuess } from '@/lib/sections/detect'
 import { inferTee } from '@/lib/sections/infer'
 import {
@@ -138,6 +138,13 @@ import { PurchaseDialog } from './PurchaseDialog'
 const PartViewer = lazy(() => import('./PartViewer'))
 
 const SEVERITY_ORDER: Record<Severity, number> = { error: 0, warning: 1, info: 2 }
+
+/** One DSTV face on the tiny face map: its unit direction in the section's own `x`/`y` frame. */
+interface FaceMapEntry {
+  face: NcFace
+  dx: number
+  dy: number
+}
 
 /** Location along the member (mm) a finding sits at, or null when it has none. */
 function findingLocationOf(finding: Finding): number | null {
@@ -644,6 +651,18 @@ export function PreflightPage() {
     (viewing ? sectionGuesses.get(viewing.mark)?.code : undefined) ??
     viewing?.expected?.profile ??
     null
+  // The four DSTV faces in the canonical cross-section, for the static face map by the location
+  // arrow. Use the documented letter→edge table, not the runtime cut projection: on a one-sided
+  // section (channel, T) two letters can resolve onto the same material side even though they are
+  // opposite faces of the section.
+  const viewingFaceMap = useMemo<FaceMapEntry[] | null>(() => {
+    const family = viewingProfileCode ? profileFamily(viewingProfileCode) : null
+    if (!family) return null
+    return (['o', 'u', 'v', 'h'] as NcFace[]).map((face) => {
+      const { dx, dy } = FACE_DIRECTIONS[family][face]
+      return { face, dx, dy }
+    })
+  }, [viewingProfileCode])
   // No NC means no face frame, but the stock outline still tells us each cut face's wall. Key the
   // thickness off the section spec where the family is known (a UB's tf/tw), so the STEP colours
   // and legend read the real plate, not a measurement across the whole section.
@@ -3656,6 +3675,14 @@ export function PreflightPage() {
                       </div>
                     )}
                   </div>
+                  {viewingFaceMap && (
+                    <div
+                      className="flex w-14 shrink-0 grow-0 basis-auto items-center justify-center self-stretch border-l border-border p-1"
+                      title={t('preflight.viewer.faceMap')}
+                    >
+                      <FaceMapSquare layout={viewingFaceMap} />
+                    </div>
+                  )}
                   <div
                     className="flex size-14 shrink-0 grow-0 basis-auto items-center justify-center self-center border-l border-border"
                     title={t('preflight.viewer.locationDirection')}
@@ -4542,6 +4569,47 @@ function DiffLegend({ info }: { info: DiffStats }) {
         <span className="text-blue-300">{t('viewer.undercut')}</span>
       </span>
     </span>
+  )
+}
+
+/**
+ * A tiny square plane labelled with the four DSTV faces (`o`/`u`/`v`/`h`) in the canonical
+ * cross-section, drawn as if the beam direction arrow points at the viewer (looking down the
+ * member). Static by design, so the letters read at a glance without tracking the 3D camera.
+ */
+function FaceMapSquare({ layout }: { layout: FaceMapEntry[] }) {
+  const size = 40
+  const c = size / 2
+  const half = 8
+  const radius = half + 6
+  return (
+    <svg aria-hidden="true" viewBox={`0 0 ${size} ${size}`} className="size-full text-foreground">
+      <rect
+        x={c - half}
+        y={c - half}
+        width={half * 2}
+        height={half * 2}
+        fill="currentColor"
+        fillOpacity={0.08}
+        stroke="currentColor"
+        strokeWidth={0.6}
+        strokeLinejoin="round"
+      />
+      {layout.map(({ face, dx, dy }) => (
+        <text
+          key={face}
+          x={c + dx * radius}
+          y={c - dy * radius}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontSize={8}
+          fontWeight={600}
+          fill="currentColor"
+        >
+          {face}
+        </text>
+      ))}
+    </svg>
   )
 }
 

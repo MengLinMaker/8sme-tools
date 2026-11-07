@@ -4,6 +4,7 @@ import {
   bottomCutAllowed,
   CUT_FACES,
   cutPriority,
+  FACE_DIRECTIONS,
   faceRole,
   holeRemovedMassGrams,
   profileFamily,
@@ -64,6 +65,46 @@ describe('faceRole', () => {
     // Channel: both flanges are sides — the preferred cut.
     expect(cutPriority('channel', 'o')).toBe(0)
     expect(cutPriority('channel', 'u')).toBe(0)
+  })
+})
+
+describe('FACE_DIRECTIONS', () => {
+  const families = ['i', 'channel', 'angle', 'tube', 'tee', 'round'] as const
+  const faces = ['o', 'u', 'v', 'h'] as const
+
+  it('puts every face on a distinct edge', () => {
+    for (const family of families) {
+      const edges = new Set<string>()
+      for (const face of faces) {
+        const { dx, dy } = FACE_DIRECTIONS[family][face]
+        expect(Math.abs(dx) + Math.abs(dy)).toBe(1)
+        edges.add(`${dx},${dy}`)
+      }
+      expect(edges.size).toBe(4)
+    }
+  })
+
+  it('keeps the documented I and channel layouts', () => {
+    // UB in H stance: v top, h bottom, o/u the sides.
+    expect(FACE_DIRECTIONS.i.v).toEqual({ dx: 0, dy: 1 })
+    expect(FACE_DIRECTIONS.i.h).toEqual({ dx: 0, dy: -1 })
+    // PFC in n stance: the web face h is top, the opening v is bottom — not both on one edge.
+    expect(FACE_DIRECTIONS.channel.h).toEqual({ dx: 0, dy: 1 })
+    expect(FACE_DIRECTIONS.channel.v).toEqual({ dx: 0, dy: -1 })
+  })
+
+  it('has every non-tee row agree with faceRole', () => {
+    // The tee row is still the documented open issue, so only assert the settled families.
+    for (const family of families) {
+      if (family === 'tee') continue
+      for (const face of faces) {
+        const role = faceRole(family, face)
+        const { dx, dy } = FACE_DIRECTIONS[family][face]
+        if (role === 'top') expect(dy).toBe(1)
+        else if (role === 'bottom') expect(dy).toBe(-1)
+        else expect(Math.abs(dx)).toBe(1)
+      }
+    }
   })
 })
 
