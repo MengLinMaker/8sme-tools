@@ -397,6 +397,27 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
   }
 
   const isTube = (frame.profile ? profileFamily(frame.profile) : null) === 'tube'
+  // DSTV writes a beveled hollow end's `AK` line on the bevel **root** surface (the inner wall when
+  // the prep opens outwards), so taken literally it sits ~wall·tan(prep) off the visible outer cut
+  // edge. Draw it on the outer skin instead, where the laser exits: shift the root line along the
+  // member by that amount. A positive prep is the rooted-in case; a negative prep is already on the
+  // outer skin. Start and end cuts shift in opposite directions.
+  let minAlong = Number.POSITIVE_INFINITY
+  let maxAlong = Number.NEGATIVE_INFINITY
+  for (const c of nc.contours) {
+    if (c.kind !== 'outer') continue
+    for (const [x] of c.points) {
+      if (x < minAlong) minAlong = x
+      if (x > maxAlong) maxAlong = x
+    }
+  }
+  const midAlong = (minAlong + maxAlong) / 2
+  const outerAlongShift = (face: NcFace, x0: number, x1: number, deg: number): number => {
+    if (!isTube || deg <= REGULAR_CUT_DEG) return 0
+    const wall = faceThickness(frame, section, face)
+    const shift = wall * Math.tan((deg * Math.PI) / 180)
+    return (x0 + x1) / 2 < midAlong ? shift : -shift
+  }
   // Draw the bevels the model will cut: out-of-range preps follow the policy (no 45° mitre drawn on
   // a tube by default). The warning lines below still read the raw NC.
   const policy =
@@ -413,8 +434,16 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     for (let i = 0; i < contour.points.length - 1; i++) {
       const [x0, y0] = contour.points[i]
       const [x1, y1] = contour.points[i + 1]
-      const a = place(contour.face, x0, y0)
-      const b = place(contour.face, x1, y1)
+      const deg =
+        Math.abs(bevelAngle(contour.bevels[i], showAsDrawn)) >=
+        Math.abs(bevelAngle(contour.bevels[i + 1], showAsDrawn))
+          ? bevelAngle(contour.bevels[i], showAsDrawn)
+          : bevelAngle(contour.bevels[i + 1], showAsDrawn)
+      const shift = contour.kind === 'outer' ? outerAlongShift(contour.face, x0, x1, deg) : 0
+      const sx0 = x0 + shift
+      const sx1 = x1 + shift
+      const a = place(contour.face, sx0, y0)
+      const b = place(contour.face, sx1, y1)
       if (
         contour.kind === 'outer' &&
         outOfRangeCouples(nc.contours[contourIndex]?.bevels[i]).length > 0
@@ -424,7 +453,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
         outOfRange.push({ face: contour.face, index: i, points })
       }
       if (contour.kind === 'inner') {
-        pushCurve(byFace[contour.face], contour.face, x0, y0, x1, y1, contour.radii?.[i] ?? 0)
+        pushCurve(byFace[contour.face], contour.face, sx0, y0, sx1, y1, contour.radii?.[i] ?? 0)
         continue
       }
       // A cut with no material anywhere along it (edge of stock / one-sided section) removes
@@ -446,7 +475,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
         // A DSTV notch label (`t`/`w`) marks a real cut at a corner where the face plane recedes
         // (e.g. the necked end of a shaft). Keep the segment so its cut line is drawn.
         const notched = notchCorners(contour.face).some(
-          ([nx, ny]) => Math.hypot(x0 - nx, y0 - ny) < 2 || Math.hypot(x1 - nx, y1 - ny) < 2,
+          ([nx, ny]) => Math.hypot(sx0 - nx, y0 - ny) < 2 || Math.hypot(sx1 - nx, y1 - ny) < 2,
         )
         if (!notched) continue
       }
@@ -463,20 +492,15 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       ) {
         continue
       }
-      const deg =
-        Math.abs(bevelAngle(contour.bevels[i], showAsDrawn)) >=
-        Math.abs(bevelAngle(contour.bevels[i + 1], showAsDrawn))
-          ? bevelAngle(contour.bevels[i], showAsDrawn)
-          : bevelAngle(contour.bevels[i + 1], showAsDrawn)
       const d0 = bevelDistance(contour.bevels[i], showAsDrawn)
       const d1 = bevelDistance(contour.bevels[i + 1], showAsDrawn)
       // A bevel is a slanted cut **surface**, not a square wall-piercing cut: the face normal is
       // not its cut path, so the CUT_DEPTH probe (which follows the normal for T + r) does not
       // apply. Sampling it reported "overcuts" on plain beveled end cuts.
       if (deg === 0 && d0 === 0 && d1 === 0)
-        sampleCut(contour.face, x0, y0, x1, y1, contour.radii?.[i] ?? 0, spur)
+        sampleCut(contour.face, sx0, y0, sx1, y1, contour.radii?.[i] ?? 0, spur)
       // The cut line is grouped by its face's thickness; the bevel just adds its indication.
-      pushCurve(byFace[contour.face], contour.face, x0, y0, x1, y1, contour.radii?.[i] ?? 0)
+      pushCurve(byFace[contour.face], contour.face, sx0, y0, sx1, y1, contour.radii?.[i] ?? 0)
       if (d0 <= 0 && d1 <= 0) continue
 
       // The cut face is tilted off the surface normal by the bevel angle; show that tilt either as

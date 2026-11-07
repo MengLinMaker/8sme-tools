@@ -206,6 +206,11 @@ const AGREES = [
   ['m31', 'PFC', nw31Top('NC files', 'm31.nc1'), nw31Top('STP files', 'm31.stp')],
   ['m130', 'PFC', nw31Top('NC files', 'm130.nc1'), nw31Top('STP files', 'm130.stp')],
   ['m40', 'PFC', nw31Top('NC files', 'm40.nc1'), nw31Top('STP files', 'm40.stp')],
+  // RHS end cuts: the AK line is rooted on the bevel's inner wall; `projectNc` maps it back to the
+  // outer-skin cut edge, so it lands on the STEP outer edge (~0.26 mm) instead of ~wall·tan(20°) off.
+  ['m117', 'RHS', nw31Top('NC files', 'm117.nc1'), nw31Top('STP files', 'm117.stp')],
+  ['m172', 'RHS', nw31Top('NC files', 'm172.nc1'), nw31Top('STP files', 'm172.stp')],
+  ['m150', 'RHS', nw31Top('NC files', 'm150.nc1'), nw31Top('STP files', 'm150.stp')],
 ] as const
 /**
  * Parts whose NC genuinely differs from the STEP geometry (recorded, not fixed). m40 (PFC) is the
@@ -214,8 +219,6 @@ const AGREES = [
  */
 const DIVERGES = [
   ['m116', 'PFC', nw31Bottom('m116.nc1'), nw31Bottom('m116.stp')],
-  ['m117', 'RHS', nw31Top('NC files', 'm117.nc1'), nw31Top('STP files', 'm117.stp')],
-  ['m150', 'RHS', nw31Top('NC files', 'm150.nc1'), nw31Top('STP files', 'm150.stp')],
   ['m105', 'SHS', nw30Bottom('m105.nc1'), nw30Bottom('m105.stp')],
 ] as const
 

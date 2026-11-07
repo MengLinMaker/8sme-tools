@@ -150,6 +150,45 @@ describe('tube canonical stance (RHS150*100*9.0)', () => {
   })
 })
 
+describe('projectNc hollow bevel end (RHS150*100*9.0)', () => {
+  it('draws a beveled end cut on the outer skin at the real cut edge', () => {
+    const path = nw31Top('NC files', 'm172.nc1')
+    if (!existsSync(path)) return
+    const text = readFileSync(path, 'utf8')
+    const header = parseDstv(text).header
+    const geo = parseNcGeometry(text)
+    const section = partSectionForCode(header.profile, header.dimensions)?.points
+    expect(section).toBeTruthy()
+    if (!section) return
+    const frame = resolveNcFaceFrame(section, geo, header.profile)
+    const toScene = (along: number, cross: [number, number]): Vec3 => [along, cross[0], cross[1]]
+    const normal = (face: NcFace): Vec3 => {
+      const n = faceNormal(frame, face, section)
+      return n.axis === 0 ? [0, n.sign, 0] : [0, 0, n.sign]
+    }
+    const out = projectNc(geo, { frame, section, toScene, normal })
+    const points: Vec3[] = []
+    for (const cut of out.cuts)
+      for (let i = 0; i + 2 < cut.points.length; i += 3)
+        points.push([
+          cut.points[i] as number,
+          cut.points[i + 1] as number,
+          cut.points[i + 2] as number,
+        ])
+    const has = (x: number, y: number, z: number): boolean =>
+      points.some(
+        (p) => Math.abs(p[0] - x) < 0.5 && Math.abs(p[1] - y) < 0.5 && Math.abs(p[2] - z) < 0.5,
+      )
+    // m172: `o`/`u` are the 150-apart short faces (wall 9). The AK line is rooted on the inner
+    // wall for a +20° prep, so the outer-skin cut edge is shifted by 9·tan20° ≈ 3.28 mm along the
+    // member: + for the start cut, − for the end cut. Negative preps are already on the outer skin.
+    expect(has(0, 75, 50)).toBe(true)
+    expect(has(51.32 + 9 * Math.tan((20 * Math.PI) / 180), -75, 50)).toBe(true)
+    expect(has(4220.07 - 9 * Math.tan((20 * Math.PI) / 180), 75, -50)).toBe(true)
+    expect(has(4271.39, -75, 50)).toBe(true)
+  })
+})
+
 describe('faceThickness', () => {
   const empty: NcGeometry = { contours: [], holes: [], notches: [], marks: [] }
   const section = partSectionForCode('EA75*75*6', [75, 75, 6, 6, 8])?.points ?? []
