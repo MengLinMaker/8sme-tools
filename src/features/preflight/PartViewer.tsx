@@ -140,6 +140,28 @@ const SABRE_HALO_OPACITY = 0.32
 const SABRE_HIGHLIGHT_WIDTH = 6
 /** The other markers dim to this while one is hovered, so the hovered one reads at a glance. */
 const SABRE_DIM_OPACITY = 0.2
+/** Resting opacity of an issue line (the hover style below is shared by every issue type). */
+const BASE_LINE_OPACITY = 0.98
+
+/**
+ * The hover treatment every issue type uses: the hovered line is wider, fully opaque and glows
+ * (halo); while any line is hovered the others dim. Hidden lines stay hidden unless hovered.
+ */
+function applyHoverStyle(
+  line: LineSegments2 | null | undefined,
+  halo: LineSegments2 | null | undefined,
+  shown: boolean,
+  highlighted: boolean,
+  anyHovered: boolean,
+): void {
+  if (line) {
+    line.visible = shown
+    const material = line.material as LineMaterial
+    material.linewidth = highlighted ? SABRE_HIGHLIGHT_WIDTH : NC_LINE_WIDTH
+    material.opacity = highlighted ? 1 : anyHovered ? SABRE_DIM_OPACITY : BASE_LINE_OPACITY
+  }
+  if (halo) halo.visible = highlighted && shown
+}
 /**
  * Length (mm) of the marker drawn for a failure that collapsed to a point — a corner-risk run can
  * be a single sample (`from` == `to`), which would otherwise draw a zero-length, invisible line.
@@ -289,7 +311,7 @@ interface NcProjectedObjects {
   /** Translucent welding-bevel area fins. */
   bevelAreas: Mesh[]
   /** One warning line per out-of-range cut segment, indexed like the audit findings. */
-  outOfRange: (LineSegments2 | null)[]
+  outOfRange: ({ line: LineSegments2; halo: LineSegments2 | null; normal: Vec3 } | null)[]
   /** Scribe/punch marking lines (`PU`/`KO`). */
   markLines: LineSegments2[]
   /** Etch text labels (`SI`), laid flat on their face. */
@@ -381,7 +403,8 @@ function addNcLines(
   const bevelAreas: Mesh[] = []
   const markLines: LineSegments2[] = []
   const markTexts: Mesh[] = []
-  const outOfRange: (LineSegments2 | null)[] = []
+  const outOfRange: ({ line: LineSegments2; halo: LineSegments2 | null; normal: Vec3 } | null)[] =
+    []
   const colorAt = (index: number): number =>
     THICKNESS_COLORS[index % THICKNESS_COLORS.length] ?? FALLBACK_COLOR
   const lineInto = (target: LineSegments2[], points: number[], color: number): void => {
@@ -402,9 +425,18 @@ function addNcLines(
   // One warning line per out-of-range segment, in `outOfRangeSegments` order: the audit finding index.
   for (const segment of outOfRangeSegments(nc)) {
     const line = sets.outOfRange.find((o) => o.face === segment.face && o.index === segment.index)
-    outOfRange.push(
-      line ? (ncLineObject(line.points, OUT_OF_RANGE_COLOR, resolution, materials) ?? null) : null,
-    )
+    const warning = line
+      ? ncLineObject(line.points, OUT_OF_RANGE_COLOR, resolution, materials, true)
+      : null
+    if (warning && line) {
+      outOfRange.push({
+        line: warning,
+        halo: ncHaloObject(line.points, OUT_OF_RANGE_COLOR, resolution, materials),
+        normal: projection.normal(segment.face),
+      })
+    } else {
+      outOfRange.push(null)
+    }
   }
   sets.bevelArrows.forEach((bevel, index) => {
     lineInto(bevelArrows, bevel.points, colorAt(index))
@@ -528,6 +560,10 @@ interface SceneHandle {
   setGridVisible: (visible: boolean) => void
   /** Show only the span markers whose index is in `indices` (null = all; [] = none). */
   setVisibleSpans: (indices: number[] | null) => void
+  /** Show only the NC probe runs whose index is in `indices` (null = all). */
+  setVisibleRuns: (indices: number[] | null) => void
+  /** Glow the NC probe run at `index` (null clears it). */
+  highlightRun: (index: number | null) => void
   /** Glow the sub-cut marker at `index` and dim the rest (null clears the hover highlight). */
   highlight: (index: number | null) => void
   /** Pull every synced viewport toward the geometry behind a finding code (null = whole model). */
@@ -766,18 +802,23 @@ function mountScene(
   const ncAreaObjects: Mesh[] = []
   /** Out-of-range welding-prep warning lines, indexed like the audit findings (null = none). */
   const ncOutOfRangeObjects: (LineSegments2 | null)[] = []
+  const ncOutOfRangeHalos: (LineSegments2 | null)[] = []
+  /** Face outward normal of each warning line, so focusing it rotates to a 3/4 view of that cut. */
+  const ncOutOfRangeDirections: (Vec3 | null)[] = []
   let outOfRangeVisible = true
   let outOfRangeHidden: ReadonlySet<number> = new Set()
   /** Warning line under the hovered issue row (glows, forced on, the rest dim). */
   let outOfRangeHover: number | null = null
   const applyOutOfRange = (): void => {
     ncOutOfRangeObjects.forEach((object, index) => {
-      if (!object) return
       const hovered = outOfRangeHover === index
-      object.visible = outOfRangeVisible && (hovered || !outOfRangeHidden.has(index))
-      const material = object.material as LineMaterial
-      material.linewidth = hovered ? SABRE_HIGHLIGHT_WIDTH : NC_LINE_WIDTH
-      material.opacity = hovered ? 1 : outOfRangeHover != null ? SABRE_DIM_OPACITY : 0.98
+      applyHoverStyle(
+        object,
+        ncOutOfRangeHalos[index],
+        outOfRangeVisible && (hovered || !outOfRangeHidden.has(index)),
+        hovered,
+        outOfRangeHover != null,
+      )
     })
   }
   let bevelStyleState: BevelStyle = bevelStyle
@@ -791,6 +832,7 @@ function mountScene(
   const sabreObjects: LineSegments2[] = []
   const sabreRunObjects: Mesh[] = []
   const sabreRunLines: LineSegments2[] = []
+  const sabreRunHalos: (LineSegments2 | null)[] = []
   const sabreRunDirections: Vec3[] = []
   const sabreRunShown: boolean[] = []
   const sabreRunCentres: Vec3[] = []
@@ -1173,11 +1215,14 @@ function mountScene(
             scene.add(area)
             ncAreaObjects.push(area)
           }
-          for (const line of projected.outOfRange) {
-            ncOutOfRangeObjects.push(line)
-            if (!line) continue
-            scene.add(line)
-            ncObjects.push(line)
+          for (const warning of projected.outOfRange) {
+            ncOutOfRangeObjects.push(warning?.line ?? null)
+            ncOutOfRangeHalos.push(warning?.halo ?? null)
+            ncOutOfRangeDirections.push(warning?.normal ?? null)
+            if (!warning) continue
+            scene.add(warning.line)
+            ncObjects.push(warning.line)
+            if (warning.halo) scene.add(warning.halo)
           }
           applyOutOfRange()
         }
@@ -1449,6 +1494,9 @@ function mountScene(
         line.renderOrder = 21
         primary.group.add(line)
         sabreRunLines.push(line)
+        const runHalo = ncHaloObject(cutLine, 0xff2d2d, ncResolution, ncMaterials)
+        if (runHalo) primary.group.add(runHalo)
+        sabreRunHalos.push(runHalo)
       }
     }
   }
@@ -1949,12 +1997,7 @@ function mountScene(
       if (!mark) continue
       const highlighted = hoverSpan != null && i === hoverSpan
       const visible = sabreVisible && (highlighted || spanShown[i] === true)
-      mark.visible = visible
-      const material = mark.material as LineMaterial
-      material.linewidth = highlighted ? SABRE_HIGHLIGHT_WIDTH : NC_LINE_WIDTH
-      material.opacity = highlighted ? 1 : hoverSpan != null ? SABRE_DIM_OPACITY : 0.98
-      const halo = sabreHaloObjects[i]
-      if (halo) halo.visible = highlighted && visible
+      applyHoverStyle(mark, sabreHaloObjects[i], visible, highlighted, hoverSpan != null)
     }
   }
 
@@ -1968,13 +2011,7 @@ function mountScene(
       mesh.visible = visible
       const material = mesh.material as MeshBasicMaterial
       material.opacity = highlighted ? 0.6 : sabreHover != null ? 0.12 : 0.35
-      const line = sabreRunLines[i]
-      if (line) {
-        line.visible = visible
-        const lineMaterial = line.material as LineMaterial
-        lineMaterial.linewidth = highlighted ? 6 : 2.5
-        lineMaterial.opacity = highlighted ? 1 : sabreHover != null ? 0.3 : 0.95
-      }
+      applyHoverStyle(sabreRunLines[i], sabreRunHalos[i], visible, highlighted, sabreHover != null)
     }
   }
 
@@ -2021,23 +2058,50 @@ function mountScene(
     setVisibleSpans(indices: number[] | null) {
       const set = indices == null ? null : new Set(indices)
       for (let i = 0; i < sabreSpanObjects.length; i++) spanShown[i] = set == null || set.has(i)
-      for (let i = 0; i < sabreRunShown.length; i++) sabreRunShown[i] = set == null || set.has(i)
       refreshSpanAppearance()
+    },
+    /** Show only the NC probe runs (CUT_DEPTH_NC rows) whose index is in `indices` (null = all). */
+    setVisibleRuns(indices: number[] | null) {
+      const set = indices == null ? null : new Set(indices)
+      for (let i = 0; i < sabreRunShown.length; i++) sabreRunShown[i] = set == null || set.has(i)
       refreshSabreAppearance()
     },
     /** Hover highlight: glow the marker at `index` (force-shown), dim the rest (null = clear). */
     highlight(index: number | null) {
       hoverSpan = index
-      sabreHover = index
       refreshSpanAppearance()
+    },
+    /** Glow the NC probe run at `index` (its CUT_DEPTH_NC row is hovered); null clears it. */
+    highlightRun(index: number | null) {
+      sabreHover = index
       refreshSabreAppearance()
     },
     focus(code: string | null, index?: number, source?: 'nc') {
       if (!bus) return
+      // A 3/4 (isometric-ish) view of a cut: the face normal plus the member axis and the in-face
+      // tangent, so the projection depth reads instead of a flat head-on view.
+      const isoViewWorld = (worldNormal: Vector3): Vec3 => {
+        const axis = new Vector3()
+          .setComponent(longAxis, 1)
+          .applyQuaternion(primary.group.quaternion)
+        const tangent = new Vector3().crossVectors(worldNormal, axis).normalize()
+        // Slightly above: lift the camera toward world-up as well as along the member.
+        const iso = worldNormal
+          .clone()
+          .addScaledVector(axis, 0.8)
+          .addScaledVector(tangent, 0.5)
+          .add(new Vector3(0, 0.7, 0))
+          .normalize()
+        return [iso.x, iso.y, iso.z]
+      }
+      const isoViewFor = (normal: Vec3): Vec3 =>
+        isoViewWorld(new Vector3(...normal).applyQuaternion(primary.group.quaternion))
       // An NC-specific marker isn't drawn on this pane; skip the focus so it stays driven by the
       // manufactured pane (which has the marker) instead of framing every other marker here.
+      // NC probe runs and warning lines index their own objects, not the sabre sub-cut markers.
       if (
         code !== 'BEVEL_OUT_OF_RANGE' &&
+        source !== 'nc' &&
         index != null &&
         sabre?.[index]?.ncOnly &&
         !showNcOnlyMarkers
@@ -2052,6 +2116,21 @@ function mountScene(
         const line = ncOutOfRangeObjects[index]
         if (!line) return
         box.expandByObject(line)
+        // Look outward from the body's centre through the warning: that side of the part is open, so
+        // the warning is never hidden behind the manufactured body. The face normal is the fallback.
+        const axisWorld = new Vector3()
+          .setComponent(longAxis, 1)
+          .applyQuaternion(primary.group.quaternion)
+        const body = new Box3().expandByObject(primary.group)
+        const outward = box
+          .getCenter(new Vector3())
+          .sub(body.getCenter(new Vector3()))
+          .projectOnPlane(axisWorld)
+        if (outward.lengthSq() > 1e-6) direction = isoViewWorld(outward.normalize())
+        else {
+          const normal = ncOutOfRangeDirections[index]
+          if (normal) direction = isoViewFor(normal)
+        }
       } else if (source === 'nc') {
         // Only the pane that carries the NC projection draws these; the STEP/overlay panes skip so
         // they don't frame the whole model instead.
@@ -2086,24 +2165,7 @@ function mountScene(
             radius = Math.max(localRadius, 10) * primary.group.scale.x * 1.6
           }
           const normal = sabreRunDirections[index]
-          if (normal) {
-            // A 3/4 (isometric-ish) view of the cut: the face normal plus the member axis and the
-            // in-face tangent, so the projection depth reads instead of a flat head-on view.
-            const worldNormal = new Vector3(...normal).applyQuaternion(primary.group.quaternion)
-            const axis = new Vector3()
-              .setComponent(longAxis, 1)
-              .applyQuaternion(primary.group.quaternion)
-            const tangent = new Vector3().crossVectors(worldNormal, axis).normalize()
-            // Slightly above: lift the camera toward world-up as well as along the member, so the
-            // cut reads as a 3/4 view rather than level with the face.
-            const iso = worldNormal
-              .clone()
-              .addScaledVector(axis, 0.8)
-              .addScaledVector(tangent, 0.5)
-              .add(new Vector3(0, 0.7, 0))
-              .normalize()
-            direction = [iso.x, iso.y, iso.z]
-          }
+          if (normal) direction = isoViewFor(normal)
         } else {
           for (const object of sabreRunObjects) box.expandByObject(object)
         }
@@ -2281,6 +2343,10 @@ export interface PartViewerProps {
   focus?: { code: string; token: number; index?: number; source?: 'nc' } | null
   /** Which failing sub-cut markers to show, by index (null/undefined = all; [] = none). */
   visibleSpans?: number[] | null
+  /** Which NC probe runs (CUT_DEPTH_NC rows) to show, by index (null = all). */
+  visibleRuns?: number[] | null
+  /** Hovered CUT_DEPTH_NC row's run: glow it and dim the others. */
+  highlightRun?: number | null
   /** Out-of-range bevel warning lines hidden by their finding's eye (by finding index). */
   hiddenOutOfRange?: ReadonlySet<number>
   /** Hovered out-of-range bevel issue's warning line: glow it and dim the rest. */
@@ -2337,6 +2403,8 @@ export default function PartViewer({
   faceFrame = null,
   focus = null,
   visibleSpans = null,
+  visibleRuns = null,
+  highlightRun = null,
   hiddenOutOfRange,
   highlightWarning = null,
   highlight = null,
@@ -2586,6 +2654,16 @@ export default function PartViewer({
     if (status !== 'ready') return
     handleRef.current?.highlightOutOfRange(highlightWarning)
   }, [highlightWarning, status])
+
+  useEffect(() => {
+    if (status !== 'ready') return
+    handleRef.current?.setVisibleRuns(showSabre ? visibleRuns : [])
+  }, [visibleRuns, showSabre, status])
+
+  useEffect(() => {
+    if (status !== 'ready') return
+    handleRef.current?.highlightRun(highlightRun)
+  }, [highlightRun, status])
 
   // Show only the checked failing sub-cuts' markers (null = all, [] = none).
   useEffect(() => {

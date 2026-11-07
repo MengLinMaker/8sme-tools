@@ -172,9 +172,16 @@ function isVisualisable(finding: Finding): boolean {
 }
 
 /** The viewer marker index a finding points at, or null when it has none. */
+/** A CUT_DEPTH finding from the NC probe: drawn as its own run, not as a sub-cut marker. */
+function isNcRun(finding: Finding): boolean {
+  return finding.code === 'CUT_DEPTH' && finding.params?.nc === 1
+}
+
 function markerIndexOf(finding: Finding): number | null {
-  // Out-of-range bevel findings index their own warning lines, not the sabre sub-cut markers.
+  // Out-of-range bevel findings index their own warning lines, and NC probe runs index their own
+  // run objects, not the sub-cut markers.
   if (finding.code === 'BEVEL_OUT_OF_RANGE') return null
+  if (isNcRun(finding)) return null
   const raw = finding.params?.index
   return typeof raw === 'number' ? raw : null
 }
@@ -1971,6 +1978,24 @@ export function PreflightPage() {
         .filter((value): value is number => value != null),
     [viewerFindings, hiddenIssues],
   )
+  /** NC probe runs (CUT_DEPTH_NC rows) that are checked on (their eye is on). */
+  const visibleRuns = useMemo(
+    () =>
+      viewerFindings
+        .map((finding, index) => ({ finding, index }))
+        .filter(({ finding, index }) => isNcRun(finding) && !hiddenIssues.has(index))
+        .map(({ finding }) => finding.params?.index)
+        .filter((value): value is number => typeof value === 'number'),
+    [viewerFindings, hiddenIssues],
+  )
+  /** The NC probe run to glow while its CUT_DEPTH_NC row is hovered. */
+  const highlightRun = useMemo(() => {
+    if (hoverIssueIndex == null) return null
+    const finding = viewerFindings[hoverIssueIndex]
+    if (!finding || !isNcRun(finding)) return null
+    const index = finding.params?.index
+    return typeof index === 'number' ? index : null
+  }, [viewerFindings, hoverIssueIndex])
   /** Sub-cut index to glow in the 3D while its issue row is hovered (only cut checks map to one). */
   const highlightSpan = useMemo(() => {
     if (hoverIssueIndex == null) return null
@@ -3824,6 +3849,8 @@ export function PreflightPage() {
                             faceFrame={viewingNcFrame}
                             cutEdges={viewingCutEdgeOptions}
                             visibleSpans={visibleSpans}
+                            visibleRuns={visibleRuns}
+                            highlightRun={highlightRun}
                             highlight={highlightSpan}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
@@ -3860,6 +3887,8 @@ export function PreflightPage() {
                             ncSection={viewingNcSection}
                             faceFrame={viewingNcFrame}
                             visibleSpans={visibleSpans}
+                            visibleRuns={visibleRuns}
+                            highlightRun={highlightRun}
                             highlight={highlightSpan}
                             focus={manufactured ? findingFocus : null}
                             showStock={showStock}
@@ -3901,6 +3930,8 @@ export function PreflightPage() {
                             ncSection={viewingNcSection}
                             faceFrame={viewingNcFrame}
                             visibleSpans={visibleSpans}
+                            visibleRuns={visibleRuns}
+                            highlightRun={highlightRun}
                             highlight={highlightSpan}
                             showStock={showStock}
                             onShowStockChange={setShowStock}
