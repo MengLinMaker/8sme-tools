@@ -1167,7 +1167,7 @@ function NestingSolution({
   priorityKeys: Set<string>
 }) {
   const { t } = useTranslation()
-  const [filter, setFilter] = useState<'all' | 'heavy' | 'reusable'>('all')
+  const [filter, setFilter] = useState<'all' | 'one' | 'two' | 'crane' | 'reusable'>('all')
   const kgPerMmFor = (plan: PurchasePlan) =>
     plan.wasteKg != null && plan.wasteMm > 0 ? plan.wasteKg / plan.wasteMm : null
   const attention = (bars: PurchaseBar[], kgPerMm: number | null) => {
@@ -1208,6 +1208,8 @@ function NestingSolution({
     return plan.bars.some((bar) => {
       if (bar.wasteMm <= 0 || bar.wasteMm >= reusableOffcutMm) return false
       const kg = kgPerMm == null ? 0 : bar.wasteMm * kgPerMm
+      if (filter === 'one') return kg <= onePersonKg
+      if (filter === 'two') return kg > onePersonKg && kg <= twoPersonKg
       return kg > twoPersonKg
     })
   })
@@ -1248,7 +1250,9 @@ function NestingSolution({
           {(
             [
               ['all', 'filterAll'],
-              ['heavy', 'filterHeavyBin'],
+              ['one', 'onePerson'],
+              ['two', 'twoPerson'],
+              ['crane', 'equipment'],
               ['reusable', 'filterReusable'],
             ] as const
           ).map(([value, key]) => (
@@ -1284,8 +1288,11 @@ function NestingSolution({
           return beam.bars.some((bar) => {
             if (bar.wasteMm <= 0) return false
             if (filter === 'reusable') return bar.wasteMm >= reusableOffcutMm
+            if (bar.wasteMm >= reusableOffcutMm) return false
             const kg = kgPerMm == null ? 0 : bar.wasteMm * kgPerMm
-            return bar.wasteMm < reusableOffcutMm && kg > twoPersonKg
+            if (filter === 'one') return kg <= onePersonKg
+            if (filter === 'two') return kg > onePersonKg && kg <= twoPersonKg
+            return kg > twoPersonKg
           })
         })
         matchingBeams.sort((a, b) => attention(b.bars, kgPerMm) - attention(a.bars, kgPerMm))
