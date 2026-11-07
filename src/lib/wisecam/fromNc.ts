@@ -362,7 +362,24 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
       points.push([station, x])
     }
     if (!developed || points.length < 2) continue
-    cuts.push({ kind: contour.kind, points })
+    if (layout.origin === 'zero') {
+      // The tube's `v` face straddles the seam, so wrapped stations jump from ~seam to ~0 in the
+      // middle of its contour. Draw the two seam halves as separate polylines instead of one line
+      // across the unrolled net.
+      let run: [number, number][] = []
+      for (let index = 0; index < points.length; index++) {
+        const point = points[index] as [number, number]
+        const previous = points[index - 1]
+        if (previous && Math.abs(point[0] - previous[0]) > layout.seam / 2) {
+          if (run.length >= 2) cuts.push({ kind: contour.kind, points: run })
+          run = []
+        }
+        run.push(point)
+      }
+      if (run.length >= 2) cuts.push({ kind: contour.kind, points: run })
+    } else {
+      cuts.push({ kind: contour.kind, points })
+    }
   }
 
   const profileType = header.profileType.trim().toUpperCase()

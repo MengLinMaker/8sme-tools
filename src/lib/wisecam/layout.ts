@@ -136,8 +136,8 @@ export function unrolledLayout(
       faces: {
         // Tekla authors the tube long-side vertical: v/h are the long faces, o/u the short.
         v: face(-developedLong / 2, developedLong, long, radius),
-        o: face(developedLong / 2, developedShort, short, radius),
-        h: face(developedLong / 2 + developedShort, developedLong, long, radius),
+        o: face(developedLong / 2, developedShort, short, radius, true),
+        h: face(developedLong / 2 + developedShort, developedLong, long, radius, true),
         u: face(developedLong / 2 + developedShort + developedLong, developedShort, short, radius),
       },
     }

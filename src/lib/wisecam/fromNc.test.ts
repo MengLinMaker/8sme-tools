@@ -314,6 +314,23 @@ describe('partFromNc end-cut development', () => {
     expect(firstAtMinus50?.[1]).toBeCloseTo(18.2, 0)
   })
 
+  for (const mark of ['M-51', 'M-42'] as const) {
+    const path = fixture('ncep', `${mark}.nc1`)
+    it.skipIf(!existsSync(path))(`${mark}: never draws a cut across the unrolled seam`, () => {
+      const part = partFromNc(readFileSync(path, 'utf8'))
+      expect(part).toBeTruthy()
+      if (!part) return
+      const seam = part.unrolledPerimeter ?? 0
+      for (const cut of part.cuts ?? []) {
+        for (let i = 1; i < cut.points.length; i++) {
+          const a = cut.points[i - 1] as [number, number]
+          const b = cut.points[i] as [number, number]
+          expect(Math.abs(b[0] - a[0])).toBeLessThanOrEqual(seam / 2)
+        }
+      }
+    })
+  }
+
   it.skipIf(!existsSync(m130))('is a pure function of the NC text', () => {
     const nc = readFileSync(m130, 'utf8')
     const first = partFromNc(nc)
