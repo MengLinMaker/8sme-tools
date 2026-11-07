@@ -209,18 +209,17 @@ export function assessManufacturability(ncText: string): ManufacturabilityIssue[
   // Welding preps outside the head's range: one finding per cut segment, so each can be framed in
   // the viewer. The part-level policy (remove / clamp / as drawn) decides what the model does.
   outOfRangeSegments(parseNcGeometry(ncText)).forEach((segment, index) => {
-    const angles = segment.couples
-      .map(([side, angle]) => `φ${angle.toFixed(1)}° (side ${side})`)
-      .join(', ')
+    const angle = Math.max(...segment.couples.map(([, value]) => Math.abs(value)))
     issues.push({
       code: 'BEVEL_OUT_OF_RANGE',
       severity: 'error',
-      message: `Welding prep ${angles} on ${segment.face}[${segment.index}] is outside the head's ±${MACHINE.bevel.maxDeg}° range. Choose remove, clamp or keep as drawn.`,
+      message: `${angle.toFixed(1)}° bevel is outside the ${MACHINE.bevel.maxDeg}° bevel range`,
       params: {
         index,
         nc: 1,
         face: segment.face,
-        angles,
+        angle: angle.toFixed(1),
+        range: MACHINE.bevel.maxDeg,
         contourIndex: segment.contourIndex,
         vertex: segment.index,
         x: segment.x,

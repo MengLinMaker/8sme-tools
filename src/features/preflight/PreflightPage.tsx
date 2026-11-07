@@ -66,6 +66,7 @@ import { findWeldingEtchings, type WeldingEtchings } from '@/lib/audit/weldingEt
 import { downloadBlob, downloadText, fileStem } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
 import { removeCutFromNc, setBevelInNc } from '@/lib/parsers/ncEdit'
+import { outOfRangeSegments } from '@/lib/parsers/ncProject'
 import { frameForProfile, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import {
@@ -328,7 +329,7 @@ interface StepOverride {
  * A per-part NC (`.nc1`) edit: a stray cut removed, or a cut line's changing bevel unified to one
  * angle (`0` = no bevel). These override the bundled NC for the manufactured model and the export.
  */
-type NcEditKind = 'removeCut' | 'setBevel'
+type NcEditKind = 'removeCut' | 'setBevel' | 'removeBevel'
 interface NcOverride {
   bytes: Uint8Array
   kind: NcEditKind
@@ -2750,7 +2751,7 @@ export function PreflightPage() {
 
   /**
    * Removes one out-of-range welding prep from the part's NC (its cut segment goes square) and
-   * records it as an override — the same NC-edit path as `setBevel` with angle 0.
+   * records it as an override (its own `removeBevel` edit, so it never resolves other findings).
    */
   const removeBevel = useCallback(
     async (part: PartRecord, finding: Finding) => {
@@ -2767,11 +2768,7 @@ export function PreflightPage() {
         if (edited === currentText) return
         setNcOverrides((prev) => {
           const next = new Map(prev)
-          next.set(part.mark, {
-            bytes: new TextEncoder().encode(edited),
-            kind: 'setBevel',
-            angle: 0,
-          })
+          next.set(part.mark, { bytes: new TextEncoder().encode(edited), kind: 'removeBevel' })
           return next
         })
       } finally {
@@ -4311,6 +4308,16 @@ function ViewerWarnings({
     if (fix?.ncEdit?.kind === 'removeCut')
       return finding.code === 'CUT_UNCLOSED' || finding.code === 'CUT_CUTOUT'
     if (fix?.ncEdit?.kind === 'setBevel') return finding.code === 'CUT_BEVEL_CHANGE'
+    if (fix?.ncEdit?.kind === 'removeBevel' && finding.code === 'BEVEL_OUT_OF_RANGE') {
+      // Resolved only when this exact cut segment no longer has an out-of-range prep in the edited NC.
+      const edited = parseNcGeometry(new TextDecoder().decode(fix.ncEdit.bytes))
+      return !outOfRangeSegments(edited).some(
+        (segment) =>
+          segment.contourIndex === finding.params?.contourIndex &&
+          segment.index === finding.params?.vertex &&
+          segment.face === finding.params?.face,
+      )
+    }
     return false
   }
   const findingText = (finding: Finding) =>

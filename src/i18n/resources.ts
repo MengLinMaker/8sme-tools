@@ -556,8 +556,7 @@ export const en = {
     STRAY_BODY: 'Found {{bodies}} detached solid bodies',
     CUT_END_PIECE:
       'Cutting straight through would detach {{extra}} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)',
-    BEVEL_OUT_OF_RANGE:
-      "Welding prep {{angles}} on {{face}}[{{vertex}}] is outside the head's range — remove it, clamp it, or keep it as drawn",
+    BEVEL_OUT_OF_RANGE: '{{angle}}° bevel is outside the {{range}}° bevel range',
     CUT_STEP:
       'Not manufacturable: a sudden {{depth}} mm thickness change on face(s) {{faces}} is past the ~30 mm the head can reach — it would damage the machine. Cut at an angle on the radius (a manual judgement), it cannot be swept in one pass',
     CUT_DEPTH:
@@ -1101,8 +1100,7 @@ export const zh = {
     NOT_A_PART: '{{mark}} 既无 NC 也无 STEP 文件——已跳过（非零件）',
     STRAY_BODY: '发现 {{bodies}} 个分离实体',
     CUT_END_PIECE: '直线切透会切掉图纸上保留的 {{extra}} 个小件——需要坡口/斜切（或该面不切）',
-    BEVEL_OUT_OF_RANGE:
-      '{{face}}[{{vertex}}] 上的焊接坡口 {{angles}} 超出机头范围——可移除、限制或保持原样',
+    BEVEL_OUT_OF_RANGE: '{{angle}}° 坡口超出 {{range}}° 坡口范围',
     CUT_STEP:
       '不可制造：{{faces}} 面上 {{depth}} mm 的厚度突变超出了机头约 30 mm 的加工范围——会损坏机器。需在圆弧处斜切（人工判断），无法一次扫切成型',
     CUT_DEPTH:
