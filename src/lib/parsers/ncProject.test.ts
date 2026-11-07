@@ -251,6 +251,39 @@ describe('projectNc tube bevel direction', () => {
   })
 })
 
+describe('projectNc tube rounded-corner cuts', () => {
+  it('draws the corner-adjacent cuts on an RHS (m123)', () => {
+    const path = nw31Top('NC files', 'm123.nc1')
+    if (!existsSync(path)) return
+    const text = readFileSync(path, 'utf8')
+    const header = parseDstv(text).header
+    const geo = parseNcGeometry(text)
+    const section = partSectionForCode(header.profile, header.dimensions)?.points
+    expect(section).toBeTruthy()
+    if (!section) return
+    const frame = resolveNcFaceFrame(section, geo, header.profile)
+    const toScene = (along: number, cross: [number, number]): Vec3 => [along, cross[0], cross[1]]
+    const normal = (face: NcFace): Vec3 => {
+      const n = faceNormal(frame, face, section)
+      return n.axis === 0 ? [0, n.sign, 0] : [0, 0, n.sign]
+    }
+    const out = projectNc(geo, { frame, section, toScene, normal })
+    // A real cut just inside the rounded corner (the old material-reach filter dropped it).
+    const targetPoint = placeNcFace(frame, 'o', 10.02, 93.29, section)
+    const target = toScene(targetPoint.along, targetPoint.cross)
+    let nearest = Number.POSITIVE_INFINITY
+    for (const cut of out.cuts) {
+      for (let i = 0; i + 2 < cut.points.length; i += 3) {
+        const dx = (cut.points[i] as number) - target[0]
+        const dy = (cut.points[i + 1] as number) - target[1]
+        const dz = (cut.points[i + 2] as number) - target[2]
+        nearest = Math.min(nearest, Math.hypot(dx, dy, dz))
+      }
+    }
+    expect(nearest).toBeLessThan(1)
+  })
+})
+
 describe('projectNc', () => {
   // 200 (x) × 100 (y) solid section, centred on the origin.
   const section: [number, number][] = [

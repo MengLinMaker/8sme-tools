@@ -381,6 +381,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     }
   }
 
+  const isTube = (frame.profile ? profileFamily(frame.profile) : null) === 'tube'
   for (const contour of nc.contours) {
     const spur = normal(contour.face)
     for (let i = 0; i < contour.points.length - 1; i++) {
@@ -407,7 +408,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
           break
         }
       }
-      if (!reached) {
+      if (!reached && !isTube) {
         // A DSTV notch label (`t`/`w`) marks a real cut at a corner where the face plane recedes
         // (e.g. the necked end of a shaft). Keep the segment so its cut line is drawn.
         const notched = notchCorners(contour.face).some(

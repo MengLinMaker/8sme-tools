@@ -4648,6 +4648,58 @@ function UnrolledDrawing({
     }
     return [...xs]
   }, [part.unrolled, geometry])
+  // Split the developed face contours into raw-stock edges (lengthwise, constant station) and
+  // actual cut lines. The stock edges are the face boundary, not laser cuts, so draw them faintly.
+  const netLines = useMemo(() => {
+    const out: { points: string; stock: boolean; key: string }[] = []
+    for (const cut of part.cuts ?? []) {
+      let run: [number, number][] = [cut.points[0] as [number, number]]
+      const flush = () => {
+        if (run.length >= 2) {
+          const text = run.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(' ')
+          out.push({ points: text, stock: false, key: `cut-${text}` })
+        }
+        run = []
+      }
+      for (let index = 1; index < cut.points.length; index++) {
+        const previous = cut.points[index - 1] as [number, number]
+        const point = cut.points[index] as [number, number]
+        const stock = Math.abs(point[0] - previous[0]) < 0.5 && Math.abs(point[1] - previous[1]) > 1
+        if (stock) {
+          flush()
+          const text = [previous, point]
+            .map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`)
+            .join(' ')
+          out.push({ points: text, stock: true, key: `stock-${text}` })
+          run = [point]
+        } else {
+          run.push(point)
+        }
+      }
+      flush()
+    }
+    return out
+  }, [part.cuts])
+
+  // RHS/SHS: the four flat faces are separated by quarter-round corner radii. WiseCAM shades those
+  // radius strips as non-machined, so show them grey too (preview only; the package geometry is
+  // unchanged). The zone is centred on each face boundary because adjacent faces each own half.
+  const radiusZones = useMemo(() => {
+    if (part.profileType.trim().toUpperCase() !== 'M') return []
+    const radius = part.rootRadius ?? 0
+    if (!(radius > 0)) return []
+    const width = (Math.PI / 2) * radius
+    const right = geometry.left + geometry.seam
+    return faceDividers
+      .map(
+        (x) =>
+          [Math.max(geometry.left, x - width / 2), Math.min(right, x + width / 2)] as [
+            number,
+            number,
+          ],
+      )
+      .filter(([start, end]) => end - start > 0.5)
+  }, [part, faceDividers, geometry])
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-xs text-muted-foreground">
@@ -4659,7 +4711,7 @@ function UnrolledDrawing({
           })}
         </span>
         <span>{t('preflight.viewer.ncepHoles', { count: part.holes?.length ?? 0 })}</span>
-        {nonMachinedZones.length > 0 && (
+        {(nonMachinedZones.length > 0 || radiusZones.length > 0) && (
           <span className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-sm bg-slate-400/40" />
             {t('preflight.viewer.ncepNonMachined')}
@@ -4696,7 +4748,18 @@ function UnrolledDrawing({
           <g transform={mirror}>
             {nonMachinedZones.map(([x0, x1]) => (
               <rect
-                key={`zone-${x0}-${x1}`}
+                key={`nonmachined-${x0}-${x1}`}
+                x={x0}
+                y={0}
+                width={x1 - x0}
+                height={part.length}
+                fill="#94a3b8"
+                fillOpacity={0.22}
+              />
+            ))}
+            {radiusZones.map(([x0, x1]) => (
+              <rect
+                key={`radius-${x0}-${x1}`}
                 x={x0}
                 y={0}
                 width={x1 - x0}
@@ -4719,14 +4782,15 @@ function UnrolledDrawing({
               />
             ))}
             <g stroke={outline} fill="none" strokeWidth={geometry.stroke} strokeLinejoin="round">
-              {(part.cuts ?? []).map((cut) => (
+              {netLines.map((line) => (
                 <polyline
-                  key={`${cut.kind}-${cut.points.length}-${cut.points[0]?.[0]}-${cut.points[0]?.[1]}`}
-                  points={points(cut.points)}
+                  key={line.key}
+                  points={line.points}
+                  strokeOpacity={line.stock ? 0.22 : 1}
                 />
               ))}
             </g>
-            {part.cuts?.length === 0 && (
+            {!netLines.some((line) => !line.stock) && (
               <>
                 <line
                   x1={geometry.left}
