@@ -66,7 +66,6 @@ import { findWeldingEtchings, type WeldingEtchings } from '@/lib/audit/weldingEt
 import { downloadBlob, downloadText, fileStem } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
 import { removeCutFromNc, setBevelInNc } from '@/lib/parsers/ncEdit'
-import { outOfRangeSegments } from '@/lib/parsers/ncProject'
 import { frameForProfile, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import {
@@ -74,6 +73,7 @@ import {
   ETCH_COLOR,
   faceThickness,
   MARKING_COLOR,
+  outOfRangeSegments,
   THICKNESS_COLORS,
 } from '@/lib/parsers/ncProject'
 import { reemitPartNc } from '@/lib/parsers/ncReemit'
