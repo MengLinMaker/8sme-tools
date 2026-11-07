@@ -33,7 +33,13 @@ import {
   type NcMark,
   slotOffset,
 } from './ncGeometry'
-import { selectWeldingPrep } from './weldingPrep'
+import {
+  applyBevelPolicy,
+  type BevelPolicy,
+  defaultBevelPolicy,
+  outOfRangeCouples,
+  selectWeldingPrep,
+} from './weldingPrep'
 
 export type Vec3 = [number, number, number]
 
@@ -47,6 +53,8 @@ export const ETCH_COLOR = 0xf5f5f5
 export const MARKING_COLOR = 0xfb923c
 
 export interface NcProjection {
+  /** How out-of-range welding preps are drawn. Default follows the family (RHS/SHS: removed). */
+  bevelPolicy?: BevelPolicy
   /** The section face frame the NC was matched against (see `resolveNcFaceFrame`). */
   frame: NcFaceFrame
   /** The section outline the frame came from, for material-reach checks. */
@@ -74,6 +82,11 @@ export interface NcLineSets {
    * a thicket of arrows. Coloured like their cut thickness.
    */
   bevelAreas: { thickness: number; triangles: number[] }[]
+  /**
+   * Cut segments whose welding prep is outside the head's range, keyed by segment (see
+   * {@link outOfRangeSegments}); drawn in a warning colour.
+   */
+  outOfRange: { face: NcFace; index: number; points: number[] }[]
   /**
    * Non-cutting layout marks (`PU`/`KO` scribe lines and `SI` etch text), kept separate from the
    * cut lines because they use their own legend colours and are not part of the cut path.
@@ -326,6 +339,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
   const { frame, section, toScene, normal } = projection
   const byFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
   const cutSamples: { point: Vec3; normal: Vec3; face: NcFace }[] = []
+  const outOfRange: { face: NcFace; index: number; points: number[] }[] = []
   const CUT_SAMPLE_STEP_MM = 1
   const arrowsByFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
   const areasByFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
@@ -382,13 +396,30 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
   }
 
   const isTube = (frame.profile ? profileFamily(frame.profile) : null) === 'tube'
-  for (const contour of nc.contours) {
+  // Draw the bevels the model will cut: out-of-range preps follow the policy (no 45° mitre drawn on
+  // a tube by default). The warning lines below still read the raw NC.
+  const policy =
+    projection.bevelPolicy ??
+    defaultBevelPolicy(frame.profile ? profileFamily(frame.profile) : null)
+  const drawn = nc.contours.map((c) => ({
+    ...c,
+    bevels: c.bevels.map((b) => applyBevelPolicy(b, policy)),
+  }))
+  for (const [contourIndex, contour] of drawn.entries()) {
     const spur = normal(contour.face)
     for (let i = 0; i < contour.points.length - 1; i++) {
       const [x0, y0] = contour.points[i]
       const [x1, y1] = contour.points[i + 1]
       const a = place(contour.face, x0, y0)
       const b = place(contour.face, x1, y1)
+      if (
+        contour.kind === 'outer' &&
+        outOfRangeCouples(nc.contours[contourIndex]?.bevels[i]).length > 0
+      ) {
+        const points: number[] = []
+        push(points, a.world, b.world)
+        outOfRange.push({ face: contour.face, index: i, points })
+      }
       if (contour.kind === 'inner') {
         pushCurve(byFace[contour.face], contour.face, x0, y0, x1, y1, contour.radii?.[i] ?? 0)
         continue
@@ -598,7 +629,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     thickness,
     triangles: points,
   }))
-  return { cuts, cutSamples, bevelArrows, bevelAreas, marks }
+  return { cuts, cutSamples, bevelArrows, bevelAreas, marks, outOfRange }
 }
 
 /** Distinct cut thicknesses (mm) present in an NC, sorted ascending — for the viewer legend. */
@@ -612,4 +643,39 @@ export function cutThicknesses(
   for (const hole of nc.holes) faces.add(hole.face)
   const values = [...faces].map((face) => Math.round(faceThickness(frame, section, face) * 10) / 10)
   return [...new Set(values)].sort((a, b) => a - b)
+}
+
+/** One cut segment whose welding prep is outside the head's range. */
+export interface OutOfRangeSegment {
+  face: NcFace
+  /** Segment start vertex (the cut runs from this point to the next). */
+  index: number
+  /** Position of the contour in `nc.contours` (the NC edit addresses contours this way). */
+  contourIndex: number
+  /** Mid-point of the segment along the member (mm), so the viewer can pan to it. */
+  x: number
+  /** The out-of-range couples on that segment, as `[side, angle]`. */
+  couples: [1 | 2, number][]
+}
+
+/**
+ * Every outer cut segment carrying an out-of-range welding prep, in contour order. The audit findings
+ * and the viewer's warning lines both index this list, so a finding's index selects its line.
+ */
+export function outOfRangeSegments(nc: NcGeometry): OutOfRangeSegment[] {
+  const out: OutOfRangeSegment[] = []
+  nc.contours.forEach((contour, contourIndex) => {
+    if (contour.kind !== 'outer') return
+    for (let i = 0; i < contour.points.length - 1; i++) {
+      const couples = outOfRangeCouples(contour.bevels[i]).map(
+        (c) => [c.side, c.angle] as [1 | 2, number],
+      )
+      if (couples.length > 0) {
+        const a = contour.points[i] ?? [0, 0]
+        const b = contour.points[i + 1] ?? a
+        out.push({ face: contour.face, index: i, contourIndex, couples, x: (a[0] + b[0]) / 2 })
+      }
+    }
+  })
+  return out
 }

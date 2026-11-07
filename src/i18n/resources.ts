@@ -24,6 +24,7 @@ export const en = {
       regenerateStep: 'Regenerate STEP',
       simplify: 'Simplify STEP (flat)',
       removeCut: 'Remove cut',
+      removeBevel: 'Remove bevel',
       setBevel: 'Unify bevel',
       working: 'Working…',
       cleaning: 'Cleaning…',
@@ -523,6 +524,8 @@ export const en = {
     sabreBevelAngle: 'Bevel {{angle}}°',
     hideSabre: 'Hide sabre',
     showSabre: 'Show sabre',
+    hideOutOfRange: 'Hide bevel errors',
+    showOutOfRange: 'Show bevel errors',
     sabreNc: 'Sabre fail near {{stations}} mm',
     ncOuter: 'Cut',
     ncBevel: 'Bevel',
@@ -553,6 +556,8 @@ export const en = {
     STRAY_BODY: 'Found {{bodies}} detached solid bodies',
     CUT_END_PIECE:
       'Cutting straight through would detach {{extra}} piece(s) the drawing keeps attached — a bevel/angled cut is needed (or leave that surface uncut)',
+    BEVEL_OUT_OF_RANGE:
+      "Welding prep {{angles}} on {{face}}[{{vertex}}] is outside the head's range — remove it, clamp it, or keep it as drawn",
     CUT_STEP:
       'Not manufacturable: a sudden {{depth}} mm thickness change on face(s) {{faces}} is past the ~30 mm the head can reach — it would damage the machine. Cut at an angle on the radius (a manual judgement), it cannot be swept in one pass',
     CUT_DEPTH:
@@ -599,6 +604,7 @@ export const zh = {
       regenerateStep: '重建 STEP',
       simplify: '简化 STEP（平面）',
       removeCut: '移除切缝',
+      removeBevel: '移除坡口',
       setBevel: '统一坡口',
       working: '处理中…',
       cleaning: '清理中…',
@@ -1065,6 +1071,8 @@ export const zh = {
     sabreBevelAngle: '坡口 {{angle}}°',
     hideSabre: '隐藏光剑标记',
     showSabre: '显示光剑标记',
+    hideOutOfRange: '隐藏焊接坡口错误',
+    showOutOfRange: '显示焊接坡口错误',
     sabreNc: '光剑失效约 {{stations}} mm 处',
     ncOuter: '切割',
     ncBevel: '坡口',
@@ -1093,6 +1101,8 @@ export const zh = {
     NOT_A_PART: '{{mark}} 既无 NC 也无 STEP 文件——已跳过（非零件）',
     STRAY_BODY: '发现 {{bodies}} 个分离实体',
     CUT_END_PIECE: '直线切透会切掉图纸上保留的 {{extra}} 个小件——需要坡口/斜切（或该面不切）',
+    BEVEL_OUT_OF_RANGE:
+      '{{face}}[{{vertex}}] 上的焊接坡口 {{angles}} 超出机头范围——可移除、限制或保持原样',
     CUT_STEP:
       '不可制造：{{faces}} 面上 {{depth}} mm 的厚度突变超出了机头约 30 mm 的加工范围——会损坏机器。需在圆弧处斜切（人工判断），无法一次扫切成型',
     CUT_DEPTH:

@@ -58,3 +58,49 @@ export function selectWeldingPrep(
   if (best.angle !== 0) return best
   return allowOutOfRange ? fallback : NO_PREP
 }
+
+/**
+ * What to do with a welding-prep couple whose angle is outside the head's range.
+ * - `remove`: drop the couple (square cut on that side).
+ * - `clamp`: limit the angle to the head's range, keeping its leg distance.
+ * - `asDrawn`: keep the NC value unchanged (the error is still reported).
+ */
+export type BevelPolicy = 'remove' | 'clamp' | 'asDrawn'
+
+/** Default per family: RHS/SHS ends cannot take a steep mitre, so they are removed by default. */
+export function defaultBevelPolicy(family: string | null | undefined): BevelPolicy {
+  return family === 'tube' ? 'remove' : 'asDrawn'
+}
+
+/** The out-of-range couples of a DSTV `[φ1, Y1, φ2, Y2]` bevel field (side 1 / side 2). */
+export function outOfRangeCouples(
+  bevel: number[] | undefined,
+): { side: 1 | 2; angle: number; distance: number }[] {
+  if (!bevel) return []
+  const out: { side: 1 | 2; angle: number; distance: number }[] = []
+  const couples = [
+    { side: 1 as const, angle: bevel[0] ?? 0, distance: bevel[1] ?? 0 },
+    { side: 2 as const, angle: bevel[2] ?? 0, distance: bevel[3] ?? 0 },
+  ]
+  for (const couple of couples)
+    if (Number.isFinite(couple.angle) && Math.abs(couple.angle) > MAX_BEVEL_DEG) out.push(couple)
+  return out
+}
+
+/** Applies a {@link BevelPolicy} to one bevel field, leaving in-range couples untouched. */
+export function applyBevelPolicy(bevel: number[] | undefined, policy: BevelPolicy): number[] {
+  if (!bevel) return []
+  if (policy === 'asDrawn') return bevel
+  const next = [...bevel]
+  for (const pair of [0, 2]) {
+    const angle = next[pair] ?? 0
+    if (!Number.isFinite(angle) || Math.abs(angle) <= MAX_BEVEL_DEG) continue
+    if (policy === 'remove') {
+      next[pair] = 0
+      next[pair + 1] = 0
+    } else {
+      next[pair] = Math.sign(angle) * MAX_BEVEL_DEG
+    }
+  }
+  return next
+}

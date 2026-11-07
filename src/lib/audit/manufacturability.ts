@@ -1,5 +1,6 @@
 import { MACHINE } from '@/lib/machine/profile'
 import { type NcContour, parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { outOfRangeSegments } from '@/lib/parsers/ncProject'
 
 /**
  * Manufacturability checks for a DSTV `.nc1`, under the shop's laser-cutting model:
@@ -28,7 +29,7 @@ const STEP_DY = 10.0
 export const UNMANUFACTURABLE_DEPTH = MACHINE.unmachinableDepthMm
 
 export interface ManufacturabilityIssue {
-  code: 'CUT_STEP'
+  code: 'CUT_STEP' | 'BEVEL_OUT_OF_RANGE'
   /** All current issues are unmanufacturable, so they surface as errors. */
   severity: 'error'
   message: string
@@ -204,6 +205,28 @@ export function assessManufacturability(ncText: string): ManufacturabilityIssue[
       params: { depth: depth.toFixed(0), faces: faceList },
     })
   }
+
+  // Welding preps outside the head's range: one finding per cut segment, so each can be framed in
+  // the viewer. The part-level policy (remove / clamp / as drawn) decides what the model does.
+  outOfRangeSegments(parseNcGeometry(ncText)).forEach((segment, index) => {
+    const angles = segment.couples
+      .map(([side, angle]) => `φ${angle.toFixed(1)}° (side ${side})`)
+      .join(', ')
+    issues.push({
+      code: 'BEVEL_OUT_OF_RANGE',
+      severity: 'error',
+      message: `Welding prep ${angles} on ${segment.face}[${segment.index}] is outside the head's ±${MACHINE.bevel.maxDeg}° range. Choose remove, clamp or keep as drawn.`,
+      params: {
+        index,
+        nc: 1,
+        face: segment.face,
+        angles,
+        contourIndex: segment.contourIndex,
+        vertex: segment.index,
+        x: segment.x,
+      },
+    })
+  })
 
   return issues
 }

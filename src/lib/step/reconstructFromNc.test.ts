@@ -68,7 +68,7 @@ describe.skipIf(!HAVE)('reconstruct parts from NC (experimental)', () => {
   }, 900000)
 
   it('matches healthy sibling parts within tolerance (T, RHS, PFC, angle)', async () => {
-    for (const mark of ['m199', 'm143', 'm117', 'm124', 'a1', 'm150', 'm153', 'm164']) {
+    for (const mark of ['m199', 'm143', 'm117', 'm124', 'a1', 'm150', 'm153', 'm164', 'm172']) {
       const step = await reconstructStepFromNc(readFileSync(ncPath(mark), 'utf8'))
       expect(step).toBeTruthy()
       if (!step) continue

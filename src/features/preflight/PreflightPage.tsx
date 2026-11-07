@@ -159,6 +159,7 @@ const VISUALISABLE_CODES = new Set([
   'CUT_BEVEL_CHANGE',
   'CUT_UNCLOSED',
   'CUT_CUTOUT',
+  'BEVEL_OUT_OF_RANGE',
 ])
 
 /**
@@ -172,6 +173,8 @@ function isVisualisable(finding: Finding): boolean {
 
 /** The viewer marker index a finding points at, or null when it has none. */
 function markerIndexOf(finding: Finding): number | null {
+  // Out-of-range bevel findings index their own warning lines, not the sabre sub-cut markers.
+  if (finding.code === 'BEVEL_OUT_OF_RANGE') return null
   const raw = finding.params?.index
   return typeof raw === 'number' ? raw : null
 }
@@ -355,13 +358,14 @@ function resolvedFindings(kind: StepFixKind): string[] {
  * cut) and rebuilds the model from it; `setBevel` edits the NC (unifying the cut line's bevel) via
  * a mini menu that offers an angle (prefilled with the recommended one) or no bevel.
  */
-type FindingFix = 'clean' | 'regenerate' | 'simplify' | 'removeCut' | 'setBevel'
+type FindingFix = 'clean' | 'regenerate' | 'simplify' | 'removeCut' | 'setBevel' | 'removeBevel'
 function fixForFinding(code: string): FindingFix | null {
   if (code === 'STRAY_BODY') return 'clean'
   if (code === 'MANUFACTURE_MISMATCH' || code === 'MANUFACTURE_BORDERLINE') return 'regenerate'
   if (code === 'CUT_END_PIECE') return 'simplify'
   if (code === 'CUT_UNCLOSED' || code === 'CUT_CUTOUT') return 'removeCut'
   if (code === 'CUT_BEVEL_CHANGE') return 'setBevel'
+  if (code === 'BEVEL_OUT_OF_RANGE') return 'removeBevel'
   return null
 }
 
@@ -1970,9 +1974,32 @@ export function PreflightPage() {
   /** Sub-cut index to glow in the 3D while its issue row is hovered (only cut checks map to one). */
   const highlightSpan = useMemo(() => {
     if (hoverIssueIndex == null) return null
-    const index = viewerFindings[hoverIssueIndex]?.params?.index
+    const finding = viewerFindings[hoverIssueIndex]
+    return finding ? markerIndexOf(finding) : null
+  }, [viewerFindings, hoverIssueIndex])
+  /** Warning line to glow while its bevel row is hovered (the finding's own index). */
+  const highlightWarning = useMemo(() => {
+    if (hoverIssueIndex == null) return null
+    const finding = viewerFindings[hoverIssueIndex]
+    if (finding?.code !== 'BEVEL_OUT_OF_RANGE') return null
+    const index = finding.params?.index
     return typeof index === 'number' ? index : null
   }, [viewerFindings, hoverIssueIndex])
+  /** Warning-line indices (bevel findings) hidden by their row's eye. */
+  const hiddenOutOfRange = useMemo(
+    () =>
+      new Set(
+        viewerFindings
+          .map((finding, index) => ({ finding, index }))
+          .filter(
+            ({ finding, index }) =>
+              finding.code === 'BEVEL_OUT_OF_RANGE' && hiddenIssues.has(index),
+          )
+          .map(({ finding }) => finding.params?.index)
+          .filter((value): value is number => typeof value === 'number'),
+      ),
+    [viewerFindings, hiddenIssues],
+  )
   const toggleIssue = useCallback((index: number) => {
     setHiddenIssues((prev) => {
       const next = new Set(prev)
@@ -2694,6 +2721,39 @@ export function PreflightPage() {
       }
     },
     [bytesByPath, ncOverrides, reachChecks],
+  )
+
+  /**
+   * Removes one out-of-range welding prep from the part's NC (its cut segment goes square) and
+   * records it as an override — the same NC-edit path as `setBevel` with angle 0.
+   */
+  const removeBevel = useCallback(
+    async (part: PartRecord, finding: Finding) => {
+      const ncPath = part.nc?.path
+      const original = ncPath ? bytesByPath.get(ncPath) : undefined
+      if (!original) return
+      const currentText = new TextDecoder().decode(ncOverrides.get(part.mark)?.bytes ?? original)
+      const contourIndex = finding.params?.contourIndex
+      const vertex = finding.params?.vertex
+      if (typeof contourIndex !== 'number' || typeof vertex !== 'number') return
+      setFixingMark(part.mark)
+      try {
+        const edited = setBevelInNc(currentText, { contourIndex, vertices: [vertex], angle: 0 })
+        if (edited === currentText) return
+        setNcOverrides((prev) => {
+          const next = new Map(prev)
+          next.set(part.mark, {
+            bytes: new TextEncoder().encode(edited),
+            kind: 'setBevel',
+            angle: 0,
+          })
+          return next
+        })
+      } finally {
+        setFixingMark(null)
+      }
+    },
+    [bytesByPath, ncOverrides],
   )
 
   /** Opens the "unify bevel" mini menu, prefilling the recommended angle for the cut line. */
@@ -3786,6 +3846,8 @@ export function PreflightPage() {
                         {manufactured ? (
                           <PartViewer
                             name={`${viewing.mark} · manufactured`}
+                            hiddenOutOfRange={hiddenOutOfRange}
+                            highlightWarning={highlightWarning}
                             bytes={manufactured}
                             stock={viewerStock}
                             bus={orbitBus}
@@ -3825,6 +3887,8 @@ export function PreflightPage() {
                         {manufactured && stepBytes ? (
                           <PartViewer
                             name={`${viewing.mark} · overlay`}
+                            hiddenOutOfRange={hiddenOutOfRange}
+                            highlightWarning={highlightWarning}
                             bytes={manufactured}
                             compareBytes={stepBytes}
                             compareLabel={t('preflight.viewer.step')}
@@ -3947,6 +4011,7 @@ export function PreflightPage() {
                           Boolean(viewing.step) && modelChecks.get(viewing.mark)?.stray === true,
                         canRemoveCut: Boolean(viewing.nc),
                         canSetBevel: Boolean(viewing.nc),
+                        canRemoveBevel: Boolean(viewing.nc),
                         ncEdit: ncOverrides.get(viewing.mark),
                         pending: fixingMark === viewing.mark,
                         onClean: () => void cleanPart(viewing),
@@ -3955,6 +4020,7 @@ export function PreflightPage() {
                         onRepair: () => void cleanTeklaPart(viewing),
                         onRemoveCut: (finding) => void removeCut(viewing, finding),
                         onSetBevel: (finding) => openBevelEdit(viewing, finding),
+                        onRemoveBevel: (finding) => void removeBevel(viewing, finding),
                         onUndo: () => undoOverride(viewing.mark),
                         onUndoNc: () => undoNcEdit(viewing),
                       }}
@@ -4070,6 +4136,8 @@ interface ViewerFix {
   canRemoveCut: boolean
   /** A `CUT_BEVEL_CHANGE` finding can be resolved by unifying the cut line's bevel via the NC. */
   canSetBevel: boolean
+  /** A `BEVEL_OUT_OF_RANGE` finding can be resolved by removing that prep from the NC. */
+  canRemoveBevel: boolean
   /** The NC edit already applied to the part, if any. */
   ncEdit?: NcOverride
   pending: boolean
@@ -4079,6 +4147,7 @@ interface ViewerFix {
   onRepair: () => void
   onRemoveCut: (finding: Finding) => void
   onSetBevel: (finding: Finding) => void
+  onRemoveBevel: (finding: Finding) => void
   onUndo: () => void
   onUndoNc: () => void
 }
@@ -4114,6 +4183,12 @@ function viewerFixAction(
       pendingLabel: t('common.actions.working'),
       run: () => fix.onSetBevel(finding),
     }
+  if (kind === 'removeBevel')
+    return {
+      label: t('common.actions.removeBevel'),
+      pendingLabel: t('common.actions.removing'),
+      run: () => fix.onRemoveBevel(finding),
+    }
   return {
     label: t('common.actions.simplify'),
     pendingLabel: t('common.actions.working'),
@@ -4127,6 +4202,7 @@ function viewerFixAvailable(fix: ViewerFix, kind: FindingFix): boolean {
   if (kind === 'regenerate') return fix.canRegenerate
   if (kind === 'removeCut') return fix.canRemoveCut
   if (kind === 'setBevel') return fix.canSetBevel
+  if (kind === 'removeBevel') return fix.canRemoveBevel
   return fix.canSimplify
 }
 
@@ -4207,10 +4283,15 @@ function ViewerWarnings({
     return false
   }
   const findingText = (finding: Finding) =>
-    t(finding.params?.nc === 1 ? 'findings.CUT_DEPTH_NC' : `findings.${finding.code}`, {
-      ...finding.params,
-      defaultValue: finding.message,
-    })
+    t(
+      finding.code === 'CUT_DEPTH' && finding.params?.nc === 1
+        ? 'findings.CUT_DEPTH_NC'
+        : `findings.${finding.code}`,
+      {
+        ...finding.params,
+        defaultValue: finding.message,
+      },
+    )
   /** A sortable column header, with an up/down arrow when it's the active sort. */
   const SortHead = ({
     k,

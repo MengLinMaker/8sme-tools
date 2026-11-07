@@ -115,7 +115,8 @@ describe('manufacturability', () => {
     'm144 (BT100*15) ignores the end cut meeting a rounded corner',
     () => {
       const text = readFileSync(join(nw31Top('NC files'), 'm144.nc1'), 'utf8')
-      expect(assessManufacturability(text)).toEqual([])
+      // Its only finding is the 45.3° weld prep just outside the head's range (BEVEL_OUT_OF_RANGE).
+      expect(assessManufacturability(text).filter((i) => i.code === 'CUT_STEP')).toEqual([])
     },
   )
 

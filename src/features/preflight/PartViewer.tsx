@@ -58,6 +58,7 @@ import {
   MARKING_COLOR,
   type NcLineSets,
   type NcProjection,
+  outOfRangeSegments,
   projectNc,
   THICKNESS_COLORS,
   type Vec3,
@@ -287,6 +288,8 @@ interface NcProjectedObjects {
   bevelArrows: LineSegments2[]
   /** Translucent welding-bevel area fins. */
   bevelAreas: Mesh[]
+  /** One warning line per out-of-range cut segment, indexed like the audit findings. */
+  outOfRange: (LineSegments2 | null)[]
   /** Scribe/punch marking lines (`PU`/`KO`). */
   markLines: LineSegments2[]
   /** Etch text labels (`SI`), laid flat on their face. */
@@ -363,6 +366,9 @@ function markTextObject(
 }
 
 /** Builds the NC line sets as coloured fat lines (cut lines + holes + bevels + layout marks). */
+/** Warning colour for welding preps the head cannot cut (outside its range). */
+const OUT_OF_RANGE_COLOR = 0xff3b30
+
 function addNcLines(
   nc: NcGeometry,
   projection: NcProjection,
@@ -375,6 +381,7 @@ function addNcLines(
   const bevelAreas: Mesh[] = []
   const markLines: LineSegments2[] = []
   const markTexts: Mesh[] = []
+  const outOfRange: (LineSegments2 | null)[] = []
   const colorAt = (index: number): number =>
     THICKNESS_COLORS[index % THICKNESS_COLORS.length] ?? FALLBACK_COLOR
   const lineInto = (target: LineSegments2[], points: number[], color: number): void => {
@@ -391,6 +398,13 @@ function addNcLines(
       const mesh = markTextObject(text, color)
       if (mesh) markTexts.push(mesh)
     }
+  }
+  // One warning line per out-of-range segment, in `outOfRangeSegments` order: the audit finding index.
+  for (const segment of outOfRangeSegments(nc)) {
+    const line = sets.outOfRange.find((o) => o.face === segment.face && o.index === segment.index)
+    outOfRange.push(
+      line ? (ncLineObject(line.points, OUT_OF_RANGE_COLOR, resolution, materials) ?? null) : null,
+    )
   }
   sets.bevelArrows.forEach((bevel, index) => {
     lineInto(bevelArrows, bevel.points, colorAt(index))
@@ -412,7 +426,7 @@ function addNcLines(
     )
     bevelAreas.push(area)
   })
-  return { cutLines, bevelArrows, bevelAreas, markLines, markTexts }
+  return { cutLines, bevelArrows, bevelAreas, outOfRange, markLines, markTexts }
 }
 
 /** Colours a cut thickness by its nearest entry in `scale` (the NC legend's thickness order). */
@@ -502,6 +516,12 @@ interface SceneHandle {
   setFlip: (flip: boolean) => void
   setDiffVisible: (visible: boolean) => void
   setSabreVisible: (visible: boolean) => void
+  /** Show/hide the out-of-range welding-prep warning lines. */
+  setOutOfRangeVisible: (visible: boolean) => void
+  /** Hide individual out-of-range warning lines (by finding index). */
+  setOutOfRangeHidden: (hidden: ReadonlySet<number>) => void
+  /** Glow the warning line for the hovered bevel issue (null clears it). */
+  highlightOutOfRange: (index: number | null) => void
   /** Switch the welding-bevel indication between stemmed arrows and translucent area fins. */
   setBevelStyle: (style: BevelStyle) => void
   /** Show/hide the base-plane reference grid. */
@@ -744,6 +764,22 @@ function mountScene(
   /** Welding-bevel indications, split by style so the toggle just flips visibility. */
   const ncArrowObjects: LineSegments2[] = []
   const ncAreaObjects: Mesh[] = []
+  /** Out-of-range welding-prep warning lines, indexed like the audit findings (null = none). */
+  const ncOutOfRangeObjects: (LineSegments2 | null)[] = []
+  let outOfRangeVisible = true
+  let outOfRangeHidden: ReadonlySet<number> = new Set()
+  /** Warning line under the hovered issue row (glows, forced on, the rest dim). */
+  let outOfRangeHover: number | null = null
+  const applyOutOfRange = (): void => {
+    ncOutOfRangeObjects.forEach((object, index) => {
+      if (!object) return
+      const hovered = outOfRangeHover === index
+      object.visible = outOfRangeVisible && (hovered || !outOfRangeHidden.has(index))
+      const material = object.material as LineMaterial
+      material.linewidth = hovered ? SABRE_HIGHLIGHT_WIDTH : NC_LINE_WIDTH
+      material.opacity = hovered ? 1 : outOfRangeHover != null ? SABRE_DIM_OPACITY : 0.98
+    })
+  }
   let bevelStyleState: BevelStyle = bevelStyle
   const applyBevelStyle = (): void => {
     for (const object of ncArrowObjects) object.visible = bevelStyleState === 'arrow'
@@ -1137,6 +1173,13 @@ function mountScene(
             scene.add(area)
             ncAreaObjects.push(area)
           }
+          for (const line of projected.outOfRange) {
+            ncOutOfRangeObjects.push(line)
+            if (!line) continue
+            scene.add(line)
+            ncObjects.push(line)
+          }
+          applyOutOfRange()
         }
         for (const line of projected.markLines) {
           scene.add(line)
@@ -1951,6 +1994,18 @@ function mountScene(
       for (const mesh of diffMeshes) mesh.visible = visible
       for (const lines of diffEdgeLines) lines.visible = visible
     },
+    setOutOfRangeVisible(visible: boolean) {
+      outOfRangeVisible = visible
+      applyOutOfRange()
+    },
+    setOutOfRangeHidden(hidden: ReadonlySet<number>) {
+      outOfRangeHidden = hidden
+      applyOutOfRange()
+    },
+    highlightOutOfRange(index: number | null) {
+      outOfRangeHover = index
+      applyOutOfRange()
+    },
     setSabreVisible(visible: boolean) {
       sabreVisible = visible
       refreshSpanAppearance()
@@ -1981,13 +2036,23 @@ function mountScene(
       if (!bus) return
       // An NC-specific marker isn't drawn on this pane; skip the focus so it stays driven by the
       // manufactured pane (which has the marker) instead of framing every other marker here.
-      if (index != null && sabre?.[index]?.ncOnly && !showNcOnlyMarkers) return
+      if (
+        code !== 'BEVEL_OUT_OF_RANGE' &&
+        index != null &&
+        sabre?.[index]?.ncOnly &&
+        !showNcOnlyMarkers
+      )
+        return
       const box = new Box3()
       const cut = code?.startsWith('CUT') ?? false
       let direction: Vec3 | undefined
       let centre: Vector3 | null = null
       let radius: number | null = null
-      if (source === 'nc') {
+      if (code === 'BEVEL_OUT_OF_RANGE' && index != null) {
+        const line = ncOutOfRangeObjects[index]
+        if (!line) return
+        box.expandByObject(line)
+      } else if (source === 'nc') {
         // Only the pane that carries the NC projection draws these; the STEP/overlay panes skip so
         // they don't frame the whole model instead.
         if (sabreRunObjects.length === 0) return
@@ -2216,6 +2281,10 @@ export interface PartViewerProps {
   focus?: { code: string; token: number; index?: number; source?: 'nc' } | null
   /** Which failing sub-cut markers to show, by index (null/undefined = all; [] = none). */
   visibleSpans?: number[] | null
+  /** Out-of-range bevel warning lines hidden by their finding's eye (by finding index). */
+  hiddenOutOfRange?: ReadonlySet<number>
+  /** Hovered out-of-range bevel issue's warning line: glow it and dim the rest. */
+  highlightWarning?: number | null
   /** Hovered finding's sub-cut index: glow that marker and dim the others (null = no highlight). */
   highlight?: number | null
   /** Live location (mm, from one end) of the orbit pivot along the member, and the member's total
@@ -2268,6 +2337,8 @@ export default function PartViewer({
   faceFrame = null,
   focus = null,
   visibleSpans = null,
+  hiddenOutOfRange,
+  highlightWarning = null,
   highlight = null,
   onLocationChange,
   onAxisAngleChange,
@@ -2307,6 +2378,7 @@ export default function PartViewer({
   const [diffInfo, setDiffInfo] = useState<DiffStats | null>(null)
   const [diffPresence, setDiffPresence] = useState<DiffPresence | null>(null)
   const [sabreState, setSabreState] = useState(true)
+  const [outOfRangeState, setOutOfRangeState] = useState(true)
   const [gridState, setGridState] = useState(true)
   const flippedRef = useRef(false)
   // The overlay toggles can be driven by a shared toolbar (controlled props) or fall back to
@@ -2500,6 +2572,21 @@ export default function PartViewer({
     handleRef.current?.setSabreVisible(showSabre)
   }, [showSabre])
 
+  useEffect(() => {
+    if (status !== 'ready') return
+    handleRef.current?.setOutOfRangeVisible(outOfRangeState)
+  }, [outOfRangeState, status])
+
+  useEffect(() => {
+    if (status !== 'ready') return
+    handleRef.current?.setOutOfRangeHidden(hiddenOutOfRange ?? new Set())
+  }, [hiddenOutOfRange, status])
+
+  useEffect(() => {
+    if (status !== 'ready') return
+    handleRef.current?.highlightOutOfRange(highlightWarning)
+  }, [highlightWarning, status])
+
   // Show only the checked failing sub-cuts' markers (null = all, [] = none).
   useEffect(() => {
     if (status !== 'ready') return
@@ -2524,6 +2611,7 @@ export default function PartViewer({
   const hasOverlay = Boolean((stock || beam) && status === 'ready')
   const hasCompare = Boolean(compareBytes && status === 'ready')
   const hasSabre = Boolean(sabreFailures && sabreFailures.length > 0 && status === 'ready')
+  const hasOutOfRange = Boolean(nc && outOfRangeSegments(nc).length > 0 && status === 'ready')
   const hasDiff = Boolean(hasCompare && diffInfo)
   // Fast probe verdict, shown while the exact boolean still runs.
   const diffFound = Boolean(hasCompare && !diffInfo && diffPresence?.found)
@@ -2570,6 +2658,15 @@ export default function PartViewer({
             className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
           >
             {showDiff ? t('viewer.hideDiff') : t('viewer.showDiff')}
+          </button>
+        )}
+        {hasOutOfRange && (
+          <button
+            type="button"
+            onClick={() => setOutOfRangeState((value) => !value)}
+            className="rounded-md border border-border bg-card/80 px-2.5 py-1 text-xs font-medium backdrop-blur transition-colors hover:bg-accent"
+          >
+            {outOfRangeState ? t('viewer.hideOutOfRange') : t('viewer.showOutOfRange')}
           </button>
         )}
         {hasSabre && (

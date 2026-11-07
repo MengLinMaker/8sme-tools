@@ -14,7 +14,13 @@ import {
 } from '@/lib/parsers/ncFaces'
 import { type NcContour, type NcFace, parseNcGeometry, slotOffset } from '@/lib/parsers/ncGeometry'
 import { faceThickness, projectNc } from '@/lib/parsers/ncProject'
-import { selectWeldingPrep } from '@/lib/parsers/weldingPrep'
+import {
+  applyBevelPolicy,
+  type BevelPolicy,
+  defaultBevelPolicy,
+  MAX_BEVEL_DEG,
+  selectWeldingPrep,
+} from '@/lib/parsers/weldingPrep'
 import { profileFamily } from '@/lib/sections/canonical'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stripStraySolids } from './clean'
@@ -52,8 +58,19 @@ const BEAM_REACH = 35
 /** Overtravel (mm) past the wall so the removal tool clears the finished surface for OCC booleans. */
 const CUT_MARGIN = 1
 
+/** Experimental: per-face tube cuts (see `buildTubeFaceCut`). Off until the overlay check passes. */
+const TUBE_PER_FACE = false
+
 /** How far (mm) a cut tool starts outside the face before reaching in, so it never shares a face. */
 const CUT_OUTSIDE = 2
+
+/**
+ * Overtravel (mm) past a tube's member end for the shallow (type 1) face extrusion. The outer
+ * corner radius on an RHS/SHS is large (up to 22.5 mm on the 150×100 family); a tool that stops
+ * just past the end leaves the rounded corner uncut. Running the extrusion a metre beyond each end
+ * guarantees the cut clears it, while the final end trim still fixes the true member length.
+ */
+const END_CUT_OVERRUN = 1000
 
 /**
  * The section's own plate / wall thickness (mm) behind a face, read from the DSTV `ST` header dims.
@@ -106,7 +123,8 @@ export function contourBevelFactor(contour: NcContour): number {
   for (const bevel of contour.bevels) {
     for (const angle of [bevel[0] ?? 0, bevel[2] ?? 0]) {
       const magnitude = Math.abs(angle)
-      if (Number.isFinite(magnitude) && magnitude > 1e-6 && magnitude < 89) {
+      // Only angles the head can cut count: an out-of-range prep is not a reach.
+      if (Number.isFinite(magnitude) && magnitude > 1e-6 && magnitude <= MAX_BEVEL_DEG) {
         factor = Math.max(factor, 1 / Math.cos((magnitude * Math.PI) / 180))
       }
     }
@@ -319,6 +337,8 @@ export interface ReconstructOptions {
   bevels?: boolean
   /** **Debug only:** skip the shallow (1st) face cut so the 2nd extrusion can be inspected. */
   debugSkipShallow?: boolean
+  /** How to treat out-of-range welding preps. Default: `remove` on RHS/SHS, `asDrawn` otherwise. */
+  bevelPolicy?: BevelPolicy
   /** Run the CUT_DEPTH sabre probe (default true; the viewer model skips it for speed). */
   sabre?: boolean
   /** Tuning/debug: sabre probe tessellation resolution. */
@@ -386,7 +406,13 @@ export async function reconstructSolidFromNc(
   // which by matching a contour's across-extent to the section's two dimensions (the same rule
   // the viewer uses to project cuts onto the face the laser cuts).
   const frame = resolveNcFaceFrame(section.points, geo, header.profile)
-  const outer = geo.contours.filter((c) => c.kind === 'outer')
+  // Out-of-range welding preps are handled by policy before any bevel/reach uses them.
+  const bevelPolicy =
+    options.bevelPolicy ??
+    defaultBevelPolicy(header.profile ? String(profileFamily(header.profile) ?? '') : '')
+  const outer = geo.contours
+    .filter((c) => c.kind === 'outer')
+    .map((c) => ({ ...c, bevels: c.bevels.map((b) => applyBevelPolicy(b, bevelPolicy)) }))
   const maxX = Math.max(
     ...geo.contours.flatMap((c) => c.points.map((p) => p[0])),
     ...geo.holes.map((h) => {
@@ -498,6 +524,9 @@ export async function reconstructSolidFromNc(
   // face's cut line as an edge — the old union of `o`/`u` suppressed the shorter flange's line
   // (m127 `o[0]`).
   const channelFaces = family === 'channel'
+  // Tube per-face cuts (`buildTubeFaceCut`) are off: they misplace the RHS/SHS walls in the viewer
+  // overlay (seat-match over/under ≈40%). The shared axis trim is used for tubes until that is fixed.
+  const perFaceFamily = channelFaces || (TUBE_PER_FACE && family === 'tube')
   const buildFaceCut = (
     face: NcFace,
     axis: Axis,
@@ -540,6 +569,59 @@ export async function reconstructSolidFromNc(
     }
     // Face spans width (Y), normal is depth (Z); `XY` extrudes towards +Z.
     const shiftZ = faceSign > 0 ? faceOut - reach : -faceOut
+    return (notch as ReturnType<typeof poly>)
+      .sketchOnPlane('XY')
+      .extrude(reach)
+      .translate(0, 0, shiftZ) as unknown as SolidOps
+  }
+
+  // A tube is cut the same way as a channel: each face's own outline is extruded through that
+  // face's own wall, from pure stock. The tool runs `END_CUT_OVERRUN` past both member ends so the
+  // end cut is always complete (an RHS/SHS corner radius is up to 22.5 mm).
+  const buildTubeFaceCut = (
+    face: NcFace,
+    axis: Axis,
+    pts: Pt[],
+    radii: number[],
+    mirrored: boolean,
+  ): SolidOps | null => {
+    const wall = plateThicknessMm(header.profile, header.dimensions, (1 - axis) as Axis)
+    if (!(wall > 0)) return null
+    // One extrusion of depth T + R + buffer: the wall, the outer corner radius (the NC outline is
+    // authored on the sharp corner), and the same 1 mm buffer the PFC/UB construction uses.
+    const cornerRadius = Math.max(0, header.dimensions[4] ?? 0)
+    const reach = wall + cornerRadius + CUT_MARGIN
+    const faceOut = facePlaneHalf(frame, face)
+    const faceSign = resolveFaceSign(frame, section.points, face)
+    const half = halfOf(axis)
+    const low = endMinX - 2 - END_CUT_OVERRUN
+    const high = endMaxX + 2 + END_CUT_OVERRUN
+    const rect = poly([
+      [low, -half - 2],
+      [high, -half - 2],
+      [high, half + 2],
+      [low, half + 2],
+    ])
+    const notch = (() => {
+      try {
+        return (rect as unknown as { cut: (other: unknown) => unknown }).cut(
+          poly(pts, radii, mirrored),
+        )
+      } catch {
+        return null
+      }
+    })()
+    if (!notch) return null
+    if (axis === 1) {
+      // Side face (spans Z, normal Y); `XZ` extrudes towards −Y. Starts `CUT_OUTSIDE` clear of it.
+      const shiftY = faceSign > 0 ? faceOut + CUT_OUTSIDE : -faceOut - CUT_OUTSIDE + reach
+      return (notch as ReturnType<typeof poly>)
+        .sketchOnPlane('XZ')
+        .extrude(reach)
+        .translate(0, shiftY, 0) as unknown as SolidOps
+    }
+    // Top/bottom face (spans Y, normal Z); `XY` extrudes towards +Z.
+    const shiftZ = faceSign > 0 ? faceOut - reach + CUT_OUTSIDE : -faceOut - CUT_OUTSIDE
     return (notch as ReturnType<typeof poly>)
       .sketchOnPlane('XY')
       .extrude(reach)
@@ -609,9 +691,11 @@ export async function reconstructSolidFromNc(
     // applies for the projection, so the two agree.
     const sign = acrossSign(c.face)
     const pts = rawPts.map(([x, y]) => [x, sign * (y - half)] as Pt)
-    if (channelFaces) {
+    if (perFaceFamily) {
       if (options.debugSkipShallow !== true) {
-        const cut = buildFaceCut(c.face, axis, pts, radii, sign < 0)
+        const cut = channelFaces
+          ? buildFaceCut(c.face, axis, pts, radii, sign < 0)
+          : buildTubeFaceCut(c.face, axis, pts, radii, sign < 0)
         if (cut) solid = solid.cut(cut)
       }
       for (const strip of buildFlangeFillet(c.face, axis, pts)) solid = solid.cut(strip)
@@ -659,7 +743,7 @@ export async function reconstructSolidFromNc(
   // the top face shorter than the bottom, so the union (not either face alone) is the true
   // silhouette and stops the intersection from over-trimming the ends.
   for (const axis of [0, 1] as Axis[]) {
-    if (channelFaces) break
+    if (perFaceFamily) break
     const drawings = drawingsByAxis[axis]
     if (drawings.length === 0) continue
     const half = halfOf(axis)
@@ -781,13 +865,17 @@ export async function reconstructSolidFromNc(
     } else {
       // Face plane is (X, depth=Z). `intersect` trips an OCC boolean error with the section
       // prism, so remove the complement (bounding rectangle minus the outline) with a cut.
-      // The rectangle spans the global end extent (not just this axis's outlines), so a
-      // longer face's end wedge is never left standing past the cut as a stray body.
+      // The rectangle spans the global end extent (not just this axis's outlines), so a longer
+      // face's end wedge is never left standing past the cut as a stray body. On a tube the tool
+      // must clear the large outer corner radius (22.5 mm on the 150×100 family), so run the
+      // shallow (type 1) extrusion a metre past both ends instead of the usual couple of mm.
+      const endLow = endMinX - 2
+      const endHigh = isI ? maxX + 22 : endMaxX + 2
       const rect = poly([
-        [endMinX - 2, -half - 2],
-        [isI ? maxX + 22 : endMaxX + 2, -half - 2],
-        [isI ? maxX + 22 : endMaxX + 2, half + 2],
-        [endMinX - 2, half + 2],
+        [endLow, -half - 2],
+        [endHigh, -half - 2],
+        [endHigh, half + 2],
+        [endLow, half + 2],
       ])
       const notch = (() => {
         try {
