@@ -7,9 +7,19 @@ export interface PartSortContext {
   findings: Finding[]
   materials: Map<string, DrawingMaterial>
   /** `error` lets a STEP-only (`stepOnly`) or NC-only (`ncOnly`) size count as no problem. */
-  modelChecks: Map<string, { ok: boolean; error?: string }>
+  modelChecks: Map<
+    string,
+    {
+      ok: boolean
+      error?: string
+      measured?: [number, number, number]
+      expected?: [number, number, number]
+    }
+  >
   /** Marks whose NC carries welding-location etchings; sorted just above clean parts. */
   weldingMarks?: ReadonlySet<string>
+  /** Per-piece mass as displayed in the table, when it is derived (not just the drawing weight). */
+  mass?: (part: PartRecord) => number | null
 }
 
 const SEVERITY_RANK: Record<Severity, number> = { error: 0, warning: 1, info: 2 }
@@ -32,11 +42,9 @@ export function severityRank(part: PartRecord, context: PartSortContext): number
   return rank
 }
 
-function partValue(
-  part: PartRecord,
-  key: PartSortKey,
-  context: PartSortContext,
-): number | string | null {
+type SortValue = number | string | readonly number[] | null
+
+function partValue(part: PartRecord, key: PartSortKey, context: PartSortContext): SortValue {
   const material = context.materials.get(part.mark)
   switch (key) {
     case 'severity':
@@ -51,14 +59,31 @@ function partValue(
       // Drawing (ground truth) first, NC only as a fallback.
       return material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
     case 'mass':
-      // Drawing (ground truth) first, then the part list.
+      // Use the same per-piece mass the table shows (drawing first, then a section estimate).
+      if (context.mass) return context.mass(part)
       return material?.weight ?? part.expected?.weight ?? null
     case 'model': {
+      // Sort by the size the column shows, length first, so parts line up by model size.
       const check = context.modelChecks.get(part.mark)
-      if (!check) return 2
-      return check.ok || check.error === 'stepOnly' || check.error === 'ncOnly' ? 1 : 0
+      return check?.measured ?? check?.expected ?? null
     }
   }
+}
+
+/** Compares two non-null values; strings sort naturally (m-1 < m-2 < m-12) case-insensitively. */
+function compareValues(a: Exclude<SortValue, null>, b: Exclude<SortValue, null>): number {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    const length = Math.max(a.length, b.length)
+    for (let i = 0; i < length; i++) {
+      const compared = (a[i] ?? -Infinity) - (b[i] ?? -Infinity)
+      if (compared !== 0) return compared
+    }
+    return 0
+  }
+  if (typeof a === 'string' && typeof b === 'string') {
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+  }
+  return (a as number) - (b as number)
 }
 
 /** Returns a new array sorted by the column, problems-first for severity/status columns. */
@@ -68,17 +93,15 @@ export function sortParts(
   direction: 1 | -1,
   context: PartSortContext,
 ): PartRecord[] {
-  const sorted = [...parts].sort((a, b) => {
+  return [...parts].sort((a, b) => {
     const av = partValue(a, key, context)
     const bv = partValue(b, key, context)
+    // Missing values always sit at the bottom, whichever way the column is sorted.
     if (av === null && bv === null) return 0
-    if (av === null) return 1 // nulls last
+    if (av === null) return 1
     if (bv === null) return -1
-    const compared =
-      typeof av === 'string' && typeof bv === 'string'
-        ? av.localeCompare(bv)
-        : (av as number) - (bv as number)
-    if (compared !== 0) return compared
+    const compared = compareValues(av, bv)
+    if (compared !== 0) return compared * direction
     // A weld mark can block production, so within the same status it comes first.
     if (key === 'severity') {
       const aw = context.weldingMarks?.has(a.mark) ? 0 : 1
@@ -87,5 +110,4 @@ export function sortParts(
     }
     return 0
   })
-  return direction === 1 ? sorted : sorted.reverse()
 }

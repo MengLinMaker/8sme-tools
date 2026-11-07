@@ -2058,9 +2058,10 @@ export function PreflightPage() {
             materials: drawingMaterials,
             modelChecks,
             weldingMarks: new Set(weldEtchings.keys()),
+            mass: pieceMass,
           })
         : [],
-    [result, sort, allFindings, drawingMaterials, modelChecks, weldEtchings],
+    [result, sort, allFindings, drawingMaterials, modelChecks, weldEtchings, pieceMass],
   )
   /** Everything the parts search can match: mark, profile/grade, findings and weld etchings. */
   const partFilterContext = useMemo<PartFilterContext>(

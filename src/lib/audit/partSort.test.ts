@@ -77,6 +77,36 @@ describe('sortParts', () => {
     expect(sortParts(parts, 'qty', -1, ctx).map((p) => p.mark)).toEqual(['a', 'b'])
   })
 
+  it('sorts marks naturally, not lexically', () => {
+    const parts = [part('m-12'), part('m-2'), part('m-21'), part('m-1')]
+    expect(sortParts(parts, 'mark', 1, context([])).map((p) => p.mark)).toEqual([
+      'm-1',
+      'm-2',
+      'm-12',
+      'm-21',
+    ])
+  })
+
+  it('sorts by the displayed mass and keeps missing values last in both directions', () => {
+    const parts = [part('a'), part('b'), part('c')]
+    const masses: Record<string, number | null> = { a: 30, b: null, c: 10 }
+    const ctx = { ...context([]), mass: (p: PartRecord) => masses[p.mark] ?? null }
+    expect(sortParts(parts, 'mass', 1, ctx).map((p) => p.mark)).toEqual(['c', 'a', 'b'])
+    expect(sortParts(parts, 'mass', -1, ctx).map((p) => p.mark)).toEqual(['a', 'c', 'b'])
+  })
+
+  it('sorts the model column by size, length first', () => {
+    const parts = [part('long'), part('short'), part('none')]
+    const ctx = {
+      ...context([]),
+      modelChecks: new Map([
+        ['long', { ok: true, measured: [3000, 200, 100] as [number, number, number] }],
+        ['short', { ok: true, measured: [500, 200, 100] as [number, number, number] }],
+      ]),
+    }
+    expect(sortParts(parts, 'model', 1, ctx).map((p) => p.mark)).toEqual(['short', 'long', 'none'])
+  })
+
   it('sorts by the first assembly and puts unassembled parts last', () => {
     const parts = [
       { mark: 'a' },
