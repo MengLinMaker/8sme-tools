@@ -4569,9 +4569,13 @@ function ViewerWarnings({
                           size="sm"
                           className="h-7"
                           disabled={fix?.pending}
-                          onClick={() =>
-                            ncResolved?.has(index) ? fix?.onUndoNc(finding) : fix?.onUndo()
-                          }
+                          onClick={(event) => {
+                            // Stop the row's own click: it would toggle this row's eye back off.
+                            event.stopPropagation()
+                            if (ncResolved?.has(index)) fix?.onUndoNc(finding)
+                            else fix?.onUndo()
+                          }}
+                          onKeyDown={(event) => event.stopPropagation()}
                         >
                           <Undo2 />
                           {t('common.actions.undo')}
