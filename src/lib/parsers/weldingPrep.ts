@@ -32,16 +32,29 @@ const NO_PREP: WeldingPrep = { angle: 0, distance: 0 }
  * are square) there is no bevel. Returns the selected couple's own `Y`, so the drawn distance
  * belongs to the angle it accompanies.
  */
-export function selectWeldingPrep(bevel: number[] | undefined): WeldingPrep {
+export function selectWeldingPrep(
+  bevel: number[] | undefined,
+  /**
+   * Drawing only: fall back to the steepest nonzero couple when neither is inside the head's
+   * range. Tekla writes real preps just outside ±45° (e.g. 47.63°); the manufactured model follows
+   * them, so the projection must show them too. The audit still uses the strict range.
+   */
+  allowOutOfRange = false,
+): WeldingPrep {
   if (!bevel) return NO_PREP
   let best = NO_PREP
+  let fallback = NO_PREP
   for (const couple of [
     { angle: bevel[0] ?? 0, distance: bevel[1] ?? 0 },
     { angle: bevel[2] ?? 0, distance: bevel[3] ?? 0 },
   ]) {
     if (!Number.isFinite(couple.angle) || couple.angle === 0) continue
-    if (Math.abs(couple.angle) > MAX_BEVEL_DEG) continue
+    if (Math.abs(couple.angle) > MAX_BEVEL_DEG) {
+      if (Math.abs(couple.angle) > Math.abs(fallback.angle)) fallback = couple
+      continue
+    }
     if (Math.abs(couple.angle) > Math.abs(best.angle)) best = couple
   }
-  return best
+  if (best.angle !== 0) return best
+  return allowOutOfRange ? fallback : NO_PREP
 }

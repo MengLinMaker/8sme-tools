@@ -23,7 +23,7 @@ Marks included per job:
 - **nw30-bottom:** m105 m106 m107 m108 m71 m87 a2
 - **nw31-bottom:** m12 m15 m16 m106 m116 m122 m128 m147 m148 m166
 - **nw31-top:** the 31 `BT100*15` Top-frame tees (m118…m232, see `cutBeam.nw31.test.ts`), plus
-  a1 m31 m41 m117 m124 m150
+  a1 m24 m31 m41 m117 m124 m150 m154 m172 m173 m211
 - **hex-module-frames:** item10 (200UB25.4 mass-variant) item35 (rotated-member SHS75*75*6.0)
 
 To extend: drop `<mark>.nc1` and/or `<mark>.stp` into the matching folder, then add the mark to the

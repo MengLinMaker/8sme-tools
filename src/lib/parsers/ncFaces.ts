@@ -182,7 +182,9 @@ export function ncAuthoredAcrossSign(frame: NcFaceFrame, face: NcFace): 1 | -1 {
     return face === 'v' || face === 'h' ? -1 : 1
   }
   if (family === 'tube') {
-    if (isSquareTube(frame)) return 1
+    // A square has no long-side cue, so it keeps the authored pose; its perimeter runs the
+    // opposite way to the long-side-horizontal stance, flipping which pair reads negative.
+    if (isSquareTube(frame)) return face === 'o' || face === 'u' ? 1 : -1
     return face === 'o' || face === 'u' ? -1 : 1
   }
   return 1

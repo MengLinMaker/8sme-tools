@@ -187,12 +187,12 @@ function arrow(target: number[], at: Vec3, dir: Vec3, spread: Vec3): void {
  * makes (see `selectWeldingPrep`). `0` = no bevel.
  */
 function bevelAngle(bevel: number[] | undefined): number {
-  return selectWeldingPrep(bevel).angle
+  return selectWeldingPrep(bevel, true).angle
 }
 
 /** Bevel distance to draw for a vertex, or 0 when the vertex is a plain cut. */
 function bevelDistance(bevel: number[] | undefined): number {
-  const { angle, distance } = selectWeldingPrep(bevel)
+  const { angle, distance } = selectWeldingPrep(bevel, true)
   if (distance > 0) return distance
   return angle !== 0 ? DEFAULT_BEVEL_SPUR : 0
 }
@@ -452,15 +452,23 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
         b.world[1] - a.world[1],
         b.world[2] - a.world[2],
       ])
-      const perp = normalize(cross(spur, line))
       const theta = (Math.abs(deg) * Math.PI) / 180
-      // Bevels lean along the beam: mirroring the across axis flips the contour traversal `line`
-      // and with it `perp`. A tube's short faces (`o`/`u`) are authored-traversed the other way in
-      // our long-horizontal stance (see `ncAuthoredAcrossSign`), so their lean is negated.
-      const mirrored =
-        (frame.profile ? profileFamily(frame.profile) : null) === 'tube' &&
-        ncAuthoredAcrossSign(frame, contour.face) < 0
-      const side = (deg >= 0 ? 1 : -1) * (mirrored ? -1 : 1)
+      const perp = normalize(cross(spur, line))
+      let side: number
+      if ((frame.profile ? profileFamily(frame.profile) : null) === 'tube') {
+        // The DSTV bevel angle is signed against the contour's authored direction, not the end of
+        // the member: a parallel double-mitre sweeps the same way at both ends. `v`/`h` are
+        // traversed the opposite way to `o`/`u` after canonical seating, and their authored across
+        // sign flips between an SHS and an RHS. Derived against the STEP cut-line projection — see
+        // the bevel-arrow cross-check in `cutProjection.test.ts`.
+        const pairSign =
+          contour.face === 'v' || contour.face === 'h'
+            ? ncAuthoredAcrossSign(frame, contour.face)
+            : 1
+        side = -(deg >= 0 ? 1 : -1) * pairSign
+      } else {
+        side = deg >= 0 ? 1 : -1
+      }
       // Outward tilt from the surface normal: at 0° it is the normal (regular), grows toward perp.
       const dir = normalize([
         spur[0] * Math.cos(theta) + perp[0] * Math.sin(theta) * side,

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { nw30Bottom, nw31Top } from '@test/fixtures'
+import { fixture, nw30Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { parseDstv } from './dstv'
@@ -199,6 +199,55 @@ describe('faceThickness', () => {
       const frame = resolveNcFaceFrame(points, geo, header.profile)
       expect(cutThicknesses(frame, points, geo)).toEqual([wall])
     }
+  })
+})
+
+describe('projectNc tube bevel direction', () => {
+  it('leans a parallel double-mitre the same way at both ends, opposite on o/u (M-51)', () => {
+    const path = fixture('ncep', 'M-51.nc1')
+    if (!existsSync(path)) return
+    const text = readFileSync(path, 'utf8')
+    const header = parseDstv(text).header
+    const geo = parseNcGeometry(text)
+    const section = partSectionForCode(header.profile, header.dimensions)?.points
+    expect(section).toBeTruthy()
+    if (!section) return
+    const frame = resolveNcFaceFrame(section, geo, header.profile)
+    const toScene = (along: number, cross: [number, number]): Vec3 => [along, cross[0], cross[1]]
+    const normal = (face: NcFace): Vec3 => {
+      const n = faceNormal(frame, face, section)
+      return n.axis === 0 ? [0, n.sign, 0] : [0, 0, n.sign]
+    }
+    const ends = (face: NcFace): { start: number[]; end: number[] } => {
+      const ncFace = {
+        ...geo,
+        contours: geo.contours.filter((c) => c.kind === 'outer' && c.face === face),
+      }
+      const out = projectNc(ncFace, { frame, section, toScene, normal })
+      const result = { start: [] as number[], end: [] as number[] }
+      for (const group of out.bevelArrows) {
+        // Each arrow is three pushed segments; the first is the stem from the cut line outward.
+        for (let i = 0; i + 5 < group.points.length; i += 18) {
+          const x0 = group.points[i] as number
+          const dx = (group.points[i + 3] as number) - x0
+          if (Math.abs(dx) < 1e-6) continue
+          result[x0 < header.length / 2 ? 'start' : 'end'].push(Math.sign(dx))
+        }
+      }
+      return result
+    }
+    const o = ends('o')
+    const u = ends('u')
+    for (const face of [o, u]) {
+      expect(face.start.length).toBeGreaterThan(0)
+      expect(face.end.length).toBeGreaterThan(0)
+      // The two ends are parallel mitres, so the bevel sweeps the same way at both.
+      expect(new Set(face.start).size).toBe(1)
+      expect(new Set(face.end).size).toBe(1)
+      expect(face.start[0]).toBe(face.end[0])
+    }
+    // `o` and `u` are opposite faces of the tube, so their bevels sweep opposite ways.
+    expect(o.start[0]).toBe(-u.start[0])
   })
 })
 

@@ -42,6 +42,14 @@ describe('selectWeldingPrep', () => {
     }
   })
 
+  it('falls back to an out-of-range prep for display only', () => {
+    // M-59 carries -47.63°: Tekla's real prep is just past the head's ±45° data sheet value.
+    const bevel = [-47.63, 3.5, 0, 0]
+    expect(selectWeldingPrep(bevel).angle).toBe(0)
+    expect(selectWeldingPrep(bevel, true).angle).toBeCloseTo(-47.63, 2)
+    expect(selectWeldingPrep(bevel, true).distance).toBe(3.5)
+  })
+
   it('carries the Y of the selected couple, not the largest Y', () => {
     expect(selectWeldingPrep([45, 0, 79.4, 1.87]).distance).toBe(0)
     expect(selectWeldingPrep([-20.05, 9, 0, 0]).distance).toBe(9)
