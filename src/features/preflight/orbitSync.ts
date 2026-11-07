@@ -378,8 +378,10 @@ export function attachOrbit(
   bus.presetListeners.add(applyPreset)
   bus.focusListeners.add(applyFocus)
   bus.locationListeners.add(applyLocation)
-  if (bus.focus) applyFocus(bus.focus)
-  else if (bus.orbit) apply(bus.orbit)
+  // A pane joining (or rebuilt after an NC fix/undo) takes the shared camera as it is now, so every
+  // synced pane stays where it was. A focus or preset only applies when no camera state exists yet.
+  if (bus.orbit) apply(bus.orbit)
+  else if (bus.focus) applyFocus(bus.focus)
   else if (bus.preset) applyPreset(bus.preset)
 
   return () => {
