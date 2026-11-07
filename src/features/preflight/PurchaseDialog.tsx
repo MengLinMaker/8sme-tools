@@ -6,6 +6,7 @@
  * bars), and every bar keeps a margin for the chuck / end trim / cutting error.
  */
 
+import { HelpCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -30,8 +31,10 @@ import {
   type PurchaseBar,
   type PurchaseGroupInput,
   type PurchasePlan,
+  planPurchase,
   planPurchases,
   REUSABLE_OFFCUT_MM,
+  stockLengthsForStock,
 } from '@/lib/purchasing/purchase'
 import { cn } from '@/lib/utils'
 
@@ -229,6 +232,43 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
     )
   }, [plans])
 
+  const largerStockSuggestions = useMemo(() => {
+    const map = new Map<string, number>()
+    if (stockLengthsMm.length === 0) return map
+    const selectedMax = Math.max(...stockLengthsMm)
+    const selected = new Set(stockLengthsMm)
+    for (const group of groups) {
+      const current = plans.find((plan) => plan.key === group.key)
+      if (!current || current.largeOffcuts === 0) continue
+      const beamCount = current.purchases.reduce((sum, item) => sum + item.count, 0)
+      if (beamCount <= 1) continue
+      const larger = stockLengthsForStock(group.stock)
+        .filter((length) => length > selectedMax && !selected.has(length))
+        .slice(0, 2)
+      let best: { lengthMm: number; purchasedMm: number } | null = null
+      for (const length of larger) {
+        const alt = planPurchase(group, {
+          stockLengthsMm: [...stockLengthsMm, length],
+          marginMm: Math.max(0, marginMm),
+          onePersonKg,
+          twoPersonKg,
+        })
+        if (alt.largeOffcuts !== 0 || !alt.purchases.some((item) => item.lengthMm === length)) {
+          continue
+        }
+        if (
+          !best ||
+          alt.purchasedMm < best.purchasedMm ||
+          (alt.purchasedMm === best.purchasedMm && length < best.lengthMm)
+        ) {
+          best = { lengthMm: length, purchasedMm: alt.purchasedMm }
+        }
+      }
+      if (best) map.set(group.key, best.lengthMm)
+    }
+    return map
+  }, [groups, marginMm, onePersonKg, plans, stockLengthsMm, twoPersonKg])
+
   const toggleStock = (length: number) => {
     setStockLengthsMm((current) =>
       current.includes(length)
@@ -404,6 +444,7 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
               onePersonKg={onePersonKg}
               twoPersonKg={twoPersonKg}
               marginMm={marginMm}
+              suggestions={largerStockSuggestions}
             />
           </>
         )}
@@ -414,6 +455,7 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
 
 function BuyList({ rows, jobName }: { rows: BuyRow[]; jobName?: string }) {
   const { t } = useTranslation()
+  const [showOptimiserHelp, setShowOptimiserHelp] = useState(false)
   const groups = useMemo(() => groupBuyRows(rows), [rows])
   const tableRows = useMemo(
     () =>
@@ -458,11 +500,37 @@ function BuyList({ rows, jobName }: { rows: BuyRow[]; jobName?: string }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-medium">{t('preflight.purchase.buyListTitle')}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm font-medium">{t('preflight.purchase.buyListTitle')}</span>
+          <button
+            type="button"
+            onClick={() => setShowOptimiserHelp((value) => !value)}
+            aria-expanded={showOptimiserHelp}
+            aria-label={t('preflight.purchase.optimiserHelp')}
+            title={t('preflight.purchase.optimiserHelp')}
+            className="inline-flex size-6 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            <HelpCircle className="size-3.5" />
+          </button>
+        </div>
         <Button variant="outline" size="sm" onClick={download} disabled={rows.length === 0}>
           {t('preflight.purchase.downloadCsv')}
         </Button>
       </div>
+      {showOptimiserHelp && (
+        <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs">
+          <div className="font-medium text-foreground">
+            {t('preflight.purchase.optimiserTitle')}
+          </div>
+          <ol className="mt-1 list-decimal space-y-1 pl-4 text-muted-foreground">
+            <li>{t('preflight.purchase.optimiserStep1')}</li>
+            <li>{t('preflight.purchase.optimiserStep2')}</li>
+            <li>{t('preflight.purchase.optimiserStep3')}</li>
+            <li>{t('preflight.purchase.optimiserStep4')}</li>
+          </ol>
+          <p className="mt-2 text-muted-foreground">{t('preflight.purchase.optimiserNote')}</p>
+        </div>
+      )}
       <div className="overflow-x-auto rounded-lg border border-border">
         <Table className="[&_td]:border-r [&_td]:border-border/50 [&_td:last-child]:border-r-0 [&_th]:border-r [&_th]:border-border/50 [&_th:last-child]:border-r-0">
           <TableHeader>
@@ -528,11 +596,13 @@ function NestingSolution({
   onePersonKg,
   twoPersonKg,
   marginMm,
+  suggestions,
 }: {
   plans: PurchasePlan[]
   onePersonKg: number
   twoPersonKg: number
   marginMm: number
+  suggestions: Map<string, number>
 }) {
   const { t } = useTranslation()
   const [filter, setFilter] = useState<'all' | 'heavy' | 'reusable' | 'large'>('all')
@@ -698,19 +768,31 @@ function NestingSolution({
               .join(';')}`,
         )
         const scrapMm = suggestedScrapMm(plan)
+        const suggestion = suggestions.get(plan.key)
 
         return (
           <div key={plan.key} className="rounded-lg border border-border p-3">
             <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="font-mono text-xs font-medium">{plan.stock}</span>
-                {scrapMm != null && (
-                  <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span
+                  className="w-24 shrink-0 truncate font-mono text-xs font-medium"
+                  title={plan.stock}
+                >
+                  {plan.stock}
+                </span>
+                {suggestion != null ? (
+                  <span className="whitespace-nowrap rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300">
+                    {t('preflight.purchase.largerStockSuggestion', {
+                      length: metres(suggestion, suggestion % 1000 === 0 ? 0 : 1),
+                    })}
+                  </span>
+                ) : scrapMm != null ? (
+                  <span className="whitespace-nowrap rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300">
                     {t('preflight.purchase.largeReusableBadge', {
                       length: metres(scrapMm),
                     })}
                   </span>
-                )}
+                ) : null}
               </div>
               <div className="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
                 <span>

@@ -137,6 +137,17 @@ export const en = {
       buyListTitle: 'Stock to buy',
       downloadCsv: 'Download CSV',
       settings: 'Search settings',
+      optimiserHelp: 'How stock lengths are calculated',
+      optimiserTitle: 'Optimisation order, per section',
+      optimiserStep1: '1. Minimise stock purchases / purchased length / waste weight.',
+      optimiserStep2:
+        '2. Maximise the sum of squared waste lengths for all waste, concentrating the offcuts.',
+      optimiserStep3:
+        '3. For bin waste (<2 m): maximise 1-person offcuts, then 2-person offcuts, then minimise equipment offcuts.',
+      optimiserStep4:
+        '4. As a final nudge, minimise the sum of squared waste lengths for beams with 1-person waste, evening out chuck space. This may trade a little phase-2 concentration.',
+      optimiserNote:
+        'Each section is optimised independently. A larger-stock suggestion only appears when it removes a large reusable offcut.',
       waste: 'Waste',
       totalWeight: 'Total steel',
       wasteWeight: 'Waste weight',
@@ -156,6 +167,7 @@ export const en = {
       filterReusable: 'Reusable',
       filterLargeReusable: 'Large reusable',
       largeReusableBadge: 'Try substitute with {{length}} scrap',
+      largerStockSuggestion: 'Try {{length}} stock',
       use: 'Use',
       profiles: 'Stock profiles',
       tee: 'T · parent UB',
@@ -691,6 +703,15 @@ export const zh = {
       buyListTitle: '需采购原材',
       downloadCsv: '下载 CSV',
       settings: '搜索设置',
+      optimiserHelp: '原材长度如何计算',
+      optimiserTitle: '每个类型的优化顺序',
+      optimiserStep1: '1. 最小化采购原材数量 / 采购长度 / 余料重量。',
+      optimiserStep2: '2. 最大化全部余料的长度平方和，将余料集中到更少、更大的余料段。',
+      optimiserStep3:
+        '3. 对废料（<2 m）：优先增加单人可搬余料，其次双人可搬余料，最后减少需设备搬运的余料。',
+      optimiserStep4:
+        '4. 最后微调：最小化单人可搬余料的长度平方和，使卡盘空间更均匀。可能略微牺牲第 2 阶段的余料集中度。',
+      optimiserNote: '每个类型独立优化。只有能消除大块可复用余料时，才会显示更大原材的建议。',
       waste: '余料',
       totalWeight: '钢材总重',
       wasteWeight: '余料重量',
@@ -710,6 +731,7 @@ export const zh = {
       filterReusable: '可复用',
       filterLargeReusable: '大块可复用',
       largeReusableBadge: '可尝试用 {{length}} 余料替代',
+      largerStockSuggestion: '可尝试 {{length}} 原材',
       use: '利用率',
       profiles: '原材规格',
       tee: 'T · 母材 UB',

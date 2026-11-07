@@ -172,6 +172,8 @@ export interface PurchasePlan {
   carryTwoPieces: number | null
   /** Offcuts that need lifting equipment. */
   overTwoPieces: number | null
+  /** Offcuts at or above the large-reusable threshold. */
+  largeOffcuts: number
   /** Bars whose last piece starts inside the final support zone. */
   invalidSupportBars: number
   /** Purchased beams light enough for one person to load. */
@@ -478,10 +480,6 @@ function planCarryCounts(
   return counts
 }
 
-function planWasteSquareSum(plan: PackedPlan): number {
-  return plan.bars.reduce((sum, bar) => sum + bar.wasteMm * bar.wasteMm, 0)
-}
-
 function planBinCarryCounts(
   plan: PackedPlan,
   group: PurchaseGroupInput,
@@ -501,6 +499,37 @@ function planBinCarryCounts(
   return counts
 }
 
+function planOnePersonWasteSquareSum(
+  plan: PackedPlan,
+  group: PurchaseGroupInput,
+  onePersonKg: number,
+): number | null {
+  if (group.massPerMetre == null) return null
+  const kgPerMm = (group.massPerMetre / 1000) * massFactor(group)
+  return plan.bars.reduce((sum, bar) => {
+    if (bar.wasteMm <= 0 || bar.wasteMm * kgPerMm > onePersonKg) return sum
+    return sum + bar.wasteMm * bar.wasteMm
+  }, 0)
+}
+
+function planWasteSquareSum(plan: PackedPlan): number {
+  return plan.bars.reduce((sum, bar) => sum + bar.wasteMm * bar.wasteMm, 0)
+}
+
+function planLargeOffcuts(plan: PackedPlan): number {
+  return plan.bars.filter((bar) => bar.wasteMm >= LARGE_REUSABLE_OFFCUT_MM).length
+}
+
+/**
+ * Per-section optimisation order:
+ * 1. Minimise stock purchases / purchased length / waste weight.
+ * 2. Maximise sum(waste length^2) for all waste, concentrating the offcuts.
+ * 3. For bin waste (< reusable threshold): maximise 1-person offcuts, then
+ *    2-person offcuts, then minimise equipment offcuts.
+ * 4. Minimise sum(waste length^2) for 1-person-carryable offcuts, which evens
+ *    them out and keeps chuck space consistent. With a fixed count and total
+ *    of 1-person waste this is equivalent to minimising their variance.
+ */
 function betterPlan(
   candidate: PackedPlan,
   current: PackedPlan | null,
@@ -533,6 +562,13 @@ function betterPlan(
     if (candidateCounts.over !== currentCounts.over) {
       return candidateCounts.over < currentCounts.over
     }
+  }
+
+  // Phase 4 (per section): even out one-person offcuts (minimise their squared lengths).
+  const candidateSpread = planOnePersonWasteSquareSum(candidate, group, onePersonKg)
+  const currentSpread = planOnePersonWasteSquareSum(current, group, onePersonKg)
+  if (candidateSpread != null && currentSpread != null && candidateSpread !== currentSpread) {
+    return candidateSpread < currentSpread
   }
 
   return lengthBetter(candidate, current)
@@ -669,6 +705,116 @@ function tryMovePieces(
   return best
 }
 
+/**
+ * Phase 4 nudge comparator: phase 1 (purchases) and phase 3 (bin carry) must hold, but
+ * phase 2 is allowed to give ground so 1-person waste can be evened out.
+ */
+function betterOnePersonRebalance(
+  candidate: PackedPlan,
+  current: PackedPlan,
+  group: PurchaseGroupInput,
+  onePersonKg: number,
+  twoPersonKg: number,
+): boolean {
+  if (candidate.purchasedMm !== current.purchasedMm) {
+    return candidate.purchasedMm < current.purchasedMm
+  }
+
+  const candidateCounts = planBinCarryCounts(candidate, group, onePersonKg, twoPersonKg)
+  const currentCounts = planBinCarryCounts(current, group, onePersonKg, twoPersonKg)
+  if (candidateCounts && currentCounts) {
+    if (candidateCounts.one !== currentCounts.one) return candidateCounts.one > currentCounts.one
+    if (candidateCounts.two !== currentCounts.two) return candidateCounts.two > currentCounts.two
+    if (candidateCounts.over !== currentCounts.over)
+      return candidateCounts.over < currentCounts.over
+  }
+
+  const candidateSpread = planOnePersonWasteSquareSum(candidate, group, onePersonKg)
+  const currentSpread = planOnePersonWasteSquareSum(current, group, onePersonKg)
+  if (candidateSpread != null && currentSpread != null && candidateSpread !== currentSpread) {
+    return candidateSpread < currentSpread
+  }
+  return false
+}
+
+/**
+ * Phase 4: move pieces between 1-person waste bars until their offcuts are as even as
+ * possible. Phases 1 and 3 are preserved; phase 2 may give ground for this nudge.
+ */
+function tryRebalanceOnePersonWaste(
+  plan: PackedPlan,
+  marginMm: number,
+  kerfMm: number,
+  group: PurchaseGroupInput,
+  onePersonKg: number,
+  twoPersonKg: number,
+): PackedPlan {
+  if (group.massPerMetre == null) return plan
+  const kgPerMm = (group.massPerMetre / 1000) * massFactor(group)
+  let best = plan
+  for (let move = 0; move < 20; move++) {
+    const onePersonBars = best.bars
+      .map((bar, index) => ({ bar, index }))
+      .filter(({ bar }) => bar.wasteMm > 0 && bar.wasteMm * kgPerMm <= onePersonKg)
+    if (onePersonBars.length < 2) break
+    const sources = [...onePersonBars].sort((a, b) => a.bar.wasteMm - b.bar.wasteMm).slice(0, 20)
+    const destinations = [...onePersonBars]
+      .sort((a, b) => b.bar.wasteMm - a.bar.wasteMm)
+      .slice(0, 20)
+    let improved = false
+    for (const source of sources) {
+      if (improved) break
+      const units = [...source.bar.units].sort((a, b) => a.lengthMm - b.lengthMm).slice(0, 5)
+      for (const unit of units) {
+        if (improved) break
+        for (const destination of destinations) {
+          if (improved) break
+          if (destination.index === source.index) continue
+          const destBar = best.bars[destination.index]
+          const gap = destBar.units.length > 0 ? kerfMm : 0
+          if (
+            destBar.usedMm + gap + unit.lengthMm >
+            usableStockLengthMm(destBar.stockLengthMm, marginMm)
+          ) {
+            continue
+          }
+          const wasteGap = destBar.wasteMm - source.bar.wasteMm
+          const maxOnePersonMm = onePersonKg / kgPerMm
+          if (
+            wasteGap <= 0 ||
+            (source.bar.wasteMm + unit.lengthMm <= maxOnePersonMm &&
+              destBar.wasteMm - unit.lengthMm <= maxOnePersonMm &&
+              unit.lengthMm >= wasteGap)
+          ) {
+            continue
+          }
+          const bars = best.bars.map((bar) => ({ ...bar, units: [...bar.units] }))
+          bars[source.index] = rebuildBar(
+            bars[source.index],
+            bars[source.index].units.filter((candidate) => candidate !== unit),
+            kerfMm,
+          )
+          bars[destination.index] = rebuildBar(
+            bars[destination.index],
+            [...bars[destination.index].units, unit],
+            kerfMm,
+          )
+          const finalBars = bars.filter((bar) => bar.units.length > 0)
+          const candidate = planFromBars(finalBars)
+          const currentInvalid = best.bars.some((bar) => !bar.supportOk)
+          if (!currentInvalid && candidate.bars.some((bar) => !bar.supportOk)) continue
+          if (betterOnePersonRebalance(candidate, best, group, onePersonKg, twoPersonKg)) {
+            best = candidate
+            improved = true
+          }
+        }
+      }
+    }
+    if (!improved) break
+  }
+  return best
+}
+
 /** Small local search: repack pairs of waste-bearing bars, keeping the rest fixed. */
 function improveLinearPlan(
   plan: PackedPlan,
@@ -782,7 +928,22 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
   const initialBest = (bestValid ?? bestInvalid) as PackedPlan | null
   const best =
     initialBest && !group.tee
-      ? improveLinearPlan(initialBest, lengths, marginMm, kerfMm, group, onePersonKg, twoPersonKg)
+      ? tryRebalanceOnePersonWaste(
+          improveLinearPlan(
+            initialBest,
+            lengths,
+            marginMm,
+            kerfMm,
+            group,
+            onePersonKg,
+            twoPersonKg,
+          ),
+          marginMm,
+          kerfMm,
+          group,
+          onePersonKg,
+          twoPersonKg,
+        )
       : initialBest
 
   const purchases = best?.purchases ?? []
@@ -827,6 +988,7 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
       : (reusableOffcutMm / 1000) * group.massPerMetre * massFactor(group)
   const carryCounts = best ? planCarryCounts(best, group, onePersonKg, twoPersonKg) : null
   const invalidSupportBars = (best?.bars ?? []).filter((bar) => !bar.supportOk).length
+  const largeOffcuts = best ? planLargeOffcuts(best) : 0
 
   return {
     key: group.key,
@@ -848,6 +1010,7 @@ export function planPurchase(group: PurchaseGroupInput, options: PurchaseOptions
     carryOnePieces: carryCounts?.one ?? null,
     carryTwoPieces: carryCounts?.two ?? null,
     overTwoPieces: carryCounts?.over ?? null,
+    largeOffcuts,
     invalidSupportBars,
     loadingOnePersonMoves,
     loadingTwoPersonMoves,
