@@ -142,8 +142,9 @@ pinned in `canonical.ts` and drawn in `figures/faces-angle.svg`. Confirm on the 
 **vertical**, so its top/bottom view (`o`/`u`) faces are the *short* faces and its front/rear
 (`v`/`h`) faces are the *long* ones. Seating it long-side-horizontal is a 90° CW rotation: the
 short faces (`o`/`u`) become the two sides, the long faces become bottom (`v`) and top (`h`).
-`o`/`u` are the short right/left sides and `h` the long top — so the machine still cuts the
-accessible sides + top, and the long bottom face `v` is the one whose slug must clear (see §4).
+`o`/`u` are the short right/left sides, `h` the long top and `v` the long bottom. A closed
+hollow is machined all round, so **all four faces count** — the bottom `v` still cuts last and
+its slug must clear (see §4).
 
 **For a channel loaded as `n` this gives a useful result:** the flange broad faces are the
 sides (`o`/`u`) — exactly where we *want* to cut (see §4) — and the web's outer face is the

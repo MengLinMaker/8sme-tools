@@ -74,6 +74,10 @@ describe('CUT_FACES', () => {
     expect(CUT_FACES.tee).toEqual(['o', 'u', 'h'])
   })
 
+  it('extracts all four faces for a closed SHS/RHS tube, including the bottom', () => {
+    expect(CUT_FACES.tube).toEqual(['o', 'u', 'v', 'h'])
+  })
+
   it('drops o and v for an angle', () => {
     expect(CUT_FACES.angle).toEqual(['u', 'h'])
   })

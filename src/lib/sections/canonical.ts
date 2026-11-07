@@ -109,14 +109,16 @@ export function faceRole(family: ProfileFamily, face: NcFace): MachineRole {
 }
 
 /**
- * DSTV faces whose cut lines the STEP viewer extracts, per family. The default is the two sides
- * plus the top; an **angle** drops `o` and `v` (those legs aren't cut / aren't extracted).
+ * DSTV faces whose cut lines the STEP viewer extracts, per family. Open sections use the two sides
+ * plus the top; a **closed hollow** (SHS/RHS) is machined all round, so all four faces count —
+ * including the bottom `v`. An **angle** drops `o` and `v` (those legs aren't cut / aren't
+ * extracted).
  */
 export const CUT_FACES: Record<ProfileFamily, NcFace[]> = {
   i: ['o', 'u', 'v'],
   channel: ['o', 'u', 'h'],
   tee: ['o', 'u', 'h'],
-  tube: ['o', 'u', 'h'],
+  tube: ['o', 'u', 'v', 'h'],
   angle: ['u', 'h'],
   round: ['o', 'u', 'h'],
 }
