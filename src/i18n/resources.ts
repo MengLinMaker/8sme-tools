@@ -369,7 +369,6 @@ export const en = {
     },
     bevel: {
       title: 'Unify bevel',
-      hint: 'The head sets one bevel per cut — a change mid-cut rotates the nozzle into the work. Keep one angle for the whole cut, or remove the bevel.',
       angle: 'Bevel angle',
       recommended: 'Recommended {{angle}}°',
       noBevel: 'No bevel',
@@ -938,7 +937,6 @@ export const zh = {
     },
     bevel: {
       title: '统一坡口',
-      hint: '机头每条切缝只设定一个坡口——中途改变会使喷嘴在切割中旋转并磨损。整条切缝保留同一角度，或取消坡口。',
       angle: '坡口角度',
       recommended: '推荐 {{angle}}°',
       noBevel: '无坡口',

@@ -271,3 +271,38 @@ export function setBevelInNc(ncText: string, target: SetBevelTarget): string {
   }
   return lines.join('\n')
 }
+
+/**
+ * Changes only the out-of-range welding prep on one vertex: its angle is set to `angle` (in range), or
+ * the couple is deleted when `angle` is 0. In-range couples on the same vertex are left untouched.
+ */
+export function setOutOfRangeBevelInNc(
+  ncText: string,
+  target: { contourIndex: number; vertex: number; angle: number },
+): string {
+  const lines = ncText.split(/\r?\n/)
+  const block = readContourBlocks(ncText)[target.contourIndex]
+  const vertex = block?.vertices[target.vertex]
+  const raw = vertex ? lines[vertex.line] : undefined
+  if (raw == null) return ncText
+  const tokens = [...raw.matchAll(/\S+/g)]
+  const first = tokens[0]?.[0]
+  const offset = first && FACE.test(first) ? 1 : 0
+  const replacements = new Map<number, string>()
+  for (const [angleSlot, distanceSlot] of [
+    [offset + 3, offset + 4],
+    [offset + 5, offset + 6],
+  ] as const) {
+    const current = num(tokens[angleSlot]?.[0])
+    if (!Number.isFinite(current) || Math.abs(current) <= MAX_BEVEL_DEG) continue
+    if (target.angle === 0) {
+      replacements.set(angleSlot, '0.00')
+      replacements.set(distanceSlot, '0.00')
+    } else {
+      replacements.set(angleSlot, target.angle.toFixed(2))
+    }
+  }
+  if (replacements.size === 0) return ncText
+  lines[vertex?.line ?? 0] = replaceTokens(raw, replacements)
+  return lines.join('\n')
+}

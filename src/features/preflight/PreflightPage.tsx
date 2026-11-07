@@ -65,7 +65,7 @@ import { assessUnclosedCuts, type UnclosedCutIssue } from '@/lib/audit/unclosedC
 import { findWeldingEtchings, type WeldingEtchings } from '@/lib/audit/weldingEtchings'
 import { downloadBlob, downloadText, fileStem } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
-import { removeCutFromNc, setBevelInNc } from '@/lib/parsers/ncEdit'
+import { removeCutFromNc, setBevelInNc, setOutOfRangeBevelInNc } from '@/lib/parsers/ncEdit'
 import { frameForProfile, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import {
@@ -73,7 +73,6 @@ import {
   ETCH_COLOR,
   faceThickness,
   MARKING_COLOR,
-  outOfRangeSegments,
   THICKNESS_COLORS,
 } from '@/lib/parsers/ncProject'
 import { reemitPartNc } from '@/lib/parsers/ncReemit'
@@ -329,12 +328,89 @@ interface StepOverride {
  * A per-part NC (`.nc1`) edit: a stray cut removed, or a cut line's changing bevel unified to one
  * angle (`0` = no bevel). These override the bundled NC for the manufactured model and the export.
  */
-type NcEditKind = 'removeCut' | 'setBevel' | 'removeBevel'
+/**
+ * One NC edit applied by a finding. Edits stack in the order they were applied on the original NC, and
+ * each is keyed to the finding it resolves, so fixes coexist and each one can be undone on its own.
+ */
+type NcOp =
+  | { key: string; kind: 'unifyBevel'; contourIndex: number; vertices: number[]; angle: number }
+  | { key: string; kind: 'outOfRangeBevel'; contourIndex: number; vertex: number; angle: number }
+  | { key: string; kind: 'removeCut'; contourIndex: number; removeVertices: [number, number] }
 interface NcOverride {
+  /** The original NC with every op applied, in order. */
   bytes: Uint8Array
-  kind: NcEditKind
-  /** For a bevel edit, the unified angle (deg; `0` = no bevel). */
-  angle?: number
+  ops: NcOp[]
+}
+
+function applyNcOp(text: string, op: NcOp): string {
+  if (op.kind === 'unifyBevel')
+    return setBevelInNc(text, {
+      contourIndex: op.contourIndex,
+      vertices: op.vertices,
+      angle: op.angle,
+    })
+  if (op.kind === 'outOfRangeBevel')
+    return setOutOfRangeBevelInNc(text, {
+      contourIndex: op.contourIndex,
+      vertex: op.vertex,
+      angle: op.angle,
+    })
+  return removeCutFromNc(text, { contourIndex: op.contourIndex, removeVertices: op.removeVertices })
+}
+
+/** The NC with `ops` applied in order to the original bytes. */
+function replayNcOps(original: Uint8Array, ops: NcOp[]): Uint8Array {
+  let text = new TextDecoder().decode(original)
+  for (const op of ops) text = applyNcOp(text, op)
+  return new TextEncoder().encode(text)
+}
+
+/** Adds `op`; re-applying a finding replaces its own op in place, so the others keep their order. */
+function upsertOp(ops: NcOp[], op: NcOp): NcOp[] {
+  return ops.some((existing) => existing.key === op.key)
+    ? ops.map((existing) => (existing.key === op.key ? op : existing))
+    : [...ops, op]
+}
+
+/** The override after `ops`; with none left the NC is back to the original, so the override goes. */
+function withNcOps(
+  prev: Map<string, NcOverride>,
+  mark: string,
+  ops: NcOp[],
+  original: Uint8Array,
+): Map<string, NcOverride> {
+  const next = new Map(prev)
+  if (ops.length === 0) next.delete(mark)
+  else next.set(mark, { bytes: replayNcOps(original, ops), ops })
+  return next
+}
+
+/** The key the NC edit for a finding is stored under, or null when the finding has no NC edit. */
+function ncKeyOf(
+  finding: Finding,
+  lists: {
+    reach: number
+    bevel: ReturnType<typeof assessBevelChange>
+    unclosed: ReturnType<typeof assessUnclosedCuts>
+  },
+): string | null {
+  const index = typeof finding.params?.index === 'number' ? finding.params.index : -1
+  if (finding.code === 'CUT_BEVEL_CHANGE') {
+    const issue = lists.bevel[index - lists.reach]
+    return issue ? `bevel:${issue.contourIndex}:${issue.vertices.join(',')}` : null
+  }
+  if (finding.code === 'BEVEL_OUT_OF_RANGE') {
+    const contourIndex = finding.params?.contourIndex
+    const vertex = finding.params?.vertex
+    return typeof contourIndex === 'number' && typeof vertex === 'number'
+      ? `oor:${contourIndex}:${vertex}`
+      : null
+  }
+  if (finding.code === 'CUT_UNCLOSED') {
+    const issue = lists.unclosed[index - (lists.reach + lists.bevel.length)]
+    return issue?.removal ? `cut:${issue.contourIndex}:${issue.removal.join(',')}` : null
+  }
+  return null
 }
 
 /**
@@ -366,14 +442,14 @@ function resolvedFindings(kind: StepFixKind): string[] {
  * cut) and rebuilds the model from it; `setBevel` edits the NC (unifying the cut line's bevel) via
  * a mini menu that offers an angle (prefilled with the recommended one) or no bevel.
  */
-type FindingFix = 'clean' | 'regenerate' | 'simplify' | 'removeCut' | 'setBevel' | 'removeBevel'
+type FindingFix = 'clean' | 'regenerate' | 'simplify' | 'removeCut' | 'setBevel'
 function fixForFinding(code: string): FindingFix | null {
   if (code === 'STRAY_BODY') return 'clean'
   if (code === 'MANUFACTURE_MISMATCH' || code === 'MANUFACTURE_BORDERLINE') return 'regenerate'
   if (code === 'CUT_END_PIECE') return 'simplify'
   if (code === 'CUT_UNCLOSED' || code === 'CUT_CUTOUT') return 'removeCut'
   if (code === 'CUT_BEVEL_CHANGE') return 'setBevel'
-  if (code === 'BEVEL_OUT_OF_RANGE') return 'removeBevel'
+  if (code === 'BEVEL_OUT_OF_RANGE') return 'setBevel'
   return null
 }
 
@@ -1979,6 +2055,50 @@ export function PreflightPage() {
         .filter((value): value is number => value != null),
     [viewerFindings, hiddenIssues],
   )
+  /** The stacked NC edit key of each row (null when the row has none). */
+  const ncKeyByRow = useMemo(() => {
+    const keys = new Map<number, string>()
+    if (!viewing) return keys
+    const lists = {
+      reach: reachChecks.get(viewing.mark)?.length ?? 0,
+      bevel: bevelChanges.get(viewing.mark) ?? [],
+      unclosed: unclosedCuts.get(viewing.mark) ?? [],
+    }
+    viewerFindings.forEach((finding, row) => {
+      const key = ncKeyOf(finding, lists)
+      if (key) keys.set(row, key)
+    })
+    return keys
+  }, [viewing, viewerFindings, reachChecks, bevelChanges, unclosedCuts])
+  /** Show or hide one row's eye, leaving every other row's toggle as it is. */
+  const setRowHidden = useCallback(
+    (finding: Finding, hidden: boolean) => {
+      // Match by code and marker index, not object identity: findings are regenerated on every fix.
+      const row = viewerFindings.findIndex(
+        (candidate) =>
+          candidate.code === finding.code && candidate.params?.index === finding.params?.index,
+      )
+      if (row < 0) return
+      setHiddenIssues((prev) => {
+        const next = new Set(prev)
+        if (hidden) next.add(row)
+        else next.delete(row)
+        return next
+      })
+    },
+    [viewerFindings],
+  )
+  /** Rows whose NC edit is applied: they stay in the list (struck through) and can be undone. */
+  const ncResolvedRows = useMemo(() => {
+    const applied = new Set(
+      (viewing ? (ncOverrides.get(viewing.mark)?.ops ?? []) : []).map((op) => op.key),
+    )
+    const rows = new Set<number>()
+    ncKeyByRow.forEach((key, row) => {
+      if (applied.has(key)) rows.add(row)
+    })
+    return rows
+  }, [viewing, ncOverrides, ncKeyByRow])
   /** NC probe runs (CUT_DEPTH_NC rows) that are checked on (their eye is on). */
   const visibleRuns = useMemo(
     () =>
@@ -2043,9 +2163,10 @@ export function PreflightPage() {
               .filter(({ finding }) => isVisualisable(finding))
               .map(({ index }) => index),
           )
-        : new Set(),
+        : // Show all, but a fixed row stays hidden: its fix owns its visibility.
+          new Set(ncResolvedRows),
     )
-  }, [viewerFindings])
+  }, [viewerFindings, ncResolvedRows])
   /**
    * Row click: pan/zoom onto the issue. It never hides a visible marker — if the marker is
    * currently hidden it is turned back on first.
@@ -2444,37 +2565,22 @@ export function PreflightPage() {
   }, [])
 
   /** Drops a part's NC edit, so it reverts to the bundled `.nc1`, and re-runs the NC checks. */
-  const undoNcEdit = useCallback(
-    (part: PartRecord) => {
-      setNcOverrides((prev) => {
-        if (!prev.has(part.mark)) return prev
-        const next = new Map(prev)
-        next.delete(part.mark)
-        return next
+  const undoNcFinding = useCallback(
+    (part: PartRecord, finding: Finding) => {
+      const key = ncKeyOf(finding, {
+        reach: reachChecks.get(part.mark)?.length ?? 0,
+        bevel: bevelChanges.get(part.mark) ?? [],
+        unclosed: unclosedCuts.get(part.mark) ?? [],
       })
       const original = part.nc ? bytesByPath.get(part.nc.path) : undefined
-      if (!original) return
-      const text = new TextDecoder().decode(original)
-      const section = part.nc?.profile
-        ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
-        : null
-      const options = { section: section?.points, profile: part.nc?.profile }
-      const unclosed = assessUnclosedCuts(text, options)
-      setUnclosedCuts((prev) => {
-        const next = new Map(prev)
-        if (unclosed.length > 0) next.set(part.mark, unclosed)
-        else next.delete(part.mark)
-        return next
+      if (!key || !original) return
+      setNcOverrides((prev) => {
+        const ops = (prev.get(part.mark)?.ops ?? []).filter((op) => op.key !== key)
+        return withNcOps(prev, part.mark, ops, original)
       })
-      const bevel = assessBevelChange(text)
-      setBevelChanges((prev) => {
-        const next = new Map(prev)
-        if (bevel.length > 0) next.set(part.mark, bevel)
-        else next.delete(part.mark)
-        return next
-      })
+      setRowHidden(finding, false)
     },
-    [bytesByPath],
+    [bytesByPath, reachChecks, bevelChanges, unclosedCuts, setRowHidden],
   )
 
   /** Cleans one part's stray STEP bodies, keeping the real geometry untouched. */
@@ -2654,8 +2760,6 @@ export function PreflightPage() {
       const ncPath = part.nc?.path
       const original = ncPath ? bytesByPath.get(ncPath) : undefined
       if (!original) return
-      const current = ncOverrides.get(part.mark)?.bytes ?? original
-      const currentText = new TextDecoder().decode(current)
       const section = part.nc?.profile
         ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
         : null
@@ -2665,34 +2769,26 @@ export function PreflightPage() {
           ? finding.params.index -
             ((reachChecks.get(part.mark)?.length ?? 0) + (bevelChanges.get(part.mark)?.length ?? 0))
           : -1
-      const issue = assessUnclosedCuts(currentText, options)[issueIndex]
+      const issue = assessUnclosedCuts(new TextDecoder().decode(original), options)[issueIndex]
       if (!issue) return
       setFixingMark(part.mark)
       try {
-        const edited = removeCutFromNc(currentText, {
+        const current = ncOverrides.get(part.mark)?.ops ?? []
+        if (!issue.removal) return
+        const key = `cut:${issue.contourIndex}:${issue.removal.join(',')}`
+        const ops = upsertOp(current, {
+          key,
+          kind: 'removeCut',
           contourIndex: issue.contourIndex,
-          removeVertices: issue.removal,
+          removeVertices: issue.removal as [number, number],
         })
-        if (edited === currentText) return
-        setNcOverrides((prev) => {
-          const next = new Map(prev)
-          next.set(part.mark, { bytes: new TextEncoder().encode(edited), kind: 'removeCut' })
-          return next
-        })
-        const remaining = assessUnclosedCuts(edited, options)
-        setUnclosedCuts((prev) => {
-          const next = new Map(prev)
-          if (remaining.length > 0) next.set(part.mark, remaining)
-          else next.delete(part.mark)
-          return next
-        })
-      } catch {
-        // leave the original NC in place if editing fails
+        setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
+        setRowHidden(finding, true)
       } finally {
         setFixingMark(null)
       }
     },
-    [bytesByPath, ncOverrides, reachChecks, bevelChanges],
+    [bytesByPath, ncOverrides, reachChecks, bevelChanges, setRowHidden],
   )
 
   /**
@@ -2706,76 +2802,60 @@ export function PreflightPage() {
       const ncPath = part.nc?.path
       const original = ncPath ? bytesByPath.get(ncPath) : undefined
       if (!original) return
-      const current = ncOverrides.get(part.mark)?.bytes ?? original
-      const currentText = new TextDecoder().decode(current)
-      // Bevel findings come after the cut-reach failures in the combined marker order, so the
-      // finding's `index` (assigned in `allFindings`) maps back to a bevel issue by that base.
+      // Bevel findings come after the cut-reach failures in the combined marker order; map back to the
+      // issue on the original NC so the index stays stable as other fixes are applied.
       const issueIndex =
         typeof finding.params?.index === 'number'
           ? finding.params.index - (reachChecks.get(part.mark)?.length ?? 0)
           : -1
-      const issue = assessBevelChange(currentText)[issueIndex]
+      const issue = assessBevelChange(new TextDecoder().decode(original))[issueIndex]
       if (!issue) return
       setFixingMark(part.mark)
       try {
-        const edited = setBevelInNc(currentText, {
+        const current = ncOverrides.get(part.mark)?.ops ?? []
+        const key = `bevel:${issue.contourIndex}:${issue.vertices.join(',')}`
+        const ops = upsertOp(current, {
+          key,
+          kind: 'unifyBevel',
           contourIndex: issue.contourIndex,
           vertices: issue.vertices,
           angle,
         })
-        if (edited === currentText) return
-        setNcOverrides((prev) => {
-          const next = new Map(prev)
-          next.set(part.mark, {
-            bytes: new TextEncoder().encode(edited),
-            kind: 'setBevel',
-            angle,
-          })
-          return next
-        })
-        const remaining = assessBevelChange(edited)
-        setBevelChanges((prev) => {
-          const next = new Map(prev)
-          if (remaining.length > 0) next.set(part.mark, remaining)
-          else next.delete(part.mark)
-          return next
-        })
+        setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
+        setRowHidden(finding, true)
       } catch {
-        // leave the original NC in place if editing fails
+        // leave the NC as it is if the edit fails
       } finally {
         setFixingMark(null)
       }
     },
-    [bytesByPath, ncOverrides, reachChecks],
+    [bytesByPath, ncOverrides, reachChecks, setRowHidden],
   )
 
   /**
-   * Removes one out-of-range welding prep from the part's NC (its cut segment goes square) and
-   * records it as an override (its own `removeBevel` edit, so it never resolves other findings).
+   * Changes one out-of-range welding prep on the part's NC: set it to an in-range angle, or delete it
+   * (`0`). Only that couple changes, so in-range preps on the same vertex are kept.
    */
-  const removeBevel = useCallback(
-    async (part: PartRecord, finding: Finding) => {
+  const changeOutOfRangeBevel = useCallback(
+    async (part: PartRecord, finding: Finding, angle: number) => {
       const ncPath = part.nc?.path
       const original = ncPath ? bytesByPath.get(ncPath) : undefined
       if (!original) return
-      const currentText = new TextDecoder().decode(ncOverrides.get(part.mark)?.bytes ?? original)
       const contourIndex = finding.params?.contourIndex
       const vertex = finding.params?.vertex
       if (typeof contourIndex !== 'number' || typeof vertex !== 'number') return
       setFixingMark(part.mark)
       try {
-        const edited = setBevelInNc(currentText, { contourIndex, vertices: [vertex], angle: 0 })
-        if (edited === currentText) return
-        setNcOverrides((prev) => {
-          const next = new Map(prev)
-          next.set(part.mark, { bytes: new TextEncoder().encode(edited), kind: 'removeBevel' })
-          return next
-        })
+        const current = ncOverrides.get(part.mark)?.ops ?? []
+        const key = `oor:${contourIndex}:${vertex}`
+        const ops = upsertOp(current, { key, kind: 'outOfRangeBevel', contourIndex, vertex, angle })
+        setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
+        setRowHidden(finding, true)
       } finally {
         setFixingMark(null)
       }
     },
-    [bytesByPath, ncOverrides],
+    [bytesByPath, ncOverrides, setRowHidden],
   )
 
   /** Opens the "unify bevel" mini menu, prefilling the recommended angle for the cut line. */
@@ -2790,9 +2870,12 @@ export function PreflightPage() {
     (angle: number) => {
       const target = bevelEdit
       setBevelEdit(null)
-      if (target) void changeBevel(target.part, target.finding, angle)
+      if (!target) return
+      if (target.finding.code === 'BEVEL_OUT_OF_RANGE')
+        void changeOutOfRangeBevel(target.part, target.finding, angle)
+      else void changeBevel(target.part, target.finding, angle)
     },
-    [bevelEdit, changeBevel],
+    [bevelEdit, changeBevel, changeOutOfRangeBevel],
   )
 
   /** The canonical cross-section to seat / rewrite a part's export against, or null when unknown. */
@@ -3428,9 +3511,11 @@ export function PreflightPage() {
                               {part.mark}
                               {ncOverrides.get(part.mark) && (
                                 <Badge variant="success" className="font-sans font-normal">
-                                  {ncOverrides.get(part.mark)?.kind === 'setBevel'
-                                    ? t('preflight.warnings.bevelSetBadge')
-                                    : t('preflight.warnings.cutRemovedBadge')}
+                                  {ncOverrides
+                                    .get(part.mark)
+                                    ?.ops.some((op) => op.kind === 'removeCut')
+                                    ? t('preflight.warnings.cutRemovedBadge')
+                                    : t('preflight.warnings.bevelSetBadge')}
                                 </Badge>
                               )}
                             </span>
@@ -4024,7 +4109,13 @@ export function PreflightPage() {
                     <ViewerWarnings
                       findings={viewerFindings}
                       step={viewing.step}
-                      onHover={setHoverIssueIndex}
+                      ncResolved={ncResolvedRows}
+                      // The bevel dialog sits over the rows, so the pointer leaving a row must not clear
+                      // its highlight; keep the row highlighted through apply and the rebuild.
+                      onHover={(index) => {
+                        if (index === null && bevelEdit) return
+                        setHoverIssueIndex(index)
+                      }}
                       isChecked={(index) => !hiddenIssues.has(index)}
                       onToggleCheck={toggleIssue}
                       onActivate={activateIssue}
@@ -4039,7 +4130,6 @@ export function PreflightPage() {
                           Boolean(viewing.step) && modelChecks.get(viewing.mark)?.stray === true,
                         canRemoveCut: Boolean(viewing.nc),
                         canSetBevel: Boolean(viewing.nc),
-                        canRemoveBevel: Boolean(viewing.nc),
                         ncEdit: ncOverrides.get(viewing.mark),
                         pending: fixingMark === viewing.mark,
                         onClean: () => void cleanPart(viewing),
@@ -4048,9 +4138,8 @@ export function PreflightPage() {
                         onRepair: () => void cleanTeklaPart(viewing),
                         onRemoveCut: (finding) => void removeCut(viewing, finding),
                         onSetBevel: (finding) => openBevelEdit(viewing, finding),
-                        onRemoveBevel: (finding) => void removeBevel(viewing, finding),
                         onUndo: () => undoOverride(viewing.mark),
-                        onUndoNc: () => undoNcEdit(viewing),
+                        onUndoNc: (finding) => undoNcFinding(viewing, finding),
                       }}
                     />
                   ) : viewingPdfBytes ? (
@@ -4165,7 +4254,6 @@ interface ViewerFix {
   /** A `CUT_BEVEL_CHANGE` finding can be resolved by unifying the cut line's bevel via the NC. */
   canSetBevel: boolean
   /** A `BEVEL_OUT_OF_RANGE` finding can be resolved by removing that prep from the NC. */
-  canRemoveBevel: boolean
   /** The NC edit already applied to the part, if any. */
   ncEdit?: NcOverride
   pending: boolean
@@ -4175,9 +4263,8 @@ interface ViewerFix {
   onRepair: () => void
   onRemoveCut: (finding: Finding) => void
   onSetBevel: (finding: Finding) => void
-  onRemoveBevel: (finding: Finding) => void
   onUndo: () => void
-  onUndoNc: () => void
+  onUndoNc: (finding: Finding) => void
 }
 
 /** Which fix action a viewer Fix button runs, with its labels. */
@@ -4211,12 +4298,6 @@ function viewerFixAction(
       pendingLabel: t('common.actions.working'),
       run: () => fix.onSetBevel(finding),
     }
-  if (kind === 'removeBevel')
-    return {
-      label: t('common.actions.removeBevel'),
-      pendingLabel: t('common.actions.removing'),
-      run: () => fix.onRemoveBevel(finding),
-    }
   return {
     label: t('common.actions.simplify'),
     pendingLabel: t('common.actions.working'),
@@ -4230,7 +4311,6 @@ function viewerFixAvailable(fix: ViewerFix, kind: FindingFix): boolean {
   if (kind === 'regenerate') return fix.canRegenerate
   if (kind === 'removeCut') return fix.canRemoveCut
   if (kind === 'setBevel') return fix.canSetBevel
-  if (kind === 'removeBevel') return fix.canRemoveBevel
   return fix.canSimplify
 }
 
@@ -4239,6 +4319,7 @@ function ViewerWarnings({
   findings,
   step,
   fix,
+  ncResolved,
   onHover,
   isChecked,
   onToggleCheck,
@@ -4249,6 +4330,8 @@ function ViewerWarnings({
   findings: Finding[]
   step?: StepFile
   fix?: ViewerFix
+  /** Row indices whose NC edit is applied (their fix shows as resolved, with Undo). */
+  ncResolved?: ReadonlySet<number>
   onHover?: (index: number | null) => void
   isChecked?: (index: number) => boolean
   onToggleCheck?: (index: number) => void
@@ -4303,22 +4386,9 @@ function ViewerWarnings({
       if (bySeverity !== 0) return bySeverity * sort.dir
       return a.finding.code.localeCompare(b.finding.code)
     })
-  const isResolved = (finding: Finding): boolean => {
+  const isResolved = (finding: Finding, index: number): boolean => {
     if (fix?.override && resolvedFindings(fix.override).includes(finding.code)) return true
-    if (fix?.ncEdit?.kind === 'removeCut')
-      return finding.code === 'CUT_UNCLOSED' || finding.code === 'CUT_CUTOUT'
-    if (fix?.ncEdit?.kind === 'setBevel') return finding.code === 'CUT_BEVEL_CHANGE'
-    if (fix?.ncEdit?.kind === 'removeBevel' && finding.code === 'BEVEL_OUT_OF_RANGE') {
-      // Resolved only when this exact cut segment no longer has an out-of-range prep in the edited NC.
-      const edited = parseNcGeometry(new TextDecoder().decode(fix.ncEdit.bytes))
-      return !outOfRangeSegments(edited).some(
-        (segment) =>
-          segment.contourIndex === finding.params?.contourIndex &&
-          segment.index === finding.params?.vertex &&
-          segment.face === finding.params?.face,
-      )
-    }
-    return false
+    return ncResolved?.has(index) ?? false
   }
   const findingText = (finding: Finding) =>
     t(
@@ -4411,7 +4481,7 @@ function ViewerWarnings({
             </TableHeader>
             <TableBody>
               {rows.map(({ finding, index }) => {
-                const resolved = isResolved(finding)
+                const resolved = isResolved(finding, index)
                 const fixKind = fix && !resolved ? fixForFinding(finding.code) : null
                 const fixable = Boolean(fixKind && fix && viewerFixAvailable(fix, fixKind))
                 const action = fixKind && fix ? viewerFixAction(t, fix, fixKind, finding) : null
@@ -4444,16 +4514,19 @@ function ViewerWarnings({
                         <button
                           type="button"
                           title={t('preflight.warnings.toggleIssue')}
+                          disabled={resolved}
                           onClick={(event) => {
                             event.stopPropagation()
                             onToggleCheck?.(index)
                           }}
                           className={cn(
-                            'inline-flex rounded p-0.5',
-                            isChecked?.(index) ? 'text-primary' : 'text-muted-foreground',
+                            'inline-flex rounded p-0.5 disabled:cursor-not-allowed disabled:opacity-40',
+                            isChecked?.(index) && !resolved
+                              ? 'text-primary'
+                              : 'text-muted-foreground',
                           )}
                         >
-                          {isChecked?.(index) ? (
+                          {isChecked?.(index) && !resolved ? (
                             <Eye className="size-4" />
                           ) : (
                             <EyeOff className="size-4" />
@@ -4496,7 +4569,9 @@ function ViewerWarnings({
                           size="sm"
                           className="h-7"
                           disabled={fix?.pending}
-                          onClick={() => (fix?.ncEdit ? fix.onUndoNc() : fix?.onUndo())}
+                          onClick={() =>
+                            ncResolved?.has(index) ? fix?.onUndoNc(finding) : fix?.onUndo()
+                          }
                         >
                           <Undo2 />
                           {t('common.actions.undo')}
@@ -5231,7 +5306,6 @@ function BevelMenu({
   return (
     <Dialog open={open} onClose={onClose} title={t('preflight.bevel.title')}>
       <div className="flex flex-col gap-4 p-5">
-        <p className="text-sm text-muted-foreground">{t('preflight.bevel.hint')}</p>
         <div className="flex flex-wrap items-center gap-2">
           <label htmlFor="bevel-angle" className="text-sm font-medium">
             {t('preflight.bevel.angle')}
@@ -5255,9 +5329,6 @@ function BevelMenu({
           )}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            {t('common.actions.cancel')}
-          </Button>
           <Button variant="outline" size="sm" onClick={() => onApply(0)}>
             {t('preflight.bevel.noBevel')}
           </Button>
