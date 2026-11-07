@@ -13,6 +13,13 @@ import { getStepWorkerPool, PRIORITY_FOREGROUND } from './stepPool'
  */
 
 const meshCache = new WeakMap<Uint8Array, Promise<MeshedStep>>()
+/** Resolved meshes, so a cache hit can mount a scene synchronously (no "loading" flash). */
+const resolvedMeshCache = new WeakMap<Uint8Array, MeshedStep>()
+
+/** Synchronous peek at an already-tessellated STEP, or null while it is still meshing. */
+export function peekMeshForViewer(bytes: Uint8Array): MeshedStep | null {
+  return resolvedMeshCache.get(bytes) ?? null
+}
 
 /** Tessellate a STEP for the viewer, reusing the result while the same bytes object is in play. */
 export function meshForViewer(
@@ -25,8 +32,13 @@ export function meshForViewer(
   const promise = getStepWorkerPool()
     // On-demand: the user is looking at this right now, so jump ahead of background analysis.
     .mesh(name, bytes, { priority: options.priority ?? PRIORITY_FOREGROUND })
+    .then((meshed) => {
+      resolvedMeshCache.set(bytes, meshed)
+      return meshed
+    })
     .catch((error) => {
       meshCache.delete(bytes)
+      resolvedMeshCache.delete(bytes)
       throw error
     })
   meshCache.set(bytes, promise)
@@ -117,11 +129,19 @@ export function reconstructViewerWithSabre(
 ): Promise<ViewerReconstruct> {
   return reconstructDetailed(ncText, { ...options, sabre: true }).then((result) => {
     const viewerKey = `${options.simplify ? 1 : 0}:f:n:${ncText}`
-    if (!reconstructCache.has(viewerKey)) {
-      reconstructCache.set(viewerKey, Promise.resolve(result))
-      resolvedCache.set(viewerKey, result.bytes)
-      trimReconstructCache()
+    const primed = reconstructCache.get(viewerKey)
+    if (primed) {
+      // A plain viewer build already exists (neighbour prefetch / analysis / background pass). Its
+      // bytes object is the one whose mesh may be warmed, so return those to keep a single stable
+      // identity — otherwise setting a fresh equivalent `Uint8Array` misses the mesh cache and the
+      // viewer flashes "loading" on an already-loaded part. The probe does not change the solid.
+      return primed
+        .then((viewer) => ({ bytes: viewer.bytes, sabre: result.sabre }))
+        .catch(() => result)
     }
+    reconstructCache.set(viewerKey, Promise.resolve(result))
+    resolvedCache.set(viewerKey, result.bytes)
+    trimReconstructCache()
     return result
   })
 }

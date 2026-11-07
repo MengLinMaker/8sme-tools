@@ -39,6 +39,15 @@ describe('viewerModel reconstruction cache', () => {
     expect(reconstruct).toHaveBeenCalledTimes(1)
   })
 
+  it('reuses an already-primed viewer build so the manufactured bytes keep one identity', async () => {
+    const viewer = await reconstructForViewer('NC-TEXT')
+    const combined = await reconstructViewerWithSabre('NC-TEXT')
+    // A neighbour prefetch primes + meshes the plain key; opening must not hand back a fresh
+    // equivalent array, or the viewer's mesh-cache peek misses and flashes "loading".
+    expect(combined.bytes).toBe(viewer)
+    expect(peekReconstructForViewer('NC-TEXT')).toBe(viewer)
+  })
+
   it('keeps a probe-only (measureOnly) build on its own cache key', async () => {
     await reconstructViewerWithSabre('NC-TEXT')
     await sabreForViewer('NC-TEXT', { measureOnly: true })

@@ -86,7 +86,7 @@ import {
   transformVertices,
   unit,
 } from '@/lib/step/seat'
-import { diffForViewer, meshForViewer } from '@/lib/step/viewerModel'
+import { diffForViewer, meshForViewer, peekMeshForViewer } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { attachOrbit, attachWheelPan, limitPolar, type OrbitBus, requestFocus } from './orbitSync'
 import { SMOOTH_LINE_THRESHOLD_DEG, smoothLines } from './smoothLines'
@@ -2335,7 +2335,6 @@ export default function PartViewer({
     }
     let disposed = false
     let handle: SceneHandle | null = null
-    setStatus('loading')
     setMessage(null)
     setFlipState(false)
     flippedRef.current = false
@@ -2344,71 +2343,108 @@ export default function PartViewer({
     onDiffInfoRef.current?.(null)
     setDiffPresence(null)
 
-    meshForViewer(name, bytes)
-      .then(async (step) => {
-        const compare = compareBytes ? await meshForViewer(`${name}·compare`, compareBytes) : null
-        const alignRef = alignReference
-          ? await meshForViewer(`${name}·alignref`, alignReference)
-          : null
-        return { step, compare, alignRef }
-      })
-      .then(async ({ step, compare, alignRef }) => {
-        if (disposed || !containerRef.current) return
-        if (step.bodies[0]?.mesh.faces.triangles.length === 0) {
-          setStatus('error')
-          setMessage(t('viewer.noGeometry'))
-          return
-        }
-        handle = mountScene(
-          containerRef.current,
-          step,
-          compare,
-          stock,
-          beam,
-          bus,
-          highlightStray,
-          smoothModelLines,
-          bytes,
-          compareBytes,
-          true,
-          sabreFailures,
-          sabrePoints,
-          nc,
-          ncMarks,
-          ncSection,
-          faceFrame,
-          ncPrimary,
-          alignRef,
-          seatProfile,
-          stepSeat,
-          'area',
-          (mm, mmLength) => onLocationRef.current?.(mm, mmLength),
-          (degrees) => onAxisAngleRef.current?.(degrees),
-          cutEdges,
-        )
-        for (const overlay of handle.overlays) overlay.visible = showStockRef.current
-        handle.setGridVisible(showGridRef.current)
-        handle.setFlip(false)
-        handleRef.current = handle
-        setHasStray(highlightStray && step.bodies.some((body) => body.stray))
-        setDiffPresence(handle.diffPresence)
-        setStatus('ready')
-        if (!compare) return
-        // Let the models and the presence verdict paint, then pull the diff (already computed in the
-        // worker when prewarmed; otherwise it resolves without blocking the main thread).
-        await new Promise((resolve) => requestAnimationFrame(resolve))
-        if (disposed) return
-        const stats = await handle.runDiff()
-        if (disposed) return
-        handle.setDiffVisible(showDiffRef.current && !flippedRef.current)
-        setDiffInfo(stats)
-        onDiffInfoRef.current?.(stats)
-      })
-      .catch((error: unknown) => {
-        if (disposed) return
+    const mount = async (
+      step: MeshedStep,
+      compare: MeshedStep | null,
+      alignRef: MeshedStep | null,
+    ) => {
+      if (disposed || !containerRef.current) return
+      if (step.bodies[0]?.mesh.faces.triangles.length === 0) {
         setStatus('error')
-        setMessage(error instanceof Error ? error.message : String(error))
-      })
+        setMessage(t('viewer.noGeometry'))
+        return
+      }
+      const scene = mountScene(
+        containerRef.current,
+        step,
+        compare,
+        stock,
+        beam,
+        bus,
+        highlightStray,
+        smoothModelLines,
+        bytes,
+        compareBytes,
+        true,
+        sabreFailures,
+        sabrePoints,
+        nc,
+        ncMarks,
+        ncSection,
+        faceFrame,
+        ncPrimary,
+        alignRef,
+        seatProfile,
+        stepSeat,
+        'area',
+        (mm, mmLength) => onLocationRef.current?.(mm, mmLength),
+        (degrees) => onAxisAngleRef.current?.(degrees),
+        cutEdges,
+      )
+      handle = scene
+      for (const overlay of scene.overlays) overlay.visible = showStockRef.current
+      scene.setGridVisible(showGridRef.current)
+      scene.setFlip(false)
+      handleRef.current = scene
+      setHasStray(highlightStray && step.bodies.some((body) => body.stray))
+      setDiffPresence(scene.diffPresence)
+      setStatus('ready')
+      if (!compare) return
+      // Let the models and the presence verdict paint, then pull the diff (already computed in the
+      // worker when prewarmed; otherwise it resolves without blocking the main thread).
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+      if (disposed || handle !== scene) return
+      const stats = await scene.runDiff()
+      if (disposed || handle !== scene) return
+      scene.setDiffVisible(showDiffRef.current && !flippedRef.current)
+      setDiffInfo(stats)
+      onDiffInfoRef.current?.(stats)
+    }
+
+    // A cached primary mesh mounts synchronously, so a dependency change never flashes the
+    // "loading" overlay while the scene is rebuilt. The compare/align meshes may still be in
+    // flight; those are picked up silently afterwards instead of gating the first paint.
+    const cachedStep = peekMeshForViewer(bytes)
+    if (cachedStep) {
+      const cachedCompare = compareBytes ? peekMeshForViewer(compareBytes) : null
+      const cachedAlign = alignReference ? peekMeshForViewer(alignReference) : null
+      void mount(cachedStep, cachedCompare, cachedAlign)
+      const missingCompare = Boolean(compareBytes && !cachedCompare)
+      const missingAlign = Boolean(alignReference && !cachedAlign)
+      if (missingCompare || missingAlign) {
+        void Promise.all([
+          missingCompare
+            ? meshForViewer(`${name}·compare`, compareBytes as Uint8Array)
+            : Promise.resolve(cachedCompare),
+          missingAlign
+            ? meshForViewer(`${name}·alignref`, alignReference as Uint8Array)
+            : Promise.resolve(cachedAlign),
+        ])
+          .then(([compare, alignRef]) => {
+            if (disposed) return
+            handle?.dispose()
+            handle = null
+            void mount(cachedStep, compare, alignRef)
+          })
+          .catch(() => {})
+      }
+    } else {
+      setStatus('loading')
+      meshForViewer(name, bytes)
+        .then(async (step) => {
+          const compare = compareBytes ? await meshForViewer(`${name}·compare`, compareBytes) : null
+          const alignRef = alignReference
+            ? await meshForViewer(`${name}·alignref`, alignReference)
+            : null
+          return { step, compare, alignRef }
+        })
+        .then(({ step, compare, alignRef }) => mount(step, compare, alignRef))
+        .catch((error: unknown) => {
+          if (disposed) return
+          setStatus('error')
+          setMessage(error instanceof Error ? error.message : String(error))
+        })
+    }
 
     return () => {
       disposed = true
