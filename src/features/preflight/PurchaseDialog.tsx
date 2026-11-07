@@ -183,9 +183,10 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   const totalBinWasteKg = plans.every((plan) => plan.binWasteKg != null)
     ? plans.reduce((sum, plan) => sum + (plan.binWasteKg ?? 0), 0)
     : null
-  const totalReusableWasteKg = plans.every((plan) => plan.reusableOffcutKg != null)
-    ? plans.reduce((sum, plan) => sum + (plan.reusableOffcutKg ?? 0), 0)
-    : null
+  const minChuckMm = useMemo(() => {
+    const wastes = plans.flatMap((plan) => plan.bars.map((bar) => bar.wasteMm))
+    return wastes.length > 0 ? Math.min(...wastes) : null
+  }, [plans])
   const totalCarryOne = plans.every((plan) => plan.carryOnePieces != null)
     ? plans.reduce((sum, plan) => sum + (plan.carryOnePieces ?? 0), 0)
     : null
@@ -287,7 +288,7 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
                 purchasedKg={totalPurchasedKg}
                 wasteKg={totalWasteKg}
                 binKg={totalBinWasteKg}
-                reusableKg={totalReusableWasteKg}
+                minChuckMm={minChuckMm}
               />
               <MovementTable
                 loadingOne={totalLoadingOne}
@@ -769,6 +770,9 @@ function NestingSolution({
         )
         const scrapMm = suggestedScrapMm(plan)
         const suggestion = suggestions.get(plan.key)
+        const minChuckMm = plan.bars.length
+          ? Math.min(...plan.bars.map((bar) => bar.wasteMm))
+          : null
 
         return (
           <div key={plan.key} className="rounded-lg border border-border p-3">
@@ -796,16 +800,10 @@ function NestingSolution({
               </div>
               <div className="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
                 <span>
-                  {t('preflight.purchase.nestingPieces', { count: plan.pieceCount })} ·{' '}
-                  {t('preflight.purchase.nestingPurchased', {
-                    length: metres(plan.purchasedMm),
-                  })}
-                </span>
-                <span>
                   {t('preflight.purchase.nestingMetrics', {
-                    waste: kilograms(plan.wasteKg),
                     bin: kilograms(plan.binWasteKg),
                     reusable: kilograms(plan.reusableOffcutKg),
+                    chuck: minChuckMm == null ? '—' : metres(minChuckMm, 2),
                   })}
                 </span>
               </div>
@@ -1012,19 +1010,19 @@ function OverallStatsTable({
   purchasedKg,
   wasteKg,
   binKg,
-  reusableKg,
+  minChuckMm,
 }: {
   purchasedKg: number | null
   wasteKg: number | null
   binKg: number | null
-  reusableKg: number | null
+  minChuckMm: number | null
 }) {
   const { t } = useTranslation()
-  const rows: [string, number | null][] = [
-    [t('preflight.purchase.totalWeight'), purchasedKg],
-    [t('preflight.purchase.wasteWeight'), wasteKg],
-    [t('preflight.purchase.binWaste'), binKg],
-    [t('preflight.purchase.reusableWaste'), reusableKg],
+  const rows: [string, string][] = [
+    [t('preflight.purchase.totalWeight'), kilograms(purchasedKg)],
+    [t('preflight.purchase.wasteWeight'), kilograms(wasteKg)],
+    [t('preflight.purchase.binWaste'), kilograms(binKg)],
+    [t('preflight.purchase.minChuck'), minChuckMm == null ? '—' : `${Math.round(minChuckMm)} mm`],
   ]
   return (
     <div className="overflow-x-auto rounded-lg border border-border">
@@ -1033,7 +1031,7 @@ function OverallStatsTable({
           {rows.map(([label, value]) => (
             <TableRow key={label}>
               <TableCell className="text-xs text-muted-foreground">{label}</TableCell>
-              <TableCell className="text-right font-mono text-xs">{kilograms(value)}</TableCell>
+              <TableCell className="text-right font-mono text-xs">{value}</TableCell>
             </TableRow>
           ))}
         </TableBody>
