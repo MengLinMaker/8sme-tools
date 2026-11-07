@@ -165,8 +165,12 @@ function developEndCut(
 ): [number, number][] | null {
   // Raw stations are unwrapped so a zero-origin tube's `v` face can straddle the seam.
   const arcs: [number, number][][] = []
-  for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
-    if (!layout.faces[face]) continue
+  // Follow the developed perimeter, not the DSTV letter order: at a station shared by two faces
+  // (a step in a notched/offset end) the stable sort below must keep the incoming face first.
+  const faces = (['v', 'o', 'u', 'h'] as NcFace[])
+    .filter((face) => layout.faces[face])
+    .sort((a, b) => (layout.faces[a]?.start ?? 0) - (layout.faces[b]?.start ?? 0))
+  for (const face of faces) {
     const contour = contours.find((entry) => entry.kind === 'outer' && entry.face === face)
     if (!contour) return null
     const ends = splitContourEnds(densifyContour(contour), length)

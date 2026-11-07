@@ -3889,6 +3889,7 @@ export function PreflightPage() {
                   ) : rightTab === 'ncep' ? (
                     viewingNcep ? (
                       <UnrolledDrawing
+                        key={viewing.mark}
                         part={viewingNcep.part}
                         palette={viewingNcep.palette}
                         onExport={downloadViewingNcep}

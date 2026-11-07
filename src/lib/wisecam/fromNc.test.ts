@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs'
-import { fixture, fixtureExists } from '@test/fixtures'
+import { existsSync, readFileSync } from 'node:fs'
+import { fixture, fixtureExists, nw31Top } from '@test/fixtures'
 import { strFromU8, unzipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { buildNcepFromNc, partFromNc } from './fromNc'
@@ -294,5 +294,35 @@ describe('generated NCEP packages pass the parser', () => {
       buildNcepFromNc(readFileSync(fixture('ncep', 'M-42.nc1'), 'utf8')) as Uint8Array,
     )
     expect(truncateRange(m42, 1).along).toEqual([expect.closeTo(56, 6), expect.closeTo(106, 6)])
+  })
+})
+
+describe('partFromNc end-cut development', () => {
+  const m130 = nw31Top('NC files', 'm130.nc1')
+
+  it.skipIf(!existsSync(m130))('stitches a stepped end in perimeter order (m130)', () => {
+    const part = partFromNc(readFileSync(m130, 'utf8'))
+    const start = part?.startCut
+    expect(start).toBeTruthy()
+    if (!start) return
+    // The `u` face ends at station -50 with along ≈18.2; the `v` face starts at -50,0. Sorting by
+    // station alone used to put the v point first, drawing a long diagonal across the net.
+    expect(start[0]?.[0]).toBeCloseTo(-100, 1)
+    expect(start[1]?.[0]).toBeCloseTo(-50, 1)
+    expect(start[1]?.[1]).toBeCloseTo(18.2, 0)
+    const firstAtMinus50 = start.find(([station]) => Math.abs(station + 50) < 0.01)
+    expect(firstAtMinus50?.[1]).toBeCloseTo(18.2, 0)
+  })
+
+  it.skipIf(!existsSync(m130))('is a pure function of the NC text', () => {
+    const nc = readFileSync(m130, 'utf8')
+    const first = partFromNc(nc)
+    // Jump to other parts (the app's navigation) then develop the same NC again.
+    partFromNc(readFileSync(nw31Top('NC files', 'm31.nc1'), 'utf8'))
+    partFromNc(readFileSync(nw31Top('NC files', 'm117.nc1'), 'utf8'))
+    const again = partFromNc(nc)
+    expect(JSON.stringify(again?.startCut)).toBe(JSON.stringify(first?.startCut))
+    expect(JSON.stringify(again?.endCut)).toBe(JSON.stringify(first?.endCut))
+    expect(JSON.stringify(again?.cuts)).toBe(JSON.stringify(first?.cuts))
   })
 })
