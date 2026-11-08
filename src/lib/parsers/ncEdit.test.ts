@@ -115,9 +115,17 @@ describe('setBevelInNc', () => {
     const before = nc(TAPER)
     const after = setBevelInNc(before, { contourIndex: 0, vertices: [3, 4, 5], angle: 20 })
     const angles = parseNcGeometry(after).contours[0]?.bevels.map((bevel) => bevel[0])
-    // Only the already-bevelled vertices change; the square vertices stay square.
+    // Vertices outside the flagged line (0–2, 6) keep their square cut.
     expect(angles).toEqual([0, 0, 0, 20, 20, 20, 0])
     expect(after).toContain('PFC100*50')
+  })
+
+  it('applies the unified bevel to square portions of the flagged line', () => {
+    const before = nc(TAPER)
+    const after = setBevelInNc(before, { contourIndex: 0, vertices: [2, 3, 4, 5], angle: 20 })
+    const angles = parseNcGeometry(after).contours[0]?.bevels.map((bevel) => bevel[0])
+    // Vertex 2 is square but part of the cut line, so it must not keep cutting un-bevelled.
+    expect(angles).toEqual([0, 0, 20, 20, 20, 20, 0])
   })
 
   it('removes the bevel entirely when the angle is 0', () => {

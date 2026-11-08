@@ -229,10 +229,12 @@ function replaceTokens(raw: string, replacements: Map<number, string>): string {
 }
 
 /**
- * Unifies the bevel on a flagged cut line: every already-bevelled vertex on the line is set to one
- * angle, so the head never has to change tilt mid-cut — and with `angle: 0` the bevel is removed
- * entirely. Vertices with no bevel (a square portion) are left alone when setting an angle; only
- * the bevel `angle`/`distance` fields change, so every other field and all whitespace is preserved.
+ * Unifies the bevel on a flagged cut line: **every vertex on the line** is set to one angle — square
+ * portions included — so the head never has to change tilt mid-cut; with `angle: 0` the bevel is
+ * removed entirely. The prep is written on the side of the plate the line already uses, carrying
+ * that side's distance onto vertices that were square. The opposite-side prep is cleared so
+ * `selectWeldingPrep` cannot pick a different angle there. Only the bevel `angle`/`distance` fields
+ * change, so every other field and all whitespace is preserved.
  *
  * `vertices` come from the same contour the geometry reader used, so they line up with the block's
  * data lines. An out-of-range contour index leaves the file untouched.
@@ -243,6 +245,7 @@ export function setBevelInNc(ncText: string, target: SetBevelTarget): string {
   const block = blocks[target.contourIndex]
   if (!block) return ncText
   const wanted = new Set(target.vertices)
+  const rows: { line: number; raw: string; tokens: RegExpMatchArray[]; offset: number }[] = []
   for (let index = 0; index < block.vertices.length; index++) {
     if (!wanted.has(index)) continue
     const vertex = block.vertices[index]
@@ -250,24 +253,60 @@ export function setBevelInNc(ncText: string, target: SetBevelTarget): string {
     if (raw == null) continue
     const tokens = [...raw.matchAll(/\S+/g)]
     const first = tokens[0]?.[0]
-    const offset = first && FACE.test(first) ? 1 : 0
+    rows.push({ line: vertex.line, raw, tokens, offset: first && FACE.test(first) ? 1 : 0 })
+  }
+  // Angle fields are the 1st and 3rd values after the radius (`offset+3`, `offset+5`); their
+  // distances follow (`offset+4`, `offset+6`). Values outside the head's range are not weld prep.
+  // Pick the plate side the line already mostly uses, and the distance it carries.
+  const sideCount = [0, 0]
+  const sideDistance: number[][] = [[], []]
+  for (const row of rows) {
+    for (const side of [0, 1] as const) {
+      const angleSlot = row.offset + 3 + 2 * side
+      const current = num(row.tokens[angleSlot]?.[0])
+      if (!Number.isFinite(current) || current === 0 || Math.abs(current) > MAX_BEVEL_DEG) continue
+      sideCount[side] = (sideCount[side] ?? 0) + 1
+      const distance = num(row.tokens[angleSlot + 1]?.[0])
+      if (distance > 0) sideDistance[side]?.push(distance)
+    }
+  }
+  const side = (sideCount[1] ?? 0) > (sideCount[0] ?? 0) ? 1 : 0
+  const distanceCounts = new Map<number, number>()
+  for (const distance of sideDistance[side] ?? []) {
+    distanceCounts.set(distance, (distanceCounts.get(distance) ?? 0) + 1)
+  }
+  let dominantDistance = 0
+  let dominantCount = 0
+  for (const [distance, count] of distanceCounts) {
+    if (count > dominantCount) {
+      dominantCount = count
+      dominantDistance = distance
+    }
+  }
+
+  for (const row of rows) {
     const replacements = new Map<number, string>()
-    // Angle fields are the 1st and 3rd values after the radius (`offset+3`, `offset+5`); their
-    // distances follow (`offset+4`, `offset+6`). Values outside the head's range are not weld prep.
-    for (const slot of [offset + 3, offset + 5]) {
-      const current = num(tokens[slot]?.[0])
-      if (target.angle === 0) {
-        replacements.set(slot, '0.00')
-      } else if (Number.isFinite(current) && current !== 0 && Math.abs(current) <= MAX_BEVEL_DEG) {
-        replacements.set(slot, target.angle.toFixed(2))
-      }
-    }
     if (target.angle === 0) {
-      for (const slot of [offset + 4, offset + 6]) {
-        if (tokens[slot]) replacements.set(slot, '0.00')
+      for (const slot of [row.offset + 3, row.offset + 5]) replacements.set(slot, '0.00')
+      for (const slot of [row.offset + 4, row.offset + 6]) {
+        if (row.tokens[slot]) replacements.set(slot, '0.00')
+      }
+    } else {
+      const angleSlot = row.offset + 3 + 2 * side
+      const distanceSlot = angleSlot + 1
+      replacements.set(angleSlot, target.angle.toFixed(2))
+      const currentDistance = num(row.tokens[distanceSlot]?.[0])
+      const distance = currentDistance > 0 ? currentDistance : dominantDistance
+      if (distance > 0) replacements.set(distanceSlot, distance.toFixed(2))
+      // Clear the other plate side so the chosen angle is the only prep on this vertex.
+      const otherAngleSlot = row.offset + 3 + 2 * (1 - side)
+      const other = num(row.tokens[otherAngleSlot]?.[0])
+      if (Number.isFinite(other) && other !== 0 && Math.abs(other) <= MAX_BEVEL_DEG) {
+        replacements.set(otherAngleSlot, '0.00')
+        replacements.set(otherAngleSlot + 1, '0.00')
       }
     }
-    lines[vertex.line] = replaceTokens(raw, replacements)
+    lines[row.line] = replaceTokens(row.raw, replacements)
   }
   return lines.join('\n')
 }
