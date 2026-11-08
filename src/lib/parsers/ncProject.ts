@@ -27,6 +27,7 @@ import {
 } from './ncFaces'
 import {
   arcSamples,
+  type NcContour,
   type NcFace,
   type NcGeometry,
   type NcHole,
@@ -209,6 +210,67 @@ function bevelDistance(bevel: number[] | undefined, drawn: boolean): number {
   const { angle, distance } = drawn ? selectDrawnPrep(bevel) : selectWeldingPrep(bevel, true)
   if (distance > 0) return distance
   return angle !== 0 ? DEFAULT_BEVEL_SPUR : 0
+}
+
+/** Mid along-member X of an NC's outer contours (distinguishes a start cut from an end cut). */
+export function ncAlongMid(nc: NcGeometry): number {
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (const c of nc.contours) {
+    if (c.kind !== 'outer') continue
+    for (const [x] of c.points) {
+      if (x < min) min = x
+      if (x > max) max = x
+    }
+  }
+  return (min + max) / 2
+}
+
+/**
+ * Per-vertex along-member shift that maps a channel's NC `v` contour onto its `h` (web outer) cut
+ * edge. The `v` face is drawn on the accessible top plane; across the web thickness the cut line is
+ * shifted by `web·tan(bevel)`, in opposite directions at the two ends. The shift is resolved at a
+ * shared vertex from the adjacent **bevelled** edge(s): a cut next to a raw-stock edge keeps the
+ * cut's full shift (not half of it), while two cut edges with different bevels are averaged so
+ * consecutive points stay **joined** — a separate per-edge shift leaves a gap across a bevel change.
+ */
+export function channelVToHShift(
+  contour: NcContour,
+  web: number,
+  midAlong: number,
+  drawn = true,
+): number[] {
+  const n = contour.points.length
+  if (n < 2) return new Array(n).fill(0)
+  const edgeShift: number[] = new Array(n - 1).fill(0)
+  const bevelled: boolean[] = new Array(n - 1).fill(false)
+  for (let j = 0; j + 1 < n; j++) {
+    const deg = bevelAngle(contour.bevels[j], drawn)
+    // Use the actual angle, however small: a bevel that tapers along the line must keep shifting
+    // smoothly, not snap back to the square line once it drops under the "regular cut" threshold.
+    if (Math.abs(deg) < 1e-6) continue
+    const mid = (contour.points[j][0] + contour.points[j + 1][0]) / 2
+    edgeShift[j] = (web * Math.tan((deg * Math.PI) / 180)) / (mid < midAlong ? -1 : 1)
+    bevelled[j] = true
+  }
+  const shift = contour.points.map((_, j) => {
+    const inIndex = j === 0 ? n - 2 : j - 1
+    const outBevelled = bevelled[j] ?? false
+    const inBevelled = bevelled[inIndex] ?? false
+    if (outBevelled && inBevelled) {
+      return ((edgeShift[j] ?? 0) + (edgeShift[inIndex] ?? 0)) / 2
+    }
+    if (outBevelled) return edgeShift[j] ?? 0
+    if (inBevelled) return edgeShift[inIndex] ?? 0
+    return 0
+  })
+  // A contour whose last point repeats the first must stay closed after shifting.
+  const first = contour.points[0]
+  const last = contour.points[n - 1]
+  if (first && last && first[0] === last[0] && first[1] === last[1]) {
+    shift[n - 1] = shift[0] ?? 0
+  }
+  return shift
 }
 
 function push(target: number[], a: Vec3, b: Vec3): void {
@@ -402,16 +464,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
   // edge. Draw it on the outer skin instead, where the laser exits: shift the root line along the
   // member by that amount. A positive prep is the rooted-in case; a negative prep is already on the
   // outer skin. Start and end cuts shift in opposite directions.
-  let minAlong = Number.POSITIVE_INFINITY
-  let maxAlong = Number.NEGATIVE_INFINITY
-  for (const c of nc.contours) {
-    if (c.kind !== 'outer') continue
-    for (const [x] of c.points) {
-      if (x < minAlong) minAlong = x
-      if (x > maxAlong) maxAlong = x
-    }
-  }
-  const midAlong = (minAlong + maxAlong) / 2
+  const midAlong = ncAlongMid(nc)
   const outerAlongShift = (face: NcFace, x0: number, x1: number, deg: number): number => {
     if (!isTube || deg <= REGULAR_CUT_DEG) return 0
     const wall = faceThickness(frame, section, face)
@@ -429,6 +482,21 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     ...c,
     bevels: c.bevels.map((b) => applyBevelPolicy(b, policy)),
   }))
+  // A PFC's NC carries `v` (the web face) but no `h`. The viewer draws the v line on the accessible
+  // top plane; projecting it to the web's outer face shifts it along the member by `web·tan(bevel)`
+  // (opposite directions at the two ends). Transform the contour's own points so the cut line, its
+  // bevel indication and any marker built from it all stay on the same (joined) line.
+  if ((frame.profile ? profileFamily(frame.profile) : null) === 'channel') {
+    const web = faceThickness(frame, section, 'h')
+    drawn.forEach((contour, index) => {
+      if (contour.kind !== 'outer' || contour.face !== 'v') return
+      const shift = channelVToHShift(contour, web, midAlong, showAsDrawn)
+      drawn[index] = {
+        ...contour,
+        points: contour.points.map(([x, y], j) => [x + (shift[j] ?? 0), y] as [number, number]),
+      }
+    })
+  }
   for (const [contourIndex, contour] of drawn.entries()) {
     const spur = normal(contour.face)
     for (let i = 0; i < contour.points.length - 1; i++) {

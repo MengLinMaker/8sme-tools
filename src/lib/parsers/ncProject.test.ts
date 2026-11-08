@@ -11,9 +11,17 @@ import {
   placeNcFace,
   resolveNcFaceFrame,
 } from './ncFaces'
-import type { NcFace, NcGeometry } from './ncGeometry'
+import type { NcContour, NcFace, NcGeometry } from './ncGeometry'
 import { parseNcGeometry } from './ncGeometry'
-import { cutThicknesses, faceThickness, holeOutline, projectNc, type Vec3 } from './ncProject'
+import {
+  channelVToHShift,
+  cutThicknesses,
+  faceThickness,
+  holeOutline,
+  ncAlongMid,
+  projectNc,
+  type Vec3,
+} from './ncProject'
 import { MAX_BEVEL_DEG } from './weldingPrep'
 
 describe('resolveNcFaceFrame', () => {
@@ -147,6 +155,68 @@ describe('tube canonical stance (RHS150*100*9.0)', () => {
     const u = placeNcFace(frame, 'u', 0, 0, section)
     expect(u.cross[0]).toBeCloseTo(-75, 6)
     expect(u.cross[1]).toBeCloseTo(50, 6)
+  })
+})
+
+describe('channel v to h projection', () => {
+  it('shifts a beveled cut across the web and keeps the line joined', () => {
+    const contour: NcContour = {
+      face: 'v',
+      kind: 'outer',
+      points: [
+        [0, 0],
+        [0, 100],
+        [1000, 100],
+        [1000, 0],
+        [0, 0],
+      ],
+      bevels: [
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [20, 4.2, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+      ],
+      radii: [0, 0, 0, 0, 0],
+    }
+    const nc: NcGeometry = { contours: [contour], holes: [], notches: [], marks: [] }
+    const shift = channelVToHShift(contour, 4.2, ncAlongMid(nc))
+    // End cut (vertex 2 → 3) with a +20° prep: web·tan20° along the member, the same at both ends.
+    const expected = 4.2 * Math.tan((20 * Math.PI) / 180)
+    expect(shift[2]).toBeCloseTo(expected, 6)
+    expect(shift[3]).toBeCloseTo(expected, 6)
+    // No bevel on the stock edges, and the repeated closing point stays joined to the first.
+    expect(shift[0]).toBe(0)
+    expect(shift[4]).toBe(shift[0])
+  })
+
+  it('keeps shifting when a bevel tapers below the regular-cut threshold', () => {
+    const contour: NcContour = {
+      face: 'v',
+      kind: 'outer',
+      points: [
+        [0, 0],
+        [0, 100],
+        [1000, 100],
+        [1050, 50],
+        [1000, 0],
+        [0, 0],
+      ],
+      bevels: [
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [10, 4.2, 0, 0],
+        [3, 4.2, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+      ],
+      radii: [0, 0, 0, 0, 0, 0],
+    }
+    const nc: NcGeometry = { contours: [contour], holes: [], notches: [], marks: [] }
+    const shift = channelVToHShift(contour, 4.2, ncAlongMid(nc))
+    // The 3° edge is under REGULAR_CUT_DEG but is still a genuine taper — it must not snap square.
+    expect(shift[4]).toBeCloseTo(4.2 * Math.tan((3 * Math.PI) / 180), 6)
+    expect(Math.abs(shift[3])).toBeGreaterThan(0)
   })
 })
 

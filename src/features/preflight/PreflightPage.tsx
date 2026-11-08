@@ -69,10 +69,12 @@ import { removeCutFromNc, setBevelInNc, setOutOfRangeBevelInNc } from '@/lib/par
 import { frameForProfile, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import {
+  channelVToHShift,
   cutThicknesses,
   ETCH_COLOR,
   faceThickness,
   MARKING_COLOR,
+  ncAlongMid,
   THICKNESS_COLORS,
 } from '@/lib/parsers/ncProject'
 import { reemitPartNc } from '@/lib/parsers/ncReemit'
@@ -2189,17 +2191,41 @@ export function PreflightPage() {
    */
   const viewerSabreFailures = useMemo<CutMarker[] | null>(() => {
     if (!viewing) return null
+    // A channel's NC `v` line is drawn on the web's outer (`h`) plane after a `web·tan(bevel)` shift;
+    // findings built from the raw v contour need the same shift or the marker floats off the line.
+    const family = viewingProfileCode ? profileFamily(viewingProfileCode) : null
+    const section = viewingNcSection ?? (Array.isArray(stock?.points) ? stock.points : null)
+    const channelProjection =
+      family === 'channel' && viewingNcFrame && section && viewingNcGeom
+        ? {
+            web: faceThickness(viewingNcFrame, section, 'h'),
+            mid: ncAlongMid(viewingNcGeom),
+          }
+        : null
     const markers: CutMarker[] = [...(reachChecks.get(viewing.mark) ?? [])]
     for (const issue of bevelChanges.get(viewing.mark) ?? []) {
       // A changing bevel is an NC-specific error: it only reads on the manufactured model, so the
       // viewer draws it there alone (see `CutMarker.ncOnly`).
-      markers.push({
-        face: issue.face,
-        from: issue.from,
-        to: issue.to,
-        lines: issue.lines,
-        ncOnly: true,
-      })
+      let from = issue.from
+      let to = issue.to
+      let lines = issue.lines
+      const contour =
+        channelProjection && issue.face === 'v'
+          ? viewingNcGeom?.contours[issue.contourIndex]
+          : undefined
+      if (channelProjection && contour) {
+        const shift = channelVToHShift(contour, channelProjection.web, channelProjection.mid)
+        const moved = (index: number, point: [number, number]): [number, number] => [
+          point[0] + (shift[index] ?? 0),
+          point[1],
+        ]
+        from = moved(issue.vertices[0] ?? 0, issue.from)
+        to = moved(issue.vertices[issue.vertices.length - 1] ?? 0, issue.to)
+        if (lines?.length === 1 && lines[0]) {
+          lines = [lines[0].map((point, k) => moved(issue.vertices[k] ?? 0, point))]
+        }
+      }
+      markers.push({ face: issue.face, from, to, lines, ncOnly: true })
     }
     for (const issue of unclosedCuts.get(viewing.mark) ?? []) {
       markers.push({
@@ -2211,7 +2237,17 @@ export function PreflightPage() {
       })
     }
     return markers.length > 0 ? markers : null
-  }, [viewing, reachChecks, bevelChanges, unclosedCuts])
+  }, [
+    viewing,
+    reachChecks,
+    bevelChanges,
+    unclosedCuts,
+    viewingNcFrame,
+    viewingNcSection,
+    viewingNcGeom,
+    viewingProfileCode,
+    stock,
+  ])
 
   // Collapsible sections — long jobs push the tables far down, so profiles
   // and parts collapse like an accordion.
