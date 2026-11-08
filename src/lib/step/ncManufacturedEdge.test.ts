@@ -97,7 +97,9 @@ describe('manufactured NC edge agreement', () => {
           }
         }
 
-        const step = await reconstructStepFromNc(nc)
+        // The NC contour is the cut line **on the face**; keep the comparison square so the
+        // bevel wedge (covered by `bevelCut.test.ts`) does not shift the measured edge.
+        const step = await reconstructStepFromNc(nc, { bevels: false })
         expect(step).toBeTruthy()
         if (!step) return
         const meshed = await meshStepFile(mark, new TextEncoder().encode(step))

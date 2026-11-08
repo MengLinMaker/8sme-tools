@@ -329,14 +329,17 @@ export interface ReconstructOptions {
    */
   measureOnly?: boolean
   /**
-   * **Experimental, opt-in:** reproduce DSTV welding-preparation chamfers as slanted cut
-   * surfaces. Off by default because the double-bevel side semantics still need a real-article
-   * check. On a closed section a full-wall bevel is already encoded by the opposite face outline
-   * and is left alone; on an open section (no opposite face) it is extended through the wall.
+   * Reproduce DSTV welding-preparation chamfers as slanted cut surfaces by subtracting a wedge
+   * whose slanted face rises from the NC cut line. **On by default** (except `tee`, whose face map
+   * is still an open issue); pass `false` to leave the cuts square. On a closed section a full-wall
+   * bevel is already encoded by the opposite face outline and is left alone; on an open section
+   * (no opposite face) it is extended through the wall.
    */
   bevels?: boolean
   /** **Debug only:** skip the shallow (1st) face cut so the 2nd extrusion can be inspected. */
   debugSkipShallow?: boolean
+  /** **Debug only:** receive every intermediate solid as STEP text. */
+  onSolid?: (name: string, step: string) => void
   /** How to treat out-of-range welding preps. Default: `remove` on RHS/SHS, `asDrawn` otherwise. */
   bevelPolicy?: BevelPolicy
   /** Run the CUT_DEPTH sabre probe (default true; the viewer model skips it for speed). */
@@ -428,6 +431,10 @@ export async function reconstructSolidFromNc(
   // likewise built in its authored (web-vertical) pose and rolled back, but the authored coordinates
   // are the opposite rotation, so no across flip is needed — keep the validated authored maths.
   const family = profileFamily(header.profile)
+  // Bevels are on by default for every family whose DSTV face map is settled. The `tee` row is
+  // still an open issue (docs/canonical-orientation.md §3), so a T keeps square cuts unless the
+  // caller explicitly opts in.
+  const buildBevels = options.bevels ?? family !== 'tee'
   const isI = family === 'i'
   const acrossSign = (face: NcFace): 1 | -1 => {
     if (family === 'tube') return ncAuthoredAcrossSign(frame, face)
@@ -497,18 +504,36 @@ export async function reconstructSolidFromNc(
     // **on the cut line** at the face surface and runs `width` into the material at `depth`. Keeping
     // the surface anchored at the NC line is what makes the manufactured edge agree with the drawn
     // cut line; the old wedge started `width` inside it and shaved the face back instead.
+    // The DSTV angle sign selects which **face of the plate** the prep is on. A positive angle
+    // bevels from the near (NC) face inward; a negative angle bevels from the far face back toward
+    // the NC face. Keep the in-surface run on the same side of the cut line either way.
+    const farSide = edge.angle < 0
+    const start = vSign * (farSide ? depth : 0)
+    const end = vSign * (farSide ? 0 : depth)
+    const outsideDepth = vSign * (farSide ? depth + outside : -outside)
     const section2: Pt[] = [
-      [-outside, -vSign * outside],
-      [0, 0],
-      [width, vSign * depth],
-      [-outside, vSign * depth],
+      [-outside, outsideDepth],
+      [0, start],
+      [width, end],
+      [-outside, end],
     ]
     const plane = new Plane(origin, n3, t3)
     const [first, ...rest] = section2
     if (!first) return null
     let pen = draw(first)
     for (const point of rest) pen = pen.lineTo(point)
-    return pen.close().sketchOnPlane(plane).extrude(length) as unknown as SolidOps
+    // Overrun both edge ends so adjacent bevel wedges overlap at a shared vertex (and across a
+    // rolled root fillet). Without it a changing bevel leaves a sliver gap/step at every corner.
+    const overrun = CUT_OUTSIDE
+    const wedge = pen
+      .close()
+      .sketchOnPlane(plane)
+      .extrude(length + 2 * overrun) as unknown as SolidOps
+    return (
+      wedge as unknown as {
+        translate: (x: number, y: number, z: number) => SolidOps
+      }
+    ).translate(-t3[0] * overrun, -t3[1] * overrun, -t3[2] * overrun)
   }
 
   // Global member-end extent over every outer face outline. Faces routinely disagree in X at
@@ -669,10 +694,78 @@ export async function reconstructSolidFromNc(
     return cuts
   }
 
+  // Channel web end cut: a prism whose profile lives in the member×web-normal (X,Y) plane and is
+  // extruded along the depth (Z), so the cut face follows the prep angle across the web thickness.
+  const buildChannelWebEndCuts = (contour: NcContour): SolidOps[] => {
+    if (contour.points.length > 6) return []
+    const axis = faceAxis(contour.face)
+    const spanHalf = halfOf(axis)
+    const faceOut = facePlaneHalf(frame, contour.face)
+    const faceSign = resolveFaceSign(frame, section.points, contour.face)
+    const web = header.dimensions[3] ?? 0
+    if (!(web > 0)) return []
+    const yOuter = faceSign * faceOut
+    const yUnder = faceSign * (faceOut - web)
+    const dir = -faceSign
+    const yDeep = yOuter + dir * (web + Math.max(0, header.dimensions[4] ?? 0) + LASER_KERF)
+    const xs = contour.points.map((p) => p[0])
+    const xMin = Math.min(...xs)
+    const xMax = Math.max(...xs)
+    const zHalf = spanHalf
+    const cuts: SolidOps[] = []
+    for (const end of ['start', 'end'] as const) {
+      const target = end === 'start' ? xMin : xMax
+      let deg = 0
+      let xLine = target
+      contour.points.forEach(([x], i) => {
+        if (Math.abs(x - target) > 0.75) return
+        const prep = selectWeldingPrep(contour.bevels[i])
+        if (Math.abs(prep.angle) > Math.abs(deg)) {
+          deg = prep.angle
+          xLine = x
+        }
+      })
+      const slope = (end === 'end' ? -1 : 1) * Math.tan((deg * Math.PI) / 180)
+      const xOuter = xLine + (yOuter - yUnder) * slope
+      const xDeep = xLine + (yDeep - yUnder) * slope
+      const far = end === 'end' ? xMax + 1000 : xMin - 1000
+      const outline: Pt[] =
+        end === 'end'
+          ? [
+              [xOuter, yOuter],
+              [far, yOuter],
+              [far, yDeep],
+              [xDeep, yDeep],
+            ]
+          : [
+              [far, yOuter],
+              [xOuter, yOuter],
+              [xDeep, yDeep],
+              [far, yDeep],
+            ]
+      try {
+        cuts.push(
+          poly(outline)
+            .sketchOnPlane('XY')
+            .extrude(2 * (zHalf + 2))
+            .translate(0, 0, -(zHalf + 2)) as unknown as SolidOps,
+        )
+      } catch {}
+    }
+    return cuts
+  }
   // Pure stock: cross-section in the (width=Y, depth=Z) plane, extruded along the member (X).
   let solid = poly(section.points)
     .sketchOnPlane('YZ')
     .extrude(maxX + 20) as unknown as SolidOps
+  const emit = async (name: string, shape: unknown): Promise<void> => {
+    if (!options.onSolid) return
+    try {
+      const step = await (shape as { blobSTEP: () => Promise<Blob> }).blobSTEP()
+      options.onSolid(name, await step.text())
+    } catch {}
+  }
+  await emit('00-stock', solid)
 
   // Holes in the section (hollow RHS/SHS/CHS) are through-cuts too.
   for (const hole of section.holes ?? []) {
@@ -692,14 +785,22 @@ export async function reconstructSolidFromNc(
     const sign = acrossSign(c.face)
     const pts = rawPts.map(([x, y]) => [x, sign * (y - half)] as Pt)
     if (perFaceFamily) {
+      const webPlaneCut = channelFaces && c.face === 'v' && c.points.length <= 6
       if (options.debugSkipShallow !== true) {
-        const cut = channelFaces
-          ? buildFaceCut(c.face, axis, pts, radii, sign < 0)
-          : buildTubeFaceCut(c.face, axis, pts, radii, sign < 0)
-        if (cut) solid = solid.cut(cut)
+        if (webPlaneCut) {
+          for (const cut of buildChannelWebEndCuts(c)) {
+            await emit(`cut-${c.face}`, cut)
+            solid = solid.cut(cut)
+          }
+        } else {
+          const cut = channelFaces
+            ? buildFaceCut(c.face, axis, pts, radii, sign < 0)
+            : buildTubeFaceCut(c.face, axis, pts, radii, sign < 0)
+          if (cut) solid = solid.cut(cut)
+        }
       }
       for (const strip of buildFlangeFillet(c.face, axis, pts)) solid = solid.cut(strip)
-      if (options.bevels === true && !options.simplify) {
+      if (buildBevels && !options.simplify && !webPlaneCut) {
         const ccw = signedArea2(pts) > 0
         const map = (p: Pt): Pt => [p[0], sign * (p[1] - half)]
         for (const edge of faceBevelEdges(c, map)) {
@@ -725,7 +826,7 @@ export async function reconstructSolidFromNc(
     // are the interior web, whose authored across coordinate is not the section silhouette this
     // tool is placed on — leave those square until they have a real fixture.
     const webFace = isI && (c.face === 'v' || c.face === 'h')
-    if (options.bevels === true && !options.simplify && !webFace) {
+    if (buildBevels && !options.simplify && !webFace) {
       const ccw = signedArea2(pts) > 0
       const map = (p: Pt): Pt => [p[0], sign * (p[1] - half)]
       for (const edge of faceBevelEdges(c, map)) {
@@ -1089,6 +1190,7 @@ export async function reconstructSolidFromNc(
     ).failures
   }
 
+  await emit('99-final', solid)
   // Measure-only callers (analysis phase 4) compare the live solid and discard
   // the text — skip the STEP export entirely.
   if (options.measureOnly) return { solid: solid as SolidOps & MeasurableShape, step: '', sabre }

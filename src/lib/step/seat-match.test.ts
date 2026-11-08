@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { nw30Bottom, nw31Top } from '@test/fixtures'
+import { nw30Bottom, nw31Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { profileFamily } from '@/lib/sections/canonical'
@@ -27,6 +27,9 @@ setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 const CASES: [string, string, string, boolean][] = [
   ['m117', nw31Top('NC files', 'm117.nc1'), nw31Top('STP files', 'm117.stp'), true],
   ['m150', nw31Top('NC files', 'm150.nc1'), nw31Top('STP files', 'm150.stp'), true],
+  // Simple PFC with one square end, one 20° miter and a web weld-prep bevel: the best-case check
+  // that the NC rebuild (cut + bevel) lands on the STEP.
+  ['m106', nw31Bottom('m106.nc1'), nw31Bottom('m106.stp'), true],
   ['a1', nw31Top('NC files', 'a1.nc1'), nw31Top('STP files', 'a1.stp'), true],
   ['m105', nw30Bottom('m105.nc1'), nw30Bottom('m105.stp'), false],
   ['m31', nw31Top('NC files', 'm31.nc1'), nw31Top('STP files', 'm31.stp'), false],
