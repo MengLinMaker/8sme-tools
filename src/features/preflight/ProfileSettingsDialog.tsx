@@ -21,6 +21,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { type CutSuggestion, type SurfaceCondition, suggestCut } from '@/lib/machine/cutParams'
+import { MACHINE } from '@/lib/machine/profile'
+import { profileFamily } from '@/lib/sections/canonical'
 import { partSectionForCode, sectionThicknesses } from '@/lib/sections/stock'
 import { cn } from '@/lib/utils'
 
@@ -38,12 +40,20 @@ type MarkSortKey = 'mark' | 'pieces' | 'length' | 'mass'
 
 /** One row of the transposed settings table (parameters down, thicknesses across). */
 const PARAM_ROWS: { key: string; value: (cut: CutSuggestion) => string }[] = [
-  { key: 'power', value: (cut) => `${cut.powerPct}` },
-  { key: 'speed', value: (cut) => `${cut.speedMinMmMin}–${cut.speedMaxMmMin}` },
-  { key: 'focus', value: (cut) => `${cut.camFocusMm > 0 ? '+' : ''}${cut.camFocusMm}` },
-  { key: 'standoff', value: (cut) => `${cut.heightMm}` },
   { key: 'pressure', value: (cut) => `${cut.pressureBar}` },
+  { key: 'speed', value: (cut) => `${cut.speedMinMmMin}` },
+  { key: 'standoff', value: (cut) => `${cut.heightMm}` },
+  { key: 'focus', value: (cut) => `${cut.camFocusMm > 0 ? '+' : ''}${cut.camFocusMm}` },
+  { key: 'power', value: (cut) => `${cut.powerPct}` },
   { key: 'frequency', value: (cut) => `${cut.frequencyHz}` },
+  {
+    key: 'rpm',
+    value: (cut) => (cut.angularSpeedMinRpm != null ? `${cut.angularSpeedMinRpm}` : '—'),
+  },
+  {
+    key: 'nozzle',
+    value: (cut) => (cut.nozzle ? `${cut.nozzle.sizeMm.toFixed(1)} ${cut.nozzle.type}` : '—'),
+  },
 ]
 
 export interface ProfileSettingsDialogProps {
@@ -321,11 +331,33 @@ export function CutSettings({
   compact?: boolean
 }) {
   const { t } = useTranslation()
-  const [surface, setSurface] = useState<SurfaceCondition>('normal')
+  const family = profileFamily(profile)
+  const kind: 'open' | 'hollow' = family === 'tube' || family === 'round' ? 'hollow' : 'open'
+  const defaultSurface: SurfaceCondition = kind === 'hollow' ? 'primed' : 'rust'
+  const [surface, setSurface] = useState<SurfaceCondition>(defaultSurface)
+  useEffect(() => setSurface(defaultSurface), [defaultSurface])
   const thicknesses = useMemo(() => sectionThicknesses(profile, dims), [profile, dims])
+  const section = useMemo(() => partSectionForCode(profile, dims), [profile, dims])
+  const rotationRadiusMm = useMemo(() => {
+    if (!section || section.points.length === 0) return undefined
+    const xs = section.points.map(([x]) => x)
+    const ys = section.points.map(([, y]) => y)
+    const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
+    return span / 2
+  }, [section])
+  const governingThicknessMm =
+    thicknesses.length > 0 ? Math.max(...thicknesses.map((thickness) => thickness.mm)) : undefined
   const suggestions = useMemo(
-    () => thicknesses.map((thickness) => ({ thickness, cut: suggestCut(thickness.mm, surface) })),
-    [thicknesses, surface],
+    () =>
+      thicknesses.map((thickness) => ({
+        thickness,
+        cut: suggestCut(thickness.mm, surface, MACHINE, {
+          kind,
+          rotationRadiusMm,
+          governingThicknessMm,
+        }),
+      })),
+    [thicknesses, surface, kind, rotationRadiusMm, governingThicknessMm],
   )
   const labelWidth = compact ? 'w-28' : 'w-40'
   const cell = compact ? 'px-2 py-1' : 'px-3 py-1.5'

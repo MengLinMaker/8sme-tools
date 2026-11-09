@@ -54,3 +54,49 @@ describe('suggestCut (O₂ carbon steel)', () => {
     expect(cut.camFocusMm).toBe(cut.focusMm)
   })
 })
+
+describe('shop nozzle and rotary-speed rules', () => {
+  it('picks the open-section nozzle by thickness', () => {
+    expect(suggestCut(5, 'rust', KL90010T, { kind: 'open' }).nozzle).toEqual({
+      sizeMm: 1.5,
+      type: 'single',
+    })
+    expect(suggestCut(15, 'rust', KL90010T, { kind: 'open' }).nozzle).toEqual({
+      sizeMm: 1.5,
+      type: 'single',
+    })
+    expect(suggestCut(16, 'rust', KL90010T, { kind: 'open' }).nozzle).toEqual({
+      sizeMm: 2,
+      type: 'single',
+    })
+  })
+
+  it('picks the hollow-section nozzle', () => {
+    expect(suggestCut(6, 'primed', KL90010T, { kind: 'hollow' }).nozzle).toEqual({
+      sizeMm: 1.8,
+      type: 'double',
+    })
+  })
+
+  it('converts the speed range to r/min at the given radius', () => {
+    const cut = suggestCut(5, 'rust', KL90010T, { kind: 'open', rotationRadiusMm: 75 })
+    expect(cut.angularSpeedMinRpm).toBeCloseTo(5.5, 1)
+    expect(cut.angularSpeedMaxRpm).toBeCloseTo(6.6, 1)
+  })
+
+  it('leaves nozzle and r/min unknown without context', () => {
+    const cut = suggestCut(5)
+    expect(cut.nozzle).toBeNull()
+    expect(cut.angularSpeedMinRpm).toBeNull()
+    expect(cut.angularSpeedMaxRpm).toBeNull()
+  })
+})
+
+describe('one nozzle per section', () => {
+  it('sizes the nozzle from the largest thickness, not the row', () => {
+    const web = suggestCut(5, 'rust', KL90010T, { kind: 'open', governingThicknessMm: 16 })
+    expect(web.nozzle).toEqual({ sizeMm: 2, type: 'single' })
+    const flange = suggestCut(16, 'rust', KL90010T, { kind: 'open', governingThicknessMm: 16 })
+    expect(flange.nozzle).toEqual({ sizeMm: 2, type: 'single' })
+  })
+})

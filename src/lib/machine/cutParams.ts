@@ -40,10 +40,31 @@ export interface CutRecipe {
   source: string
 }
 
+/** Nozzle the shop fits for this cut. */
+export interface CutNozzle {
+  sizeMm: number
+  type: 'single' | 'double'
+}
+
+/** Extra context the suggestion needs to pick a nozzle / rotary speed. */
+export interface CutOptions {
+  /** Open section (UB/PFC/T/angle) or hollow (SHS/RHS/CHS). */
+  kind?: 'open' | 'hollow'
+  /** Distance from the rotary axis to the reference outer surface (mm). */
+  rotationRadiusMm?: number
+  /** Largest thickness in the section; the shop fits one nozzle per section. */
+  governingThicknessMm?: number
+}
+
 /** A suggestion ready for display / for the `Technology.xml` fields. */
 export interface CutSuggestion extends CutRecipe {
   /** The `FocusPos` value to enter in the shop CAM (physical focus × machine sign). */
   camFocusMm: number
+  /** Shop nozzle for this cut, when the section kind is known. */
+  nozzle: CutNozzle | null
+  /** Equivalent rotary speed range at `rotationRadiusMm` (r/min), when known. */
+  angularSpeedMinRpm: number | null
+  angularSpeedMaxRpm: number | null
   /** Adjustments / caveats applied on top of the base row. */
   notes: string[]
 }
@@ -288,6 +309,7 @@ export function suggestCut(
   thicknessMm: number,
   surface: SurfaceCondition = 'normal',
   profile: MachineProfile = MACHINE,
+  options: CutOptions = {},
 ): CutSuggestion {
   const notes: string[] = []
   let wanted = thicknessMm
@@ -315,16 +337,36 @@ export function suggestCut(
   notes.push('Speed is the quality lever: start at the low end of the range.')
   notes.push('Source values are published O₂ charts — verify on scrap before a production run.')
 
+  const speedMin = round1(base.speedMinMmMin * adjust.speed)
+  const speedMax = round1(base.speedMaxMmMin * adjust.speed)
+
+  // Shop nozzle rule: one nozzle per section, sized by the largest thickness —
+  // 1.5 single ≤15 mm, 2.0 single >15 mm for open sections; 1.8 double for hollow sections.
+  const nozzleThickness = options.governingThicknessMm ?? wanted
+  const nozzle: CutNozzle | null =
+    options.kind === 'hollow'
+      ? { sizeMm: 1.8, type: 'double' }
+      : options.kind === 'open'
+        ? { sizeMm: nozzleThickness <= 15 ? 1.5 : 2.0, type: 'single' }
+        : null
+
+  const radiusM = options.rotationRadiusMm ? options.rotationRadiusMm / 1000 : 0
+  const angularSpeedMinRpm = radiusM > 0 ? round1(speedMin / (2 * Math.PI * radiusM)) : null
+  const angularSpeedMaxRpm = radiusM > 0 ? round1(speedMax / (2 * Math.PI * radiusM)) : null
+
   return {
     ...base,
     thicknessMm: round1(wanted),
     powerPct,
-    speedMinMmMin: round1(base.speedMinMmMin * adjust.speed),
-    speedMaxMmMin: round1(base.speedMaxMmMin * adjust.speed),
+    speedMinMmMin: speedMin,
+    speedMaxMmMin: speedMax,
     focusMm: round1(physicalFocus),
     camFocusMm: round1(physicalFocus * profile.focus.sign),
     heightMm: round2(base.heightMm),
     pressureBar: round2(base.pressureBar + adjust.pressureBar),
+    nozzle,
+    angularSpeedMinRpm,
+    angularSpeedMaxRpm,
     notes,
   }
 }
