@@ -1274,6 +1274,47 @@ Pack: `~/Downloads/ncep-probes-round12-20261106.zip` (43 probes/controls).
 - **Bar orientation/Segment (round 11):** `2500–2503` real corrected-marking exemplars + L6
   controls; `2600–2607` negative-x/no-transform and positive-x/rotate(180) with Segment 1/3.
 
+## Round 12 results (2026-11-09)
+
+Pack: `~/Downloads/ncep-probes-round12-20261106 result/`.
+
+- **Marking is confirmed auto/overridden:** `2762` (no marks) still gets a mark. Drop text/font/
+  angle/size mark probes from future packs — they cannot prove anything.
+- **Etch form:** layer-6 rectangle, outline, `needSetAdobe`, `T={};` and text-L4 all look similar;
+  the layer-6 **single line** is wrong (`2732`). Keep rectangle/outline; no line.
+- **Etch correction:** moving M-1 to `y=3306`/centre adds an etch but does not correct it
+  (`2742–2744`). The correction rule is still unknown.
+- **RHS/SHS end cuts:** real section + real trims looks similar (`2704`, `2714`); real section
+  alone leaves a sharp end, real trims alone is shifted. Both must be fixed together.
+  - M-43 standard radius is **17.68** vs control **12.5**.
+  - M-51 real section needs face swaps; real trims are shifted by half a face.
+- **M-39 collision map:** real section fixes it (`2722`, `2724`); real trims alone is wrong
+  (`2723`). Our section is the collision-map culprit, not the trim.
+- **Quantity/flip:** quantity 2, `flipFlanges`, and M-1 quantity all teleport/shift geometry
+  (`2750`, `2751`, `2759`, `2760`). Do not enable until placement/seam is fixed.
+
+## NC → STEP and UB recognition (2026-11-09)
+
+See **`docs/nc-to-step.md`** for the dedicated write-up.
+
+- `M_12` parser fix: `300PLUS` grade (and quantity) now parses; `M_12` fixture/test added.
+- Overlapping `u`-face holes caused the OCC crash when all holes were cut as one compound;
+  sequential hole cuts produce a valid STEP. NCEP still carries both circles.
+- `pnpm nc-to-step` added; latest M_12 STEP is `~/Downloads/M_12-corrected.stp`.
+- UB STEPs still import as custom; PFC works. Real J12095 UB pattern is AP203 + `digitsUBdigits`
+  in FILE_NAME and PRODUCT. Metadata matrix: `~/Downloads/M_12-step-matrix.zip`.
+
+## Arc recovery fix and round 13 (2026-11-09)
+
+- Lowered the sampled-arc interior-angle cutoff from `1.9` to `1.0` and bounded recovered radii to
+  `1.5 × (rootRadius | rCornerMaxRadius)`. This lets <90° SHS/RHS corner samples recover without
+  fitting a rectangle's four corners to a huge circle.
+- Generated section radii now match controls: M-43 `12.50/7.50` (was `17.68`), M-51 `8.75/5.25`,
+  M-39 `11.40`, M-3 `13.00`, M-35 `12.50/7.50`.
+- Pack `~/Downloads/ncep-probes-round13-20261109.zip`: L1–L7 identical M-3 bars; L5/L6 with
+  `needSetAdobe`, negative/no-transform and text; M-43/M-51/M-39 standard + controls for the arc
+  fix. Layer 5 is being tested as the suspected corrected-etch layer.
+
 ## Implementation — true arc sections (2026-11-04)
 
 The arc probes established that WiseCAM's own section `cadgroup` carries **true arcs** and that

@@ -150,11 +150,10 @@ now lower priority — no evidence they are blocking.
 
 **Next tests**
 
-- Confirm the writer's layer-4 open etch lines etch (`round 8`).
-- Test `SI` text at 0°/45°/90° and reversed; current fixtures mostly carry bars.
-- Choose between layer-4 line centerline and outline for a closed `PU`/`KO` rectangle.
-- Determine whether the writer should keep the default part-name text when an `SI` mark exists.
-- Determine the auto-mark length threshold and whether short parts should omit the mark.
+- Confirm layer 6 rectangle/outline etches in the latest writer (line form is wrong).
+- Determine the corrected-etch rule: position/shape on layer 6, not a layer change.
+- Layer-5 sweep (`round 13`) is pending; it may be the intended corrected-etch layer.
+- Do not add text/font/angle/size mark probes: auto marking is overridden (`2762`).
 - Compare mark placement at `x=0` vs the real face/station for M-1/M-3/M-35.
 - The M-3 feature matrix was regenerated after the `holeBlock` bug fix; `1802` + all-real
   `1808` confirm our holes are fine, while our trims cause the sharp front end and our marks

@@ -113,6 +113,7 @@ maps DSTV faces to machine roles + enforces the cut-side rules.
 
 ## Toolchain
 
+- `pnpm nc-to-step -i <nc1>` rebuilds STEP from NC (`tools/nc-to-step.mjs`; see `docs/nc-to-step.md`).
 - pnpm + Vite + React + TanStack Router + PWA; Tailwind + shadcn-style UI; Biome; Vitest.
 - CAD via `replicad` / `replicad-opencascadejs` (lazy-loaded ~23 MB WASM). Engraving font:
   **Liberation Sans** (SIL OFL) at `public/fonts/`.
