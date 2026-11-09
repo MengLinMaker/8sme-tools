@@ -1304,6 +1304,25 @@ See **`docs/nc-to-step.md`** for the dedicated write-up.
 - UB STEPs still import as custom; PFC works. Real J12095 UB pattern is AP203 + `digitsUBdigits`
   in FILE_NAME and PRODUCT. Metadata matrix: `~/Downloads/M_12-step-matrix.zip`.
 
+## Round 14 — tube corner trims (2026-11-09)
+
+Round 12 showed the sharp RHS/SHS end is the **trim**, not the section: real trims fix the
+cut line, real section alone does not. The real trim is not the 8 AK chords. On each flat it
+is a straight line between the corner tangent points; through a corner it is the unrolled
+cylinder intersection
+
+`along = A0 + r·m0·sinθ + (A1 − A0 − r·m0)·(1 − cosθ)`.
+
+A square face whose AK line is short of the neighbouring mitre by `wall·tan(bevel)` is the
+inner/root line (M-43 `h` 45 → 50, M-42 `h` 61 → 56). The writer now snaps that face onto
+the outer mitre and samples the corner arc. M-43/M-42 match the control curve within 0.6 mm.
+M-51's half-face station shift is still open — do not treat its standard file as proven.
+
+Pack: `~/Downloads/ncep-probes-round14.zip` (11 files). Compare each `corner trims` file to
+its control. `real section` keeps the new trims, so a remaining shift is the section stance.
+M-39 `section arcs` is the collision-map check. Round 13's layer sweep is still untested;
+do not add more mark probes.
+
 ## Arc recovery fix and round 13 (2026-11-09)
 
 - Lowered the sampled-arc interior-angle cutoff from `1.9` to `1.0` and bounded recovered radii to

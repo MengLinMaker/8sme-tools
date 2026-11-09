@@ -280,6 +280,32 @@ describe('generated NCEP packages pass the parser', () => {
     })
   }
 
+  it('follows the tube corner cylinder instead of chording the mitre', () => {
+    const nearest = (points: [number, number][] | undefined, target: [number, number]): number => {
+      if (!points?.length) return Infinity
+      return Math.min(
+        ...points.map((point) => Math.hypot(point[0] - target[0], point[1] - target[1])),
+      )
+    }
+    const m43 = partFromNc(readFileSync(fixture('ncep', 'M-43.nc1'), 'utf8'))
+    // Real M-43 start passes through the v/o corner arc, and the h flat sits on the outer
+    // mitre (along 50) rather than the AK root (45).
+    expect(nearest(m43?.startCut, [45.17, 2.28])).toBeLessThan(0.6)
+    expect(nearest(m43?.startCut, [57.14, 12.5])).toBeLessThan(0.6)
+    const hFlat = (m43?.startCut ?? []).filter(([station]) => station > 100 && station < 178)
+    expect(hFlat.length).toBeGreaterThan(0)
+    expect(hFlat.every(([, along]) => Math.abs(along - 50) < 0.6)).toBe(true)
+
+    const m42 = partFromNc(readFileSync(fixture('ncep', 'M-42.nc1'), 'utf8'))
+    expect(nearest(m42?.endCut, [47.32, 102.34])).toBeLessThan(0.6)
+    const m42H = (m42?.endCut ?? []).filter(([station]) => station > 100 && station < 178)
+    expect(m42H.every(([, along]) => Math.abs(along - 56) < 0.6)).toBe(true)
+
+    const m35 = partFromNc(readFileSync(fixture('ncep', 'M-35.nc1'), 'utf8'))
+    expect(m35?.startCut).toHaveLength(2)
+    expect(m35?.endCut).toHaveLength(2)
+  })
+
   it('develops the M-3 and M-42 shaped ends instead of straight cuts', () => {
     const m3 = parseNcepPackage(
       buildNcepFromNc(readFileSync(fixture('ncep', 'M-3.nc1'), 'utf8')) as Uint8Array,

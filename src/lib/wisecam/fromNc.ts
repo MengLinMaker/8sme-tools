@@ -21,7 +21,8 @@ import {
  * `U` (PFC) and `M` (RHS/SHS). `T`, `L` and round sections return `null` until a sample exists.
  *
  * Limitations (see `docs/wisecam-formats.md`):
- * - straight end cuts only (a mitred/bevelled end is not yet developed);
+ * - tube mitres are developed through the corner cylinder; I/U root-fillet arcs and bevel
+ *   `PosMap` clusters are not yet emitted;
  * - `h`/inner-side cuts are not developed (WiseCAM's NCEP only carries the front surface);
  * - mirrored (`o`/`u`) parts may need `flipFlanges` (handedness is not in the NC header).
  */
@@ -153,6 +154,198 @@ function inRange(points: [number, number][], min: number, max: number): [number,
   return points
 }
 
+/** Along-coordinate on a face end polyline at across-coordinate `y`. */
+function alongAt(points: [number, number][], y: number): number {
+  let nearest = points[0] as [number, number]
+  let nearestDist = Infinity
+  for (let index = 0; index < points.length - 1; index++) {
+    const from = points[index] as [number, number]
+    const to = points[index + 1] as [number, number]
+    const span = to[1] - from[1]
+    if (Math.abs(span) < 1e-9) {
+      const dist = Math.abs(y - from[1])
+      if (dist < nearestDist) {
+        nearest = from
+        nearestDist = dist
+      }
+      continue
+    }
+    const t = (y - from[1]) / span
+    if (t >= -1e-6 && t <= 1 + 1e-6)
+      return from[0] + Math.min(1, Math.max(0, t)) * (to[0] - from[0])
+    const end = t < 0 ? from : to
+    const dist = Math.abs(y - end[1])
+    if (dist < nearestDist) {
+      nearest = end
+      nearestDist = dist
+    }
+  }
+  return nearest[0]
+}
+
+function alongSlope(points: [number, number][], y: number): number {
+  for (let index = 0; index < points.length - 1; index++) {
+    const from = points[index] as [number, number]
+    const to = points[index + 1] as [number, number]
+    const span = to[1] - from[1]
+    if (Math.abs(span) < 1e-9) continue
+    const t = (y - from[1]) / span
+    if (t >= -0.05 && t <= 1.05) return (to[0] - from[0]) / span
+  }
+  return 0
+}
+
+function bevelOnArc(contour: NcContour, arc: [number, number][]): number {
+  let angle = 0
+  contour.points.forEach((point, index) => {
+    const onArc = arc.some(([along, y]) => Math.hypot(point[0] - along, point[1] - y) < 0.5)
+    if (!onArc) return
+    const value = contour.bevels[index]?.[0] ?? 0
+    if (Math.abs(value) > Math.abs(angle)) angle = value
+  })
+  return angle
+}
+
+/**
+ * A tube end cut is the mitre plane meeting the outer skin. On each flat that is a straight
+ * line in the development; through a corner it is the unrolled cylinder intersection
+ * `along = A0 + r·m0·sinθ + (A1 − A0 − r·m0)·(1 − cosθ)`. A square face whose AK line is
+ * short of the neighbouring mitre by `wall·tan(bevel)` is the inner/root line — the outer
+ * trim snaps onto the mitre.
+ */
+function developTubeEnd(
+  layout: UnrolledLayout,
+  contours: NcContour[],
+  length: number,
+  end: 'start' | 'end',
+  wall: number,
+): [number, number][] | null {
+  const order: NcFace[] = ['v', 'o', 'h', 'u']
+  const cuts = new Map<NcFace, [number, number][]>()
+  const angles = new Map<NcFace, number>()
+  let radius = 0
+  for (const face of order) {
+    const region = layout.faces[face]
+    const contour = contours.find((entry) => entry.kind === 'outer' && entry.face === face)
+    if (!region || !contour || !(region.radius && region.radius > 0)) return null
+    radius = region.radius
+    const ends = splitContourEnds(densifyContour(contour), length)
+    if (!ends) return null
+    const arc = (end === 'start' ? ends.start : ends.end).map(
+      (point) => [point[0], point[1]] as [number, number],
+    )
+    cuts.set(face, arc)
+    angles.set(face, bevelOnArc(contour, arc))
+  }
+  const web = layout.faces.v
+  if (!web || web.start >= 0 || radius >= (web.width ?? web.length) / 2) return null
+
+  const boundaryY = (face: NcFace, side: 'low' | 'high'): number => {
+    const region = layout.faces[face]
+    const width = region?.width ?? region?.length ?? 0
+    if (!region) return 0
+    if (side === 'high') return region.reversed ? 0 : width
+    return region.reversed ? width : 0
+  }
+  const shift = (face: NcFace, delta: number): void => {
+    const points = cuts.get(face)
+    if (!points) return
+    cuts.set(
+      face,
+      points.map(([along, y]) => [along + delta, y]),
+    )
+  }
+  if (wall > 0) {
+    for (const face of order) {
+      const points = cuts.get(face)
+      if (!points) continue
+      const alongs = points.map(([along]) => along)
+      if (Math.max(...alongs) - Math.min(...alongs) > 0.05) continue
+      const deltas: number[] = []
+      for (const side of ['low', 'high'] as const) {
+        const index = order.indexOf(face)
+        const neighbor = order[
+          (index + (side === 'high' ? 1 : order.length - 1)) % order.length
+        ] as NcFace
+        const neighborSide = side === 'high' ? 'low' : 'high'
+        const mine = alongAt(points, boundaryY(face, side))
+        const theirs = alongAt(cuts.get(neighbor) ?? [], boundaryY(neighbor, neighborSide))
+        const angle = Math.max(Math.abs(angles.get(face) ?? 0), Math.abs(angles.get(neighbor) ?? 0))
+        const expected = wall * Math.tan((angle * Math.PI) / 180)
+        const delta = theirs - mine
+        if (expected > 0.2 && Math.abs(Math.abs(delta) - expected) < 0.4) deltas.push(delta)
+      }
+      if (deltas.length > 0 && deltas.every((delta) => Math.abs(delta - (deltas[0] ?? 0)) < 0.4)) {
+        shift(face, deltas[0] ?? 0)
+      }
+    }
+  }
+
+  const tangentY = (face: NcFace, side: 'low' | 'high'): number => {
+    const region = layout.faces[face]
+    const width = region?.width ?? region?.length ?? 0
+    const corner = region?.radius ?? 0
+    if (!region) return 0
+    const highY = region.reversed ? corner : width - corner
+    const lowY = region.reversed ? width - corner : corner
+    return side === 'high' ? highY : lowY
+  }
+  const tangent = (
+    face: NcFace,
+    side: 'low' | 'high',
+  ): { station: number; along: number; slope: number } => {
+    const region = layout.faces[face]
+    const y = tangentY(face, side)
+    const raw = rawStationFor(layout, face, y) ?? 0
+    const station = raw < -1e-6 ? raw + layout.seam : raw
+    const points = cuts.get(face) ?? []
+    const dAlong = alongSlope(points, y)
+    return {
+      station,
+      along: alongAt(points, y),
+      slope: region?.reversed ? -dAlong : dAlong,
+    }
+  }
+  const appendArc = (
+    points: [number, number][],
+    from: { station: number; along: number; slope: number },
+    to: { station: number; along: number },
+  ): void => {
+    const steps = 36
+    for (let step = 1; step <= steps; step++) {
+      const theta = ((Math.PI / 2) * step) / steps
+      const along =
+        from.along +
+        radius * from.slope * Math.sin(theta) +
+        (to.along - from.along - radius * from.slope) * (1 - Math.cos(theta))
+      points.push([from.station + radius * theta, along])
+    }
+  }
+
+  const centerY = (web.width ?? web.length) / 2
+  const centerAlong = alongAt(cuts.get('v') ?? [], centerY)
+  const points: [number, number][] = [[0, centerAlong]]
+  let cursor = tangent('v', 'high')
+  points.push([cursor.station, cursor.along])
+  for (const face of ['o', 'h', 'u', 'v'] as const) {
+    const low = tangent(face, 'low')
+    appendArc(points, cursor, low)
+    if (face === 'v') {
+      points.push([layout.seam, centerAlong])
+      break
+    }
+    cursor = tangent(face, 'high')
+    points.push([cursor.station, cursor.along])
+  }
+  const simplified = simplifyCollinear(dedupePoints(points))
+  for (let index = 1; index < simplified.length; index++) {
+    const previous = simplified[index - 1] as [number, number]
+    const point = simplified[index] as [number, number]
+    if (Math.abs(point[0] - previous[0]) > layout.seam / 2) return null
+  }
+  return inRange(simplified, 0, layout.seam)
+}
+
 /**
  * Develops one end cut onto the unrolled surface. Returns null when the NC does not give a
  * complete shaped boundary; the writer then falls back to a straight cut.
@@ -162,7 +355,12 @@ function developEndCut(
   contours: NcContour[],
   length: number,
   end: 'start' | 'end',
+  wall = 0,
 ): [number, number][] | null {
+  if (layout.origin === 'zero') {
+    const tube = developTubeEnd(layout, contours, length, end, wall)
+    if (tube) return tube
+  }
   // Raw stations are unwrapped so a zero-origin tube's `v` face can straddle the seam.
   const arcs: [number, number][][] = []
   // Follow the developed perimeter, not the DSTV letter order: at a station shared by two faces
@@ -383,8 +581,10 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
   }
 
   const profileType = header.profileType.trim().toUpperCase()
-  const startCut = developEndCut(layout, geometry.contours, header.length, 'start') ?? undefined
-  const endCut = developEndCut(layout, geometry.contours, header.length, 'end') ?? undefined
+  const wall = header.dimensions[2] ?? 0
+  const startCut =
+    developEndCut(layout, geometry.contours, header.length, 'start', wall) ?? undefined
+  const endCut = developEndCut(layout, geometry.contours, header.length, 'end', wall) ?? undefined
   return {
     mark: options.mark ?? header.mark,
     profile: header.profile,
