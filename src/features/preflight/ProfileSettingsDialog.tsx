@@ -421,14 +421,23 @@ export function CutSettings({
                   >
                     {t(`preflight.profileSettings.${row.key}`)}
                   </TableCell>
-                  {suggestions.map(({ thickness, cut }) => (
+                  {row.key === 'nozzle' ? (
                     <TableCell
-                      key={`${row.key}-${thickness.role}-${thickness.mm}`}
-                      className={cn(cell, 'w-20 text-right font-mono text-xs')}
+                      colSpan={suggestions.length}
+                      className={cn(cell, 'text-center font-mono text-xs')}
                     >
-                      {row.value(cut)}
+                      {suggestions[0] ? row.value(suggestions[0].cut) : '—'}
                     </TableCell>
-                  ))}
+                  ) : (
+                    suggestions.map(({ thickness, cut }) => (
+                      <TableCell
+                        key={`${row.key}-${thickness.role}-${thickness.mm}`}
+                        className={cn(cell, 'w-20 text-right font-mono text-xs')}
+                      >
+                        {row.value(cut)}
+                      </TableCell>
+                    ))
+                  )}
                 </TableRow>
               ))}
             </TableBody>
