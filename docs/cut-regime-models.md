@@ -23,7 +23,7 @@ Status: **v0.4** (2026-11-09). Changes from v0.3 are in §13.
 
 ## Regimes
 
-The practical picture is a few regimes in `(speed, pressure, focus, power)` space:
+The practical picture is a few regimes in $(speed, pressure, focus, power)$ space:
 
 - **N0 no penetration** — not enough energy to sever.
 - **N1 through, bridged** — full kerf, still joined by melt or slag.
@@ -35,85 +35,88 @@ Outcome codes and the handling test are in `docs/cut-regime-data-spec.md` §5.
 
 ## Read this first
 
-```
-S = 0.06 · P / (v · t)          [J/mm²]
-```
+$$
+S = 0.06\,\frac{P}{v\,t} \qquad [\mathrm{J/mm^{2}}]
+$$
 
-`P` = beam power in W · `v` = speed in m/min · `t` = thickness in mm · `S` = beam energy per unit
-**cut-face area** (wall or flange area, `t` times length) in J/mm².
+$P$ = beam power in W · $v$ = speed in m/min · $t$ = thickness in mm · $S$ = beam energy per unit
+**cut-face area** (wall or flange area, $t$ times length) in J/mm².
 
-The 0.06 is exact: 1 m/min = 1000/60 mm/s, so `P / (v·1000/60 · t)` = `0.06·P/(v·t)`. (T1)
+The 0.06 is exact: 1 m/min = 1000/60 mm/s, so $\frac{P}{v\cdot\frac{1000}{60}\,t} = 0.06\,\frac{P}{v\,t}$. (T1)
 
 Worked example — 30% of 12 kW, 3.2 m/min, 5 mm web (assumes linear % → kW, unverified):
 
-```
-P = 0.30 × 12000 = 3600 W
-S = 0.06 × 3600 / (3.2 × 5) = 13.5 J/mm²
-```
+$$
+P = 0.30 \times 12000 = 3600\ \mathrm{W}
+$$
 
-**What `S` is and is not.** It is the beam energy per cut-face area. It is *not* the total energy
-the process needs. Oxidation adds energy (§2), so the total is larger than `S`. The name
+$$
+S = \frac{0.06 \times 3600}{3.2 \times 5} = 13.5\ \mathrm{J/mm^{2}}
+$$
+
+**What $S$ is and is not.** It is the beam energy per cut-face area. It is *not* the total energy
+the process needs. Oxidation adds energy (§2), so the total is larger than $S$. The name
 "severance energy" is ours; we have not confirmed it as a literature term.
 
 ### Which energy?
 
-- **`S_beam`** — the default. Uses beam power `P`. This is what we measure.
-- **`S_eff`** — uses an absorbed-plus-oxidation energy (§2). Only when the oxidation term is estimated.
+- **$S_{beam}$** — the default. Uses beam power $P$. This is what we measure.
+- **$S_{eff}$** — uses an absorbed-plus-oxidation energy (§2). Only when the oxidation term is estimated.
 
 Every table, plot and comparison states which one is used. Do not compare literature values
-(often `S_eff`, flat plate, or CO₂) against shop `S_beam` without saying so.
+(often $S_{eff}$, flat plate, or CO₂) against shop $S_{beam}$ without saying so.
 
 ## Symbols
 
 | Symbol | Meaning | Unit |
 |---|---|---|
-| `P` | beam power (set/measured at the workpiece) | W |
-| `v` | cutting speed | m/min (shop) or mm/s (SI) |
-| `t` | material thickness (wall, flange or web) | mm |
-| `S` | beam energy per unit cut-face area | J/mm² |
-| `p` | assist-gas (O₂) pressure at the cutting head | bar (gauge or absolute: **to confirm**) |
-| `f` | focus offset from the surface (positive = above) | mm |
-| `d_f` | focused spot diameter (1/e² or D4σ — state which) | mm |
-| `r_g` | focused spot radius, `d_f / 2` | mm |
-| `z` | distance from the beam waist along the axis | mm |
-| `z_R` | Rayleigh range (depth of focus) | mm |
-| `λ` | laser wavelength (fibre ≈ 1.07 µm) | µm |
-| `M²` | beam-quality factor (1 = perfect) | – |
-| `I` | mean intensity over the spot (`4P/πd²`) | W/mm² |
-| `η_abs` | absorptance: fraction of beam power absorbed by the cut front | – |
-| `f_ox` | fraction of the removed iron that is oxidised to FeO | – |
-| `ΔH_ox` | heat of Fe → FeO oxidation, ≈ 250 kJ/mol | J/mol |
-| `P_ox` | power released by iron oxidation = `f_ox · ṁ_Fe/M_Fe · ΔH_ox` | W |
-| `X_O2` | oxygen purity (0–1) | – |
-| `w_k` | kerf width | mm |
-| `α` | cut-front / taper angle | ° |
-| `ρ_g` | assist-gas density | kg/m³ |
-| `v_g` | assist-gas velocity at the kerf | m/s |
-| `δ` | melt-film thickness | mm (not measured) |
-| `γ` | molten-steel surface tension | N/m |
-| `κ` | thermal diffusivity of steel (≈ 5.9 mm²/s, T2 — from a published iron value) | mm²/s |
-| `h` | nozzle standoff | mm |
-| `d_n` | nozzle diameter | mm |
-| `Pe` | Péclet number, moving Gaussian source: `v·r_g/(2κ)` | – |
-| `We` | Weber number (gas drag ÷ surface tension) | – |
+| $P$ | beam power (set/measured at the workpiece) | W |
+| $v$ | cutting speed | m/min (shop) or mm/s (SI) |
+| $t$ | material thickness (wall, flange or web) | mm |
+| $S$ | beam energy per unit cut-face area | J/mm² |
+| $p$ | assist-gas (O₂) pressure at the cutting head | bar (gauge or absolute: **to confirm**) |
+| $f$ | focus offset from the surface (positive = above) | mm |
+| $d_f$ | focused spot diameter (1/e² or D4σ — state which) | mm |
+| $r_g$ | focused spot radius, $d_{f} / 2$ | mm |
+| $z$ | distance from the beam waist along the axis | mm |
+| $z_R$ | Rayleigh range (depth of focus) | mm |
+| $\lambda$ | laser wavelength (fibre ≈ 1.07 µm) | µm |
+| $M^{2}$ | beam-quality factor (1 = perfect) | – |
+| $I$ | mean intensity over the spot ($4P/\pi d^2$) | W/mm² |
+| $\eta_{\mathrm{abs}}$ | absorptance: fraction of beam power absorbed by the cut front | – |
+| $f_{\mathrm{ox}}$ | fraction of the removed iron that is oxidised to FeO | – |
+| $\Delta H_{\mathrm{ox}}$ | heat of Fe → FeO oxidation, ≈ 250 kJ/mol | J/mol |
+| $P_{\mathrm{ox}}$ | power released by iron oxidation = $f_{ox} \cdot  \dot m _Fe/M_{Fe} \cdot  \Delta H_{ox}$ | W |
+| $X_{\mathrm{O_2}}$ | oxygen purity (0–1) | – |
+| $w_k$ | kerf width | mm |
+| $\alpha$ | cut-front / taper angle | ° |
+| $\rho_g$ | assist-gas density | kg/m³ |
+| $v_g$ | assist-gas velocity at the kerf | m/s |
+| $\delta$ | melt-film thickness | mm (not measured) |
+| $\gamma$ | molten-steel surface tension | N/m |
+| $\kappa$ | thermal diffusivity of steel (≈ 5.9 mm²/s, T2 — from a published iron value) | mm²/s |
+| $h$ | nozzle standoff | mm |
+| $d_n$ | nozzle diameter | mm |
+| $\mathrm{Pe}$ | Péclet number, moving Gaussian source: $v\cdot r_{g}/(2\kappa )$ | – |
+| $\mathrm{We}$ | Weber number (gas drag ÷ surface tension) | – |
 
-**Symbol clash fixed in v0.3:** v0.2 used `η` as "coupling efficiency" and in the oxidation sum.
-The literature uses `η` for different things (in one cutting model it is the *oxidised fraction*).
-v0.3 splits them into `η_abs` and `f_ox`.
+**Symbol clash fixed in v0.3:** v0.2 used $\eta$ as "coupling efficiency" and in the oxidation sum.
+The literature uses $\eta$ for different things (in one cutting model it is the *oxidised fraction*).
+v0.3 splits them into $\eta _abs$ and $f_{ox}$.
 
 ## Shapes at a glance
 
 | Plot | Shape | What it tells you |
 |---|---|---|
-| `v` vs `t` at fixed `P` | hyperbola | thicker → slower |
-| `v` vs `P` at fixed `t` | straight line through 0 | power buys speed proportionally |
-| `log v` vs `log t` | straight line, slope −1 | the same-energy line |
-| `S` vs `p` | island / lens | mirror window, bounded by striation and dross (T3) |
+| $v$ vs $t$ at fixed $P$ | hyperbola | thicker → slower |
+| $v$ vs $P$ at fixed $t$ | straight line through 0 | power buys speed proportionally |
+| $log v$ vs $log t$ | straight line, slope −1 | the same-energy line |
+| $S$ vs $p$ | island / lens | mirror window, bounded by striation and dross (T3) |
 | focus vs quality | parabola | best focus near minimum roughness/dross (T3) |
 
 ## Worked examples from the shop
 
-| Cut | Power | Speed | `t` | `S_beam` | Outcome |
+| Cut | Power | Speed | $t$ | $S_{beam}$ | Outcome |
 |---|---|---|---|---|---|
 | 150UB14 web, conservative | 25% = 3000 W | 2.0 m/min | 5 mm | **18.0** | good (shop label) |
 | 150UB14 web, mirror (slightly unstable) | 30% = 3600 W | 3.2 m/min | 5 mm | **13.5** | mirror, unstable (shop label) |
@@ -121,26 +124,32 @@ v0.3 splits them into `η_abs` and `f_ox`.
 | 10% test cut | 10% = 1200 W | 1.2 m/min | 6 mm | **10.0** | to be graded |
 
 These are **shop labels, not graded outcomes.** They become data only once re-cut and graded with
-the spec. The 13.5 cut shows that `S` alone does not separate mirror from unstable.
+the spec. The 13.5 cut shows that $S$ alone does not separate mirror from unstable.
 
 ## 1. Energy and the penetration boundary
 
-```
-S = 0.06 · P / (v · t)          [J/mm²]          (T1)
-v = 0.06 · P / (S · t)          [m/min]
-P = S · v · t / 0.06            [W]
-```
+$$
+S = 0.06\,\frac{P}{v\,t} \qquad [\mathrm{J/mm^{2}}]
+$$
 
-**No-cut boundary:** the cut needs `S ≥ S_min(t)`:
+$$
+v = 0.06\,\frac{P}{S\,t} \qquad [\mathrm{m/min}]
+$$
 
-```
-v ≤ 0.06 · P / (S_min(t) · t)
-```
+$$
+P = \frac{S\,v\,t}{0.06} \qquad [\mathrm{W}]
+$$
 
-**Shape:** a hyperbola in `(v, t)`; a straight line through the origin in `(v, P)` at fixed `t`;
-a straight line of slope −1 in `log v` vs `log t`. These follow from the algebra (T1).
+**No-cut boundary:** the cut needs $S \ge S_{\min}(t)$:
 
-**Fitting:** `S_min(t)` is empirical. Fit linear or power law (see §9).
+$$
+v \le 0.06\,\frac{P}{S_{\min}(t)\,t}
+$$
+
+**Shape:** a hyperbola in $(v, t)$; a straight line through the origin in $(v, P)$ at fixed $t$;
+a straight line of slope −1 in $log v$ vs $log t$. These follow from the algebra (T1).
+
+**Fitting:** $S_{\min}(t)$ is empirical. Fit linear or power law (see §9).
 
 ## 2. Oxidation energy (oxygen reaction)
 
@@ -148,14 +157,23 @@ The iron–oxygen reaction adds heat. Powell et al. (2009) give the Fe → FeO e
 **≈ 250 kJ/mol** between the melting and boiling points of iron, and about 600 kJ/mol above the
 boiling point (T1 for the number; T2 for applying it to a cut).
 
-Rate of iron removed from the kerf, and the power from oxidising a fraction `f_ox` of it:
+Rate of iron removed from the kerf, and the power from oxidising a fraction $f_{ox}$ of it:
 
-```
-ṁ_Fe  = ρ_Fe · v · t · w_k          [kg/s]     ρ_Fe = 7874 kg/m³
-P_ox  = f_ox · (ṁ_Fe / M_Fe) · ΔH_ox           M_Fe = 0.05584 kg/mol
-P_eff = η_abs · P + P_ox
-S_eff = 0.06 · P_eff / (v · t)
-```
+$$
+\dot m_{\mathrm{Fe}} = \rho_{\mathrm{Fe}}\,v\,t\,w_k
+$$
+
+$$
+P_{\mathrm{ox}} = f_{\mathrm{ox}}\,\frac{\dot m_{\mathrm{Fe}}}{M_{\mathrm{Fe}}}\,\Delta H_{\mathrm{ox}}
+$$
+
+$$
+P_{\mathrm{eff}} = \eta_{\mathrm{abs}}\,P + P_{\mathrm{ox}}
+$$
+
+$$
+S_{\mathrm{eff}} = 0.06\,\frac{P_{\mathrm{eff}}}{v\,t}
+$$
 
 **What the sources say, and what they do not:**
 
@@ -165,9 +183,9 @@ S_eff = 0.06 · P_eff / (v · t)
   contribution at **40–70%**, and one of those models used η = 50% **as the oxidised fraction**. So the
   "40–60%" figure in v0.2 mixed two quantities. Restated: the reported share of energy is
   roughly 40–70%, depending on source, speed and kerf (T2).
-- Our estimate (5 mm, 25% = 3000 W, `f_ox` = 0.5, `ρ_Fe` and `ΔH` from Powell, assumed kerf):
+- Our estimate (5 mm, 25% = 3000 W, $f_{ox}$ = 0.5, $\rho _Fe$ and $\Delta H$ from Powell, assumed kerf):
 
-| v (m/min) | kerf (mm) | P_ox (W) | P_ox ÷ P | `S_beam` | `S_eff` (η_abs = 1) |
+| v (m/min) | kerf (mm) | P_ox (W) | P_ox ÷ P | $S_{beam}$ | $S_{eff}$ (η_abs = 1) |
 |---|---|---|---|---|---|
 | 2.0 | 0.2 | 588 | 0.20 | 18.0 | 21.5 |
 | 2.0 | 0.3 | 881 | 0.29 | 18.0 | 23.3 |
@@ -175,68 +193,79 @@ S_eff = 0.06 · P_eff / (v · t)
 | 3.6 | 0.3 | 1586 | 0.53 | 10.0 | 15.3 |
 
 Read this as: oxidation is a **significant, speed-dependent** term, and its share moves with kerf
-width and `f_ox`, both of which we do not measure. A fixed "40–60%" is not a constant. The
-kerf and `f_ox` values here are assumptions, so the table is an illustration, not a result (T2).
+width and $f_{ox}$, both of which we do not measure. A fixed "40–60%" is not a constant. The
+kerf and $f_{ox}$ values here are assumptions, so the table is an illustration, not a result (T2).
 
-**Shape:** the apparent `S_min` falls as the oxidation share grows with thickness and oxygen supply.
+**Shape:** the apparent $S_{min}$ falls as the oxidation share grows with thickness and oxygen supply.
 
 ## 3. Power density and focus
 
-```
-I = 4 · P / (π · d_f²)                          [W/mm²]
-d(z) = d_f · √(1 + ((z − z₀) / z_R)²)
-z_R  = π · w₀² / (M² · λ)                       // w₀ = d_f / 2, same length unit as λ
-     = π · d_f² / (4 · M² · λ)
-```
+$$
+I = \frac{4P}{\pi d_f^{2}} \qquad [\mathrm{W/mm^{2}}]
+$$
+
+$$
+d(z) = d_f\sqrt{1 + \left(\frac{z - z_0}{z_R}\right)^{2}}
+$$
+
+$$
+z_R = \frac{\pi w_0^{2}}{M^{2}\lambda} = \frac{\pi d_f^{2}}{4M^{2}\lambda}, \qquad w_0 = \frac{d_f}{2}
+$$
 
 - **Verified (T1):** the Rayleigh range with M² and the waist radius is the standard Gaussian
-  result (RP Photonics; Kogelnik & Li 1966; ISO 11146 for M²). The `π·d_f²/(4·M²·λ)` form is
-  exact when `d_f` is the **waist diameter** and λ is in the same unit.
-- **Correction (v0.3):** `I = 4P/(πd²)` is the **mean** intensity over the 1/e² diameter. The
-  **peak** is `I₀ = 8P/(πd²)`, twice as large. Label every plot with which one is used.
+  result (RP Photonics; Kogelnik & Li 1966; ISO 11146 for M²). The $\pi \cdot d_{f}^2/(4\cdot M^2\cdot \lambda )$ form is
+  exact when $d_{f}$ is the **waist diameter** and λ is in the same unit.
+- **Correction (v0.3):** $I = 4P/(\pi d^2)$ is the **mean** intensity over the 1/e² diameter. The
+  **peak** is $I_{0} = 8P/(\pi d^2)$, twice as large. Label every plot with which one is used.
 - Diameter definition matters: 1/e² and D4σ agree for an ideal Gaussian and disagree for real
   beams. State which we use.
 
-Use the **normalised focus** `f / d_f` rather than raw millimetres when comparing optics.
+Use the **normalised focus** $f / d_{f}$ rather than raw millimetres when comparing optics.
 
-**Shape:** `I` peaks at the waist and falls as a hyperbola either side. Quality against focus is a
+**Shape:** $I$ peaks at the waist and falls as a hyperbola either side. Quality against focus is a
 parabola with a minimum near the optimum (T3).
 
 ## 4. Striation-free / mirror boundary (semi-empirical, T3)
 
 No universal closed form. The usual fitted form is a power law:
 
-```
-v_crit = C · (P / t)^a · p^b · (f / d_f)^c
-log v_crit = log C + a·log(P / t) + b·log p + c·log(f / d_f)
-```
+$$
+v_{\mathrm{crit}} = C\left(\frac{P}{t}\right)^{a} p^{b}\left(\frac{f}{d_f}\right)^{c}
+$$
+
+$$
+\log v_{\mathrm{crit}} = \log C + a\log\frac{P}{t} + b\log p + c\log\frac{f}{d_f}
+$$
 
 - Context (T2): a review of thin-sheet mild steel O₂ cutting reports striation appearing at low
   speed and disappearing ("steady cutting") above a critical speed, quoted as about 2 m/min for
   thin sections. Our thick-section speeds (2–4 m/min) sit near or above that, so the trend is
   consistent. It is not a calibration for our 5–25 mm sections.
-- The **mirror window** is `v_crit ≤ v ≤ v_dross`. Below `v_crit`, striation. Above `v_dross`,
-  dross. On an `(S, p)` plot this is a **closed island** if both bounds are real.
+- The **mirror window** is $v_{\mathrm{crit}} \le v \le v_{\mathrm{dross}}$. Below $v_{crit}$, striation. Above $v_{dross}$,
+  dross. On an $(S, p)$ plot this is a **closed island** if both bounds are real.
 - **Source check:** the primary paper, Sobih, Crouse & Li (2007), was **not accessible** (bot
   check). Its critical-speed model is unverified. Its scope is EN43, **1–2 mm**, **1 kW fibre**.
   It is not a source for 5–25 mm sections at 12 kW.
 
 ## 5. Dross / ejection boundary (semi-empirical, T2/T3)
 
-```
-We = ρ_g · v_g² · δ / γ
-```
+$$
+We = \frac{\rho_g\, v_g^{2}\,\delta}{\gamma}
+$$
 
-`δ` is not measured, so `We` cannot be computed from our logs. Use `p` and `v` as observable proxies
+$\delta$ is not measured, so `We` cannot be computed from our logs. Use $p$ and $v$ as observable proxies
 and treat `We` as a hypothesis.
 
 Dross-free cutting needs enough gas momentum and pressure. Too much oxygen over-drives the
 oxidation and causes striation and side burning. The boundary is commonly fitted as:
 
-```
-v_dross = C · (P / t)^a · p^b          (T3 fit template)
-p_min(v, t) … p_max(v, t)
-```
+$$
+v_{\mathrm{dross}} = C\left(\frac{P}{t}\right)^{a} p^{b} \qquad \text{(T3 fit template)}
+$$
+
+$$
+p_{\min}(v,t) \ \ldots\ p_{\max}(v,t)
+$$
 
 **Pressure reference (T2, checked):**
 
@@ -251,14 +280,14 @@ Our 0.6–0.7 bar is inside the wide literature range, but it is **below Powell'
 sections**. The shop value is also ambiguous: gauge or absolute is not stated. Confirm which, and
 measure it at the head (see §11).
 
-**Shape:** a lens or ellipse in `(v, p)`: dross at low speed or low pressure, and again at excessive
+**Shape:** a lens or ellipse in $(v, p)$: dross at low speed or low pressure, and again at excessive
 speed.
 
 ## 6. Oxygen purity
 
-```
-v ∝ X_O2^n      (form is a T3 fit template; the steepness is what matters)
-```
+$$
+v \propto X_{\mathrm{O_2}}^{\,n} \qquad \text{(T3 fit template)}
+$$
 
 **What the source says:** Powell et al. (2009), citing Ivarson et al. (1993) and Powell et al.
 (1992), report that **cut speed falls by 50% or more when O₂ purity drops by 3%**. Their data are
@@ -276,11 +305,11 @@ removed.) I have not found a fibre-laser purity curve, so the fibre sensitivity 
 - **12-pack:** 124.0 m³ at 101.325 kPa, 15 °C; 600 L water capacity per pack (Supagas sheet).
   Pack pressure is not on the sheet we read. From 124 m³ and 600 L, the fill pressure is roughly
   200 bar absolute (T2 estimate, not from the sheet).
-- **Run-time per pack:** `124 m³ ÷ Q`, where `Q` is the flow at the head. `Q` depends on pressure and
-  nozzle, and we have not measured it. Measure `Q` (or the pack-pressure drop per shift) before
+- **Run-time per pack:** $124 m^3 ÷ Q$, where $Q$ is the flow at the head. $Q$ depends on pressure and
+  nozzle, and we have not measured it. Measure $Q$ (or the pack-pressure drop per shift) before
   quoting run-time.
 - **Grade purchased: Industrial, >99.5% (decided, shop policy: cheapest grade).** Nominal
-  `X_O2` = 0.995 for every row unless the batch certificate says otherwise.
+  $X_{O2}$ = 0.995 for every row unless the batch certificate says otherwise.
 - **Purity is not a test variable for us.** We cannot buy HP, so we do not need an HP-vs-industrial
   series. Record the certified purity per pack anyway (`gas_purity_pct`), because a bad batch
   changes speed.
@@ -289,11 +318,11 @@ removed.) I have not found a fibre-laser purity curve, so the fibre sensitivity 
 
 ## 7. Kerf
 
-```
-w_k ≈ d_f + 2 · t · tan(α)
-```
+$$
+w_k \approx d_f + 2\,t\,\tan\alpha
+$$
 
-`α` is the taper angle. It changes with speed, focus and pressure, and can change sign as the
+$\alpha$ is the taper angle. It changes with speed, focus and pressure, and can change sign as the
 focus passes through the thickness. The formula is a geometric approximation (T2).
 
 ## 8. Dimensionless groups
@@ -301,14 +330,14 @@ focus passes through the thickness. The formula is a geometric approximation (T2
 **Péclet number (corrected in v0.3).** For a moving Gaussian source, the standard form uses the
 beam radius (Manca et al. 2007 COMSOL proceedings; arXiv 2202.06501):
 
-```
-Pe = v · r_g / (2κ)          r_g = d_f / 2
-```
+$$
+\mathrm{Pe} = \frac{v\,r_g}{2\kappa}, \qquad r_g = \frac{d_f}{2}
+$$
 
-v0.2 used `v·d_f/κ` (wrong factor and sometimes the wrong length). v0.2's `v·t/κ` is **not** the
-standard definition. Thickness belongs in a separate ratio, the aspect ratio `t / w_k`, if we use one.
+v0.2 used $v\cdot d_{f}/\kappa $ (wrong factor and sometimes the wrong length). v0.2's $v\cdot t/\kappa $ is **not** the
+standard definition. Thickness belongs in a separate ratio, the aspect ratio $t / w_{k}$, if we use one.
 
-Worked check (T2): with κ ≈ 5.9 mm²/s and a 0.2 mm spot (`r_g` = 0.1 mm):
+Worked check (T2): with κ ≈ 5.9 mm²/s and a 0.2 mm spot ($r_{g}$ = 0.1 mm):
 
 | v (m/min) | Pe |
 |---|---|
@@ -318,10 +347,13 @@ Worked check (T2): with κ ≈ 5.9 mm²/s and a 0.2 mm spot (`r_g` = 0.1 mm):
 So in our speed range, Pe is below about 1 for a 0.2 mm spot. Whether Pe is the right collapse
 variable for cutting is a hypothesis (T3). Test it, do not assume it.
 
-```
-Φ( S, Pe, We, f/d_f, h/d_n, X_O2 ) = 0       (T3 hypothesis)
-We = ρ_g · v_g² · δ / γ                       (δ unmeasured)
-```
+$$
+\Phi\left(S,\ \mathrm{Pe},\ \mathrm{We},\ \tfrac{f}{d_f},\ \tfrac{h}{d_n},\ X_{\mathrm{O_2}}\right) = 0 \qquad \text{(T3 hypothesis)}
+$$
+
+$$
+\mathrm{We} = \frac{\rho_g\, v_g^{2}\,\delta}{\gamma} \qquad (\delta\ \text{unmeasured})
+$$
 
 If the groups match, the shape of the map should repeat across sections and machines (T3). The
 coefficients still move with optics, nozzle and material.
@@ -329,44 +361,44 @@ coefficients still move with optics, nozzle and material.
 ## 9. Fitting recipe
 
 1. Fix optics, nozzle, gas and material. Record them on every row.
-2. Log each sample as per `docs/cut-regime-data-spec.md`: section, feature, face, `t`, `P`, `v`,
-   `f`, `p` (with gauge/absolute), `h`, `d_n`, gas grade and purity, `S_beam`, outcome codes.
+2. Log each sample as per `docs/cut-regime-data-spec.md`: section, feature, face, $t$, $P$, $v$,
+   $f$, $p$ (with gauge/absolute), $h$, $d_{n}$, gas grade and purity, $S_{beam}$, outcome codes.
 3. Outcome codes: `through_code` N0–N3, plus edge grades (`striation` per zone, `mirror_flag`,
    `dross_grade`). Do not use one "mirror / striated / dross" label.
-4. Penetration: fit `S_min(t)` from N0 vs N1 (linear or power law).
+4. Penetration: fit $S_{\min}(t)$ from N0 vs N1 (linear or power law).
 5. Separation: N2 vs N3 gives the separation boundary, separate from penetration.
-6. Mirror: logistic regression on `log S`, `log p`, `f/d_f` for the mirror flag. The 0.5 contour is
+6. Mirror: logistic regression on $log S$, $log p$, $f/d_{f}$ for the mirror flag. The 0.5 contour is
    the boundary. Needs about 30+ points per class, not 10–15.
-7. Dross: fit upper and lower branches in `(v, p)`.
+7. Dross: fit upper and lower branches in $(v, p)$.
 8. Do not extrapolate outside the tested window.
 
 ## 10. Trust tiers and fact-check
 
 | Item | Tier | Status / note |
 |---|---|---|
-| `S = 0.06·P/(v·t)` unit conversion | T1 | Exact: 1 m/min = 1000/60 mm/s. |
-| Rayleigh `z_R = πw₀²/(M²λ)`; `d(z)` | T1 | Standard Gaussian result; RP Photonics, Kogelnik & Li 1966. |
-| `I = 4P/(πd²)` | T1 | Mean over 1/e² diameter; **peak is 2×**. Label which. |
-| Penetration / no-cut boundary | T1 | Energy balance; only `S_min(t)` is empirical. |
+| $S = 0.06\cdot P/(v\cdot t)$ unit conversion | T1 | Exact: 1 m/min = 1000/60 mm/s. |
+| Rayleigh $z_{R} = \pi w_{0}^2/(M^2\lambda )$; `d(z)` | T1 | Standard Gaussian result; RP Photonics, Kogelnik & Li 1966. |
+| $I = 4P/(\pi d^2)$ | T1 | Mean over 1/e² diameter; **peak is 2×**. Label which. |
+| Penetration / no-cut boundary | T1 | Energy balance; only $S_{\min}(t)$ is empirical. |
 | Fe → FeO enthalpy ≈ 250 kJ/mol | T1 | Powell et al. (2009), Guideline 5. |
-| Oxidation share of energy 40–70% | T2 | Secondary citation (KEM 442.81). Not one number; kerf and `f_ox` dependent. |
+| Oxidation share of energy 40–70% | T2 | Secondary citation (KEM 442.81). Not one number; kerf and $f_{ox}$ dependent. |
 | "Half the iron oxidised" | T2 | Powell (2009), CO₂ typical sample. Fraction of iron, not energy. |
 | Purity: −3% → speed −50% | T2 | Powell (2009), citing 1992/1993 work. CO₂. |
-| Pe = `v·r_g/(2κ)` | T2 | Moving Gaussian-source definition (Manca 2007; arXiv 2202.06501). Not cutting-specific. |
-| Pe with thickness (v0.2 `v·t/κ`) | **removed** | Not a standard definition. |
-| `We` (dross) | T2 | Standard Weber number; `δ` unmeasured. |
-| Striation-free law and `v_crit` | T3 | Sobih et al. (2007) not accessible; scope 1–2 mm, 1 kW. |
-| `v_dross` power law | T3 | Generic fit; calibrate on the machine. |
-| Dimensionless collapse `Φ = 0` | T3 | Hypothesis. |
-| `S` = 4–13 J/mm² for MS + O₂ | T2 | Published range, not verified against a primary source. |
+| Pe = $v\cdot r_{g}/(2\kappa )$ | T2 | Moving Gaussian-source definition (Manca 2007; arXiv 2202.06501). Not cutting-specific. |
+| Pe with thickness (v0.2 $v\cdot t/\kappa $) | **removed** | Not a standard definition. |
+| `We` (dross) | T2 | Standard Weber number; $\delta$ unmeasured. |
+| Striation-free law and $v_{crit}$ | T3 | Sobih et al. (2007) not accessible; scope 1–2 mm, 1 kW. |
+| $v_{dross}$ power law | T3 | Generic fit; calibrate on the machine. |
+| Dimensionless collapse $\Phi  = 0$ | T3 | Hypothesis. |
+| $S$ = 4–13 J/mm² for MS + O₂ | T2 | Published range, not verified against a primary source. |
 | Shop good cuts 13–18 J/mm² | T3 | Small local dataset, not graded. |
 | Focus sign: `cutParams.ts` table is `+` (above surface); shop practice is **below** surface | **open, likely table error** | Practice and one fibre source (`−7` below, 15 mm) agree. See §11. |
 | O₂ pressure 0.6–0.7 bar | T2 | In literature range; gauge/absolute unknown; below Powell's thick-section value. |
 | Purity sensitivity | T2 | See above. |
 | Nozzle / surface rules | T1 (shop) | Shop practice, not literature. |
-| `r/min = v/(2πR)` | T2 | Formula exact; `R` depends on the calibrated B-axis and eccentric. |
+| $r/min = v/(2\pi R)$ | T2 | Formula exact; $R$ depends on the calibrated B-axis and eccentric. |
 | "Flat plate" caveat | T1 | Confirmed scope of the published maps. |
-| Calibrate `% → kW` | T1 | Must be measured; non-linearity shifts every `S`. |
+| Calibrate $% \to  kW$ | T1 | Must be measured; non-linearity shifts every $S$. |
 | Mirror Rz threshold | TBD | Set from the calibration set (spec §11), not from literature. |
 
 ## 11. Beam-section caveats and machine facts
@@ -374,7 +406,7 @@ coefficients still move with optics, nozzle and material.
 - The published maps are **flat plate and mostly CO₂**. A beam web is a recessed channel with
   different gas escape and height-sensor behaviour. Fibre and CO₂ may differ in absorption and in
   the oxidation share; we have not verified the size of that difference.
-- Treat **external wall** and **recessed web** as separate series (an access factor on `S` or on
+- Treat **external wall** and **recessed web** as separate series (an access factor on $S$ or on
   `We`), not one curve.
 - **Focus sign (shop practice confirmed by the user, v0.4).** The operator runs focus **below the
   top surface**, inside the material or past it. The data spec uses physical sign: **negative =
@@ -394,9 +426,9 @@ coefficients still move with optics, nozzle and material.
   DA output, so pressure needs a DA-to-bar calibration. The repo's controller name is Weihong
   WiseCAM/NcStudio, and the manual is FSCUT TubePro. **Confirm which controller is on the machine.**
   **Action:** photograph the laser source nameplate and the controller model plate.
-- Calibrate the controller's `% → kW`. If it is non-linear, every `S` value shifts.
+- Calibrate the controller's $% \to  kW$. If it is non-linear, every $S$ value shifts.
 - The rotary axis is the calibrated B-axis centre, not necessarily the section centroid. The
-  eccentric offset changes the radius used for `r/min`.
+  eccentric offset changes the radius used for $r/min$.
 - **Corners and curves are separate feature classes** (spec §8).
 - **Pressure unit (v0.4).** The shop states pressure in **bar**. Gauge or absolute is still not
   stated, and the TubePro gas page reads actual pressure from a DA output, so calibrate DA → bar at
@@ -405,11 +437,11 @@ coefficients still move with optics, nozzle and material.
 ## 12. Map views (proposed)
 
 All maps are **planned, not built.** They need data first. Each map is for one series and states
-its `S` basis and its pressure basis (gauge or absolute).
+its $S$ basis and its pressure basis (gauge or absolute).
 
-### 12.1 Operating map — `v` vs `P` at fixed `t` (primary)
+### 12.1 Operating map — $v$ vs $P$ at fixed $t$ (primary)
 
-The map an operator uses. Lines of constant `S` are straight lines through the origin.
+The map an operator uses. Lines of constant $S$ are straight lines through the origin.
 
 ```
 P (W)
@@ -425,12 +457,12 @@ P (W)
        0      1      2      3      4      5      6
 ```
 
-- Hard boundary: the N0/N1 line through the origin (T1 energy balance, with `S_min` fitted).
-- Second boundary: the N3/N2 line, same shape, higher `S`.
+- Hard boundary: the N0/N1 line through the origin (T1 energy balance, with $S_{min}$ fitted).
+- Second boundary: the N3/N2 line, same shape, higher $S$.
 - Overlay quality classes as markers (S0–S3, dross, mirror).
-- Operator view: pick a constant-`S` line and move along it.
+- Operator view: pick a constant-$S$ line and move along it.
 
-### 12.2 Quality map — `v` vs `p` at fixed `P` and `t` (T3 shape)
+### 12.2 Quality map — $v$ vs $p$ at fixed $P$ and $t$ (T3 shape)
 
 Shows the mirror island and its limits. Needs the most data.
 
@@ -451,9 +483,9 @@ p (bar)
 - The mirror cell is only defined when `S0` holds in all three zones and `Rz` is under the
   calibrated threshold.
 
-### 12.3 Contour map — quality as contour bands in `(S, p)`
+### 12.3 Contour map — quality as contour bands in $(S, p)$
 
-Collapses `P`, `v`, `t` into `S`. Tests the "one number" claim.
+Collapses $P$, $v$, $t$ into $S$. Tests the "one number" claim.
 
 ```
 p (bar)
@@ -466,9 +498,9 @@ p (bar)
         S_min   10   13   18   25
 ```
 
-- Test whether the mirror island collapses onto one `S` band across thicknesses. If not,
-  oxidation share, `Pe` or `t` matter separately.
-- Only valid if `S` is `S_beam` for the whole plot.
+- Test whether the mirror island collapses onto one $S$ band across thicknesses. If not,
+  oxidation share, `Pe` or $t$ matter separately.
+- Only valid if $S$ is $S_{beam}$ for the whole plot.
 
 ### 12.4 Zone map — quality by depth
 
@@ -483,12 +515,12 @@ bot   ▓░░░░░░░░░   ...
 
 - Shows where striation starts and how it develops. A cut that is mirror only at the top is not a
   mirror cut.
-- Small multiples: one panel per `(v, P)` setting, so the operator sees how zones change along a
+- Small multiples: one panel per $(v, P)$ setting, so the operator sees how zones change along a
   speed line.
 
 ### 12.5 Focus and pressure — small multiples (T3)
 
-Focus against quality, one panel per pressure. The parabola's minimum should move with `t`. Needs
+Focus against quality, one panel per pressure. The parabola's minimum should move with $t$. Needs
 focus varied in the series, which the pilot does not do.
 
 ### 12.6 Feature and access split
@@ -498,7 +530,7 @@ Separate maps for each feature class (`straight`, `curve`, `corner`) and face (`
 
 ### 12.7 Build order
 
-1. **12.1 operating map** — needs only N0/N1/N3 and `S`.
+1. **12.1 operating map** — needs only N0/N1/N3 and $S$.
 2. **12.4 zone map** — needs three-zone striation grades (the spec records these).
 3. **12.2 quality map** — needs about 30+ points per class and a calibrated mirror threshold.
 4. **12.3 contour test** — only after 12.1 and 12.2 exist.
@@ -507,10 +539,10 @@ Separate maps for each feature class (`straight`, `curve`, `corner`) and face (`
 
 | Version | Change |
 |---|---|
-| v0.1 | Initial draft. Mirror/striated/dross labels; Pe with `d_f`; `S` defined per kerf area. |
-| v0.2 | Outcome codes N0–N3 and edge grades. `S` as per cut-face area. Pe changed to `v·t/κ`. `S_beam` vs `S_eff` rule. Map views added. |
+| v0.1 | Initial draft. Mirror/striated/dross labels; Pe with $d_{f}$; $S$ defined per kerf area. |
+| v0.2 | Outcome codes N0–N3 and edge grades. $S$ as per cut-face area. Pe changed to $v\cdot t/\kappa $. $S_{beam}$ vs $S_{eff}$ rule. Map views added. |
 | v0.4 | Gas grade fixed to Industrial (>99.5%, shop policy). Purity removed as a test variable. Focus practice recorded as below surface (negative); `cutParams.ts` sign flagged as likely wrong. Pressure stated in bar, gauge/absolute open. Machine documentation status corrected (envelope documented; power, gas and focus not). TubePro manual checked. |
-| v0.3 | **Source check.** Pe restored to the moving-source form `v·r_g/(2κ)`; v0.2 `v·t/κ` removed. Purity claim changed from "1.25% halved speed" to Powell's "−3% → −50%" (CO₂). Oxidation section rewritten: "half the iron" ≠ "40–60% of energy"; ΔH ≈ 250 kJ/mol added; `η` split into `η_abs` and `f_ox`; estimate table added. `I` labelled as mean; peak = 2×. Pressure compared with literature; gauge/absolute flagged. Focus-sign conflict flagged. Supagas 12-pack data added. Machine-documentation gap recorded. |
+| v0.3 | **Source check.** Pe restored to the moving-source form $v\cdot r_{g}/(2\kappa )$; v0.2 $v\cdot t/\kappa $ removed. Purity claim changed from "1.25% halved speed" to Powell's "−3% → −50%" (CO₂). Oxidation section rewritten: "half the iron" ≠ "40–60% of energy"; ΔH ≈ 250 kJ/mol added; $\eta$ split into $\eta _abs$ and $f_{ox}$; estimate table added. $I$ labelled as mean; peak = 2×. Pressure compared with literature; gauge/absolute flagged. Focus-sign conflict flagged. Supagas 12-pack data added. Machine-documentation gap recorded. |
 
 ## 14. Sources and verification status
 
@@ -523,8 +555,8 @@ Separate maps for each feature class (`straight`, `curve`, `corner`) and face (`
 | Genna, Menna, Rubino, Tagliaferri, *Appl. Sci.* 10 (2020) 4956. DOI 10.3390/app10144956 | O₂ pressure 0.2–0.6 bar (CO₂) | Verified (abstract/excerpt). Full text not read. |
 | KEM 442.81 (2010), *Role of Combustion Energy in Laser Cutting of Austenitic Stainless Steel* | 40–70% combustion share; η = 50% as oxidised fraction | Excerpt only; secondary for the 40–70% range. |
 | Laser Focus World (2010), *Cutting thick section steel with fiber lasers* | Fibre thick mild steel: 1.0 bar O₂, focus −7 mm | Excerpt only. Different machine. |
-| Manca et al., COMSOL Users Conference (2007); arXiv 2202.06501 | Pe = `v·a/(2κ)` for moving Gaussian source | Excerpt only. |
-| RP Photonics, *Rayleigh length*; Kogelnik & Li (1966); ISO 11146 | `z_R = πw₀²/(M²λ)`; M² definition | Verified (excerpt). |
+| Manca et al., COMSOL Users Conference (2007); arXiv 2202.06501 | Pe = $v\cdot a/(2\kappa )$ for moving Gaussian source | Excerpt only. |
+| RP Photonics, *Rayleigh length*; Kogelnik & Li (1966); ISO 11146 | $z_{R} = \pi w_{0}^2/(M^2\lambda )$; M² definition | Verified (excerpt). |
 | Columbia NSF workshop, *Thermal aspects in laser materials processing* | Striation vs cutting speed ("steady cutting" above ~2 m/min, thin CO₂) | Excerpt only. |
 | Chen & Yao (2000), *High Temp. Material Processes* 4, 227 | Reaction energy ≈ half at low speed | Excerpt only. |
 | Ivarson et al. (1993); Powell et al. (1992) | Purity effect | Cited inside Powell (2009); not read directly. |
