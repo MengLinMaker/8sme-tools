@@ -153,9 +153,9 @@ Run in random order. Tick when done.
 
 ```
 [ ] Sheet 0 complete; TBD fields filled (optics, nozzle, gas, focus, standoff, gas p)
-[ ] % -> kW confirmed (measure, do not assume 25% = 3000 W)
+[ ] $\%$ $\rightarrow$ kW confirmed (measure, do not assume 25% = 3000 W)
 [ ] t_meas measured on the part, not catalogue
-[ ] Sample length >= 40 mm, window clear of corners, holes and fillets
+[ ] Sample length $\ge 40$ mm, window clear of corners, holes and fillets
 [ ] Run order randomised: ____________________________________
 [ ] R01  [ ] R02  [ ] R03  [ ] R04  [ ] R05  [ ] R06 (centre)  [ ] R07  [ ] R08 (centre)  [ ] R09 (centre)
 [ ] Each cut graded blind on Sheet 2 by two graders for at least the centre points

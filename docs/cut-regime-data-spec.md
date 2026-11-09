@@ -4,7 +4,7 @@ Companion to `docs/cut-regime-models.md` (equations and trust tiers). This file 
 **what we record and what each label means**, so that every run is comparable and the maps
 can be built from it. Data lives in `data/cut-regime/runs.csv`.
 
-Status: **draft v0.1** (2026-11-09). Thresholds marked `TBD` are set from a calibration set,
+Status: **v0.4** (2026-11-09). Thresholds marked `TBD` are set from a calibration set,
 not guessed. Change a definition only by editing this file and noting the change in §12.
 
 ---
@@ -35,8 +35,8 @@ separate feature classes (§7, §8) and are never averaged into straight-line da
 | Gas pressure `gas_p_bar` | bar | At the head. **State gauge (barg) or absolute (bar abs)** in the series header. Shop values are unstated; see models §5. |
 | Focus `focus_f_mm` | mm | Physical: **negative = below the top surface** (shop practice: inside or past the material), positive = above. The controller/CAM value is recorded separately in `cam_focus_mm`. |
 | Standoff `standoff_h_mm` | mm | Nozzle tip to surface. |
-| Energy `S_beam` | J/mm² | `0.06 × P_W / (v_m_min × t_mm)`. **Beam-only** — default S. |
-| Energy `S_eff` | J/mm² | Only if oxidation energy is estimated (models §2: `P_eff = η_abs·P + P_ox`). Leave blank otherwise. |
+| Energy $S_{\mathrm{beam}}$ | J/mm² | $S_{\mathrm{beam}} = 0.06\,\dfrac{P_W}{v_{\mathrm{m/min}}\,t_{\mathrm{mm}}}$. **Beam-only** — default $S$. |
+| Energy $S_{\mathrm{eff}}$ | J/mm² | Only if oxidation energy is estimated (models §2: $P_{\mathrm{eff}} = \eta_{\mathrm{abs}}P + P_{\mathrm{ox}}$). Leave blank otherwise. |
 
 **Rule:** every table, plot and comparison states whether S is `S_beam` or `S_eff`.
 Default is `S_beam`.
@@ -132,12 +132,12 @@ Visual, under **10×** magnification with raking light.
 | `S2` | Lines visible in normal light. |
 | `S3` | Deep, coarse striation, clearly visible. |
 
-Also record, for `S2`/`S3` only, **striation pitch** (mm, perpendicular to beam, mean of ≥5
+Also record, for `S2`/`S3` only, **striation pitch** (mm, perpendicular to beam, mean of $\ge 5$
 lines) and **depth** (`rz_<zone>_um`, measured on the edge profile or by comparator
 gauge where a profilometer is not available).
 
 ### 6.3 Mirror
-**Mirror** = `S0` in **all three zones** **and** `rz` ≤ `TBD` in all zones.
+**Mirror** = $S0$ in **all three zones** **and** $rz \le \text{TBD}$ in all zones.
 `TBD` is set from the calibration set (§11) — do not fill it in from a published number.
 
 `mirror_flag` = 1 only if both conditions hold. `mirror_flag` = 0 otherwise.
