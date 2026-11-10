@@ -190,7 +190,11 @@ function parseHeader(lines: string[]): DstvHeader {
   const mark =
     [tokens[1], tokens[2]].find(looksLikeMark) ??
     tokens.find((token, index) => index > 0 && looksLikeMark(token))
-  const grade = tokens.find((t) => /^[A-Z]\d{2,3}$/.test(t))
+  // Grade is field 5 in the fixed DSTV header, but Tekla sometimes inserts drawing/phase fields
+  // first. Accepted forms include `C350` and digit-leading `300PLUS`/`S355JR`.
+  const isGrade = (token: string | undefined): boolean =>
+    token != null && /^(?:[A-Z]\d{2,4}[A-Z0-9]*|\d{2,4}[A-Z][A-Z0-9]*)$/.test(token)
+  const grade = isGrade(tokens[4]) ? tokens[4] : tokens.find(isGrade)
   const gradeIndex = grade ? tokens.indexOf(grade) : -1
   const quantityToken = gradeIndex >= 0 ? tokens[gradeIndex + 1] : undefined
   const quantity = quantityToken && /^\d+$/.test(quantityToken) ? Number(quantityToken) : undefined

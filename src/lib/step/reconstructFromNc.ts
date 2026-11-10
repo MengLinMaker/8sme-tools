@@ -348,6 +348,35 @@ export interface ReconstructOptions {
   sabreMesh?: { tolerance?: number; angularTolerance?: number }
 }
 
+/**
+ * Fitted radius for each edge's destination vertex, or 0 when the three points are straight or
+ * the circle is implausibly large. Section builders sample rounded corners into ~7 points; this
+ * keeps them as arcs in the STEP instead of chords.
+ */
+function sectionArcRadii(points: Pt[], maxRadius: number): number[] {
+  const n = points.length
+  const radii = new Array<number>(n).fill(0)
+  for (let i = 0; i < n; i++) {
+    const a = points[(i - 1 + n) % n]
+    const b = points[i]
+    const c = points[(i + 1) % n]
+    if (!a || !b || !c) continue
+    const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]))
+    if (Math.abs(d) < 1e-9) continue
+    const aa = a[0] ** 2 + a[1] ** 2
+    const bb = b[0] ** 2 + b[1] ** 2
+    const cc = c[0] ** 2 + c[1] ** 2
+    const cx = (aa * (b[1] - c[1]) + bb * (c[1] - a[1]) + cc * (a[1] - b[1])) / d
+    const cy = (aa * (c[0] - b[0]) + bb * (a[0] - c[0]) + cc * (b[0] - a[0])) / d
+    const radius = Math.hypot(b[0] - cx, b[1] - cy)
+    if (!(radius > 0.1 && radius <= maxRadius)) continue
+    // Match the sagitta direction used by `poly` with the contour's turn direction.
+    const cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+    radii[(i - 1 + n) % n] = cross >= 0 ? radius : -radius
+  }
+  return radii
+}
+
 export async function reconstructStepFromNc(
   ncText: string,
   options: ReconstructOptions = {},
@@ -378,7 +407,7 @@ export async function reconstructSolidFromNc(
   const section = canonicalSectionFlip ? { ...rawSection, points: authoredPoints } : rawSection
 
   await ensureOc()
-  const { draw, drawCircle, drawRoundedRectangle, Plane, compoundShapes } = await import('replicad')
+  const { draw, drawCircle, drawRoundedRectangle, Plane } = await import('replicad')
   const poly = (pts: Pt[], radii?: number[], mirrored = false) => {
     let pen = draw(pts[0])
     for (let i = 1; i < pts.length; i++) {
@@ -755,7 +784,10 @@ export async function reconstructSolidFromNc(
     return cuts
   }
   // Pure stock: cross-section in the (width=Y, depth=Z) plane, extruded along the member (X).
-  let solid = poly(section.points)
+  // The section builders return sampled points; passing fitted radii keeps root fillets/corner
+  // arcs as real arcs instead of chords, which matters for WiseCAM's standard-section matcher.
+  const sectionRadiusLimit = Math.max(1, header.dimensions[4] ?? 0) * 1.5
+  let solid = poly(section.points, sectionArcRadii(section.points, sectionRadiusLimit))
     .sketchOnPlane('YZ')
     .extrude(maxX + 20) as unknown as SolidOps
   const emit = async (name: string, shape: unknown): Promise<void> => {
@@ -1118,13 +1150,7 @@ export async function reconstructSolidFromNc(
       holeTools.push(cyl.translate(0, shift, 0) as unknown as SolidOps)
     }
   }
-  if (holeTools.length > 0) {
-    const holes =
-      holeTools.length === 1
-        ? holeTools[0]!
-        : (compoundShapes(holeTools as never) as unknown as SolidOps)
-    solid = solid.cut(holes)
-  }
+  for (const tool of holeTools) solid = solid.cut(tool)
 
   // NC booleans can leave floating slivers alongside the real body. Strip them on the
   // live shape — same rule as cleanStep, but with no STEP round trip — so orientation

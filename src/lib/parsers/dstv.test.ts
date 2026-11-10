@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fixture } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from './dstv'
 
@@ -56,6 +58,15 @@ describe('parseDstv', () => {
     expect(file.header.quantity).toBe(1)
     expect(file.header.length).toBeCloseTo(2920.71, 2)
     expect(file.header.dimensions.slice(0, 4)).toEqual([134, 103, 9.6, 6.3])
+  })
+
+  it('reads a digit-leading 300PLUS grade and quantity', () => {
+    const file = parseDstv(readFileSync(fixture('ncep', 'M_12.nc1'), 'utf8'))
+    expect(file.header.grade).toBe('300PLUS')
+    expect(file.header.quantity).toBe(1)
+    expect(file.header.profile).toBe('UB250*31')
+    expect(file.header.profileType).toBe('I')
+    expect(file.header.length).toBeCloseTo(5308.96, 2)
   })
 
   it('reads the 8 × Ø14 holes', () => {

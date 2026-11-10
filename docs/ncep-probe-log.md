@@ -1323,6 +1323,17 @@ its control. `real section` keeps the new trims, so a remaining shift is the sec
 M-39 `section arcs` is the collision-map check. Round 13's layer sweep is still untested;
 do not add more mark probes.
 
+## Manufactured STEP section fix (2026-11-10)
+
+- The NC→STEP section now uses fitted radii (`sagittaArcTo`) instead of chords for sampled
+  root/corner arcs. This made the M_12 UB STEP register as a standard `250UB31.4` section in
+  WiseCAM (confirmed).
+- PFC already worked because its root fillets are inside the channel cavity; UB root fillets are
+  on the outer I boundary.
+- Added `pnpm nc-to-step` (`tools/nc-to-step.mjs`) and an M_12 section-recognition regression test.
+- Overlapping `u`-face holes are cut sequentially; batching them in one OCC compound crashed.
+- Metadata/schema matrix was ruled out as the UB-recognition cause.
+
 ## Arc recovery fix and round 13 (2026-11-09)
 
 - Lowered the sampled-arc interior-angle cutoff from `1.9` to `1.0` and bounded recovered radii to

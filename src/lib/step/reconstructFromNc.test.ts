@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
-import { nw30Bottom, nw31Top, OUTPUT_DIR } from '@test/fixtures'
+import { fixture, nw30Bottom, nw31Top, OUTPUT_DIR } from '@test/fixtures'
 import {
   BufferGeometry,
   Float32BufferAttribute,
@@ -20,6 +20,7 @@ import { measureStep } from './measure'
 import { meshStepFile } from './mesh'
 import { alignedOverlap } from './occDiff'
 import { setOcWasmUrl } from './occInit'
+import { detectStepSection } from './readSection'
 import { reconstructSolidFromNc, reconstructStepFromNc } from './reconstructFromNc'
 import { CANONICAL_X_AXIS, CANONICAL_Y_AXIS, seatedPair, transformVertices } from './seat'
 
@@ -575,4 +576,20 @@ describe('reconstructFromNc — I-section cut arc side (synthetic)', () => {
     // A flipped arc puts the manufactured fillet ~2 × sagitta (~64 mm) off the NC line.
     expect(maxGap).toBeLessThan(2)
   }, 120000)
+})
+
+describe('manufactured section recognition', () => {
+  it.skipIf(!existsSync(fixture('ncep', 'M_12.nc1')))(
+    'rebuilds M_12 as a recognisable UB section, not a customs section',
+    async () => {
+      const step = await reconstructStepFromNc(readFileSync(fixture('ncep', 'M_12.nc1'), 'utf8'), {
+        sabre: false,
+      })
+      expect(step).not.toBeNull()
+      const guess = await detectStepSection(new TextEncoder().encode(step as string))
+      expect(guess?.code).toBe('250UB31.4')
+      expect(guess?.score).toBeGreaterThan(0.95)
+    },
+    120_000,
+  )
 })

@@ -68,6 +68,25 @@ If `09` works and `10` does not, AP203 is required. If `12` works alone, WiseCAM
 If none work, the remaining difference is the Tekla/SolidWorks product/assembly structure, not the
 section designation string.
 
+## Stock section arcs (implemented)
+
+The section builders return sampled points for rounded corners. `reconstructFromNc` previously
+drew those points with `lineTo`, so UB root fillets became **chords** in the manufactured STEP.
+WiseCAM's section matcher accepted the faceted section as "custom".
+
+`sectionArcRadii` now fits a radius to each sampled section vertex and `poly` uses
+`sagittaArcTo`, so root fillets and corner arcs remain **real arcs**. This is applied to every
+manufactured NC→STEP rebuild and is the fix that made the UB STEP register as a standard section.
+
+- PFC root fillets sit inside the channel cavity, which is why PFC STEPs already registered
+  correctly despite the same sampled-section path.
+- UB root fillets are on the outer I-section boundary, so chorded fillets changed the matched
+  profile.
+- Metadata/schema variants did not matter; the smooth stock section did.
+
+Regression test: `reconstructFromNc.test.ts` rebuilds `M_12` and asserts
+`detectStepSection` finds `250UB31.4` with score > 0.95.
+
 ## Open items
 
 - Confirm which matrix variant registers as UB.
