@@ -91,6 +91,14 @@ describe('markFromFilename', () => {
   it('leaves normal marks alone', () => {
     expect(markFromFilename('a1.nc1')).toBe('a1')
     expect(markFromFilename('M-1.nc1')).toBe('m-1')
+    expect(markFromFilename('3ub-1.nc1')).toBe('3ub-1')
+    expect(markFromFilename('3uc-100.nc1')).toBe('3uc-100')
+  })
+
+  it('keeps the distinguishing suffix of a mark', () => {
+    expect(markFromFilename('TR9-1.nc1')).toBe('tr9-1')
+    expect(markFromFilename('TR9-2.nc1')).toBe('tr9-2')
+    expect(markFromFilename('TR9-1  Shaft - UC (0).pdf')).toBe('tr9-1')
   })
 })
 
@@ -163,6 +171,34 @@ describe('auditEntries', () => {
     expect(result.parts[0]?.nc?.path).toBe('a1.nc1')
     expect(result.parts[0]?.step?.path).toBe('a1.stp')
     expect(result.parts[0]?.pdf?.path).toBe('a1 - ANGLE.pdf')
+  })
+
+  it('keeps hyphenated marks that share a prefix as separate parts', () => {
+    const result = auditEntries('job.zip', [
+      { path: 'IFC shaft NC/TR9-1.nc1', bytes: strToU8(makeNc('TR9-1', 1, 100)) },
+      { path: 'IFC shaft NC/TR9-2.nc1', bytes: strToU8(makeNc('TR9-2', 1, 200)) },
+      { path: 'IFC shafts PDF/TR9-1  Shaft - UC (0).pdf', bytes: PDF_BYTES },
+      { path: 'IFC shafts PDF/TR9-2  Shaft - UC (0).pdf', bytes: PDF_BYTES },
+    ])
+    expect(result.parts.map((part) => part.mark)).toEqual(['tr9-1', 'tr9-2'])
+    expect(result.parts.map((part) => part.nc?.length)).toEqual([100, 200])
+    expect(result.parts.map((part) => part.pdf?.path)).toEqual([
+      'IFC shafts PDF/TR9-1  Shaft - UC (0).pdf',
+      'IFC shafts PDF/TR9-2  Shaft - UC (0).pdf',
+    ])
+    expect(result.findings.some((finding) => finding.code === 'NC_MARK_MISMATCH')).toBe(false)
+  })
+
+  it('still folds duplicate copies of the same mark together', () => {
+    const result = auditEntries('job.zip', [
+      { path: 'IFC shaft NC/TR9-1.nc1', bytes: strToU8(makeNc('TR9-1', 1, 100)) },
+      { path: 'IFC-shaft-NC-selected/TR9-1.nc1', bytes: strToU8(makeNc('TR9-1', 1, 100)) },
+      { path: 'IFC shaft NC/TR9-2.nc1', bytes: strToU8(makeNc('TR9-2', 1, 200)) },
+    ])
+    expect(result.parts.map((part) => part.mark)).toEqual(['tr9-1', 'tr9-2'])
+    expect(result.parts.find((part) => part.mark === 'tr9-1')?.nc?.path).toBe(
+      'IFC shaft NC/TR9-1.nc1',
+    )
   })
 
   it('ignores slash/underscore differences in the NC internal mark', () => {

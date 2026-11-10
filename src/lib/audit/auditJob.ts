@@ -38,8 +38,10 @@ export function markFromFilename(path: string): string {
   const base = baseName(path)
     .replace(/\.[^.]+$/, '')
     .replace(/^[^A-Za-z0-9]+/, '')
-  const match = base.match(/^[A-Za-z]+\d+/)
-  return (match ? match[0] : base).toLowerCase()
+  // The whole first token is the mark; descriptions after it are not (`TR9-1  Shaft - UC (0).pdf`).
+  // Suffixes are part of the mark: `TR9-1` and `TR9-2` are different parts, so never truncate at `-`.
+  const token = base.split(/\s+/)[0]
+  return (token || base).toLowerCase()
 }
 
 /** Filenames cannot carry `/`, so Tekla substitutes `_`; the mark is still the same part. */
