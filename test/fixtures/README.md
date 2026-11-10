@@ -16,6 +16,7 @@ test/fixtures/
     NC files/
     STP files/
   hex-module-frames/           # J12095 HEX Module Frames (STEP-only, flat item<##>.stp)
+  chs/                         # J7347 18 m Leg Nest (circular hollow, 508.0 OD × 9.5)
 ```
 
 Marks included per job:
@@ -25,6 +26,7 @@ Marks included per job:
 - **nw31-top:** the 31 `BT100*15` Top-frame tees (m118…m232, see `cutBeam.nw31.test.ts`), plus
   a1 m24 m31 m41 m117 m124 m150 m154 m172 m173 m211
 - **hex-module-frames:** item10 (200UB25.4 mass-variant) item35 (rotated-member SHS75*75*6.0)
+- **chs:** `7347-18m-Leg-Nest-11980` — a 508.0 OD × 9.5 CHS leg (circular profile detection)
 
 To extend: drop `<mark>.nc1` and/or `<mark>.stp` into the matching folder, then add the mark to the
 suite that should use it. Whole-folder "scratch" scans (`scratch-skin-scan`, `scratch-bench-sabre`)

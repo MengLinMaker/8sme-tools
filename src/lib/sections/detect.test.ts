@@ -62,6 +62,18 @@ describe('inferSectionFromCross', () => {
     expect(detect('CHS100*6')?.code).toBe('CHS100*6.0')
   })
 
+  it('snaps a sampled circular hollow back to its nominal outside diameter', () => {
+    // A 508.0 OD slice samples as ~507.5; the callout must read the mill size.
+    const outer: [number, number][] = []
+    const inner: [number, number][] = []
+    for (let i = 0; i < 96; i++) {
+      const angle = (i / 96) * Math.PI * 2
+      outer.push([Math.cos(angle) * 253.75, Math.sin(angle) * 253.75])
+      inner.push([Math.cos(angle) * 244.25, Math.sin(angle) * 244.25])
+    }
+    expect(inferSectionFromCross({ outer, holes: [inner] })?.code).toBe('CHS508*9.5')
+  })
+
   it('rounds a reconstructed hollow callout (no float noise)', () => {
     // A sampled 75 mm square carries ~1e-9 bbox noise — the callout must read clean.
     const noisy: [number, number][] = [

@@ -1,4 +1,5 @@
 import { angleDesignation, EQUAL_ANGLES, UNEQUAL_ANGLES } from './angle'
+import { snapChsOutsideDiameter } from './chs'
 import { PFC_SECTIONS } from './pfc'
 import { partSectionForCode, sectionMassPerMetre } from './stock'
 import { TFB_SECTIONS } from './tfb'
@@ -321,7 +322,8 @@ function detectHollow(measured: MeasuredSection, outerArea: number): SectionGues
   let family: string
   if (circular) {
     family = 'chs'
-    code = `CHS${dimText(long)}*${t}`
+    // Snap the sampled diameter back to the mill's nominal OD (508.0, not 507.5).
+    code = `CHS${dimText(snapChsOutsideDiameter(long))}*${t}`
   } else if (long - short <= Math.max(DIM_ABS_TOL, long * DIM_REL_TOL)) {
     family = 'shs'
     code = `SHS${dimText(long)}*${dimText(short)}*${t}`

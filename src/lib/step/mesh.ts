@@ -48,7 +48,7 @@ interface WireLike {
 
 interface FaceLike {
   geomType: string
-  normalAt(location?: VectorLike): VectorLike
+  normalAt(location?: [number, number, number]): VectorLike
   clone(): FaceLike
   outerWire(): WireLike
   innerWires(): WireLike[]
@@ -166,11 +166,9 @@ function sampleEdge(edge: EdgeLike): number[] {
 function sampleNormals(face: FaceLike, points: number[]): number[] {
   const out: number[] = []
   for (let i = 0; i + 2 < points.length; i += 3) {
-    const n = face.normalAt({
-      x: points[i] as number,
-      y: points[i + 1] as number,
-      z: points[i + 2] as number,
-    })
+    // Must be a `[x, y, z]` tuple (replicad `Point`): a plain `{x, y, z}` object is silently
+    // coerced to the origin, whose projection onto a cylinder axis is degenerate and throws.
+    const n = face.normalAt([points[i] as number, points[i + 1] as number, points[i + 2] as number])
     const length = Math.hypot(n.x, n.y, n.z) || 1
     out.push(n.x / length, n.y / length, n.z / length)
   }

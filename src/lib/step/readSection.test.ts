@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { hexModuleFrames, nw30Bottom, nw31Bottom, nw31Top } from '@test/fixtures'
+import { chsLeg, hexModuleFrames, nw30Bottom, nw31Bottom, nw31Top } from '@test/fixtures'
 import { draw, importSTEP, makeBox } from 'replicad'
 import { describe, expect, it } from 'vitest'
 import { partSectionForCode } from '@/lib/sections/stock'
@@ -22,6 +22,8 @@ const CASES: { path: string; section: string; family: string }[] = [
   // rotated (diagonal-member) SHS must not read as an oversized oblique RHS.
   { path: hexModuleFrames('item10.stp'), section: '200UB25.4', family: 'ub' },
   { path: hexModuleFrames('item35.stp'), section: 'SHS75*75*6.0', family: 'shs' },
+  // A circular hollow: the sampled diameter is snapped back to the nominal 508.0 OD.
+  { path: chsLeg('7347-18m-Leg-Nest-11980.stp'), section: 'CHS508*9.5', family: 'chs' },
 ]
 const HAVE = CASES.every((testCase) => existsSync(testCase.path))
 

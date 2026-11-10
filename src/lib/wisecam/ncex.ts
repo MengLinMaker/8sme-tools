@@ -240,7 +240,7 @@ function interiorAngle(a: [number, number], b: [number, number], c: [number, num
 }
 
 /** A smooth point on an arc must turn gently; sharp section corners are not arc samples. */
-const MIN_ARC_INTERIOR_ANGLE = 1.9
+const MIN_ARC_INTERIOR_ANGLE = 1.0
 
 function onCircle(point: [number, number], arc: ArcFit, tolerance = 0.05): boolean {
   return Math.abs(Math.hypot(point[0] - arc.cx, point[1] - arc.cy) - arc.r) <= tolerance
@@ -260,13 +260,17 @@ interface SectionArc {
  * Recovering the circle here keeps the exact corner vertices while dropping the intermediate
  * samples (dense sampled section polylines are what failed the arc probes).
  */
-function arcFrom(points: [number, number][], start: number): SectionArc | null {
+function arcFrom(
+  points: [number, number][],
+  start: number,
+  maxRadius = Infinity,
+): SectionArc | null {
   const a = points[start]
   const b = points[start + 1]
   const c = points[start + 2]
   if (!a || !b || !c) return null
   const arc = circleThrough(a, b, c)
-  if (!arc) return null
+  if (!arc || arc.r > maxRadius) return null
   const sign = turnSign(a, b, c)
   if (sign === 0) return null
   let end = start + 2
@@ -300,7 +304,7 @@ function arcFrom(points: [number, number][], start: number): SectionArc | null {
 }
 
 /** The section outline as SVG, with sampled arc runs emitted as real `A` commands. */
-function pathFromSection(points: [number, number][], close = true): string {
+function pathFromSection(points: [number, number][], close = true, maxRadius = Infinity): string {
   if (points.length < 4) return pathFromPoints(points, close)
   let ring = points.slice()
   if (close) {
@@ -322,7 +326,7 @@ function pathFromSection(points: [number, number][], close = true): string {
   const parts = [`M${mm((ring[0] as [number, number])[0])},${mm((ring[0] as [number, number])[1])}`]
   let index = 0
   while (index < n) {
-    const arc = arcFrom(ring, index)
+    const arc = arcFrom(ring, index, maxRadius)
     if (arc && arc.end < n) {
       const end = ring[arc.end] as [number, number]
       parts.push(
@@ -384,17 +388,29 @@ function truncatePath(
   return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="1" wh:machining="1" d="${pathFromPoints(points, false)}" wh:params="${params}" wh:technical="${TECHNICAL_TRUNCATE}" class="layer0"${paint(stroke)}/>`
 }
 
-function profilePath(id: number, points: [number, number][], stroke?: string): string {
-  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="0" wh:machining="1" d="${pathFromSection(points)}" wh:params="ANGLE_DISTINGUISH_LW=1;ANGLE_DISTINGUISH_MODE=0;" wh:technical="${TECHNICAL_EMPTY}" class="layer0"${paint(stroke)}/>`
+/** Plausible maximum section-arc radius: a rectangle's corners can share a huge circle. */
+function arcRadiusLimit(part: NcexPart): number {
+  const radius = Math.max(part.rootRadius ?? 0, part.rCornerMaxRadius ?? 0, 1)
+  return radius * 1.5
+}
+
+function profilePath(
+  id: number,
+  points: [number, number][],
+  maxRadius = Infinity,
+  stroke?: string,
+): string {
+  return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="0" wh:machining="1" d="${pathFromSection(points, true, maxRadius)}" wh:params="ANGLE_DISTINGUISH_LW=1;ANGLE_DISTINGUISH_MODE=0;" wh:technical="${TECHNICAL_EMPTY}" class="layer0"${paint(stroke)}/>`
 }
 
 function innerProfilePath(
   id: number,
   points: [number, number][],
+  maxRadius = Infinity,
   stroke?: string,
   close = true,
 ): string {
-  const d = pathFromSection(points, close)
+  const d = pathFromSection(points, close, maxRadius)
   return `<path wh:id="${id}" wh:class="cadpolyline" wh:layer="0" wh:isfill="0" wh:machining="1" d="${d}" wh:technical="${TECHNICAL_EMPTY}" class="layer0"${paint(stroke)}/>`
 }
 
@@ -543,10 +559,18 @@ function partSvg(part: NcexPart, refId: number, palette?: NcexPalette): string {
   }
   body.push(...ncMarkElements(part, next, palette))
   body.push(truncatePath(next(), end, 1, part.mark, palette?.outline))
-  const section: string[] = [profilePath(next(), part.section, palette?.outline)]
+  const section: string[] = [
+    profilePath(next(), part.section, arcRadiusLimit(part), palette?.outline),
+  ]
   if (part.innerSection)
     section.push(
-      innerProfilePath(next(), part.innerSection, palette?.outline, innerSectionClosed(part)),
+      innerProfilePath(
+        next(),
+        part.innerSection,
+        arcRadiusLimit(part),
+        palette?.outline,
+        innerSectionClosed(part),
+      ),
     )
   return [
     svgHeader(),
@@ -769,9 +793,17 @@ function adobeSvg(part: NcexPart, stockLength: number, refId: number): string {
   cutGroup.push(truncatePath(next(), start, 0))
   cutGroup.push(truncatePath(next(), end, 1, part.mark))
   const userPath = adobeUserPath(part, next)
-  const section: string[] = [profilePath(next(), part.section)]
+  const section: string[] = [profilePath(next(), part.section, arcRadiusLimit(part))]
   if (part.innerSection)
-    section.push(innerProfilePath(next(), part.innerSection, undefined, innerSectionClosed(part)))
+    section.push(
+      innerProfilePath(
+        next(),
+        part.innerSection,
+        arcRadiusLimit(part),
+        undefined,
+        innerSectionClosed(part),
+      ),
+    )
   const groups = [
     ` <g wh:id="${refId}" wh:class="cadgroup" wh:layer="0" wh:isfill="0" wh:machining="1" class="layer0">`,
     ...cutGroup.map((line) => `  ${line}`),
