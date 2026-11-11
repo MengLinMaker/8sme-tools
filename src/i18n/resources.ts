@@ -47,7 +47,7 @@ export const en = {
       repaired: 'Tekla repaired',
       regenerated: 'regenerated',
       simplified: 'simplified',
-      tabbed: 'tabs added',
+      tabbed: 'tabbed',
     },
     dialog: {
       close: 'Close',
@@ -642,7 +642,7 @@ export const zh = {
       repaired: 'Tekla 已修复',
       regenerated: '已重建',
       simplified: '已简化',
-      tabbed: '已添加连接片',
+      tabbed: '已加片',
     },
     dialog: {
       close: '关闭',
