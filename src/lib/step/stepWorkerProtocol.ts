@@ -41,6 +41,13 @@ export interface RepairResult {
   cleaned: boolean
 }
 
+/** Result of joining a nested STEP's separate bodies with tabs. */
+export interface TabResult {
+  bytes: Uint8Array
+  pieces: number
+  tabs: number
+}
+
 /** First message a worker receives; carries embedded assets in the single-file build. */
 export interface StepWorkerInit {
   kind: 'init'
@@ -90,6 +97,13 @@ export type StepRequest =
       features: Uint8Array
       overrun?: number
     }
+  | {
+      id: number
+      kind: 'tab'
+      step: Uint8Array
+      /** Tabs per metre along the beam. */
+      density: number
+    }
   | { id: number; kind: 'mesh'; step: Uint8Array; name: string }
   | {
       id: number
@@ -109,6 +123,7 @@ export type StepResponse =
   | { id: number; kind: 'reconstruct'; ok: true; value: ReconstructResult }
   | { id: number; kind: 'seat'; ok: true; value: SeatResult }
   | { id: number; kind: 'repair'; ok: true; value: RepairResult }
+  | { id: number; kind: 'tab'; ok: true; value: TabResult | null }
   | { id: number; kind: 'mesh'; ok: true; value: MeshedStep }
   | { id: number; kind: 'diff'; ok: true; value: DiffPayload | null }
   | { id: number; kind: 'warm'; ok: true; value: null }

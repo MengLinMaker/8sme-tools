@@ -112,6 +112,7 @@ import {
   prebootStepWorkers,
   STEP_WORKER_COUNT,
 } from '@/lib/step/stepPool'
+import { TAB_DENSITY_DEFAULT, TAB_DENSITY_MAX, TAB_DENSITY_MIN } from '@/lib/step/tabs'
 import {
   clearViewerModels,
   diffForViewer,
@@ -313,12 +314,13 @@ function writePrefString(key: string, value: string): void {
 }
 
 /**
- * A per-part STEP fix the user applied: cleaned (stray bodies dropped), regenerated from the
- * NC, or simplified (a bevel-cut surface left flat/uncut so a sloped end stays attached).
- * There is deliberately no auto "simplify" fix for CUT_STEP — a sudden uncuttable step is a
- * judgement call (cut at an angle on the radius), so it is flagged as an error and left alone.
+ * A per-part STEP fix the user applied: cleaned (stray bodies dropped), tabbed (all nested bodies
+ * kept and joined), regenerated from the NC, or simplified (a bevel-cut surface left flat/uncut so
+ * a sloped end stays attached). There is deliberately no auto "simplify" fix for CUT_STEP — a
+ * sudden uncuttable step is a judgement call (cut at an angle on the radius), so it is flagged as
+ * an error and left alone.
  */
-type StepFixKind = 'cleaned' | 'regenerated' | 'simplified' | 'repaired'
+type StepFixKind = 'cleaned' | 'tabbed' | 'regenerated' | 'simplified' | 'repaired'
 interface StepOverride {
   bytes: Uint8Array
   kind: StepFixKind
@@ -649,6 +651,13 @@ export function PreflightPage() {
   const [bevelEdit, setBevelEdit] = useState<{ part: PartRecord; finding: Finding } | null>(null)
   /** The menu's angle field (deg); prefilled with the recommended angle. */
   const [bevelAngle, setBevelAngle] = useState('')
+  /** The part whose "add tabs" dialog is open, if any. */
+  const [tabEdit, setTabEdit] = useState<PartRecord | null>(null)
+  /** Tabs per metre, persisted across jobs (the nested-STEP handling aid, not a cut setting). */
+  const [tabDensity, setTabDensity] = useState(() =>
+    readPrefString('tabDensity', String(TAB_DENSITY_DEFAULT)),
+  )
+  useEffect(() => writePrefString('tabDensity', tabDensity), [tabDensity])
   const ncBytes = viewing?.nc
     ? (ncOverrides.get(viewing.mark)?.bytes ?? bytesByPath.get(viewing.nc.path))
     : undefined
@@ -2558,6 +2567,20 @@ export function PreflightPage() {
     [modelChecks, stepOverrides],
   )
 
+  /**
+   * A part can be tabbed when its STEP carries separate nested bodies (the clean fix would throw
+   * the other pieces away). Tabs keep every piece and join them into one connected solid.
+   */
+  const isTabbable = useCallback(
+    (part: PartRecord | undefined) =>
+      Boolean(
+        part?.step &&
+          modelChecks.get(part.mark)?.stray &&
+          stepOverrides.get(part.mark)?.kind !== 'tabbed',
+      ),
+    [modelChecks, stepOverrides],
+  )
+
   /** A part can be regenerated when its NC build doesn't match the STEP (and isn't regenerated). */
   const isRegeneratable = useCallback(
     (part: PartRecord | undefined) =>
@@ -2636,6 +2659,43 @@ export function PreflightPage() {
       }
     },
     [bytesByPath, setOverride],
+  )
+
+  /**
+   * Joins one part's separate nested bodies with tabs instead of deleting all but the largest.
+   * The density is tabs per metre; the whole fix runs in the STEP worker so the viewer stays live.
+   */
+  const tabPart = useCallback(
+    async (part: PartRecord, density: number) => {
+      const path = part.step?.path
+      const bytes = path ? bytesByPath.get(path) : undefined
+      if (!path || !bytes) return
+      setFixingMark(part.mark)
+      setError(null)
+      try {
+        const result = await getStepWorkerPool().tab(bytes, density, {
+          priority: PRIORITY_FOREGROUND,
+        })
+        if (result) setOverride(part.mark, result.bytes, 'tabbed')
+        else setError(t('preflight.tabs.failed'))
+      } catch {
+        setError(t('preflight.tabs.failed'))
+      } finally {
+        setFixingMark(null)
+      }
+    },
+    [bytesByPath, setOverride, t],
+  )
+
+  const openTabEdit = useCallback((part: PartRecord) => setTabEdit(part), [])
+  const closeTabEdit = useCallback(() => setTabEdit(null), [])
+  const applyTabEdit = useCallback(
+    (density: number) => {
+      const part = tabEdit
+      setTabEdit(null)
+      if (part) void tabPart(part, density)
+    },
+    [tabEdit, tabPart],
   )
 
   /**
@@ -4160,6 +4220,7 @@ export function PreflightPage() {
                       fix={{
                         override: overrideFor(viewing)?.kind,
                         canClean: isCleanable(viewing),
+                        canTab: isTabbable(viewing),
                         canRegenerate: isRegeneratable(viewing),
                         canSimplify: isSimplifiable(viewing),
                         canRepair:
@@ -4169,6 +4230,7 @@ export function PreflightPage() {
                         ncEdit: ncOverrides.get(viewing.mark),
                         pending: fixingMark === viewing.mark,
                         onClean: () => void cleanPart(viewing),
+                        onTab: () => openTabEdit(viewing),
                         onRegenerate: () => void regeneratePart(viewing),
                         onSimplify: () => void simplifyPart(viewing),
                         onRepair: () => void cleanTeklaPart(viewing),
@@ -4227,6 +4289,14 @@ export function PreflightPage() {
         onApply={applyBevel}
         onClose={closeBevelEdit}
       />
+
+      <TabDialog
+        open={tabEdit !== null}
+        density={tabDensity}
+        onDensity={setTabDensity}
+        onApply={applyTabEdit}
+        onClose={closeTabEdit}
+      />
     </div>
   )
 }
@@ -4281,6 +4351,8 @@ function PartSummary({
 interface ViewerFix {
   override?: StepFixKind
   canClean: boolean
+  /** Keep all nested bodies and join them with tabs (for an already-nested STEP). */
+  canTab: boolean
   canRegenerate: boolean
   canSimplify: boolean
   /** A STEP repair is possible when the part has a real STEP to harvest features from. */
@@ -4294,6 +4366,7 @@ interface ViewerFix {
   ncEdit?: NcOverride
   pending: boolean
   onClean: () => void
+  onTab: () => void
   onRegenerate: () => void
   onSimplify: () => void
   onRepair: () => void
@@ -4392,7 +4465,7 @@ function ViewerWarnings({
   /** Whether a finding can be fixed with the actions currently available for this part. */
   const fixableFinding = (finding: Finding): boolean => {
     if (!fix) return false
-    if (finding.code === 'STRAY_BODY') return fix.canClean || fix.canRepair
+    if (finding.code === 'STRAY_BODY') return fix.canClean || fix.canTab || fix.canRepair
     if (fix.override && resolvedFindings(fix.override).includes(finding.code)) return false
     const kind = fixForFinding(finding.code)
     return Boolean(kind && viewerFixAvailable(fix, kind))
@@ -4618,8 +4691,8 @@ function ViewerWarnings({
                         </Button>
                       ) : finding.code === 'STRAY_BODY' &&
                         fix &&
-                        (fix.canClean || fix.canRepair) ? (
-                        <div className="flex justify-end gap-1">
+                        (fix.canClean || fix.canTab || fix.canRepair) ? (
+                        <div className="flex flex-wrap justify-end gap-1">
                           {fix.canClean && (
                             <Button
                               variant="outline"
@@ -4635,6 +4708,23 @@ function ViewerWarnings({
                               {fix.pending
                                 ? t('common.actions.cleaning')
                                 : t('common.actions.cleanStep')}
+                            </Button>
+                          )}
+                          {fix.canTab && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7"
+                              disabled={fix.pending}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                fix.onTab()
+                              }}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
+                              {fix.pending
+                                ? t('common.actions.working')
+                                : t('common.actions.addTabs')}
                             </Button>
                           )}
                           {fix.canRepair && (
@@ -5317,6 +5407,57 @@ function SortHead({
         </span>
       </button>
     </TableHead>
+  )
+}
+
+/** Density picker for the stray-body "add tabs" fix. */
+function TabDialog({
+  open,
+  density,
+  onDensity,
+  onApply,
+  onClose,
+}: {
+  open: boolean
+  density: string
+  onDensity: (value: string) => void
+  onApply: (density: number) => void
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+  const parsed = Number.parseFloat(density)
+  const valid = Number.isFinite(parsed) && parsed >= TAB_DENSITY_MIN && parsed <= TAB_DENSITY_MAX
+  return (
+    <Dialog open={open} onClose={onClose} title={t('preflight.tabs.title')}>
+      <div className="flex flex-col gap-4 p-5">
+        <p className="text-sm text-muted-foreground">{t('preflight.tabs.hint')}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="tab-density" className="text-sm font-medium">
+            {t('preflight.tabs.density')}
+          </label>
+          <input
+            id="tab-density"
+            type="number"
+            inputMode="decimal"
+            step="0.5"
+            min={TAB_DENSITY_MIN}
+            max={TAB_DENSITY_MAX}
+            value={density}
+            onChange={(event) => onDensity(event.target.value)}
+            className="h-8 w-24 rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <span className="text-sm text-muted-foreground">{t('preflight.tabs.unit')}</span>
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onClose}>
+            {t('common.actions.cancel')}
+          </Button>
+          <Button size="sm" disabled={!valid} onClick={() => onApply(parsed)}>
+            {t('common.actions.addTabs')}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   )
 }
 

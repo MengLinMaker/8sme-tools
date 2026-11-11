@@ -9,6 +9,7 @@ import type {
   SeatResult,
   StepRequest,
   StepResponse,
+  TabResult,
 } from './stepWorkerProtocol'
 
 /**
@@ -139,6 +140,20 @@ class StepWorkerPool {
         overrun: options.overrun,
       },
       transfer,
+      options.priority ?? PRIORITY_BACKGROUND,
+    )
+  }
+
+  /** Join an already-nested STEP's separate bodies with tabs so they stay together. */
+  tab(
+    bytes: Uint8Array,
+    density: number,
+    options: { priority?: number } = {},
+  ): Promise<TabResult | null> {
+    const copy = new Uint8Array(bytes)
+    return this.run<TabResult | null>(
+      { id: this.nextId++, kind: 'tab', step: copy, density },
+      [copy.buffer],
       options.priority ?? PRIORITY_BACKGROUND,
     )
   }

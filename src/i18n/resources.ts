@@ -20,6 +20,7 @@ export const en = {
       cleanStep: 'Clean STEP',
       repairStep: 'Repair STEP…',
       cleanTekla: 'Clean Tekla',
+      addTabs: 'Add tabs',
       regenerate: 'Regenerate',
       regenerateStep: 'Regenerate STEP',
       simplify: 'Simplify STEP (flat)',
@@ -46,6 +47,7 @@ export const en = {
       repaired: 'Tekla repaired',
       regenerated: 'regenerated',
       simplified: 'simplified',
+      tabbed: 'tabs added',
     },
     dialog: {
       close: 'Close',
@@ -376,6 +378,13 @@ export const en = {
       noBevel: 'No bevel',
       apply: 'Apply bevel',
     },
+    tabs: {
+      title: 'Add tabs',
+      hint: 'Keep every body in this already-nested STEP and join them with small tabs. Density is the number of tabs per metre along the beam; end-to-end pieces in each row are always joined once.',
+      density: 'Density',
+      unit: 'tabs/m',
+      failed: 'Could not connect all bodies with tabs — try a higher density or clean the STEP.',
+    },
     warnings: {
       cancelFix: 'Undo',
       issues: 'Issues ({{count}})',
@@ -600,6 +609,7 @@ export const zh = {
       cleanStep: '清理 STEP',
       repairStep: '修复 STEP…',
       cleanTekla: '清理 Tekla',
+      addTabs: '添加连接片',
       regenerate: '重建',
       regenerateStep: '重建 STEP',
       simplify: '简化 STEP（平面）',
@@ -626,6 +636,7 @@ export const zh = {
       repaired: 'Tekla 已修复',
       regenerated: '已重建',
       simplified: '已简化',
+      tabbed: '已添加连接片',
     },
     dialog: {
       close: '关闭',
@@ -945,6 +956,13 @@ export const zh = {
       recommended: '推荐 {{angle}}°',
       noBevel: '无坡口',
       apply: '应用坡口',
+    },
+    tabs: {
+      title: '添加连接片',
+      hint: '保留这个已套料 STEP 中的全部实体，并用小连接片把它们连成一体。密度是沿钢梁每米的连接片数量；每排中端对端的零件始终连接一次。',
+      density: '密度',
+      unit: '片/米',
+      failed: '无法用连接片连接全部实体——请提高密度或清理 STEP。',
     },
     warnings: {
       solved: '已解决（{{count}}）',

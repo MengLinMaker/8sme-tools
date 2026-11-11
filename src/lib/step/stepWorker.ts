@@ -19,6 +19,7 @@ import type {
   StepResponse,
   StepWorkerInit,
 } from './stepWorkerProtocol'
+import { tabStep } from './tabs'
 
 /**
  * OpenCASCADE worker. Owns its own instance of the ~23 MB WASM kernel (initialised lazily on the
@@ -123,6 +124,9 @@ async function handle(request: StepRequest): Promise<void> {
           : { bytes: request.features, valid: false, redrilled: 0, cleaned: false }
       }
       scope.postMessage({ id: request.id, kind: 'repair', ok: true, value })
+    } else if (request.kind === 'tab') {
+      const value = await tabStep(request.step, { density: request.density })
+      scope.postMessage({ id: request.id, kind: 'tab', ok: true, value })
     } else if (request.kind === 'warm') {
       await ensureOc()
       scope.postMessage({ id: request.id, kind: 'warm', ok: true, value: null })
