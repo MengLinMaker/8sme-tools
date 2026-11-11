@@ -437,12 +437,17 @@ Remaining parser gaps:
 
 ## 4. What we are still unsure about
 
-1. **`o`/`u` handedness on I-sections.** Mirrored parts swap which flange is `o`:
-   - `M-3`, `M-4`, `M-5` → `o` on the negative flange (formula above).
+1. **`o`/`u` handedness on I-sections.** DSTV `o` is the **top view** and `u` the **bottom
+   view**, so `u`'s across (Y) axis runs opposite `o`'s. `unrolledLayout` now reverses `u` for
+   both `I` and `U`; this fixes the within-flange mirror on M-9 and the M-34 1 mm shift (their
+   hole sets now match the real exports exactly). What remains is the **flange side**:
+   - `M-3`, `M-4`, `M-5`, `M-9` → `o` on the negative flange (formula above).
    - `M-30`, `M-39` → `o` on the **positive** flange.
-   - `M-9` → `u` is Y-reversed within its flange.
-   All have `RotateAngle=0;Invert=0`, so handedness is not in the header. The writer exposes
-   `flipFlanges`, but a rule (or a STEP-derived cue) is still missing.
+   All have `RotateAngle=0;Invert=0`, so handedness is not in the header. These two parts have
+   flange holes symmetric about the flange centreline, so the positive/negative layouts describe
+   the same physical part (just a different seam/region order). `flipFlanges` remains the escape
+   hatch for a genuinely mirrored part with asymmetric flange holes; a header rule is still
+   missing.
 2. **No T / angle / round samples.** `partFromNc` returns `null` for `T`, `L`, `RO`.
 3. **Bevelled/mitred end cuts.** The reference `Beveled PFC` shows a bevel as **child paths
    nested inside the end-trim `<path>`**, carrying `PosMap`/`needSetAdobe`. The reference is

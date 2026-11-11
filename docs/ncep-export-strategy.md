@@ -155,7 +155,8 @@ bevel/technology intent**.
    manufacturable.
 3. **Grey-strip hole removal** (`1920–1924`) — validate the UB column removal form.
 4. **Bevel nesting** (`1940–1944`) — confirm nested child paths are required.
-5. **M-34 handedness** (`1930–1932`) — u-face hole shift.
+5. ~~**M-34 handedness** (`1930–1932`) — u-face hole shift.~~ **Fixed:** `u` is the bottom view,
+   so its across axis is reversed; the generated M-34 hole set now matches the real export.
 6. **Quantity** — already confirmed for 2/3; decide export policy.
 7. **Cut order** — inspect a real exported `CNC/Plate0-1.zua`; no new NCEP needed.
 8. **Round-trip comparison** — use the existing `.ncexa` exports from the loaded probes.

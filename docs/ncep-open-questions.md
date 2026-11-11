@@ -21,7 +21,7 @@ Status legend: **SOLID** (proven on WiseCAM), **LIKELY** (strong evidence), **SU
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Canonical orientation / stance | **SOLID** | H / n / long-side-horizontal / L stances documented and implemented. Residual: mirrored `o`/`u` handedness is not encoded in the header. |
+| Canonical orientation / stance | **SOLID** | H / n / long-side-horizontal / L stances documented and implemented. The `u` bottom-view Y reversal is implemented (M-9/M-34 hole sets match). Residual: which flange is `o` on a mirrored part is not encoded in the header; `flipFlanges` covers it. |
 | Holes | **SOLID** | Our hole sets match real M-1/M-3/M-35/M-42; real holes load (`1502`). |
 | Enclosed cuts | **SOLID** | Inner/enclosed contours are handled; no import blocker seen. |
 | Markings | **LIKELY** | Text marks load; UB real text + bars improved the result (`1316`); M-42 has no mark. Correction (layer 4 bars) and short-part auto-mark rules remain open. |

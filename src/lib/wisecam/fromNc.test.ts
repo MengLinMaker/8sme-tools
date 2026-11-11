@@ -30,7 +30,7 @@ function ncepPartSvg(bytes: Uint8Array): string {
   return strFromU8(files[`CAD/${name}`] as Uint8Array)
 }
 
-const MARKS = ['M-1', 'M-3', 'M-35', 'M-42'] as const
+const MARKS = ['M-1', 'M-3', 'M-9', 'M-35', 'M-42'] as const
 
 describe('partFromNc / NCEP', () => {
   for (const mark of MARKS) {
@@ -228,7 +228,7 @@ function expectRange(
 }
 
 describe('generated NCEP packages pass the parser', () => {
-  const marks = ['M-1', 'M-3', 'M-34', 'M-35', 'M-42'] as const
+  const marks = ['M-1', 'M-3', 'M-9', 'M-34', 'M-35', 'M-42'] as const
 
   it('reads hyphenated marks from the NC header', () => {
     for (const mark of marks) {
@@ -264,12 +264,7 @@ describe('generated NCEP packages pass the parser', () => {
       expect(generated.quantity).toBe(partFromNc(nc)?.quantity)
       expect(generated.thickness ?? 0).toBeCloseTo(real.thickness ?? 0, 6)
       expect(generated.legThickness ?? 0).toBeCloseTo(real.legThickness ?? 0, 6)
-      if (mark === 'M-34') {
-        // Known open issue: the DSTV `u` face is reversed for this PFC (1 mm hole shift).
-        expect(generated.partSvg?.part?.holes.length).toBe(real.partSvg?.part?.holes.length)
-      } else {
-        expect(holeSet(generated)).toEqual(holeSet(real))
-      }
+      expect(holeSet(generated)).toEqual(holeSet(real))
 
       for (const type of [0, 1] as const) {
         expectRange(truncateRange(generated, type), truncateRange(real, type))
@@ -331,13 +326,18 @@ describe('partFromNc end-cut development', () => {
     const start = part?.startCut
     expect(start).toBeTruthy()
     if (!start) return
-    // The `u` face ends at station -50 with along ≈18.2; the `v` face starts at -50,0. Sorting by
-    // station alone used to put the v point first, drawing a long diagonal across the net.
+    // PFC100*50 start trim. The bottom flange (`u`) is the bottom view, so its across axis is
+    // reversed: the notched toe (y=50) is at station -100 with along ≈18.2, and the web-side edge
+    // (y=0) meets `v` at station -50 with along 0. The old non-reversed mapping swapped these.
     expect(start[0]?.[0]).toBeCloseTo(-100, 1)
-    expect(start[1]?.[0]).toBeCloseTo(-50, 1)
-    expect(start[1]?.[1]).toBeCloseTo(18.2, 0)
-    const firstAtMinus50 = start.find(([station]) => Math.abs(station + 50) < 0.01)
-    expect(firstAtMinus50?.[1]).toBeCloseTo(18.2, 0)
+    expect(start[0]?.[1]).toBeCloseTo(18.2, 0)
+    const atMinus50 = start.find(([station]) => Math.abs(station + 50) < 0.01)
+    expect(atMinus50?.[1]).toBeCloseTo(0, 0)
+    // `v` and `o` share the other web edge at +50 (along 23.43).
+    const atPlus50 = start.find(([station]) => Math.abs(station - 50) < 0.01)
+    expect(atPlus50?.[1]).toBeCloseTo(23.43, 0)
+    expect(start[start.length - 1]?.[0]).toBeCloseTo(100, 1)
+    expect(start[start.length - 1]?.[1]).toBeCloseTo(41.63, 0)
   })
 
   for (const mark of ['M-51', 'M-42'] as const) {

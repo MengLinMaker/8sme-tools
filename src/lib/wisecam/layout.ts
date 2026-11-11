@@ -89,7 +89,8 @@ export function unrolledLayout(
     const seam = depth + 2 * flange
     const half = seam / 2
     const faces: UnrolledLayout['faces'] = {
-      u: face(-half, flange),
+      // The bottom view (`u`) looks up the member, so its across axis runs opposite the top view.
+      u: face(-half, flange, flange, 0, true),
       v: face(-half + flange, depth),
       o: face(-half + flange + depth, flange),
     }
@@ -112,7 +113,8 @@ export function unrolledLayout(
     const faces: UnrolledLayout['faces'] = {
       o: face(-half, flange),
       v: face(-half + flange + gap, depth),
-      u: face(half - flange, flange),
+      // The bottom view (`u`) looks up the member, so its across axis runs opposite the top view.
+      u: face(half - flange, flange, flange, 0, true),
     }
     if (options.flipFlanges) {
       const u = faces.u
