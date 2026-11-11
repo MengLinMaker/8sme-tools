@@ -4589,7 +4589,7 @@ function ViewerWarnings({
                   <SortHead k="location" label={t('preflight.warnings.colLocation')} />
                 </TableHead>
                 <TableHead>{t('preflight.warnings.colIssue')}</TableHead>
-                <TableHead className="w-32">
+                <TableHead className="w-48">
                   <SortHead k="fix" label={t('preflight.warnings.colFix')} />
                 </TableHead>
               </TableRow>
