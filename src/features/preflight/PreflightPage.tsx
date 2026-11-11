@@ -134,6 +134,7 @@ import {
   CutSettings,
   type ProfileMarkRow,
   ProfileSettingsDialog,
+  SectionLookupDialog,
   SectionPreview,
 } from './ProfileSettingsDialog'
 import { PurchaseDialog } from './PurchaseDialog'
@@ -2265,6 +2266,7 @@ export function PreflightPage() {
   /** Index into `profileGroups` of the profile whose cut-settings dialog is open. */
   const [settingsProfileIndex, setSettingsProfileIndex] = useState<number | null>(null)
   const [purchaseOpen, setPurchaseOpen] = useState(false)
+  const [sectionLookupOpen, setSectionLookupOpen] = useState(false)
   const settingsGroup =
     settingsProfileIndex === null ? null : (profileGroups[settingsProfileIndex] ?? null)
   /** Previous/next profile while the dialog is open (arrow keys or the header buttons). */
@@ -3207,572 +3209,574 @@ export function PreflightPage() {
       )}
 
       {result && (
-        <>
-          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
-            <Stat label={t('preflight.stats.parts')} value={result.summary.parts} />
-            <Stat label={t('preflight.stats.totalQty')} value={totalQty} />
-            <Stat
-              label={t('preflight.stats.totalLength')}
-              value={totalLengthMm > 0 ? `${(totalLengthMm / 1000).toFixed(1)} m` : '—'}
-              pending={analyzing && drawingChecking}
-            />
-            <Stat
-              label={t('preflight.stats.totalMass')}
-              value={totalMassKg > 0 ? `${totalMassKg.toFixed(1)} kg` : '—'}
-              pending={analyzing && drawingChecking}
-            />
-            <Stat label={t('preflight.stats.profiles')} value={profileGroups.length} />
-            <Stat
-              label={t('preflight.stats.errors')}
-              value={counts.error}
-              tone="error"
-              pending={analyzing}
-            />
-            <Stat
-              label={t('preflight.stats.warnings')}
-              value={counts.warning}
-              tone="warning"
-              pending={analyzing}
-            />
-          </section>
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
+          <Stat label={t('preflight.stats.parts')} value={result.summary.parts} />
+          <Stat label={t('preflight.stats.totalQty')} value={totalQty} />
+          <Stat
+            label={t('preflight.stats.totalLength')}
+            value={totalLengthMm > 0 ? `${(totalLengthMm / 1000).toFixed(1)} m` : '—'}
+            pending={analyzing && drawingChecking}
+          />
+          <Stat
+            label={t('preflight.stats.totalMass')}
+            value={totalMassKg > 0 ? `${totalMassKg.toFixed(1)} kg` : '—'}
+            pending={analyzing && drawingChecking}
+          />
+          <Stat label={t('preflight.stats.profiles')} value={profileGroups.length} />
+          <Stat
+            label={t('preflight.stats.errors')}
+            value={counts.error}
+            tone="error"
+            pending={analyzing}
+          />
+          <Stat
+            label={t('preflight.stats.warnings')}
+            value={counts.warning}
+            tone="warning"
+            pending={analyzing}
+          />
+        </section>
+      )}
 
-          <Card>
-            <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => setProfilesOpen((open) => !open)}
-                aria-expanded={profilesOpen}
-                className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <ChevronDown
-                  className={cn(
-                    'size-4 shrink-0 text-muted-foreground transition-transform',
-                    !profilesOpen && '-rotate-90',
-                  )}
-                />
-                <CardTitle>
-                  {t('preflight.profiles.title')}
-                  <span className="ml-2 text-sm font-normal text-muted-foreground">
-                    ({profileGroups.length})
+      <Card>
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => setProfilesOpen((open) => !open)}
+            aria-expanded={profilesOpen}
+            className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ChevronDown
+              className={cn(
+                'size-4 shrink-0 text-muted-foreground transition-transform',
+                !profilesOpen && '-rotate-90',
+              )}
+            />
+            <CardTitle>
+              {t('preflight.profiles.title')}
+              <span className="ml-2 text-sm font-normal text-muted-foreground">
+                ({profileGroups.length})
+              </span>
+            </CardTitle>
+          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setSectionLookupOpen(true)}>
+              {t('preflight.profiles.lookup')}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPurchaseOpen(true)}
+              disabled={purchaseGroups.length === 0}
+            >
+              {t('preflight.purchase.open')}
+            </Button>
+          </div>
+        </CardHeader>
+        {profilesOpen && (
+          <CardContent>
+            {profileGroups.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t('preflight.profiles.empty')}</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>{t('preflight.profiles.profile')}</TableHead>
+                    <TableHead>{t('preflight.profiles.marks')}</TableHead>
+                    <TableHead>{t('preflight.profiles.pieces')}</TableHead>
+                    <TableHead className="text-right">
+                      {t('preflight.profiles.totalLength')}
+                    </TableHead>
+                    <TableHead className="text-right">
+                      {t('preflight.profiles.totalMass')}
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {profileGroups.map((group, index) => (
+                    <TableRow
+                      key={group.profile}
+                      className={cn(group.profile !== '—' && 'cursor-pointer')}
+                      title={
+                        group.profile !== '—'
+                          ? t('preflight.profileSettings.open', { profile: group.profile })
+                          : undefined
+                      }
+                      onClick={() => {
+                        if (group.profile !== '—') setSettingsProfileIndex(index)
+                      }}
+                    >
+                      <TableCell className="font-mono text-xs">{group.profile}</TableCell>
+                      <TableCell>{group.markCount}</TableCell>
+                      <TableCell>{group.pieces}</TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {group.lengthMm > 0 ? (
+                          `${(group.lengthMm / 1000).toFixed(1)} m`
+                        ) : (
+                          <span className="text-muted-foreground">
+                            {t('preflight.profiles.noLengths')}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {group.massKg > 0 ? (
+                          `${group.massKg.toFixed(1)} kg`
+                        ) : (
+                          <span className="text-muted-foreground">
+                            {t('preflight.profiles.noMass')}
+                          </span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+            {result && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t('preflight.source')}:{' '}
+                <span className="font-mono">
+                  {result.entriesTotal} {t('preflight.stats.files').toLowerCase()} ·{' '}
+                  {t('preflight.stats.partList')}:{' '}
+                  {result.summary.hasPartList ? t('preflight.stats.yes') : t('preflight.stats.no')}
+                </span>
+              </p>
+            )}
+          </CardContent>
+        )}
+      </Card>
+
+      {result && result.parts.length > 0 && (
+        <Card>
+          <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between">
+            <button
+              type="button"
+              onClick={() => setPartsOpen((open) => !open)}
+              aria-expanded={partsOpen}
+              className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <ChevronDown
+                className={cn(
+                  'size-4 shrink-0 text-muted-foreground transition-transform',
+                  !partsOpen && '-rotate-90',
+                )}
+              />
+              <CardTitle className="flex flex-wrap items-center gap-2">
+                {t('preflight.parts.title')}
+                <span className="text-sm font-normal text-muted-foreground">
+                  ({visibleParts.length}
+                  {(markQuery.trim() || assemblyFilter) &&
+                  sortedParts.length !== visibleParts.length
+                    ? `/${sortedParts.length}`
+                    : ''}
+                  )
+                </span>
+                {drawingChecking && (
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {t('preflight.parts.readingDrawings', {
+                      done: drawingDone,
+                      total: drawingTotal,
+                    })}
                   </span>
-                </CardTitle>
-              </button>
+                )}
+                {checking && (
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {t(
+                      modelPhase === 'rebuild'
+                        ? 'preflight.parts.rebuildingModels'
+                        : 'preflight.parts.measuringModels',
+                      {
+                        done: modelDone,
+                        total: modelTotal,
+                      },
+                    )}
+                  </span>
+                )}
+              </CardTitle>
+            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <Search
+                  className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden
+                />
+                <input
+                  type="text"
+                  value={markQuery}
+                  onChange={(event) => setMarkQuery(event.target.value)}
+                  placeholder={t('preflight.parts.searchPlaceholder')}
+                  aria-label={t('preflight.parts.searchPlaceholder')}
+                  title={t('preflight.parts.filterHint')}
+                  className="h-8 w-56 rounded-md border border-border bg-background pl-7 pr-7 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+                />
+                {markQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setMarkQuery('')}
+                    aria-label={t('preflight.parts.searchClear')}
+                    title={t('preflight.parts.searchClear')}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                )}
+              </div>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setPurchaseOpen(true)}
-                disabled={purchaseGroups.length === 0}
+                onClick={() =>
+                  downloadText(
+                    `${fileStem(result.sourceName)}-findings.csv`,
+                    findingsToCsv({ ...result, findings: allFindings }),
+                  )
+                }
               >
-                {t('preflight.purchase.open')}
+                {t('preflight.findings.exportFindings')}
               </Button>
-            </CardHeader>
-            {profilesOpen && (
-              <CardContent>
-                {profileGroups.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">—</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="hover:bg-transparent">
-                        <TableHead>{t('preflight.profiles.profile')}</TableHead>
-                        <TableHead>{t('preflight.profiles.marks')}</TableHead>
-                        <TableHead>{t('preflight.profiles.pieces')}</TableHead>
-                        <TableHead className="text-right">
-                          {t('preflight.profiles.totalLength')}
-                        </TableHead>
-                        <TableHead className="text-right">
-                          {t('preflight.profiles.totalMass')}
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {profileGroups.map((group, index) => (
-                        <TableRow
-                          key={group.profile}
-                          className={cn(group.profile !== '—' && 'cursor-pointer')}
-                          title={
-                            group.profile !== '—'
-                              ? t('preflight.profileSettings.open', { profile: group.profile })
-                              : undefined
-                          }
-                          onClick={() => {
-                            if (group.profile !== '—') setSettingsProfileIndex(index)
-                          }}
-                        >
-                          <TableCell className="font-mono text-xs">{group.profile}</TableCell>
-                          <TableCell>{group.markCount}</TableCell>
-                          <TableCell>{group.pieces}</TableCell>
-                          <TableCell className="text-right font-mono text-xs">
-                            {group.lengthMm > 0 ? (
-                              `${(group.lengthMm / 1000).toFixed(1)} m`
-                            ) : (
-                              <span className="text-muted-foreground">
-                                {t('preflight.profiles.noLengths')}
-                              </span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-xs">
-                            {group.massKg > 0 ? (
-                              `${group.massKg.toFixed(1)} kg`
-                            ) : (
-                              <span className="text-muted-foreground">
-                                {t('preflight.profiles.noMass')}
-                              </span>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {t('preflight.source')}:{' '}
-                  <span className="font-mono">
-                    {result.entriesTotal} {t('preflight.stats.files').toLowerCase()} ·{' '}
-                    {t('preflight.stats.partList')}:{' '}
-                    {result.summary.hasPartList
-                      ? t('preflight.stats.yes')
-                      : t('preflight.stats.no')}
-                  </span>
-                </p>
-              </CardContent>
-            )}
-          </Card>
-
-          <Card>
-            <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between">
-              <button
-                type="button"
-                onClick={() => setPartsOpen((open) => !open)}
-                aria-expanded={partsOpen}
-                className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  downloadText(`${fileStem(result.sourceName)}-parts.csv`, partsToCsv(result))
+                }
               >
-                <ChevronDown
-                  className={cn(
-                    'size-4 shrink-0 text-muted-foreground transition-transform',
-                    !partsOpen && '-rotate-90',
-                  )}
-                />
-                <CardTitle className="flex flex-wrap items-center gap-2">
-                  {t('preflight.parts.title')}
-                  <span className="text-sm font-normal text-muted-foreground">
-                    ({visibleParts.length}
-                    {(markQuery.trim() || assemblyFilter) &&
-                    sortedParts.length !== visibleParts.length
-                      ? `/${sortedParts.length}`
-                      : ''}
-                    )
-                  </span>
-                  {drawingChecking && (
-                    <span className="text-xs font-normal text-muted-foreground">
-                      {t('preflight.parts.readingDrawings', {
-                        done: drawingDone,
-                        total: drawingTotal,
-                      })}
-                    </span>
-                  )}
-                  {checking && (
-                    <span className="text-xs font-normal text-muted-foreground">
-                      {t(
-                        modelPhase === 'rebuild'
-                          ? 'preflight.parts.rebuildingModels'
-                          : 'preflight.parts.measuringModels',
-                        {
-                          done: modelDone,
-                          total: modelTotal,
-                        },
-                      )}
-                    </span>
-                  )}
-                </CardTitle>
-              </button>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="relative">
-                  <Search
-                    className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-                    aria-hidden
-                  />
-                  <input
-                    type="text"
-                    value={markQuery}
-                    onChange={(event) => setMarkQuery(event.target.value)}
-                    placeholder={t('preflight.parts.searchPlaceholder')}
-                    aria-label={t('preflight.parts.searchPlaceholder')}
-                    title={t('preflight.parts.filterHint')}
-                    className="h-8 w-56 rounded-md border border-border bg-background pl-7 pr-7 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                  {markQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setMarkQuery('')}
-                      aria-label={t('preflight.parts.searchClear')}
-                      title={t('preflight.parts.searchClear')}
-                      className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="size-3.5" />
-                    </button>
-                  )}
-                </div>
+                {t('preflight.findings.exportParts')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void ncToStepSelected()}
+                disabled={selectedMarks.size === 0 || exporting}
+                title={t('preflight.findings.ncToStepHint')}
+              >
+                {t('preflight.findings.ncToStep', { count: selectedMarks.size })}
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => void exportSelected()}
+                disabled={selectedMarks.size === 0 || exporting}
+              >
+                {t('preflight.findings.exportSelected', { count: selectedMarks.size })}
+              </Button>
+              {stepOverrides.size + ncOverrides.size > 0 && (
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() =>
-                    downloadText(
-                      `${fileStem(result.sourceName)}-findings.csv`,
-                      findingsToCsv({ ...result, findings: allFindings }),
-                    )
-                  }
+                  onClick={() => void exportFixed()}
+                  disabled={exporting}
                 >
-                  {t('preflight.findings.exportFindings')}
+                  {t('preflight.findings.exportFixed', {
+                    count: stepOverrides.size + ncOverrides.size,
+                  })}
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    downloadText(`${fileStem(result.sourceName)}-parts.csv`, partsToCsv(result))
-                  }
+              )}
+            </div>
+          </CardHeader>
+          {partsOpen && (
+            <CardContent>
+              <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-muted-foreground">
+                  {t('preflight.parts.filterStatus')}
+                </span>
+                <Toggle
+                  size="xs"
+                  pressed={activeStatus === null}
+                  onPressedChange={() => setStatusFilter('all')}
                 >
-                  {t('preflight.findings.exportParts')}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void ncToStepSelected()}
-                  disabled={selectedMarks.size === 0 || exporting}
-                  title={t('preflight.findings.ncToStepHint')}
-                >
-                  {t('preflight.findings.ncToStep', { count: selectedMarks.size })}
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => void exportSelected()}
-                  disabled={selectedMarks.size === 0 || exporting}
-                >
-                  {t('preflight.findings.exportSelected', { count: selectedMarks.size })}
-                </Button>
-                {stepOverrides.size + ncOverrides.size > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void exportFixed()}
-                    disabled={exporting}
-                  >
-                    {t('preflight.findings.exportFixed', {
-                      count: stepOverrides.size + ncOverrides.size,
-                    })}
-                  </Button>
-                )}
-              </div>
-            </CardHeader>
-            {partsOpen && (
-              <CardContent>
-                <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                  <span className="text-xs text-muted-foreground">
-                    {t('preflight.parts.filterStatus')}
-                  </span>
+                  {t('preflight.filters.all')}
+                </Toggle>
+                {(
+                  [
+                    ['error', t('preflight.filters.error'), statusCounts.error],
+                    ['warning', t('preflight.filters.warning'), statusCounts.warning],
+                    ['ok', t('preflight.status.ok'), statusCounts.ok],
+                  ] as const
+                ).map(([status, label, count]) => (
                   <Toggle
+                    key={status}
                     size="xs"
-                    pressed={activeStatus === null}
-                    onPressedChange={() => setStatusFilter('all')}
+                    pressed={activeStatus === status}
+                    onPressedChange={() => setStatusFilter(status)}
                   >
-                    {t('preflight.filters.all')}
+                    {label}
+                    <span className="font-mono opacity-60">{count}</span>
                   </Toggle>
-                  {(
-                    [
-                      ['error', t('preflight.filters.error'), statusCounts.error],
-                      ['warning', t('preflight.filters.warning'), statusCounts.warning],
-                      ['ok', t('preflight.status.ok'), statusCounts.ok],
-                    ] as const
-                  ).map(([status, label, count]) => (
-                    <Toggle
-                      key={status}
-                      size="xs"
-                      pressed={activeStatus === status}
-                      onPressedChange={() => setStatusFilter(status)}
+                ))}
+                {assemblyOptions.length > 0 && (
+                  <label className="ml-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span>{t('preflight.parts.filterAssembly')}</span>
+                    <select
+                      value={assemblyFilter ?? ''}
+                      onChange={(event) => setAssemblyFilter(event.target.value || null)}
+                      className="h-7 max-w-56 rounded-md border border-border bg-background px-1.5 text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
                     >
-                      {label}
-                      <span className="font-mono opacity-60">{count}</span>
-                    </Toggle>
-                  ))}
-                  {assemblyOptions.length > 0 && (
-                    <label className="ml-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <span>{t('preflight.parts.filterAssembly')}</span>
-                      <select
-                        value={assemblyFilter ?? ''}
-                        onChange={(event) => setAssemblyFilter(event.target.value || null)}
-                        className="h-7 max-w-56 rounded-md border border-border bg-background px-1.5 text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        <option value="">{t('preflight.parts.allAssemblies')}</option>
-                        {assemblyOptions.map((assembly) => (
-                          <option key={assembly} value={assembly}>
-                            {assembly}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                  <span className="ml-auto text-[11px] text-muted-foreground">
-                    {t('preflight.parts.filterHint')}
-                  </span>
-                </div>
-                <Table containerClassName="max-h-[70vh] overflow-auto">
-                  <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:border-b [&_th]:border-border [&_th]:bg-card [&_th:first-child]:left-0 [&_th:first-child]:z-30 [&_th:nth-child(2)]:left-8 [&_th:nth-child(2)]:z-30">
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead className="w-8">
-                        <input
-                          type="checkbox"
-                          checked={allVisibleSelected}
-                          onChange={toggleAllVisible}
-                          aria-label={t('preflight.parts.selectAll')}
-                        />
-                      </TableHead>
-                      {PART_COLUMNS.map((column) => (
-                        <SortHead
-                          key={column.key}
-                          label={t(column.labelKey)}
-                          sortKey={column.key}
-                          sort={sort}
-                          onSort={toggleSort}
-                        />
+                      <option value="">{t('preflight.parts.allAssemblies')}</option>
+                      {assemblyOptions.map((assembly) => (
+                        <option key={assembly} value={assembly}>
+                          {assembly}
+                        </option>
                       ))}
+                    </select>
+                  </label>
+                )}
+                <span className="ml-auto text-[11px] text-muted-foreground">
+                  {t('preflight.parts.filterHint')}
+                </span>
+              </div>
+              <Table containerClassName="max-h-[70vh] overflow-auto">
+                <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:border-b [&_th]:border-border [&_th]:bg-card [&_th:first-child]:left-0 [&_th:first-child]:z-30 [&_th:nth-child(2)]:left-8 [&_th:nth-child(2)]:z-30">
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-8">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        onChange={toggleAllVisible}
+                        aria-label={t('preflight.parts.selectAll')}
+                      />
+                    </TableHead>
+                    {PART_COLUMNS.map((column) => (
+                      <SortHead
+                        key={column.key}
+                        label={t(column.labelKey)}
+                        sortKey={column.key}
+                        sort={sort}
+                        onSort={toggleSort}
+                      />
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card [&_td:nth-child(2)]:sticky [&_td:nth-child(2)]:left-8 [&_td:nth-child(2)]:z-10 [&_td:nth-child(2)]:bg-card">
+                  {visibleParts.length === 0 && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell
+                        colSpan={PART_COLUMNS.length + 1}
+                        className="text-center text-sm text-muted-foreground"
+                      >
+                        {assemblyFilter && !markQuery.trim()
+                          ? t('preflight.parts.assemblyEmpty', { assembly: assemblyFilter })
+                          : t('preflight.parts.searchEmpty', { query: markQuery.trim() })}
+                      </TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card [&_td:nth-child(2)]:sticky [&_td:nth-child(2)]:left-8 [&_td:nth-child(2)]:z-10 [&_td:nth-child(2)]:bg-card">
-                    {visibleParts.length === 0 && (
-                      <TableRow className="hover:bg-transparent">
+                  )}
+                  {visibleParts.map((part) => {
+                    const material = drawingMaterials.get(part.mark)
+                    const pdfQty = material?.qty ?? part.expected?.qty ?? null
+                    const ncQty = part.nc?.quantity ?? null
+                    const qtyMismatch = pdfQty != null && ncQty != null && pdfQty !== ncQty
+                    const qtyFallback = pdfQty == null && ncQty != null
+                    const mass = pieceMass(part)
+                    const band = massBand(mass)
+                    const pills = issuesByMark.get(part.mark) ?? []
+                    const weld = weldEtchings.get(part.mark)
+                    const assemblyUsage = assemblyFilter
+                      ? part.assemblies?.find((usage) => usage.assembly === assemblyFilter)
+                      : undefined
+                    const qtyKnown = assemblyUsage != null || pdfQty != null || ncQty != null
+                    return (
+                      <TableRow
+                        key={part.mark}
+                        tabIndex={0}
+                        onClick={() => openPart(part)}
+                        onMouseEnter={() => prefetchPart(part)}
+                        onFocus={() => prefetchPart(part)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            openPart(part)
+                          }
+                        }}
+                        className="cursor-pointer outline-none focus-visible:bg-accent/60"
+                      >
+                        <TableCell className="w-8 p-0">
+                          <label
+                            className="flex cursor-pointer items-center justify-center py-2"
+                            onClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => event.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedMarks.has(part.mark)}
+                              readOnly
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                toggleMark(part.mark, event.shiftKey)
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === ' ' || event.key === 'Enter') {
+                                  event.stopPropagation()
+                                }
+                              }}
+                              aria-label={part.mark}
+                            />
+                          </label>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          <span className="flex items-center gap-1.5">
+                            {part.mark}
+                            {ncOverrides.get(part.mark) && (
+                              <Badge variant="success" className="font-sans font-normal">
+                                {ncOverrides
+                                  .get(part.mark)
+                                  ?.ops.some((op) => op.kind === 'removeCut')
+                                  ? t('preflight.warnings.cutRemovedBadge')
+                                  : t('preflight.warnings.bevelSetBadge')}
+                              </Badge>
+                            )}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          {pills.length === 0 && !weld ? (
+                            <FilterPill
+                              token="ok"
+                              active={isFilterTokenActive('ok')}
+                              title={t('preflight.status.ok')}
+                              onToggle={toggleFilterToken}
+                            >
+                              <Badge variant="success">{t('preflight.status.ok')}</Badge>
+                            </FilterPill>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {weld && (
+                                <FilterPill
+                                  token="weld"
+                                  active={isFilterTokenActive('weld')}
+                                  title={weldEtchingsTitle(t, weld)}
+                                  onToggle={toggleFilterToken}
+                                >
+                                  <Badge variant="info" className="gap-1 font-mono">
+                                    {t('preflight.status.weld')}
+                                  </Badge>
+                                </FilterPill>
+                              )}
+                              {pills.map((pill) => (
+                                <FilterPill
+                                  key={pill.code}
+                                  token={pill.code}
+                                  active={isFilterTokenActive(pill.code)}
+                                  title={
+                                    findingText(pill.finding) +
+                                    (pill.fixable ? ` · ${t('preflight.status.autoFix')}` : '')
+                                  }
+                                  onToggle={toggleFilterToken}
+                                >
+                                  <Badge
+                                    variant={SEVERITY_VARIANT[pill.severity]}
+                                    className={cn('gap-1 font-mono', pill.resolved && 'opacity-50')}
+                                  >
+                                    {pill.fixable && (
+                                      <Wrench className="size-3 shrink-0" aria-hidden />
+                                    )}
+                                    {pill.code}
+                                    {pill.count > 1 && ` ×${pill.count}`}
+                                  </Badge>
+                                </FilterPill>
+                              ))}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {part.assemblies && part.assemblies.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {part.assemblies.map((usage) => (
+                                <button
+                                  key={usage.assembly}
+                                  type="button"
+                                  aria-pressed={assemblyFilter === usage.assembly}
+                                  title={t('preflight.qty.assemblyTitle', {
+                                    assembly: usage.assembly,
+                                    qty: usage.qtyPerAssembly,
+                                    count: usage.assemblyQty,
+                                    total: usage.total,
+                                  })}
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    setAssemblyFilter((current) =>
+                                      current === usage.assembly ? null : usage.assembly,
+                                    )
+                                  }}
+                                  className={cn(
+                                    'cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                    assemblyFilter === usage.assembly &&
+                                      'ring-2 ring-ring ring-offset-1 ring-offset-card',
+                                  )}
+                                >
+                                  <Badge variant="muted" className="font-mono">
+                                    {usage.assembly}
+                                  </Badge>
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
                         <TableCell
-                          colSpan={PART_COLUMNS.length + 1}
-                          className="text-center text-sm text-muted-foreground"
+                          className={cn(
+                            !assemblyUsage &&
+                              qtyMismatch &&
+                              'font-semibold text-destructive-foreground',
+                          )}
+                          title={
+                            assemblyUsage
+                              ? t('preflight.qty.assemblyTitle', {
+                                  assembly: assemblyUsage.assembly,
+                                  qty: assemblyUsage.qtyPerAssembly,
+                                  count: assemblyUsage.assemblyQty,
+                                  total: assemblyUsage.total,
+                                })
+                              : !qtyKnown
+                                ? t('preflight.qty.unknownTitle')
+                                : qtyMismatch
+                                  ? t('preflight.qty.mismatchTitle', { nc: ncQty, pdf: pdfQty })
+                                  : qtyFallback
+                                    ? t('preflight.qty.fallbackTitle')
+                                    : undefined
+                          }
                         >
-                          {assemblyFilter && !markQuery.trim()
-                            ? t('preflight.parts.assemblyEmpty', { assembly: assemblyFilter })
-                            : t('preflight.parts.searchEmpty', { query: markQuery.trim() })}
+                          {assemblyUsage?.total ?? pdfQty ?? ncQty ?? '?'}
+                          {!assemblyUsage && qtyMismatch && (
+                            <span className="ml-1 text-xs">≠ {ncQty}</span>
+                          )}
+                          {!assemblyUsage && qtyFallback && (
+                            <span className="ml-1 text-xs text-muted-foreground">(NC)</span>
+                          )}
+                        </TableCell>
+                        <TableCell
+                          className={cn('font-mono text-xs', band && MASS_BAND_CLASS[band])}
+                          title={
+                            band === 'red'
+                              ? t('preflight.mass.heavy', { kg: MASS_RED_KG })
+                              : band === 'yellow'
+                                ? t('preflight.mass.medium', { kg: MASS_YELLOW_KG })
+                                : undefined
+                          }
+                        >
+                          {mass != null ? `${mass.toFixed(1)} kg` : '—'}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{sectionLabel(part)}</TableCell>
+                        <TableCell className="text-xs">
+                          {overrideFor(part) ? (
+                            <Badge variant="success">
+                              {overrideFor(part)?.kind
+                                ? t(`common.fix.${overrideFor(part)?.kind}`)
+                                : ''}
+                            </Badge>
+                          ) : modelChecks.has(part.mark) ? (
+                            <span className={sizeCheckTone(modelChecks.get(part.mark))}>
+                              {formatSizeCheck(t, modelChecks.get(part.mark))}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
                         </TableCell>
                       </TableRow>
-                    )}
-                    {visibleParts.map((part) => {
-                      const material = drawingMaterials.get(part.mark)
-                      const pdfQty = material?.qty ?? part.expected?.qty ?? null
-                      const ncQty = part.nc?.quantity ?? null
-                      const qtyMismatch = pdfQty != null && ncQty != null && pdfQty !== ncQty
-                      const qtyFallback = pdfQty == null && ncQty != null
-                      const mass = pieceMass(part)
-                      const band = massBand(mass)
-                      const pills = issuesByMark.get(part.mark) ?? []
-                      const weld = weldEtchings.get(part.mark)
-                      const assemblyUsage = assemblyFilter
-                        ? part.assemblies?.find((usage) => usage.assembly === assemblyFilter)
-                        : undefined
-                      const qtyKnown = assemblyUsage != null || pdfQty != null || ncQty != null
-                      return (
-                        <TableRow
-                          key={part.mark}
-                          tabIndex={0}
-                          onClick={() => openPart(part)}
-                          onMouseEnter={() => prefetchPart(part)}
-                          onFocus={() => prefetchPart(part)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault()
-                              openPart(part)
-                            }
-                          }}
-                          className="cursor-pointer outline-none focus-visible:bg-accent/60"
-                        >
-                          <TableCell className="w-8 p-0">
-                            <label
-                              className="flex cursor-pointer items-center justify-center py-2"
-                              onClick={(event) => event.stopPropagation()}
-                              onKeyDown={(event) => event.stopPropagation()}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={selectedMarks.has(part.mark)}
-                                readOnly
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  toggleMark(part.mark, event.shiftKey)
-                                }}
-                                onKeyDown={(event) => {
-                                  if (event.key === ' ' || event.key === 'Enter') {
-                                    event.stopPropagation()
-                                  }
-                                }}
-                                aria-label={part.mark}
-                              />
-                            </label>
-                          </TableCell>
-                          <TableCell className="font-mono text-xs">
-                            <span className="flex items-center gap-1.5">
-                              {part.mark}
-                              {ncOverrides.get(part.mark) && (
-                                <Badge variant="success" className="font-sans font-normal">
-                                  {ncOverrides
-                                    .get(part.mark)
-                                    ?.ops.some((op) => op.kind === 'removeCut')
-                                    ? t('preflight.warnings.cutRemovedBadge')
-                                    : t('preflight.warnings.bevelSetBadge')}
-                                </Badge>
-                              )}
-                            </span>
-                          </TableCell>
-                          <TableCell>
-                            {pills.length === 0 && !weld ? (
-                              <FilterPill
-                                token="ok"
-                                active={isFilterTokenActive('ok')}
-                                title={t('preflight.status.ok')}
-                                onToggle={toggleFilterToken}
-                              >
-                                <Badge variant="success">{t('preflight.status.ok')}</Badge>
-                              </FilterPill>
-                            ) : (
-                              <div className="flex flex-wrap gap-1">
-                                {weld && (
-                                  <FilterPill
-                                    token="weld"
-                                    active={isFilterTokenActive('weld')}
-                                    title={weldEtchingsTitle(t, weld)}
-                                    onToggle={toggleFilterToken}
-                                  >
-                                    <Badge variant="info" className="gap-1 font-mono">
-                                      {t('preflight.status.weld')}
-                                    </Badge>
-                                  </FilterPill>
-                                )}
-                                {pills.map((pill) => (
-                                  <FilterPill
-                                    key={pill.code}
-                                    token={pill.code}
-                                    active={isFilterTokenActive(pill.code)}
-                                    title={
-                                      findingText(pill.finding) +
-                                      (pill.fixable ? ` · ${t('preflight.status.autoFix')}` : '')
-                                    }
-                                    onToggle={toggleFilterToken}
-                                  >
-                                    <Badge
-                                      variant={SEVERITY_VARIANT[pill.severity]}
-                                      className={cn(
-                                        'gap-1 font-mono',
-                                        pill.resolved && 'opacity-50',
-                                      )}
-                                    >
-                                      {pill.fixable && (
-                                        <Wrench className="size-3 shrink-0" aria-hidden />
-                                      )}
-                                      {pill.code}
-                                      {pill.count > 1 && ` ×${pill.count}`}
-                                    </Badge>
-                                  </FilterPill>
-                                ))}
-                              </div>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-xs">
-                            {part.assemblies && part.assemblies.length > 0 ? (
-                              <div className="flex flex-wrap gap-1">
-                                {part.assemblies.map((usage) => (
-                                  <button
-                                    key={usage.assembly}
-                                    type="button"
-                                    aria-pressed={assemblyFilter === usage.assembly}
-                                    title={t('preflight.qty.assemblyTitle', {
-                                      assembly: usage.assembly,
-                                      qty: usage.qtyPerAssembly,
-                                      count: usage.assemblyQty,
-                                      total: usage.total,
-                                    })}
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      setAssemblyFilter((current) =>
-                                        current === usage.assembly ? null : usage.assembly,
-                                      )
-                                    }}
-                                    className={cn(
-                                      'cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                                      assemblyFilter === usage.assembly &&
-                                        'ring-2 ring-ring ring-offset-1 ring-offset-card',
-                                    )}
-                                  >
-                                    <Badge variant="muted" className="font-mono">
-                                      {usage.assembly}
-                                    </Badge>
-                                  </button>
-                                ))}
-                              </div>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </TableCell>
-                          <TableCell
-                            className={cn(
-                              !assemblyUsage &&
-                                qtyMismatch &&
-                                'font-semibold text-destructive-foreground',
-                            )}
-                            title={
-                              assemblyUsage
-                                ? t('preflight.qty.assemblyTitle', {
-                                    assembly: assemblyUsage.assembly,
-                                    qty: assemblyUsage.qtyPerAssembly,
-                                    count: assemblyUsage.assemblyQty,
-                                    total: assemblyUsage.total,
-                                  })
-                                : !qtyKnown
-                                  ? t('preflight.qty.unknownTitle')
-                                  : qtyMismatch
-                                    ? t('preflight.qty.mismatchTitle', { nc: ncQty, pdf: pdfQty })
-                                    : qtyFallback
-                                      ? t('preflight.qty.fallbackTitle')
-                                      : undefined
-                            }
-                          >
-                            {assemblyUsage?.total ?? pdfQty ?? ncQty ?? '?'}
-                            {!assemblyUsage && qtyMismatch && (
-                              <span className="ml-1 text-xs">≠ {ncQty}</span>
-                            )}
-                            {!assemblyUsage && qtyFallback && (
-                              <span className="ml-1 text-xs text-muted-foreground">(NC)</span>
-                            )}
-                          </TableCell>
-                          <TableCell
-                            className={cn('font-mono text-xs', band && MASS_BAND_CLASS[band])}
-                            title={
-                              band === 'red'
-                                ? t('preflight.mass.heavy', { kg: MASS_RED_KG })
-                                : band === 'yellow'
-                                  ? t('preflight.mass.medium', { kg: MASS_YELLOW_KG })
-                                  : undefined
-                            }
-                          >
-                            {mass != null ? `${mass.toFixed(1)} kg` : '—'}
-                          </TableCell>
-                          <TableCell className="font-mono text-xs">{sectionLabel(part)}</TableCell>
-                          <TableCell className="text-xs">
-                            {overrideFor(part) ? (
-                              <Badge variant="success">
-                                {overrideFor(part)?.kind
-                                  ? t(`common.fix.${overrideFor(part)?.kind}`)
-                                  : ''}
-                              </Badge>
-                            ) : modelChecks.has(part.mark) ? (
-                              <span className={sizeCheckTone(modelChecks.get(part.mark))}>
-                                {formatSizeCheck(t, modelChecks.get(part.mark))}
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            )}
-          </Card>
-        </>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          )}
+        </Card>
       )}
 
       <Dialog
@@ -4276,6 +4280,8 @@ export function PreflightPage() {
             : { index: settingsProfileIndex + 1, total: profileGroups.length }
         }
       />
+
+      <SectionLookupDialog open={sectionLookupOpen} onClose={() => setSectionLookupOpen(false)} />
 
       <BevelMenu
         open={bevelEdit !== null}

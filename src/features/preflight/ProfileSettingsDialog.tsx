@@ -7,7 +7,7 @@
  * verify them on scrap.
  */
 
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -23,6 +23,7 @@ import {
 import { type CutSuggestion, type SurfaceCondition, suggestCut } from '@/lib/machine/cutParams'
 import { MACHINE } from '@/lib/machine/profile'
 import { profileFamily } from '@/lib/sections/canonical'
+import { CATALOGUE_SECTIONS } from '@/lib/sections/catalogue'
 import { partSectionForCode, sectionThicknesses } from '@/lib/sections/stock'
 import { cn } from '@/lib/utils'
 
@@ -289,6 +290,105 @@ export function ProfileInfo({ profile, dims, marks = [] }: ProfileInfoProps) {
         </div>
       )}
     </div>
+  )
+}
+
+export interface SectionLookupDialogProps {
+  open: boolean
+  onClose: () => void
+}
+
+/** Searchable list of the tabulated sections, with the same preview and cut settings as a job. */
+export function SectionLookupDialog({ open, onClose }: SectionLookupDialogProps) {
+  const { t } = useTranslation()
+  const [query, setQuery] = useState('')
+  const [selected, setSelected] = useState(CATALOGUE_SECTIONS[0]?.code ?? '')
+
+  const matches = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return CATALOGUE_SECTIONS
+    return CATALOGUE_SECTIONS.filter(
+      (section) =>
+        section.label.toLowerCase().includes(needle) ||
+        section.group.toLowerCase().includes(needle),
+    )
+  }, [query])
+
+  const current = matches.find((section) => section.code === selected) ?? matches[0]
+
+  useEffect(() => {
+    if (!open) return
+    setSelected(current?.code ?? '')
+  }, [open, current?.code])
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t('preflight.profiles.lookupTitle')}
+      className="max-w-4xl"
+    >
+      <div className="grid md:h-[70vh] md:grid-cols-[17rem_minmax(0,1fr)]">
+        <div className="flex max-h-64 min-h-0 flex-col border-b border-border md:max-h-none md:border-b-0 md:border-r">
+          <div className="border-b border-border p-3">
+            <div className="relative">
+              <Search
+                className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <input
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t('preflight.profiles.lookupPlaceholder')}
+                aria-label={t('preflight.profiles.lookupPlaceholder')}
+                className="h-8 w-full rounded-md border border-border bg-background pl-7 pr-2 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              {t('preflight.profiles.lookupHint')}
+            </p>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto p-1.5">
+            {matches.length === 0 ? (
+              <p className="p-2 text-sm text-muted-foreground">
+                {t('preflight.profiles.lookupEmpty')}
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-0.5">
+                {matches.map((section) => (
+                  <li key={section.code}>
+                    <button
+                      type="button"
+                      onClick={() => setSelected(section.code)}
+                      aria-current={section.code === current?.code}
+                      className={cn(
+                        'flex w-full items-baseline justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                        section.code === current?.code
+                          ? 'bg-primary/15 text-foreground'
+                          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                      )}
+                    >
+                      <span className="truncate font-mono text-xs">{section.label}</span>
+                      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                        {section.group} · {section.mass.toFixed(1)}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+        <div className="min-h-0 overflow-auto p-4">
+          {current ? (
+            <ProfileInfo profile={current.code} dims={current.dims} />
+          ) : (
+            <p className="text-sm text-muted-foreground">{t('preflight.profiles.lookupEmpty')}</p>
+          )}
+        </div>
+      </div>
+    </Dialog>
   )
 }
 
