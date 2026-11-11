@@ -50,6 +50,14 @@ interface Row {
   center: Vec
 }
 
+interface StockWall {
+  clip: AnyShape
+  /** Axis point in world coordinates (the long coordinate is irrelevant). */
+  center: Vec
+  outerRadius: number
+  innerRadius: number | null
+}
+
 interface TabEdge {
   a: number
   b: number
@@ -232,7 +240,7 @@ export async function tabStep(
      * are intersected with it so they sit flush in the wall instead of sticking out past the OD or
      * into the bore. Non-round sections return null and keep the rectangular tab.
      */
-    const stockWallClip = (a: Body, b: Body): AnyShape | null => {
+    const stockWall = (a: Body, b: Body): StockWall | null => {
       interface AxialCylinder {
         radius: number
         point: Vec
@@ -309,7 +317,12 @@ export async function tabStep(
         const cutter = makeCylinder(inner.radius, height, start, unitLong) as unknown as AnyShape
         stock = (stock as unknown as { cut: (tool: AnyShape) => AnyShape }).cut(cutter)
       }
-      return stock
+      return {
+        clip: stock,
+        center: outer.point,
+        outerRadius: outer.radius,
+        innerRadius: inner ? inner.radius : null,
+      }
     }
 
     const sortedByRow = [...bodies].sort((a, b) => a.center[rowAxis] - b.center[rowAxis])
@@ -349,6 +362,45 @@ export async function tabStep(
         return [lo, Math.max(lo, hi)]
       }) as [[number, number], [number, number], [number, number]]
 
+    /**
+     * Half the local material width on one cross axis, measured on a thin slice just inside the
+     * body. This is what makes a non-round tab flush with both faces of a web/flange: the tab is
+     * no wider than the material it sits in, so neither side sticks out into the section void.
+     */
+    const localHalf = (
+      body: Body,
+      u: number,
+      otherAxis: number,
+      otherCentre: number,
+      otherHalf: number,
+      measureAxis: number,
+    ): number | null => {
+      const thickness = 0.2
+      const ranges: [[number, number], [number, number], [number, number]] = [
+        [0, 0],
+        [0, 0],
+        [0, 0],
+      ]
+      ranges[longAxis] = [u - thickness / 2, u + thickness / 2]
+      ranges[otherAxis] = [otherCentre - otherHalf, otherCentre + otherHalf]
+      ranges[measureAxis] = [
+        (overallMin[measureAxis] as number) - 1,
+        (overallMax[measureAxis] as number) + 1,
+      ]
+      try {
+        const slab = boxFromRanges(makeBox, ranges)
+        const piece = (
+          body.solid as unknown as { intersect: (tool: AnyShape) => AnyShape }
+        ).intersect(slab)
+        const [min, max] = (piece as unknown as { boundingBox: { bounds: [number[], number[]] } })
+          .boundingBox.bounds
+        const width = (max[measureAxis] as number) - (min[measureAxis] as number)
+        return width > 0.5 ? width / 2 : null
+      } catch {
+        return null
+      }
+    }
+
     // 1. Keep each row as one chain: one tab across every end-to-end junction.
     for (const row of rows) {
       for (let index = 0; index < row.bodies.length - 1; index++) {
@@ -375,7 +427,8 @@ export async function tabStep(
           if (hi >= lo) return lo + (hi - lo) * fraction
           return overlapCenter(a, b, axis)
         }
-        const wallClip = stockWallClip(a, b)
+        const wall = stockWall(a, b)
+        const wallClip = wall?.clip ?? null
         const makeTab = (
           fractionRow: number,
           fractionLateral: number,
@@ -389,8 +442,50 @@ export async function tabStep(
           const row = crossPoint(rowAxis, fractionRow)
           const lateral = crossPoint(lateralAxis, fractionLateral)
           ranges[longAxis] = [z0, z1]
-          ranges[rowAxis] = [row - sizeHalf, row + sizeHalf]
-          ranges[lateralAxis] = [lateral - sizeHalf, lateral + sizeHalf]
+          if (wall) {
+            // A round wall tab must span the whole wall thickness: tangential width stays local,
+            // but the radial extent runs from the bore to the OD, then the annulus clip trims it
+            // flush on both surfaces. Keeping it only at the OD leaves an inner step which can
+            // throw off the tube diameter when the STEP is re-imported.
+            const distanceRow = Math.abs(row - wall.center[rowAxis])
+            const distanceLateral = Math.abs(lateral - wall.center[lateralAxis])
+            const radialAxis = distanceRow >= distanceLateral ? rowAxis : lateralAxis
+            const tangentialAxis = radialAxis === rowAxis ? lateralAxis : rowAxis
+            const radialCoord = radialAxis === rowAxis ? row : lateral
+            const tangentialCoord = radialAxis === rowAxis ? lateral : row
+            if (wall.innerRadius != null) {
+              const sign = radialCoord >= wall.center[radialAxis] ? 1 : -1
+              const inner = wall.center[radialAxis] + sign * (wall.innerRadius - 0.2)
+              const outer = wall.center[radialAxis] + sign * (wall.outerRadius + 0.2)
+              ranges[radialAxis] = [Math.min(inner, outer), Math.max(inner, outer)]
+            } else {
+              ranges[radialAxis] = [radialCoord - sizeHalf, radialCoord + sizeHalf]
+            }
+            ranges[tangentialAxis] = [tangentialCoord - sizeHalf, tangentialCoord + sizeHalf]
+          } else {
+            let rowHalf = sizeHalf
+            let lateralHalf = sizeHalf
+            const midpoint = (z0 + z1) / 2
+            const positiveGap = b.min[longAxis] - a.max[longAxis] > 0
+            const sample = [a, b].map((body) => ({
+              body,
+              u: positiveGap
+                ? body === a
+                  ? (a.max[longAxis] as number) - 0.5
+                  : (b.min[longAxis] as number) + 0.5
+                : midpoint,
+            }))
+            const rowWidths = sample
+              .map(({ body, u }) => localHalf(body, u, lateralAxis, lateral, sizeHalf, rowAxis))
+              .filter((value): value is number => value != null && value > 0.5)
+            const lateralWidths = sample
+              .map(({ body, u }) => localHalf(body, u, rowAxis, row, sizeHalf, lateralAxis))
+              .filter((value): value is number => value != null && value > 0.5)
+            if (rowWidths.length > 0) rowHalf = Math.min(sizeHalf, ...rowWidths)
+            if (lateralWidths.length > 0) lateralHalf = Math.min(sizeHalf, ...lateralWidths)
+            ranges[rowAxis] = [row - rowHalf, row + rowHalf]
+            ranges[lateralAxis] = [lateral - lateralHalf, lateral + lateralHalf]
+          }
           const box = boxFromRanges(makeBox, clipRanges(ranges))
           if (!wallClip) return box
           try {
@@ -456,6 +551,13 @@ export async function tabStep(
         const [low, high] = a.center[rowAxis] <= b.center[rowAxis] ? [a, b] : [b, a]
         const [r0, r1] = gapSpan(low, high, rowAxis, half, penetration)
         const lateralCenter = overlapCenter(low, high, lateralAxis)
+        const rowCentre = (r0 + r1) / 2
+        const rowHalf = Math.max(half, (r1 - r0) / 2)
+        const widths = [
+          localHalf(low, u, rowAxis, rowCentre, rowHalf, lateralAxis),
+          localHalf(high, u, rowAxis, rowCentre, rowHalf, lateralAxis),
+        ].filter((value): value is number => value != null && value > 0.5)
+        const lateralHalf = widths.length > 0 ? Math.min(half, ...widths) : half
         const u0 = u - half
         const u1 = u + half
         const ranges: [[number, number], [number, number], [number, number]] = [
@@ -465,7 +567,7 @@ export async function tabStep(
         ]
         ranges[longAxis] = [u0, u1]
         ranges[rowAxis] = [r0, r1]
-        ranges[lateralAxis] = [lateralCenter - half, lateralCenter + half]
+        ranges[lateralAxis] = [lateralCenter - lateralHalf, lateralCenter + lateralHalf]
         tabs.push(boxFromRanges(makeBox, clipRanges(ranges)))
         edges.push({ a: low.index, b: high.index })
       }
