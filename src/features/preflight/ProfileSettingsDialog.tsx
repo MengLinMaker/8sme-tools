@@ -8,7 +8,7 @@
  */
 
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
@@ -303,6 +303,7 @@ export function SectionLookupDialog({ open, onClose }: SectionLookupDialogProps)
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(CATALOGUE_SECTIONS[0]?.code ?? '')
+  const listRef = useRef<HTMLDivElement>(null)
 
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -319,6 +320,30 @@ export function SectionLookupDialog({ open, onClose }: SectionLookupDialogProps)
   useEffect(() => {
     if (!open) return
     setSelected(current?.code ?? '')
+  }, [open, current?.code])
+
+  // Arrow keys move down/up the filtered list, even while the search field has focus.
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+      if (event.altKey || event.ctrlKey || event.metaKey) return
+      event.preventDefault()
+      setSelected((currentCode) => {
+        const index = matches.findIndex((section) => section.code === currentCode)
+        const step = event.key === 'ArrowDown' ? 1 : -1
+        const next = Math.min(matches.length - 1, Math.max(0, (index < 0 ? 0 : index) + step))
+        return matches[next]?.code ?? currentCode
+      })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, matches])
+
+  // Keep the highlighted section visible as the selection moves.
+  useEffect(() => {
+    if (!open || !current?.code) return
+    listRef.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' })
   }, [open, current?.code])
 
   return (
@@ -349,7 +374,7 @@ export function SectionLookupDialog({ open, onClose }: SectionLookupDialogProps)
               {t('preflight.profiles.lookupHint')}
             </p>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto p-1.5">
+          <div ref={listRef} className="min-h-0 flex-1 overflow-auto p-1.5">
             {matches.length === 0 ? (
               <p className="p-2 text-sm text-muted-foreground">
                 {t('preflight.profiles.lookupEmpty')}
