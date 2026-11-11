@@ -86,7 +86,7 @@ export const en = {
   preflight: {
     title: 'WiseCAM Preflight',
     subtitle:
-      'Drop a job .zip / .rar (NC + STEP + PDF, optionally a part list .xlsx/.xls). Everything is checked locally in your browser — nothing is uploaded.',
+      'Drop a job .zip / .rar (NC + STEP + PDF, optionally a part list .xlsx/.xlsm/.xls). Everything is checked locally in your browser — nothing is uploaded.',
     analyzing: 'Analyzing…',
     source: 'Job',
     stats: {
@@ -552,7 +552,7 @@ export const en = {
     LENGTH_DIFFERENCE:
       'NC length {{nc}}mm vs part-list {{list}}mm (Δ{{diff}}mm) — verify against drawing',
     PART_LIST_NO_FILES: 'Part list lists {{part}} but no NC/STEP/PDF files were found',
-    NO_PART_LIST: 'No part list (.xlsx/.xls) found — quantity cross-checks were skipped',
+    NO_PART_LIST: 'No part list (.xlsx/.xlsm/.xls) found — quantity cross-checks were skipped',
     NOT_A_PART: '{{mark}} has neither an NC nor a STEP file — skipped (not a part)',
     STRAY_BODY: 'Found {{bodies}} detached solid bodies',
     CUT_END_PIECE:
@@ -665,7 +665,7 @@ export const zh = {
   preflight: {
     title: 'WiseCAM 预检',
     subtitle:
-      '拖入作业 .zip / .rar（NC + STEP + PDF，可选零件清单 .xlsx/.xls）。全部在浏览器本地检查——不会上传任何数据。',
+      '拖入作业 .zip / .rar（NC + STEP + PDF，可选零件清单 .xlsx/.xlsm/.xls）。全部在浏览器本地检查——不会上传任何数据。',
     analyzing: '正在分析…',
     source: '作业',
     stats: {
@@ -1098,7 +1098,7 @@ export const zh = {
     LENGTH_DIFFERENCE:
       'NC 长度 {{nc}}mm 与零件清单 {{list}}mm 不符（相差 {{diff}}mm）——请对照图纸核对',
     PART_LIST_NO_FILES: '零件清单列出了 {{part}}，但未找到对应的 NC/STEP/PDF 文件',
-    NO_PART_LIST: '未找到零件清单（.xlsx/.xls）——已跳过数量交叉核对',
+    NO_PART_LIST: '未找到零件清单（.xlsx/.xlsm/.xls）——已跳过数量交叉核对',
     NOT_A_PART: '{{mark}} 既无 NC 也无 STEP 文件——已跳过（非零件）',
     STRAY_BODY: '发现 {{bodies}} 个分离实体',
     CUT_END_PIECE: '直线切透会切掉图纸上保留的 {{extra}} 个小件——需要坡口/斜切（或该面不切）',

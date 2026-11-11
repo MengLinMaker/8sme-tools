@@ -100,6 +100,12 @@ describe('markFromFilename', () => {
     expect(markFromFilename('TR9-2.nc1')).toBe('tr9-2')
     expect(markFromFilename('TR9-1  Shaft - UC (0).pdf')).toBe('tr9-1')
   })
+
+  it('reads the ITEM token from comma-separated Tekla STEP names', () => {
+    expect(markFromFilename('12095, ITEM 1, PFC 250, 1 OFF[C].STEP')).toBe('item1')
+    expect(markFromFilename('12095, ITEM 35, SHS 75x75x6, 2 OFF[C].STEP')).toBe('item35')
+    expect(markFromFilename('item10.stp')).toBe('item10')
+  })
 })
 
 describe('auditEntries', () => {
@@ -199,6 +205,26 @@ describe('auditEntries', () => {
     expect(result.parts.find((part) => part.mark === 'tr9-1')?.nc?.path).toBe(
       'IFC shaft NC/TR9-1.nc1',
     )
+  })
+
+  it('keeps comma-separated ITEM STEPs as separate parts and folds true copies', () => {
+    const result = auditEntries('j12095.zip', [
+      { path: 'STEP/12095, ITEM 1, PFC 250, 1 OFF[C].STEP', bytes: strToU8(VALID_STEP) },
+      { path: 'STEP/12095, ITEM 2, PFC 250, 1 OFF[C].STEP', bytes: strToU8(VALID_STEP) },
+      { path: 'STEP.zip/STEP/12095, ITEM 1, PFC 250, 1 OFF[C].STEP', bytes: strToU8(VALID_STEP) },
+    ])
+    expect(result.parts.map((part) => part.mark)).toEqual(['item1', 'item2'])
+    expect(result.parts[0]?.step?.path).toBe('STEP/12095, ITEM 1, PFC 250, 1 OFF[C].STEP')
+  })
+
+  it('reads a macro-enabled .xlsm part list', () => {
+    const entries = makeEntries().map((entry) =>
+      entry.path === 'part list.xlsx' ? { ...entry, path: 'part list.xlsm' } : entry,
+    )
+    const result = auditEntries('job.zip', entries)
+    expect(result.summary.hasPartList).toBe(true)
+    expect(result.parts).toHaveLength(2)
+    expect(result.findings.find((finding) => finding.code === 'QTY_MISMATCH')?.mark).toBe('a3')
   })
 
   it('ignores slash/underscore differences in the NC internal mark', () => {

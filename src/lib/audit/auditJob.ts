@@ -29,7 +29,7 @@ function classify(path: string): Kind {
   if (ext === 'nc1' || ext === 'nc') return 'nc'
   if (ext === 'stp' || ext === 'step') return 'step'
   if (ext === 'pdf') return 'pdf'
-  if (ext === 'xlsx' || ext === 'xls') return 'xlsx'
+  if (ext === 'xlsx' || ext === 'xlsm' || ext === 'xls') return 'xlsx'
   return 'other'
 }
 
@@ -38,8 +38,12 @@ export function markFromFilename(path: string): string {
   const base = baseName(path)
     .replace(/\.[^.]+$/, '')
     .replace(/^[^A-Za-z0-9]+/, '')
-  // The whole first token is the mark; descriptions after it are not (`TR9-1  Shaft - UC (0).pdf`).
-  // Suffixes are part of the mark: `TR9-1` and `TR9-2` are different parts, so never truncate at `-`.
+  // Tekla STEP exports are comma-separated: `12095, ITEM 1, PFC 250, 1 OFF[C].STEP`. The leading
+  // project number is shared by every part, so the mark is the `ITEM <n>` token, not `12095,`.
+  const item = base.match(/\bitem\s*([0-9]+[A-Za-z]?)\b/i)
+  if (item) return `item${item[1]}`.toLowerCase()
+  // Otherwise the whole first token is the mark; descriptions after it are not
+  // (`TR9-1  Shaft - UC (0).pdf`). Suffixes are part of the mark: `TR9-1` and `TR9-2` differ.
   const token = base.split(/\s+/)[0]
   return (token || base).toLowerCase()
 }
