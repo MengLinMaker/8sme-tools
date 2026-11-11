@@ -18,6 +18,21 @@ import { MACHINE, type MachineProfile } from './profile'
 /** Surface condition of the incoming stock. */
 export type SurfaceCondition = 'normal' | 'rust' | 'primed' | 'galvanised'
 
+/** Weld-prep bevel presets (degrees off square), including the default square cut. */
+export const BEVEL_PRESETS_DEG = [0, 15, 30, 45] as const
+
+/**
+ * Thickness the beam actually traverses on a bevel cut: `t / cos θ`.
+ *
+ * A 0° cut is the square wall; a 45° bevel cuts a ≈1.41× longer path, so speed, focus and power
+ * follow the effective thickness rather than the nominal plate.
+ */
+export function bevelThicknessMm(thicknessMm: number, bevelDeg: number): number {
+  if (!(thicknessMm > 0) || !Number.isFinite(bevelDeg)) return thicknessMm
+  const angle = Math.min(Math.abs(bevelDeg), 89)
+  return thicknessMm / Math.cos((angle * Math.PI) / 180)
+}
+
 /** Where a row sits in the source data. */
 export interface CutSource {
   /** Human-readable provenance, shown next to the suggestion. */

@@ -20,7 +20,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { type CutSuggestion, type SurfaceCondition, suggestCut } from '@/lib/machine/cutParams'
+import {
+  BEVEL_PRESETS_DEG,
+  bevelThicknessMm,
+  type CutSuggestion,
+  type SurfaceCondition,
+  suggestCut,
+} from '@/lib/machine/cutParams'
 import { MACHINE } from '@/lib/machine/profile'
 import { profileFamily } from '@/lib/sections/canonical'
 import { CATALOGUE_SECTIONS } from '@/lib/sections/catalogue'
@@ -461,6 +467,7 @@ export function CutSettings({
   const defaultSurface: SurfaceCondition = kind === 'hollow' ? 'primed' : 'rust'
   const [surface, setSurface] = useState<SurfaceCondition>(defaultSurface)
   useEffect(() => setSurface(defaultSurface), [defaultSurface])
+  const [bevelDeg, setBevelDeg] = useState(0)
   const thicknesses = useMemo(() => sectionThicknesses(profile, dims), [profile, dims])
   const section = useMemo(() => partSectionForCode(profile, dims), [profile, dims])
   const rotationRadiusMm = useMemo(() => {
@@ -470,47 +477,82 @@ export function CutSettings({
     const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
     return span / 2
   }, [section])
-  const governingThicknessMm =
-    thicknesses.length > 0 ? Math.max(...thicknesses.map((thickness) => thickness.mm)) : undefined
-  const suggestions = useMemo(
+  // A bevel cuts a longer path through the plate, so the recipe follows the effective thickness.
+  const cutThicknesses = useMemo(
     () =>
       thicknesses.map((thickness) => ({
+        ...thickness,
+        cutMm: bevelThicknessMm(thickness.mm, bevelDeg),
+      })),
+    [thicknesses, bevelDeg],
+  )
+  const governingThicknessMm =
+    cutThicknesses.length > 0
+      ? Math.max(...cutThicknesses.map((thickness) => thickness.cutMm))
+      : undefined
+  const suggestions = useMemo(
+    () =>
+      cutThicknesses.map((thickness) => ({
         thickness,
-        cut: suggestCut(thickness.mm, surface, MACHINE, {
+        cut: suggestCut(thickness.cutMm, surface, MACHINE, {
           kind,
           rotationRadiusMm,
           governingThicknessMm,
         }),
       })),
-    [thicknesses, surface, kind, rotationRadiusMm, governingThicknessMm],
+    [cutThicknesses, surface, kind, rotationRadiusMm, governingThicknessMm],
   )
   const labelWidth = compact ? 'w-28' : 'w-40'
   const cell = compact ? 'px-2 py-1' : 'px-3 py-1.5'
   return (
     <div className={cn('flex flex-col gap-3', compact && '@container')}>
-      <fieldset
-        className={cn(
-          'm-0 grid gap-1.5 border-0 p-0',
-          compact ? 'grid-cols-2 @[18rem]:grid-cols-4' : 'grid-cols-4',
-        )}
-      >
-        <legend className="sr-only">{t('preflight.profileSettings.surface')}</legend>
-        {SURFACES.map((value) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setSurface(value)}
-            className={cn(
-              'min-w-0 truncate rounded-md border px-2 py-1 text-center text-[11px] transition-colors',
-              surface === value
-                ? 'border-primary bg-primary/15 text-foreground'
-                : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-            )}
-          >
-            {t(`preflight.profileSettings.surfaces.${value}`)}
-          </button>
-        ))}
-      </fieldset>
+      <div className="flex flex-col gap-2">
+        <fieldset
+          className={cn(
+            'm-0 grid gap-1.5 border-0 p-0',
+            compact ? 'grid-cols-2 @[18rem]:grid-cols-4' : 'grid-cols-4',
+          )}
+        >
+          <legend className="sr-only">{t('preflight.profileSettings.surface')}</legend>
+          {SURFACES.map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setSurface(value)}
+              className={cn(
+                'min-w-0 truncate rounded-md border px-2 py-1 text-center text-[11px] transition-colors',
+                surface === value
+                  ? 'border-primary bg-primary/15 text-foreground'
+                  : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              )}
+            >
+              {t(`preflight.profileSettings.surfaces.${value}`)}
+            </button>
+          ))}
+        </fieldset>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] font-medium text-muted-foreground">
+            {t('preflight.profileSettings.bevel')}
+          </span>
+          {BEVEL_PRESETS_DEG.map((angle) => (
+            <button
+              key={angle}
+              type="button"
+              onClick={() => setBevelDeg(angle)}
+              aria-pressed={bevelDeg === angle}
+              title={t('preflight.profileSettings.bevelOption', { angle })}
+              className={cn(
+                'rounded-md border px-2.5 py-1 text-center text-[11px] tabular-nums transition-colors',
+                bevelDeg === angle
+                  ? 'border-primary bg-primary/15 text-foreground'
+                  : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              )}
+            >
+              {angle}°
+            </button>
+          ))}
+        </div>
+      </div>
 
       {thicknesses.length === 0 ? (
         <p className="text-sm text-muted-foreground">
@@ -527,9 +569,22 @@ export function CutSettings({
                 {suggestions.map(({ thickness }) => (
                   <TableHead
                     key={`${thickness.role}-${thickness.mm}`}
+                    title={
+                      bevelDeg > 0
+                        ? t('preflight.profileSettings.bevelEffective', {
+                            angle: bevelDeg,
+                            base: thickness.mm.toFixed(1),
+                          })
+                        : undefined
+                    }
                     className="h-8 w-20 text-right font-mono text-xs text-foreground"
                   >
-                    {thickness.mm.toFixed(1)}
+                    {thickness.cutMm.toFixed(1)}
+                    {bevelDeg > 0 && (
+                      <span className="block text-[10px] font-normal text-muted-foreground">
+                        ({thickness.mm.toFixed(1)})
+                      </span>
+                    )}
                   </TableHead>
                 ))}
               </TableRow>

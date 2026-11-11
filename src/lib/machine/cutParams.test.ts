@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CUT_TABLE_RANGE_MM, suggestCut } from './cutParams'
+import { BEVEL_PRESETS_DEG, bevelThicknessMm, CUT_TABLE_RANGE_MM, suggestCut } from './cutParams'
 import { KL90010T, type MachineProfile } from './profile'
 
 describe('suggestCut (O₂ carbon steel)', () => {
@@ -98,5 +98,21 @@ describe('one nozzle per section', () => {
     expect(web.nozzle).toEqual({ sizeMm: 2, type: 'single' })
     const flange = suggestCut(16, 'rust', KL90010T, { kind: 'open', governingThicknessMm: 16 })
     expect(flange.nozzle).toEqual({ sizeMm: 2, type: 'single' })
+  })
+})
+
+describe('bevel thickness', () => {
+  it('exposes square plus the weld-prep presets', () => {
+    expect(BEVEL_PRESETS_DEG).toEqual([0, 15, 30, 45])
+  })
+
+  it('leaves a square cut at the nominal thickness', () => {
+    expect(bevelThicknessMm(6, 0)).toBe(6)
+  })
+
+  it('follows the 1/cos path through the plate', () => {
+    expect(bevelThicknessMm(6, 15)).toBeCloseTo(6.21, 2)
+    expect(bevelThicknessMm(6, 30)).toBeCloseTo(6.93, 2)
+    expect(bevelThicknessMm(6, 45)).toBeCloseTo(8.49, 2)
   })
 })
