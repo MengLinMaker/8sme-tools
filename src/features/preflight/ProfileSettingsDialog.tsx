@@ -474,6 +474,8 @@ export function CutSettings({
   useEffect(() => setRegime(kind === 'open' ? 'mirror' : 'normal'), [kind])
   const [mirrorSpeeds, setMirrorSpeeds] = useState<Record<string, number>>({})
   const [severance, setSeverance] = useState(13.4)
+  const [kerf, setKerf] = useState(1)
+  const [spot, setSpot] = useState(0.2)
   const [bevelDeg, setBevelDeg] = useState(0)
   const thicknesses = useMemo(() => sectionThicknesses(profile, dims), [profile, dims])
   const section = useMemo(() => partSectionForCode(profile, dims), [profile, dims])
@@ -528,20 +530,17 @@ export function CutSettings({
   }, [baseSuggestions, severance])
   const suggestions = useMemo(
     () =>
-      cutThicknesses.map((thickness) => {
-        const mirror = kind === 'open' && regime === 'mirror'
-        return {
-          thickness,
-          cut: suggestCut(thickness.cutMm, surface, MACHINE, {
-            kind,
-            rotationRadiusMm,
-            governingThicknessMm,
-            regime,
-            targetSpeedMmMin: mirror ? mirrorSpeeds[thicknessKey(thickness)] : undefined,
-            targetSeveranceJPerMm2: mirror ? severance : undefined,
-          }),
-        }
-      }),
+      cutThicknesses.map((thickness) => ({
+        thickness,
+        cut: suggestCut(thickness.cutMm, surface, MACHINE, {
+          kind,
+          rotationRadiusMm,
+          governingThicknessMm,
+          regime,
+          targetSpeedMmMin: mirrorSpeeds[thicknessKey(thickness)],
+          targetSeveranceJPerMm2: severance,
+        }),
+      })),
     [
       cutThicknesses,
       surface,
@@ -604,7 +603,7 @@ export function CutSettings({
             ))}
           </div>
         )}
-        {kind === 'open' && regime === 'mirror' && (
+        {suggestions.length > 0 && (
           <div className="flex flex-col gap-1.5">
             {suggestions.map(({ thickness, cut }) => {
               const key = thicknessKey(thickness)
@@ -749,6 +748,87 @@ export function CutSettings({
             </TableBody>
           </Table>
         </div>
+      )}
+
+      {suggestions.length > 0 && (
+        <details className="rounded-lg border border-border">
+          <summary className="cursor-pointer px-3 py-2 text-xs font-medium">
+            {t('preflight.profileSettings.advanced')}
+          </summary>
+          <div className="flex flex-col gap-3 border-t border-border p-3">
+            <div className="flex flex-wrap items-end gap-3 text-[11px] text-muted-foreground">
+              <label className="flex flex-col gap-1">
+                <span>{t('preflight.profileSettings.kerf')}</span>
+                <input
+                  type="number"
+                  min={0.1}
+                  step={0.1}
+                  value={kerf}
+                  onChange={(event) => setKerf(Number(event.target.value) || 0.1)}
+                  className="h-8 w-24 rounded-md border border-input bg-transparent px-2 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>{t('preflight.profileSettings.spot')}</span>
+                <input
+                  type="number"
+                  min={0.05}
+                  step={0.05}
+                  value={spot}
+                  onChange={(event) => setSpot(Number(event.target.value) || 0.05)}
+                  className="h-8 w-24 rounded-md border border-input bg-transparent px-2 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </label>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>{t('preflight.profileSettings.thickness')}</TableHead>
+                  <TableHead className="text-right">
+                    {t('preflight.profileSettings.severanceShort')}
+                  </TableHead>
+                  <TableHead className="text-right">
+                    {t('preflight.profileSettings.volumetric')}
+                  </TableHead>
+                  <TableHead className="text-right">
+                    {t('preflight.profileSettings.interaction')}
+                  </TableHead>
+                  <TableHead className="text-right">
+                    {t('preflight.profileSettings.peclet')}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {suggestions.map(({ thickness, cut }) => {
+                  const v = cut.speedMinMmMin
+                  const S =
+                    v > 0
+                      ? (0.06 * ((cut.powerPct / 100) * MACHINE.laser.ratedPowerW)) /
+                        (v * thickness.cutMm)
+                      : 0
+                  const Ev = kerf > 0 ? S / kerf : 0
+                  const tau = v > 0 ? (60 * kerf) / v : 0
+                  const Pe = 4.167 * v * spot
+                  return (
+                    <TableRow key={thicknessKey(thickness)}>
+                      <TableCell className="font-mono text-xs">{thickness.mm.toFixed(1)}</TableCell>
+                      <TableCell className="text-right font-mono text-xs">{S.toFixed(1)}</TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {Ev.toFixed(1)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {tau.toFixed(1)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {Pe.toFixed(1)}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </details>
       )}
     </div>
   )
