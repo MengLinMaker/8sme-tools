@@ -20,13 +20,34 @@ export const TAB_DENSITY_DEFAULT = 2
 export const TAB_DENSITY_MIN = 0.2
 export const TAB_DENSITY_MAX = 20
 
-/** Tab cross-section (mm) and how far each tab bites into the two pieces it joins. */
-export const TAB_SIZE_MM = 8
-export const TAB_PENETRATION_MM = 1.5
+/** Defaults for the three tab dimensions (mm). */
+export const TAB_LENGTH_DEFAULT = 50
+export const TAB_LENGTH_MIN = 2
+export const TAB_LENGTH_MAX = 500
+export const TAB_WIDTH_DEFAULT = 8
+export const TAB_WIDTH_MIN = 1
+export const TAB_WIDTH_MAX = 200
+export const TAB_ENGAGEMENT_DEFAULT = 1.5
+export const TAB_ENGAGEMENT_MIN = 0.1
+export const TAB_ENGAGEMENT_MAX = 10
 
 export interface TabOptions {
   /** Tabs per metre of overlap between adjacent rows. */
   density?: number
+  /** Tab size along the beam (mm). */
+  tabLength?: number
+  /** Tab size across the joint (mm); clamped to the local material to stay flush. */
+  tabWidth?: number
+  /** How far the tab bites into each piece (mm). */
+  engagement?: number
+}
+
+/** The defaults the planner would use for a particular STEP. */
+export interface TabDefaults {
+  tabLength: number
+  tabWidth: number
+  engagement: number
+  density: number
 }
 
 export interface TabResult {
@@ -196,6 +217,23 @@ export async function tabStep(
       TAB_DENSITY_MIN,
       TAB_DENSITY_MAX,
     )
+    const lengthHalf =
+      clamp(
+        Number.isFinite(options.tabLength) ? (options.tabLength as number) : TAB_LENGTH_DEFAULT,
+        TAB_LENGTH_MIN,
+        TAB_LENGTH_MAX,
+      ) / 2
+    const widthHalf =
+      clamp(
+        Number.isFinite(options.tabWidth) ? (options.tabWidth as number) : TAB_WIDTH_DEFAULT,
+        TAB_WIDTH_MIN,
+        TAB_WIDTH_MAX,
+      ) / 2
+    const penetration = clamp(
+      Number.isFinite(options.engagement) ? (options.engagement as number) : TAB_ENGAGEMENT_DEFAULT,
+      TAB_ENGAGEMENT_MIN,
+      TAB_ENGAGEMENT_MAX,
+    )
 
     const bodies: Body[] = solids.map((solid, index) => {
       const [min, max] = solid.boundingBox.bounds
@@ -345,8 +383,6 @@ export async function tabStep(
     }
     for (const row of rows) row.bodies.sort((a, b) => a.min[longAxis] - b.min[longAxis])
 
-    const half = TAB_SIZE_MM / 2
-    const penetration = TAB_PENETRATION_MM
     const tabs: AnyShape[] = []
     const edges: TabEdge[] = []
 
@@ -406,7 +442,7 @@ export async function tabStep(
       for (let index = 0; index < row.bodies.length - 1; index++) {
         const a = row.bodies[index] as Body
         const b = row.bodies[index + 1] as Body
-        const [z0, z1] = gapSpan(a, b, longAxis, half, penetration)
+        const [z0, z1] = gapSpan(a, b, longAxis, lengthHalf, penetration)
         // The bbox centre works for a solid T/L section but sits in the bore of a tube. Try the
         // centre first, then points out towards the cross-section edges until a tab touches both
         // pieces; this keeps the tab small even on a hollow section.
@@ -432,7 +468,7 @@ export async function tabStep(
         const makeTab = (
           fractionRow: number,
           fractionLateral: number,
-          sizeHalf = half,
+          sizeHalf = widthHalf,
         ): AnyShape => {
           const ranges: [[number, number], [number, number], [number, number]] = [
             [0, 0],
@@ -512,7 +548,7 @@ export async function tabStep(
           // A hollow section has no material at the bbox centre. Bridge the seam wherever a small
           // candidate actually touches both pieces (a tube's split normally gives two, top and
           // bottom) rather than widening the tab until it reaches the wall.
-          const bridgeHalf = half * 2
+          const bridgeHalf = widthHalf
           const bridged: AnyShape[] = []
           for (const [rowFraction, lateralFraction] of fractions) {
             const candidate = makeTab(rowFraction, lateralFraction, bridgeHalf)
@@ -545,21 +581,21 @@ export async function tabStep(
       const step = (hi - lo) / count
       for (let tabIndex = 0; tabIndex < count; tabIndex++) {
         const u = lo + (tabIndex + 0.5) * step
-        const a = bodyAt(lower, u, longAxis, half)
-        const b = bodyAt(upper, u, longAxis, half)
+        const a = bodyAt(lower, u, longAxis, lengthHalf)
+        const b = bodyAt(upper, u, longAxis, lengthHalf)
         if (!a || !b) continue
         const [low, high] = a.center[rowAxis] <= b.center[rowAxis] ? [a, b] : [b, a]
-        const [r0, r1] = gapSpan(low, high, rowAxis, half, penetration)
+        const [r0, r1] = gapSpan(low, high, rowAxis, widthHalf, penetration)
         const lateralCenter = overlapCenter(low, high, lateralAxis)
         const rowCentre = (r0 + r1) / 2
-        const rowHalf = Math.max(half, (r1 - r0) / 2)
+        const rowHalf = Math.max(widthHalf, (r1 - r0) / 2)
         const widths = [
           localHalf(low, u, rowAxis, rowCentre, rowHalf, lateralAxis),
           localHalf(high, u, rowAxis, rowCentre, rowHalf, lateralAxis),
         ].filter((value): value is number => value != null && value > 0.5)
-        const lateralHalf = widths.length > 0 ? Math.min(half, ...widths) : half
-        const u0 = u - half
-        const u1 = u + half
+        const lateralHalf = widths.length > 0 ? Math.min(widthHalf, ...widths) : widthHalf
+        const u0 = u - lengthHalf
+        const u1 = u + lengthHalf
         const ranges: [[number, number], [number, number], [number, number]] = [
           [0, 0],
           [0, 0],
@@ -596,7 +632,7 @@ export async function tabStep(
           first.center[1] - dir[1] * penetration,
           first.center[2] - dir[2] * penetration,
         ]
-        tabs.push(makeCylinder(half, distance + penetration * 2, start, dir))
+        tabs.push(makeCylinder(widthHalf, distance + penetration * 2, start, dir))
         edges.push({ a: first.index, b: other.index })
         components.union(first.index, other.index)
       }
@@ -629,6 +665,152 @@ export async function tabStep(
       bytes: new TextEncoder().encode(text),
       pieces: bodies.length,
       tabs: tabs.length,
+    }
+  } finally {
+    shape.delete()
+  }
+}
+
+/**
+ * Detects the tab defaults used by {@link tabStep} for a particular STEP: the local material
+ * width across the joint (web/wall thickness) plus the standard length and engagement. The UI
+ * shows these as the initial settings so they can be adjusted rather than guessed.
+ */
+export async function detectTabDefaults(bytes: Uint8Array): Promise<TabDefaults> {
+  const fallback: TabDefaults = {
+    tabLength: TAB_LENGTH_DEFAULT,
+    tabWidth: TAB_WIDTH_DEFAULT,
+    engagement: TAB_ENGAGEMENT_DEFAULT,
+    density: TAB_DENSITY_DEFAULT,
+  }
+  await ensureOc()
+  const { importSTEP, makeBox } = await import('replicad')
+  const shape = (await importSTEP(
+    new Blob([new Uint8Array(bytes)], { type: 'model/step' }),
+  )) as unknown as { solids?: AnyShape[]; delete: () => void }
+  try {
+    const solids = shape.solids ?? []
+    if (solids.length <= 1) return fallback
+    const bodies: Body[] = solids.map((solid, index) => {
+      const [min, max] = solid.boundingBox.bounds
+      const lo: Vec = [min[0] as number, min[1] as number, min[2] as number]
+      const hi: Vec = [max[0] as number, max[1] as number, max[2] as number]
+      return {
+        solid,
+        min: lo,
+        max: hi,
+        center: [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2],
+        index,
+      }
+    })
+    const overallMin: Vec = [0, 1, 2].map((axis) =>
+      Math.min(...bodies.map((body) => body.min[axis])),
+    ) as Vec
+    const overallMax: Vec = [0, 1, 2].map((axis) =>
+      Math.max(...bodies.map((body) => body.max[axis])),
+    ) as Vec
+    const extents = [0, 1, 2].map((axis) => overallMax[axis] - overallMin[axis])
+    const longAxis = extents.indexOf(Math.max(...extents))
+    const crossAxes = [0, 1, 2].filter((axis) => axis !== longAxis)
+    const spread = (axis: number): number =>
+      Math.max(...bodies.map((body) => body.center[axis])) -
+      Math.min(...bodies.map((body) => body.center[axis]))
+    const rowAxis =
+      spread(crossAxes[0] as number) >= spread(crossAxes[1] as number)
+        ? (crossAxes[0] as number)
+        : (crossAxes[1] as number)
+    const lateralAxis = (crossAxes.find((axis) => axis !== rowAxis) ?? crossAxes[0]) as number
+
+    const localWidth = (
+      body: Body,
+      u: number,
+      otherAxis: number,
+      otherCentre: number,
+      otherHalf: number,
+      measureAxis: number,
+    ): number | null => {
+      const ranges: [[number, number], [number, number], [number, number]] = [
+        [0, 0],
+        [0, 0],
+        [0, 0],
+      ]
+      ranges[longAxis] = [u - 0.1, u + 0.1]
+      ranges[otherAxis] = [otherCentre - otherHalf, otherCentre + otherHalf]
+      ranges[measureAxis] = [
+        (overallMin[measureAxis] as number) - 1,
+        (overallMax[measureAxis] as number) + 1,
+      ]
+      try {
+        const slab = boxFromRanges(makeBox, ranges)
+        const piece = (
+          body.solid as unknown as { intersect: (tool: AnyShape) => AnyShape }
+        ).intersect(slab)
+        const [min, max] = (piece as unknown as { boundingBox: { bounds: [number[], number[]] } })
+          .boundingBox.bounds
+        const width = (max[measureAxis] as number) - (min[measureAxis] as number)
+        return width > 0.5 ? width : null
+      } catch {
+        return null
+      }
+    }
+
+    const sorted = [...bodies].sort((a, b) => a.center[rowAxis] - b.center[rowAxis])
+    const rows: Body[][] = []
+    const rowSpread =
+      (sorted[sorted.length - 1] as Body).center[rowAxis] - (sorted[0] as Body).center[rowAxis]
+    const tolerance = Math.max(2, Math.min(20, rowSpread * 0.2))
+    for (const body of sorted) {
+      const row = rows[rows.length - 1]
+      const centre =
+        row && row.length > 0
+          ? row.reduce((sum, item) => sum + item.center[rowAxis], 0) / row.length
+          : Number.POSITIVE_INFINITY
+      if (!row || Math.abs(body.center[rowAxis] - centre) > tolerance) rows.push([body])
+      else row.push(body)
+    }
+
+    const widths: number[] = []
+    if (rows.length >= 2) {
+      const lower = rows[0] as Body[]
+      const upper = rows[1] as Body[]
+      for (const a of lower) {
+        for (const b of upper) {
+          const lo = Math.max(a.min[longAxis], b.min[longAxis])
+          const hi = Math.min(a.max[longAxis], b.max[longAxis])
+          if (!(hi > lo)) continue
+          const u = (lo + hi) / 2
+          const rowCentre = (a.max[rowAxis] + b.min[rowAxis]) / 2
+          const rowHalf = Math.max(2, Math.abs(b.min[rowAxis] - a.max[rowAxis]) / 2 + 2)
+          const widthA = localWidth(a, u, rowAxis, rowCentre, rowHalf, lateralAxis)
+          const widthB = localWidth(b, u, rowAxis, rowCentre, rowHalf, lateralAxis)
+          if (widthA != null) widths.push(widthA)
+          if (widthB != null) widths.push(widthB)
+          if (widths.length > 0) break
+        }
+        if (widths.length > 0) break
+      }
+    } else {
+      const row = rows[0] ?? []
+      for (let i = 0; i < row.length - 1; i++) {
+        const a = row[i] as Body
+        const b = row[i + 1] as Body
+        const u = Math.max(a.min[longAxis], b.min[longAxis])
+        const rowCentre = overlapCenter(a, b, rowAxis)
+        const rowHalf = 2
+        const widthA = localWidth(a, u, rowAxis, rowCentre, rowHalf, lateralAxis)
+        const widthB = localWidth(b, u, rowAxis, rowCentre, rowHalf, lateralAxis)
+        if (widthA != null) widths.push(widthA)
+        if (widthB != null) widths.push(widthB)
+        if (widths.length > 0) break
+      }
+    }
+
+    const width = widths.length > 0 ? Math.min(...widths) : TAB_WIDTH_DEFAULT
+    return {
+      tabLength: TAB_LENGTH_DEFAULT,
+      tabWidth: width > 0.5 && width <= 200 ? width : TAB_WIDTH_DEFAULT,
+      engagement: TAB_ENGAGEMENT_DEFAULT,
+      density: TAB_DENSITY_DEFAULT,
     }
   } finally {
     shape.delete()

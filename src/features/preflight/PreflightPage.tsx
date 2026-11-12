@@ -112,7 +112,21 @@ import {
   prebootStepWorkers,
   STEP_WORKER_COUNT,
 } from '@/lib/step/stepPool'
-import { TAB_DENSITY_DEFAULT, TAB_DENSITY_MAX, TAB_DENSITY_MIN } from '@/lib/step/tabs'
+import {
+  TAB_DENSITY_DEFAULT,
+  TAB_DENSITY_MAX,
+  TAB_DENSITY_MIN,
+  TAB_ENGAGEMENT_DEFAULT,
+  TAB_ENGAGEMENT_MAX,
+  TAB_ENGAGEMENT_MIN,
+  TAB_LENGTH_DEFAULT,
+  TAB_LENGTH_MAX,
+  TAB_LENGTH_MIN,
+  TAB_WIDTH_DEFAULT,
+  TAB_WIDTH_MAX,
+  TAB_WIDTH_MIN,
+  type TabDefaults,
+} from '@/lib/step/tabs'
 import {
   clearViewerModels,
   diffForViewer,
@@ -654,11 +668,25 @@ export function PreflightPage() {
   const [bevelAngle, setBevelAngle] = useState('')
   /** The part whose "add tabs" dialog is open, if any. */
   const [tabEdit, setTabEdit] = useState<PartRecord | null>(null)
-  /** Tabs per metre, persisted across jobs (the nested-STEP handling aid, not a cut setting). */
+  /** Tab settings, persisted across jobs (the nested-STEP handling aid, not a cut setting). */
   const [tabDensity, setTabDensity] = useState(() =>
     readPrefString('tabDensity', String(TAB_DENSITY_DEFAULT)),
   )
+  const [tabLength, setTabLength] = useState(() =>
+    readPrefString('tabLength', String(TAB_LENGTH_DEFAULT)),
+  )
+  const [tabWidth, setTabWidth] = useState(() =>
+    readPrefString('tabWidth', String(TAB_WIDTH_DEFAULT)),
+  )
+  const [tabEngagement, setTabEngagement] = useState(() =>
+    readPrefString('tabEngagement', String(TAB_ENGAGEMENT_DEFAULT)),
+  )
+  const [tabDetected, setTabDetected] = useState<TabDefaults | null>(null)
+  const [tabDetecting, setTabDetecting] = useState(false)
   useEffect(() => writePrefString('tabDensity', tabDensity), [tabDensity])
+  useEffect(() => writePrefString('tabLength', tabLength), [tabLength])
+  useEffect(() => writePrefString('tabWidth', tabWidth), [tabWidth])
+  useEffect(() => writePrefString('tabEngagement', tabEngagement), [tabEngagement])
   const ncBytes = viewing?.nc
     ? (ncOverrides.get(viewing.mark)?.bytes ?? bytesByPath.get(viewing.nc.path))
     : undefined
@@ -2668,14 +2696,23 @@ export function PreflightPage() {
    * The density is tabs per metre; the whole fix runs in the STEP worker so the viewer stays live.
    */
   const tabPart = useCallback(
-    async (part: PartRecord, density: number) => {
+    async (
+      part: PartRecord,
+      settings: {
+        density: number
+        tabLength: number
+        tabWidth: number
+        engagement: number
+      },
+    ) => {
       const path = part.step?.path
       const bytes = path ? bytesByPath.get(path) : undefined
       if (!path || !bytes) return
       setFixingMark(part.mark)
       setError(null)
       try {
-        const result = await getStepWorkerPool().tab(bytes, density, {
+        const result = await getStepWorkerPool().tab(bytes, {
+          ...settings,
           priority: PRIORITY_FOREGROUND,
         })
         if (result) setOverride(part.mark, result.bytes, 'tabbed')
@@ -2689,13 +2726,48 @@ export function PreflightPage() {
     [bytesByPath, setOverride, t],
   )
 
-  const openTabEdit = useCallback((part: PartRecord) => setTabEdit(part), [])
+  /**
+   * Opens the tab dialog and asks the worker for the detected defaults from this STEP (local
+   * web/wall width, standard length and engagement) so the fields start from real geometry.
+   */
+  const openTabEdit = useCallback(
+    async (part: PartRecord) => {
+      setTabEdit(part)
+      setTabDetected(null)
+      setTabDetecting(false)
+      const path = part.step?.path
+      const bytes = path ? bytesByPath.get(path) : undefined
+      if (!bytes) return
+      setTabDetecting(true)
+      try {
+        const detected = await getStepWorkerPool().tabDefaults(bytes, {
+          priority: PRIORITY_FOREGROUND,
+        })
+        setTabDetected(detected)
+        setTabLength(String(+detected.tabLength.toFixed(2)))
+        setTabWidth(String(+detected.tabWidth.toFixed(2)))
+        setTabEngagement(String(+detected.engagement.toFixed(2)))
+      } catch {
+        // keep the persisted values when detection fails
+      } finally {
+        setTabDetecting(false)
+      }
+    },
+    [bytesByPath],
+  )
   const closeTabEdit = useCallback(() => setTabEdit(null), [])
+  const useDetectedTabDefaults = useCallback(() => {
+    if (!tabDetected) return
+    setTabDensity(String(+tabDetected.density.toFixed(2)))
+    setTabLength(String(+tabDetected.tabLength.toFixed(2)))
+    setTabWidth(String(+tabDetected.tabWidth.toFixed(2)))
+    setTabEngagement(String(+tabDetected.engagement.toFixed(2)))
+  }, [tabDetected])
   const applyTabEdit = useCallback(
-    (density: number) => {
+    (settings: { density: number; tabLength: number; tabWidth: number; engagement: number }) => {
       const part = tabEdit
       setTabEdit(null)
-      if (part) void tabPart(part, density)
+      if (part) void tabPart(part, settings)
     },
     [tabEdit, tabPart],
   )
@@ -4299,7 +4371,16 @@ export function PreflightPage() {
       <TabDialog
         open={tabEdit !== null}
         density={tabDensity}
+        tabLength={tabLength}
+        tabWidth={tabWidth}
+        engagement={tabEngagement}
+        detected={tabDetected}
+        detecting={tabDetecting}
         onDensity={setTabDensity}
+        onTabLength={setTabLength}
+        onTabWidth={setTabWidth}
+        onEngagement={setTabEngagement}
+        onUseDetected={useDetectedTabDefaults}
         onApply={applyTabEdit}
         onClose={closeTabEdit}
       />
@@ -5416,49 +5497,170 @@ function SortHead({
   )
 }
 
-/** Density picker for the stray-body "add tabs" fix. */
+/** Density and tab-dimension settings for the stray-body "add tabs" fix. */
 function TabDialog({
   open,
   density,
+  tabLength,
+  tabWidth,
+  engagement,
+  detected,
+  detecting,
   onDensity,
+  onTabLength,
+  onTabWidth,
+  onEngagement,
+  onUseDetected,
   onApply,
   onClose,
 }: {
   open: boolean
   density: string
+  tabLength: string
+  tabWidth: string
+  engagement: string
+  detected: TabDefaults | null
+  detecting: boolean
   onDensity: (value: string) => void
-  onApply: (density: number) => void
+  onTabLength: (value: string) => void
+  onTabWidth: (value: string) => void
+  onEngagement: (value: string) => void
+  onUseDetected: () => void
+  onApply: (settings: {
+    density: number
+    tabLength: number
+    tabWidth: number
+    engagement: number
+  }) => void
   onClose: () => void
 }) {
   const { t } = useTranslation()
-  const parsed = Number.parseFloat(density)
-  const valid = Number.isFinite(parsed) && parsed >= TAB_DENSITY_MIN && parsed <= TAB_DENSITY_MAX
+  const parsedDensity = Number.parseFloat(density)
+  const parsedLength = Number.parseFloat(tabLength)
+  const parsedWidth = Number.parseFloat(tabWidth)
+  const parsedEngagement = Number.parseFloat(engagement)
+  const valid =
+    Number.isFinite(parsedDensity) &&
+    parsedDensity >= TAB_DENSITY_MIN &&
+    parsedDensity <= TAB_DENSITY_MAX &&
+    Number.isFinite(parsedLength) &&
+    parsedLength >= TAB_LENGTH_MIN &&
+    parsedLength <= TAB_LENGTH_MAX &&
+    Number.isFinite(parsedWidth) &&
+    parsedWidth >= TAB_WIDTH_MIN &&
+    parsedWidth <= TAB_WIDTH_MAX &&
+    Number.isFinite(parsedEngagement) &&
+    parsedEngagement >= TAB_ENGAGEMENT_MIN &&
+    parsedEngagement <= TAB_ENGAGEMENT_MAX
+  const inputClass =
+    'h-8 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring'
+  const field = (
+    id: string,
+    label: string,
+    value: string,
+    onChange: (value: string) => void,
+    min: number,
+    max: number,
+    step: string,
+    unit: string,
+  ) => (
+    <label htmlFor={id} className="flex flex-col gap-1 text-sm">
+      <span className="font-medium">{label}</span>
+      <div className="flex items-center gap-2">
+        <input
+          id={id}
+          type="number"
+          inputMode="decimal"
+          step={step}
+          min={min}
+          max={max}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className={inputClass}
+        />
+        <span className="shrink-0 text-xs text-muted-foreground">{unit}</span>
+      </div>
+    </label>
+  )
   return (
     <Dialog open={open} onClose={onClose} title={t('preflight.tabs.title')}>
       <div className="flex flex-col gap-4 p-5">
         <p className="text-sm text-muted-foreground">{t('preflight.tabs.hint')}</p>
-        <div className="flex flex-wrap items-center gap-2">
-          <label htmlFor="tab-density" className="text-sm font-medium">
-            {t('preflight.tabs.density')}
-          </label>
-          <input
-            id="tab-density"
-            type="number"
-            inputMode="decimal"
-            step="0.5"
-            min={TAB_DENSITY_MIN}
-            max={TAB_DENSITY_MAX}
-            value={density}
-            onChange={(event) => onDensity(event.target.value)}
-            className="h-8 w-24 rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
-          />
-          <span className="text-sm text-muted-foreground">{t('preflight.tabs.unit')}</span>
+        {detecting ? (
+          <p className="text-xs text-muted-foreground">{t('preflight.tabs.detecting')}</p>
+        ) : detected ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            <span>
+              {t('preflight.tabs.detected', {
+                length: +detected.tabLength.toFixed(2),
+                width: +detected.tabWidth.toFixed(2),
+                engagement: +detected.engagement.toFixed(2),
+                density: +detected.density.toFixed(2),
+              })}
+            </span>
+            <Button variant="ghost" size="sm" className="h-6" onClick={onUseDetected}>
+              {t('preflight.tabs.useDetected')}
+            </Button>
+          </div>
+        ) : null}
+        <div className="grid grid-cols-2 gap-3">
+          {field(
+            'tab-density',
+            t('preflight.tabs.density'),
+            density,
+            onDensity,
+            TAB_DENSITY_MIN,
+            TAB_DENSITY_MAX,
+            '0.5',
+            t('preflight.tabs.densityUnit'),
+          )}
+          {field(
+            'tab-length',
+            t('preflight.tabs.length'),
+            tabLength,
+            onTabLength,
+            TAB_LENGTH_MIN,
+            TAB_LENGTH_MAX,
+            '1',
+            t('preflight.tabs.mm'),
+          )}
+          {field(
+            'tab-width',
+            t('preflight.tabs.width'),
+            tabWidth,
+            onTabWidth,
+            TAB_WIDTH_MIN,
+            TAB_WIDTH_MAX,
+            '0.1',
+            t('preflight.tabs.mm'),
+          )}
+          {field(
+            'tab-engagement',
+            t('preflight.tabs.engagement'),
+            engagement,
+            onEngagement,
+            TAB_ENGAGEMENT_MIN,
+            TAB_ENGAGEMENT_MAX,
+            '0.1',
+            t('preflight.tabs.mm'),
+          )}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Button variant="outline" size="sm" onClick={onClose}>
             {t('common.actions.cancel')}
           </Button>
-          <Button size="sm" disabled={!valid} onClick={() => onApply(parsed)}>
+          <Button
+            size="sm"
+            disabled={!valid}
+            onClick={() =>
+              onApply({
+                density: parsedDensity,
+                tabLength: parsedLength,
+                tabWidth: parsedWidth,
+                engagement: parsedEngagement,
+              })
+            }
+          >
             {t('common.actions.addTabs')}
           </Button>
         </div>

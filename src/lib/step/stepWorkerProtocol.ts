@@ -3,6 +3,7 @@ import type { StepMeasure } from './measure'
 import type { MeshedStep } from './mesh'
 import type { DiffPayload } from './occDiff'
 import type { SabreFailure } from './sabre'
+import type { TabDefaults } from './tabs'
 
 /**
  * Message protocol between the preflight UI and the STEP worker pool.
@@ -103,6 +104,14 @@ export type StepRequest =
       step: Uint8Array
       /** Tabs per metre along the beam. */
       density: number
+      tabLength: number
+      tabWidth: number
+      engagement: number
+    }
+  | {
+      id: number
+      kind: 'tab-defaults'
+      step: Uint8Array
     }
   | { id: number; kind: 'mesh'; step: Uint8Array; name: string }
   | {
@@ -124,6 +133,7 @@ export type StepResponse =
   | { id: number; kind: 'seat'; ok: true; value: SeatResult }
   | { id: number; kind: 'repair'; ok: true; value: RepairResult }
   | { id: number; kind: 'tab'; ok: true; value: TabResult | null }
+  | { id: number; kind: 'tab-defaults'; ok: true; value: TabDefaults }
   | { id: number; kind: 'mesh'; ok: true; value: MeshedStep }
   | { id: number; kind: 'diff'; ok: true; value: DiffPayload | null }
   | { id: number; kind: 'warm'; ok: true; value: null }

@@ -389,9 +389,17 @@ export const en = {
     },
     tabs: {
       title: 'Add tabs',
-      hint: 'Keep every body in this already-nested STEP and join them with small tabs. Density is the number of tabs per metre along the beam; end-to-end pieces in each row are always joined once.',
+      hint: 'Keep every body in this already-nested STEP and join them with tabs. Width is capped to the local material so the tab stays flush; end-to-end pieces in each row are always joined once.',
       density: 'Density',
-      unit: 'tabs/m',
+      densityUnit: 'tabs/m',
+      length: 'Tab length',
+      width: 'Tab width',
+      engagement: 'Engagement',
+      mm: 'mm',
+      detecting: 'Detecting defaults from the STEP…',
+      detected:
+        'Detected: {{length}} × {{width}} mm, {{engagement}} mm engagement, {{density}} tabs/m.',
+      useDetected: 'Use detected',
       failed: 'Could not connect all bodies with tabs — try a higher density or clean the STEP.',
     },
     warnings: {
@@ -977,9 +985,16 @@ export const zh = {
     },
     tabs: {
       title: '添加连接片',
-      hint: '保留这个已套料 STEP 中的全部实体，并用小连接片把它们连成一体。密度是沿钢梁每米的连接片数量；每排中端对端的零件始终连接一次。',
+      hint: '保留这个已套料 STEP 中的全部实体，并用连接片把它们连成一体。宽度限制在局部材料内以保持齐平；每排中端对端的零件始终连接一次。',
       density: '密度',
-      unit: '片/米',
+      densityUnit: '片/米',
+      length: '连接片长度',
+      width: '连接片宽度',
+      engagement: '咬合深度',
+      mm: 'mm',
+      detecting: '正在从 STEP 检测默认值…',
+      detected: '检测值：{{length}} × {{width}} mm，咬合 {{engagement}} mm，{{density}} 片/米。',
+      useDetected: '使用检测值',
       failed: '无法用连接片连接全部实体——请提高密度或清理 STEP。',
     },
     warnings: {

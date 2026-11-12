@@ -11,6 +11,7 @@ import type {
   StepResponse,
   TabResult,
 } from './stepWorkerProtocol'
+import type { TabDefaults } from './tabs'
 
 /**
  * A small pool of {@link ./stepWorker} OpenCASCADE workers.
@@ -147,12 +148,35 @@ class StepWorkerPool {
   /** Join an already-nested STEP's separate bodies with tabs so they stay together. */
   tab(
     bytes: Uint8Array,
-    density: number,
-    options: { priority?: number } = {},
+    options: {
+      density: number
+      tabLength: number
+      tabWidth: number
+      engagement: number
+      priority?: number
+    },
   ): Promise<TabResult | null> {
     const copy = new Uint8Array(bytes)
     return this.run<TabResult | null>(
-      { id: this.nextId++, kind: 'tab', step: copy, density },
+      {
+        id: this.nextId++,
+        kind: 'tab',
+        step: copy,
+        density: options.density,
+        tabLength: options.tabLength,
+        tabWidth: options.tabWidth,
+        engagement: options.engagement,
+      },
+      [copy.buffer],
+      options.priority ?? PRIORITY_BACKGROUND,
+    )
+  }
+
+  /** Detect the planner's tab defaults (including the local web/wall width) for a STEP. */
+  tabDefaults(bytes: Uint8Array, options: { priority?: number } = {}): Promise<TabDefaults> {
+    const copy = new Uint8Array(bytes)
+    return this.run<TabDefaults>(
+      { id: this.nextId++, kind: 'tab-defaults', step: copy },
       [copy.buffer],
       options.priority ?? PRIORITY_BACKGROUND,
     )

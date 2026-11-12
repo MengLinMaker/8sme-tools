@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 import { chsLeg, fixtureExists } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { ensureOc, setOcWasmUrl } from './occInit'
-import { tabStep } from './tabs'
+import { detectTabDefaults, tabStep } from './tabs'
 
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
@@ -53,6 +53,20 @@ async function sliceArea(bytes: Uint8Array, z: number): Promise<number> {
   return area
 }
 
+/** Two thin-web T-like rows with a 6 mm web gap, for flush/width checks. */
+async function thinWebPair(): Promise<Uint8Array> {
+  const { makeBox } = await import('replicad')
+  const web = { half: 3, depth: 100 }
+  const flange = { half: 50, depth: 10 }
+  const lower = makeBox([-web.half, -web.depth, 0], [web.half, -3, 1000]).fuse(
+    makeBox([-flange.half, -web.depth - flange.depth, 0], [flange.half, -web.depth, 1000]),
+  )
+  const upper = makeBox([-web.half, 3, 0], [web.half, web.depth, 1000]).fuse(
+    makeBox([-flange.half, web.depth, 0], [flange.half, web.depth + flange.depth, 1000]),
+  )
+  return stepBytes([lower, upper])
+}
+
 describe('tabStep', () => {
   it('returns null for a single-body STEP', async () => {
     await ensureOc()
@@ -97,20 +111,21 @@ describe('tabStep', () => {
     expect(await bodyCount(result.bytes)).toBe(1)
   }, 300000)
 
+  it('detects the local web thickness as the default tab width', async () => {
+    await ensureOc()
+    const bytes = await thinWebPair()
+    const defaults = await detectTabDefaults(bytes)
+    expect(defaults.tabLength).toBe(50)
+    expect(defaults.tabWidth).toBeCloseTo(6, 1)
+    expect(defaults.engagement).toBe(1.5)
+    expect(defaults.density).toBe(2)
+  }, 300000)
+
   it('clips a non-round tab flush to a thin web on both faces', async () => {
     await ensureOc()
-    const { makeBox } = await import('replicad')
-    const web = { half: 3, depth: 100 }
-    const flange = { half: 50, depth: 10 }
-    const lower = makeBox([-web.half, -web.depth, 0], [web.half, -3, 1000]).fuse(
-      makeBox([-flange.half, -web.depth - flange.depth, 0], [flange.half, -web.depth, 1000]),
-    )
-    const upper = makeBox([-web.half, 3, 0], [web.half, web.depth, 1000]).fuse(
-      makeBox([-flange.half, web.depth, 0], [flange.half, web.depth + flange.depth, 1000]),
-    )
-    const bytes = await stepBytes([lower, upper])
+    const bytes = await thinWebPair()
     const before = await sliceArea(bytes, 500)
-    const result = await tabStep(bytes, { density: 1 })
+    const result = await tabStep(bytes, { density: 1, tabLength: 50, tabWidth: 6, engagement: 1 })
     expect(result).not.toBeNull()
     if (!result) return
     expect(await bodyCount(result.bytes)).toBe(1)
