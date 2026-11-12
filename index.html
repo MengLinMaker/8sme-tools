@@ -2,13 +2,191 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0b0f14" />
     <title>8SME Tools</title>
+    <style>
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: #0b0f14;
+        color: #e6edf3;
+        font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      #boot-splash[hidden] {
+        display: none;
+      }
+      .boot-card {
+        width: 100%;
+        max-width: 680px;
+      }
+      .boot-title {
+        margin: 0 0 8px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .boot-status {
+        margin: 0;
+        color: #9aa7b3;
+      }
+      .boot-status strong {
+        color: #f0f6fc;
+      }
+      .boot-hint {
+        margin: 12px 0 0;
+        color: #9aa7b3;
+      }
+      .boot-error {
+        margin: 16px 0 0;
+        padding: 12px;
+        max-height: 45vh;
+        overflow: auto;
+        white-space: pre-wrap;
+        background: #111820;
+        border: 1px solid #263140;
+        border-radius: 8px;
+        color: #ffb4a8;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+      }
+    </style>
+    <script>
+      (() => {
+        var errors = []
+        var shown = false
+        var ready = false
+
+        function remember(message) {
+          if (!message) return
+          message = String(message)
+          for (let i = 0; i < errors.length; i++) if (errors[i] === message) return
+          if (errors.length < 6) errors.push(message)
+        }
+
+        function errorText(event) {
+          if (!event) return ''
+          if (event.message) {
+            const where = event.filename
+              ? ' (' + event.filename + ':' + (event.lineno || 0) + ')'
+              : ''
+            return event.message + where
+          }
+          const target = event.target
+          if (target && target.tagName) {
+            return 'Failed to load ' + (target.src || target.href || target.tagName)
+          }
+          return ''
+        }
+
+        function supportsModules() {
+          try {
+            return 'noModule' in document.createElement('script')
+          } catch (error) {
+            return false
+          }
+        }
+
+        function showDiagnostics() {
+          if (shown) return
+          shown = true
+          var status = document.getElementById('boot-status')
+          var hint = document.getElementById('boot-hint')
+          var details = document.getElementById('boot-error')
+          if (!status || !hint || !details) return
+          var ieMode = !!document.documentMode
+          if (ieMode) {
+            status.innerHTML =
+              '<strong>Edge is running this file in Internet Explorer mode.</strong>'
+            hint.textContent =
+              '8SME Tools needs a modern browser. Open the file directly in Microsoft Edge (normal mode) or Google Chrome.'
+          } else if (!supportsModules()) {
+            status.innerHTML = '<strong>This browser is too old to run 8SME Tools.</strong>'
+            hint.textContent =
+              'Install the latest Microsoft Edge or Google Chrome, then open the file again.'
+          } else {
+            status.innerHTML = '<strong>8SME Tools did not start.</strong>'
+            hint.textContent =
+              'Press F12 and open the Console tab for the full error. If the file came from the internet, right-click it, choose Properties, tick Unblock, and reopen.'
+          }
+          hint.hidden = false
+          var text = errors.slice(0)
+          text.push('User agent: ' + navigator.userAgent)
+          details.textContent = text.join('\n\n')
+          details.hidden = false
+        }
+
+        function check() {
+          var root = document.getElementById('root')
+          if (ready || (root && root.childNodes.length > 0)) {
+            ready = true
+            const splash = document.getElementById('boot-splash')
+            if (splash && splash.parentNode) splash.parentNode.removeChild(splash)
+            return true
+          }
+          return false
+        }
+
+        function start() {
+          if (check()) return
+          var started = new Date().getTime()
+          var timer = window.setInterval(() => {
+            if (check()) {
+              window.clearInterval(timer)
+              return
+            }
+            if (new Date().getTime() - started > 7000) {
+              window.clearInterval(timer)
+              showDiagnostics()
+              window.setInterval(() => {
+                check()
+              }, 1000)
+            }
+          }, 300)
+        }
+
+        if (window.addEventListener) {
+          window.addEventListener(
+            'error',
+            (event) => {
+              remember(errorText(event))
+            },
+            true,
+          )
+          window.addEventListener('unhandledrejection', (event) => {
+            var reason = event && event.reason
+            remember('Unhandled: ' + ((reason && (reason.stack || reason.message)) || reason))
+          })
+        } else if (window.attachEvent) {
+          window.attachEvent('onerror', (message) => {
+            remember(message)
+          })
+        }
+
+        window.__8smeAppReady = check
+
+        if (document.addEventListener) document.addEventListener('DOMContentLoaded', start)
+        else if (window.attachEvent) window.attachEvent('onload', start)
+        else window.onload = start
+      })()
+    </script>
   </head>
   <body>
+    <div id="boot-splash" role="status" aria-live="polite">
+      <div class="boot-card">
+        <p class="boot-title">8SME Tools</p>
+        <p class="boot-status" id="boot-status">Loading…</p>
+        <p class="boot-hint" id="boot-hint" hidden></p>
+        <pre class="boot-error" id="boot-error" hidden></pre>
+      </div>
+    </div>
     <div id="root"></div>
+    <noscript>8SME Tools needs JavaScript. Enable it in your browser and reload this file.</noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

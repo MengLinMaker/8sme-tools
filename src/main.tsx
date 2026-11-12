@@ -27,3 +27,5 @@ createRoot(rootElement).render(
     <RouterProvider router={router} />
   </StrictMode>,
 )
+
+requestAnimationFrame(() => window.__8smeAppReady?.())

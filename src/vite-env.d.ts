@@ -18,4 +18,6 @@ declare module 'pdfjs-dist/build/pdf.worker.min.mjs' {
 
 interface Window {
   showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>
+  /** Dismisses the index.html boot splash once React has mounted (see `index.html`). */
+  __8smeAppReady?: () => void
 }
