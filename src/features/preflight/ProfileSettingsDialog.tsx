@@ -47,6 +47,9 @@ export interface ProfileMarkRow {
 type MarkSortKey = 'mark' | 'pieces' | 'length' | 'mass'
 
 /** One row of the transposed settings table (parameters down, thicknesses across). */
+const thicknessKey = (thickness: { role: string; cutMm: number }) =>
+  `${thickness.role}-${thickness.cutMm}`
+
 const PARAM_ROWS: { key: string; value: (cut: CutSuggestion) => string }[] = [
   { key: 'regime', value: (cut) => cut.regime },
   { key: 'pressure', value: (cut) => `${cut.pressureBar}` },
@@ -469,6 +472,8 @@ export function CutSettings({
   useEffect(() => setSurface(defaultSurface), [defaultSurface])
   const [regime, setRegime] = useState<CutRegime>(kind === 'open' ? 'mirror' : 'normal')
   useEffect(() => setRegime(kind === 'open' ? 'mirror' : 'normal'), [kind])
+  const [mirrorSpeeds, setMirrorSpeeds] = useState<Record<string, number>>({})
+  const [severance, setSeverance] = useState(13.4)
   const [bevelDeg, setBevelDeg] = useState(0)
   const thicknesses = useMemo(() => sectionThicknesses(profile, dims), [profile, dims])
   const section = useMemo(() => partSectionForCode(profile, dims), [profile, dims])
@@ -492,7 +497,7 @@ export function CutSettings({
     cutThicknesses.length > 0
       ? Math.max(...cutThicknesses.map((thickness) => thickness.cutMm))
       : undefined
-  const suggestions = useMemo(
+  const baseSuggestions = useMemo(
     () =>
       cutThicknesses.map((thickness) => ({
         thickness,
@@ -504,6 +509,49 @@ export function CutSettings({
         }),
       })),
     [cutThicknesses, surface, kind, rotationRadiusMm, governingThicknessMm, regime],
+  )
+  useEffect(() => {
+    setMirrorSpeeds((current) => {
+      let changed = false
+      const next = { ...current }
+      for (const { thickness, cut } of baseSuggestions) {
+        const key = thicknessKey(thickness)
+        if (next[key] === undefined) {
+          const powerW = (cut.powerPct / 100) * MACHINE.laser.ratedPowerW
+          next[key] =
+            Math.round(((0.06 * powerW) / (severance * Math.max(thickness.cutMm, 0.1))) * 10) / 10
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+  }, [baseSuggestions, severance])
+  const suggestions = useMemo(
+    () =>
+      cutThicknesses.map((thickness) => {
+        const mirror = kind === 'open' && regime === 'mirror'
+        return {
+          thickness,
+          cut: suggestCut(thickness.cutMm, surface, MACHINE, {
+            kind,
+            rotationRadiusMm,
+            governingThicknessMm,
+            regime,
+            targetSpeedMmMin: mirror ? mirrorSpeeds[thicknessKey(thickness)] : undefined,
+            targetSeveranceJPerMm2: mirror ? severance : undefined,
+          }),
+        }
+      }),
+    [
+      cutThicknesses,
+      surface,
+      kind,
+      rotationRadiusMm,
+      governingThicknessMm,
+      regime,
+      mirrorSpeeds,
+      severance,
+    ],
   )
   const labelWidth = compact ? 'w-28' : 'w-40'
   const cell = compact ? 'px-2 py-1' : 'px-3 py-1.5'
@@ -554,6 +602,58 @@ export function CutSettings({
                 {t(`preflight.profileSettings.regimes.${value}`)}
               </button>
             ))}
+          </div>
+        )}
+        {kind === 'open' && regime === 'mirror' && (
+          <div className="flex flex-col gap-1.5">
+            {suggestions.map(({ thickness, cut }) => {
+              const key = thicknessKey(thickness)
+              const value = mirrorSpeeds[key] ?? cut.speedMinMmMin
+              return (
+                <label
+                  key={key}
+                  className="flex items-center gap-2 text-[11px] text-muted-foreground"
+                >
+                  <span className="w-28 shrink-0">
+                    {t('preflight.profileSettings.mirrorSpeedFor', {
+                      thickness: thickness.mm.toFixed(1),
+                    })}
+                  </span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={5}
+                    step={0.1}
+                    value={value}
+                    onChange={(event) =>
+                      setMirrorSpeeds((current) => ({
+                        ...current,
+                        [key]: Number(event.target.value),
+                      }))
+                    }
+                    className="flex-1 accent-primary"
+                  />
+                  <span className="w-12 text-right font-mono text-foreground">
+                    {value.toFixed(1)}
+                  </span>
+                </label>
+              )
+            })}
+            <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span className="w-28 shrink-0">{t('preflight.profileSettings.severance')}</span>
+              <input
+                type="range"
+                min={8}
+                max={25}
+                step={0.1}
+                value={severance}
+                onChange={(event) => setSeverance(Number(event.target.value))}
+                className="flex-1 accent-primary"
+              />
+              <span className="w-12 text-right font-mono text-foreground">
+                {severance.toFixed(1)}
+              </span>
+            </label>
           </div>
         )}
         <div className="flex flex-wrap items-center gap-1.5">

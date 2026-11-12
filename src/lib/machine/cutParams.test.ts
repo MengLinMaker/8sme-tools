@@ -124,16 +124,42 @@ describe('open-section mirror regime', () => {
     expect(cut.powerPct).toBe(28)
     expect(cut.speedMinMmMin).toBe(3)
     expect(cut.pressureBar).toBe(0.7)
-    expect(cut.focusMm).toBe(15)
-    expect(cut.camFocusMm).toBe(-15)
+    expect(cut.focusMm).toBe(9)
+    expect(cut.camFocusMm).toBe(-9)
     expect(cut.nozzle).toEqual({ sizeMm: 1.5, type: 'single' })
   })
 
   it('applies the mirror focus to other thicknesses, keeping their power/speed', () => {
     const cut = suggestCut(7, 'rust', KL90010T, { kind: 'open', regime: 'mirror' })
     expect(cut.regime).toBe('mirror')
-    expect(cut.focusMm).toBe(15)
-    expect(cut.camFocusMm).toBe(-15)
+    expect(cut.focusMm).toBe(10)
+    expect(cut.camFocusMm).toBe(-10)
     expect(cut.powerPct).toBeGreaterThan(28)
+  })
+})
+
+describe('mirror sliders', () => {
+  it('holds severance while the speed target changes the power', () => {
+    const cut = suggestCut(5, 'rust', KL90010T, {
+      kind: 'open',
+      regime: 'mirror',
+      targetSpeedMmMin: 3.2,
+      targetSeveranceJPerMm2: 13.4,
+    })
+    expect(cut.speedMinMmMin).toBe(3.2)
+    // P = S·v·t / 0.06 = 13.4 × 3.2 × 5 / 0.06 ≈ 3573 W → 30%
+    expect(cut.powerPct).toBe(30)
+  })
+
+  it('holds speed while the severance target changes the power', () => {
+    const cut = suggestCut(5, 'rust', KL90010T, {
+      kind: 'open',
+      regime: 'mirror',
+      targetSpeedMmMin: 3.0,
+      targetSeveranceJPerMm2: 16,
+    })
+    expect(cut.speedMinMmMin).toBe(3)
+    // P = 16 × 3 × 5 / 0.06 = 4000 W → 33%
+    expect(cut.powerPct).toBe(33)
   })
 })

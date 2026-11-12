@@ -74,6 +74,10 @@ export interface CutOptions {
   governingThicknessMm?: number
   /** `mirror` selects the wide-kerf, high-focus window for open sections. */
   regime?: CutRegime
+  /** Optional severance-energy target; when set, speed is derived from S, power and thickness. */
+  targetSeveranceJPerMm2?: number
+  /** Optional speed target for the selected thickness (paired with the severance target). */
+  targetSpeedMmMin?: number
 }
 
 /** A suggestion ready for display / for the `Technology.xml` fields. */
@@ -252,19 +256,19 @@ const O2_CARBON: CutRecipe[] = [
   },
 ]
 
-// Provisional shop point for the open-section mirror window (150UB14 web, 5 mm).
-// Physical focus is deliberately far outside the normal row; verify sign/CAM on the machine.
+// Shop point for the open-section mirror window (150UB14 web, 5 mm).
+// 9 mm is the measured good focus; below ~8 mm the cut loses stability.
 const MIRROR_OPEN_5MM: CutRecipe = {
   thicknessMm: 5,
   powerPct: 28,
   speedMinMmMin: 3.0,
   speedMaxMmMin: 3.0,
-  focusMm: 15,
+  focusMm: 9,
   heightMm: 0.8,
   pressureBar: 0.7,
   frequencyHz: 5000,
   dutyPct: 100,
-  source: 'shop mirror regime (provisional, 150UB14 web)',
+  source: 'shop mirror regime (5 mm, focus 9)',
 }
 
 interface SurfaceAdjustment {
@@ -368,23 +372,35 @@ export function suggestCut(
   if (mirror) {
     notes.push(
       shopMirrorPoint
-        ? 'Mirror regime: measured 5 mm open-section point; physical focus 15 mm (CAM −15).'
+        ? 'Mirror regime: measured 5 mm open-section point; physical focus 9 mm (CAM −9).'
         : 'Mirror regime: provisional wide-focus setting; power/speed follow the normal row.',
     )
   }
 
-  const physicalFocus = mirror ? MIRROR_OPEN_5MM.focusMm : base.focusMm + adjust.focusMm
+  const physicalFocus = mirror ? 9 + Math.max(0, wanted - 5) * 0.5 : base.focusMm + adjust.focusMm
   const { minPowerPct, ratedPowerW } = profile.laser
-  const powerPct = Math.min(100, Math.max(minPowerPct, Math.round(base.powerPct)))
+  let powerPct = Math.min(100, Math.max(minPowerPct, Math.round(base.powerPct)))
+  let speedMin = round1(base.speedMinMmMin * adjust.speed)
+  let speedMax = round1(base.speedMaxMmMin * adjust.speed)
+
+  const targetS = options.targetSeveranceJPerMm2
+  const targetSpeed = options.targetSpeedMmMin
+  if (targetS && targetS > 0 && targetSpeed && targetSpeed > 0) {
+    speedMin = round1(targetSpeed)
+    speedMax = speedMin
+    const powerW = (targetS * targetSpeed * wanted) / 0.06
+    powerPct = Math.min(100, Math.max(minPowerPct, Math.round((powerW / ratedPowerW) * 100)))
+  } else if (targetS && targetS > 0) {
+    const speed = (0.06 * ((powerPct / 100) * ratedPowerW)) / (targetS * wanted)
+    speedMin = round1(speed)
+    speedMax = speedMin
+  }
 
   notes.push(
     `${powerPct}% of ${(ratedPowerW / 1000).toFixed(0)} kW ≈ ${round1((powerPct / 100) * (ratedPowerW / 1000))} kW.`,
   )
   notes.push('Speed is the quality lever: start at the low end of the range.')
   notes.push('Source values are published O₂ charts — verify on scrap before a production run.')
-
-  const speedMin = round1(base.speedMinMmMin * adjust.speed)
-  const speedMax = round1(base.speedMaxMmMin * adjust.speed)
 
   // Shop nozzle rule: one nozzle per section, sized by the largest thickness —
   // 1.5 single ≤15 mm, 2.0 single >15 mm for open sections; 1.8 double for hollow sections.
