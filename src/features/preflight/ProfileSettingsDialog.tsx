@@ -31,7 +31,7 @@ import {
 import { MACHINE } from '@/lib/machine/profile'
 import { profileFamily } from '@/lib/sections/canonical'
 import { CATALOGUE_SECTIONS } from '@/lib/sections/catalogue'
-import { partSectionForCode, sectionThicknesses } from '@/lib/sections/stock'
+import { partSectionForCode, sectionDimensions, sectionThicknesses } from '@/lib/sections/stock'
 import { cn } from '@/lib/utils'
 
 const SURFACES: SurfaceCondition[] = ['normal', 'rust', 'primed', 'galvanised']
@@ -161,6 +161,32 @@ export interface ProfileInfoProps {
   marks?: ProfileMarkRow[]
 }
 
+function SectionDimensions({ profile, dims }: { profile: string; dims: number[] }) {
+  const { t } = useTranslation()
+  const rows = useMemo(() => sectionDimensions(profile, dims), [profile, dims])
+  if (rows.length === 0) return null
+  return (
+    <div className="rounded-lg border border-border bg-muted/20 p-2">
+      <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {t('preflight.profileSettings.dimensions.title')}
+      </span>
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-1">
+        {rows.map((row) => (
+          <div key={row.key} className="min-w-0">
+            <dt className="truncate text-[10px] text-muted-foreground">
+              {t(`preflight.profileSettings.dimensions.${row.key}`)}
+            </dt>
+            <dd className="font-mono text-[11px] tabular-nums text-foreground">
+              {row.value.toFixed(row.unit === 'kg/m' || !Number.isInteger(row.value) ? 1 : 0)}{' '}
+              <span className="text-muted-foreground">{row.unit}</span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  )
+}
+
 /** Cross-section, suggested cut parameters and (optionally) the per-mark rollup for a profile. */
 export function ProfileInfo({ profile, dims, marks = [] }: ProfileInfoProps) {
   const { t } = useTranslation()
@@ -207,8 +233,9 @@ export function ProfileInfo({ profile, dims, marks = [] }: ProfileInfoProps) {
   return (
     <div className="flex flex-col gap-4">
       <div className="grid gap-5 md:grid-cols-[15.5rem_minmax(0,1fr)]">
-        <div className="w-40 md:w-full">
+        <div className="flex w-40 flex-col gap-2 md:w-full">
           <SectionPreview section={section} label={profile} />
+          <SectionDimensions profile={profile} dims={dims} />
         </div>
 
         <CutSettings profile={profile} dims={dims} />

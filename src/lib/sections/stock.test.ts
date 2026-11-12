@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   partSectionForCode,
   resolveStockOutline,
+  sectionDimensions,
   sectionThicknesses,
   stockOutlineForCode,
 } from './stock'
@@ -221,6 +222,42 @@ describe('stockOutlineForCode', () => {
       expect(outline?.points.length).toBeGreaterThan(3)
       expect(bbox(outline?.points ?? []).width).toBeCloseTo(100, 0)
     })
+  })
+})
+
+describe('sectionDimensions', () => {
+  it('lists rolled-section depth, flange and root radius', () => {
+    const byKey = Object.fromEntries(
+      sectionDimensions('200UB29.8', []).map((row) => [row.key, row.value]),
+    )
+    expect(byKey.depth).toBe(207)
+    expect(byKey.flangeWidth).toBe(134)
+    expect(byKey.flangeThickness).toBe(9.6)
+    expect(byKey.webThickness).toBe(6.3)
+    expect(byKey.rootRadius).toBe(8.9)
+    expect(byKey.massPerMetre).toBe(29.8)
+  })
+
+  it('derives hollow corner radii from the wall', () => {
+    const byKey = Object.fromEntries(
+      sectionDimensions('RHS150*100*9.0', []).map((row) => [row.key, row.value]),
+    )
+    expect(byKey.sideA).toBe(150)
+    expect(byKey.sideB).toBe(100)
+    expect(byKey.wall).toBe(9)
+    expect(byKey.cornerRadius).toBe(22.5)
+    expect(byKey.innerRadius).toBe(13.5)
+  })
+
+  it('reads the parent UB dimensions for a T', () => {
+    const byKey = Object.fromEntries(
+      sectionDimensions('BT100*15', [134, 103, 9.6, 6.3, 8.9]).map((row) => [row.key, row.value]),
+    )
+    expect(byKey.flangeWidth).toBe(134)
+    expect(byKey.halfDepth).toBe(103)
+    expect(byKey.flangeThickness).toBe(9.6)
+    expect(byKey.webThickness).toBe(6.3)
+    expect(byKey.rootRadius).toBe(8.9)
   })
 })
 

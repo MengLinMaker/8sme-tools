@@ -871,6 +871,140 @@ export function sectionThicknesses(code: string, dims: number[]): SectionThickne
   })
 }
 
+export type SectionDimensionKey =
+  | 'depth'
+  | 'flangeWidth'
+  | 'flangeThickness'
+  | 'webThickness'
+  | 'halfDepth'
+  | 'rootRadius'
+  | 'legA'
+  | 'legB'
+  | 'legThickness'
+  | 'toeRadius'
+  | 'sideA'
+  | 'sideB'
+  | 'wall'
+  | 'cornerRadius'
+  | 'innerRadius'
+  | 'outsideDiameter'
+  | 'insideDiameter'
+  | 'massPerMetre'
+
+/** One labelled cross-section dimension for the profile card. */
+export interface SectionDimension {
+  key: SectionDimensionKey
+  value: number
+  unit: 'mm' | 'kg/m'
+}
+
+/**
+ * The dimensions an operator needs to seat the stock and read the drawing: overall size,
+ * flange/web or wall thickness, and the root/corner radius. Values come from the catalogue
+ * when the code identifies a tabulated section, else from the NC header dims.
+ */
+export function sectionDimensions(code: string, dims: number[]): SectionDimension[] {
+  const clean = code.trim().replace(/\s+/g, '').toUpperCase()
+  const family = detectFamily(clean)
+  if (!family) return []
+
+  const n = numbers(clean)
+  const rows: SectionDimension[] = []
+  const mm = (key: SectionDimensionKey, value?: number) => {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      rows.push({ key, value: Math.round(value * 10) / 10, unit: 'mm' })
+    }
+  }
+
+  switch (family) {
+    case 'tee': {
+      const match = inferTee(clean, dims)
+      const parent = match?.section
+      mm('flangeWidth', dims[0] ?? parent?.b)
+      mm('halfDepth', dims[1] ?? (parent ? parent.d / 2 : undefined))
+      mm('flangeThickness', dims[2] ?? parent?.tf)
+      mm('webThickness', dims[3] ?? parent?.tw)
+      mm('rootRadius', dims[4] ?? parent?.r)
+      break
+    }
+    case 'ub': {
+      const section = getUb(clean)
+      mm('depth', dims[0] || section?.d)
+      mm('flangeWidth', dims[1] || section?.b)
+      mm('flangeThickness', dims[2] || section?.tf)
+      mm('webThickness', dims[3] || section?.tw)
+      mm('rootRadius', dims[4] || section?.r)
+      break
+    }
+    case 'uc': {
+      const section = getUc(clean) ?? getUcByDepth(dims[0] ?? n[0] ?? 0)
+      mm('depth', dims[0] || section?.d)
+      mm('flangeWidth', dims[1] || section?.b)
+      mm('flangeThickness', dims[2] || section?.tf)
+      mm('webThickness', dims[3] || section?.tw)
+      mm('rootRadius', dims[4] || section?.r)
+      break
+    }
+    case 'tfb': {
+      const section = getTfbByDepth(n[0] || dims[0] || dims[1] || 0)
+      mm('depth', dims[0] || section?.d)
+      mm('flangeWidth', dims[1] || section?.b)
+      mm('flangeThickness', dims[2] || section?.tf)
+      mm('webThickness', dims[3] || section?.tw)
+      mm('rootRadius', dims[4] || section?.r)
+      break
+    }
+    case 'channel': {
+      const section = /PFC/i.test(clean) ? getPfcByDepth(n[0] || dims[0] || 0) : undefined
+      mm('depth', dims[0] || section?.d || n[0])
+      mm('flangeWidth', dims[1] || section?.b || n[1])
+      mm('flangeThickness', dims[2] || section?.tf)
+      mm('webThickness', dims[3] || section?.tw)
+      mm('rootRadius', dims[4] || section?.r)
+      break
+    }
+    case 'angle-equal':
+    case 'angle-unequal': {
+      const angle = catalogueAngle(clean, dims)
+      const legA = n[0] ?? dims[0] ?? angle?.a
+      const legB = family === 'angle-equal' ? legA : (n[1] ?? dims[1] ?? angle?.b)
+      mm('legA', legA)
+      if (family === 'angle-unequal') mm('legB', legB)
+      mm('legThickness', n[2] ?? dims[2] ?? angle?.t)
+      mm('rootRadius', dims[4] ?? angle?.r1)
+      mm('toeRadius', angle?.r2)
+      break
+    }
+    case 'shs':
+    case 'rhs': {
+      const a = n[0] ?? dims[0]
+      const b = n[1] ?? dims[1] ?? a
+      const wall = n[2] ?? dims[2]
+      const radius = dims[4] ?? (wall ? 2.5 * wall : undefined)
+      mm('sideA', a)
+      if (a !== b) mm('sideB', b)
+      mm('wall', wall)
+      mm('cornerRadius', radius)
+      mm('innerRadius', radius != null && wall != null ? radius - wall : undefined)
+      break
+    }
+    case 'chs': {
+      const od = n[0] ?? dims[0]
+      const wall = n[1] ?? dims[2]
+      mm('outsideDiameter', od)
+      mm('wall', wall)
+      mm('insideDiameter', od != null && wall != null ? od - 2 * wall : undefined)
+      break
+    }
+  }
+
+  const mass = sectionMassPerMetre(clean, dims)
+  if (mass != null && mass > 0) {
+    rows.push({ key: 'massPerMetre', value: Math.round(mass * 10) / 10, unit: 'kg/m' })
+  }
+  return rows
+}
+
 /** Nominal steel density (kg/m³), per AS/NZS 3679.1 / AS 4100. */
 const STEEL_DENSITY = 7850
 
