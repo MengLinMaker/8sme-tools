@@ -18,6 +18,9 @@ import { MACHINE, type MachineProfile } from './profile'
 /** Surface condition of the incoming stock. */
 export type SurfaceCondition = 'normal' | 'rust' | 'primed' | 'galvanised'
 
+/** Cut regime: the normal recipe, or the wide-kerf mirror window. */
+export type CutRegime = 'normal' | 'mirror'
+
 /** Weld-prep bevel presets (degrees off square), including the default square cut. */
 export const BEVEL_PRESETS_DEG = [0, 15, 30, 45] as const
 
@@ -69,6 +72,8 @@ export interface CutOptions {
   rotationRadiusMm?: number
   /** Largest thickness in the section; the shop fits one nozzle per section. */
   governingThicknessMm?: number
+  /** `mirror` selects the wide-kerf, high-focus window for open sections. */
+  regime?: CutRegime
 }
 
 /** A suggestion ready for display / for the `Technology.xml` fields. */
@@ -80,6 +85,8 @@ export interface CutSuggestion extends CutRecipe {
   /** Equivalent rotary speed range at `rotationRadiusMm` (r/min), when known. */
   angularSpeedMinRpm: number | null
   angularSpeedMaxRpm: number | null
+  /** Which regime this row came from. */
+  regime: CutRegime
   /** Adjustments / caveats applied on top of the base row. */
   notes: string[]
 }
@@ -245,6 +252,21 @@ const O2_CARBON: CutRecipe[] = [
   },
 ]
 
+// Provisional shop point for the open-section mirror window (150UB14 web, 5 mm).
+// Physical focus is deliberately far outside the normal row; verify sign/CAM on the machine.
+const MIRROR_OPEN_5MM: CutRecipe = {
+  thicknessMm: 5,
+  powerPct: 28,
+  speedMinMmMin: 3.0,
+  speedMaxMmMin: 3.0,
+  focusMm: 15,
+  heightMm: 0.8,
+  pressureBar: 0.7,
+  frequencyHz: 5000,
+  dutyPct: 100,
+  source: 'shop mirror regime (provisional, 150UB14 web)',
+}
+
 interface SurfaceAdjustment {
   /** Extra physical focus (mm) — more positive for uneven/coated surfaces. */
   focusMm: number
@@ -338,11 +360,20 @@ export function suggestCut(
     wanted = MAX_THICKNESS_MM
   }
 
-  const base = interpolateRow(wanted)
-  const adjust = SURFACE[surface]
+  const mirror = options.regime === 'mirror'
+  const shopMirrorPoint = mirror && Math.abs(wanted - 5) <= 0.8
+  const base = shopMirrorPoint ? MIRROR_OPEN_5MM : interpolateRow(wanted)
+  const adjust = mirror ? SURFACE.normal : SURFACE[surface]
   if (adjust.note) notes.push(adjust.note)
+  if (mirror) {
+    notes.push(
+      shopMirrorPoint
+        ? 'Mirror regime: measured 5 mm open-section point; physical focus 15 mm (CAM −15).'
+        : 'Mirror regime: provisional wide-focus setting; power/speed follow the normal row.',
+    )
+  }
 
-  const physicalFocus = base.focusMm + adjust.focusMm
+  const physicalFocus = mirror ? MIRROR_OPEN_5MM.focusMm : base.focusMm + adjust.focusMm
   const { minPowerPct, ratedPowerW } = profile.laser
   const powerPct = Math.min(100, Math.max(minPowerPct, Math.round(base.powerPct)))
 
@@ -362,7 +393,16 @@ export function suggestCut(
     options.kind === 'hollow'
       ? { sizeMm: 1.8, type: 'double' }
       : options.kind === 'open'
-        ? { sizeMm: nozzleThickness <= 15 ? 1.5 : 2.0, type: 'single' }
+        ? {
+            sizeMm: mirror
+              ? MIRROR_OPEN_5MM.focusMm > 15
+                ? 2.0
+                : 1.5
+              : nozzleThickness <= 15
+                ? 1.5
+                : 2.0,
+            type: 'single',
+          }
         : null
 
   const radiusM = options.rotationRadiusMm ? options.rotationRadiusMm / 1000 : 0
@@ -378,10 +418,11 @@ export function suggestCut(
     focusMm: round1(physicalFocus),
     camFocusMm: round1(physicalFocus * profile.focus.sign),
     heightMm: round2(base.heightMm),
-    pressureBar: round2(base.pressureBar + adjust.pressureBar),
+    pressureBar: round2(mirror ? 0.7 : base.pressureBar + adjust.pressureBar),
     nozzle,
     angularSpeedMinRpm,
     angularSpeedMaxRpm,
+    regime: mirror ? 'mirror' : 'normal',
     notes,
   }
 }

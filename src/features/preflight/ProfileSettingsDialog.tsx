@@ -23,6 +23,7 @@ import {
 import {
   BEVEL_PRESETS_DEG,
   bevelThicknessMm,
+  type CutRegime,
   type CutSuggestion,
   type SurfaceCondition,
   suggestCut,
@@ -47,12 +48,11 @@ type MarkSortKey = 'mark' | 'pieces' | 'length' | 'mass'
 
 /** One row of the transposed settings table (parameters down, thicknesses across). */
 const PARAM_ROWS: { key: string; value: (cut: CutSuggestion) => string }[] = [
+  { key: 'regime', value: (cut) => cut.regime },
   { key: 'pressure', value: (cut) => `${cut.pressureBar}` },
   { key: 'speed', value: (cut) => `${cut.speedMinMmMin}` },
-  { key: 'standoff', value: (cut) => `${cut.heightMm}` },
   { key: 'focus', value: (cut) => `${cut.camFocusMm > 0 ? '+' : ''}${cut.camFocusMm}` },
   { key: 'power', value: (cut) => `${cut.powerPct}` },
-  { key: 'frequency', value: (cut) => `${cut.frequencyHz}` },
   {
     key: 'rpm',
     value: (cut) => (cut.angularSpeedMinRpm != null ? `${cut.angularSpeedMinRpm}` : '—'),
@@ -467,6 +467,8 @@ export function CutSettings({
   const defaultSurface: SurfaceCondition = kind === 'hollow' ? 'primed' : 'rust'
   const [surface, setSurface] = useState<SurfaceCondition>(defaultSurface)
   useEffect(() => setSurface(defaultSurface), [defaultSurface])
+  const [regime, setRegime] = useState<CutRegime>(kind === 'open' ? 'mirror' : 'normal')
+  useEffect(() => setRegime(kind === 'open' ? 'mirror' : 'normal'), [kind])
   const [bevelDeg, setBevelDeg] = useState(0)
   const thicknesses = useMemo(() => sectionThicknesses(profile, dims), [profile, dims])
   const section = useMemo(() => partSectionForCode(profile, dims), [profile, dims])
@@ -498,9 +500,10 @@ export function CutSettings({
           kind,
           rotationRadiusMm,
           governingThicknessMm,
+          regime,
         }),
       })),
-    [cutThicknesses, surface, kind, rotationRadiusMm, governingThicknessMm],
+    [cutThicknesses, surface, kind, rotationRadiusMm, governingThicknessMm, regime],
   )
   const labelWidth = compact ? 'w-28' : 'w-40'
   const cell = compact ? 'px-2 py-1' : 'px-3 py-1.5'
@@ -530,6 +533,29 @@ export function CutSettings({
             </button>
           ))}
         </fieldset>
+        {kind === 'open' && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              {t('preflight.profileSettings.regime')}
+            </span>
+            {(['normal', 'mirror'] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setRegime(value)}
+                aria-pressed={regime === value}
+                className={cn(
+                  'rounded-md border px-2.5 py-1 text-center text-[11px] transition-colors',
+                  regime === value
+                    ? 'border-primary bg-primary/15 text-foreground'
+                    : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                )}
+              >
+                {t(`preflight.profileSettings.regimes.${value}`)}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[11px] font-medium text-muted-foreground">
             {t('preflight.profileSettings.bevel')}

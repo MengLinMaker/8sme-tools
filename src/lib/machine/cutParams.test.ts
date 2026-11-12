@@ -116,3 +116,24 @@ describe('bevel thickness', () => {
     expect(bevelThicknessMm(6, 45)).toBeCloseTo(8.49, 2)
   })
 })
+
+describe('open-section mirror regime', () => {
+  it('uses the provisional mirror point at 5 mm', () => {
+    const cut = suggestCut(5, 'rust', KL90010T, { kind: 'open', regime: 'mirror' })
+    expect(cut.regime).toBe('mirror')
+    expect(cut.powerPct).toBe(28)
+    expect(cut.speedMinMmMin).toBe(3)
+    expect(cut.pressureBar).toBe(0.7)
+    expect(cut.focusMm).toBe(15)
+    expect(cut.camFocusMm).toBe(-15)
+    expect(cut.nozzle).toEqual({ sizeMm: 1.5, type: 'single' })
+  })
+
+  it('applies the mirror focus to other thicknesses, keeping their power/speed', () => {
+    const cut = suggestCut(7, 'rust', KL90010T, { kind: 'open', regime: 'mirror' })
+    expect(cut.regime).toBe('mirror')
+    expect(cut.focusMm).toBe(15)
+    expect(cut.camFocusMm).toBe(-15)
+    expect(cut.powerPct).toBeGreaterThan(28)
+  })
+})
