@@ -138,6 +138,17 @@ describe('open-section mirror regime', () => {
   })
 })
 
+describe('hollow-section mirror regime', () => {
+  it('applies the mirror window to a hollow wall', () => {
+    const cut = suggestCut(5, 'primed', KL90010T, { kind: 'hollow', regime: 'mirror' })
+    expect(cut.regime).toBe('mirror')
+    expect(cut.pressureBar).toBe(0.7)
+    expect(cut.focusMm).toBe(9)
+    expect(cut.camFocusMm).toBe(-9)
+    expect(cut.nozzle).toEqual({ sizeMm: 1.8, type: 'double' })
+  })
+})
+
 describe('mirror sliders', () => {
   it('holds severance while the speed target changes the power', () => {
     const cut = suggestCut(5, 'rust', KL90010T, {

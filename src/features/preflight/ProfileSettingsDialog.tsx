@@ -498,8 +498,11 @@ export function CutSettings({
   const [surface, setSurface] = useState<SurfaceCondition>(defaultSurface)
   useEffect(() => setSurface(defaultSurface), [defaultSurface])
   const [regime, setRegime] = useState<CutRegime>(kind === 'open' ? 'mirror' : 'normal')
-  useEffect(() => setRegime(kind === 'open' ? 'mirror' : 'normal'), [kind])
   const [mirrorSpeeds, setMirrorSpeeds] = useState<Record<string, number>>({})
+  useEffect(() => {
+    setRegime(kind === 'open' ? 'mirror' : 'normal')
+    setMirrorSpeeds({})
+  }, [kind])
   const [severance, setSeverance] = useState(13.4)
   const [kerf, setKerf] = useState(1)
   const [spot, setSpot] = useState(0.2)
@@ -607,29 +610,31 @@ export function CutSettings({
             </button>
           ))}
         </fieldset>
-        {kind === 'open' && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] font-medium text-muted-foreground">
-              {t('preflight.profileSettings.regime')}
-            </span>
-            {(['normal', 'mirror'] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setRegime(value)}
-                aria-pressed={regime === value}
-                className={cn(
-                  'rounded-md border px-2.5 py-1 text-center text-[11px] transition-colors',
-                  regime === value
-                    ? 'border-primary bg-primary/15 text-foreground'
-                    : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                )}
-              >
-                {t(`preflight.profileSettings.regimes.${value}`)}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] font-medium text-muted-foreground">
+            {t('preflight.profileSettings.regime')}
+          </span>
+          {(['normal', 'mirror'] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => {
+                if (value === regime) return
+                setRegime(value)
+                setMirrorSpeeds({})
+              }}
+              aria-pressed={regime === value}
+              className={cn(
+                'rounded-md border px-2.5 py-1 text-center text-[11px] transition-colors',
+                regime === value
+                  ? 'border-primary bg-primary/15 text-foreground'
+                  : 'border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              )}
+            >
+              {t(`preflight.profileSettings.regimes.${value}`)}
+            </button>
+          ))}
+        </div>
         {suggestions.length > 0 && (
           <div className="flex flex-col gap-1.5">
             {suggestions.map(({ thickness, cut }) => {

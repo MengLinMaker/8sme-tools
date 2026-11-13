@@ -72,7 +72,7 @@ export interface CutOptions {
   rotationRadiusMm?: number
   /** Largest thickness in the section; the shop fits one nozzle per section. */
   governingThicknessMm?: number
-  /** `mirror` selects the wide-kerf, high-focus window for open sections. */
+  /** `mirror` selects the wide-kerf, high-focus window (open or hollow; hollow is experimental). */
   regime?: CutRegime
   /** Optional severance-energy target; when set, speed is derived from S, power and thickness. */
   targetSeveranceJPerMm2?: number
@@ -372,7 +372,7 @@ export function suggestCut(
   if (mirror) {
     notes.push(
       shopMirrorPoint
-        ? 'Mirror regime: measured 5 mm open-section point; physical focus 9 mm (CAM −9).'
+        ? 'Mirror regime: measured 5 mm flat-wall point; physical focus 9 mm (CAM −9).'
         : 'Mirror regime: provisional wide-focus setting; power/speed follow the normal row.',
     )
   }
