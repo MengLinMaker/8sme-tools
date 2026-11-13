@@ -165,9 +165,10 @@ function chartLayer(
   stroke: number,
   overlay?: PartIr,
   options: PartIrSvgOptions = {},
-): string {
+): { body: string; clip: string | null; clipId: string } {
   const half = chart.layout.seam / 2
   const elements: string[] = []
+  const reference: string[] = []
   const featureFace = (points: UvPoint[]): NcFace | null => {
     for (const [station] of points) {
       const hit = faceAtCenteredStation(chart.layout, station)
@@ -213,10 +214,10 @@ function chartLayer(
         if (seamDrawn) continue
         seamDrawn = true
         // The corner straddles the unwrapped seam: show its half on each edge.
-        elements.push(
+        reference.push(
           `<rect x="${fmt(-half)}" y="0" width="${fmt(width / 2)}" height="${fmt(part.length)}" fill="${ZONE_FILL}" fill-opacity="${ZONE_OPACITY}"/>`,
         )
-        elements.push(
+        reference.push(
           `<rect x="${fmt(half - width / 2)}" y="0" width="${fmt(width / 2)}" height="${fmt(part.length)}" fill="${ZONE_FILL}" fill-opacity="${ZONE_OPACITY}"/>`,
         )
         continue
@@ -224,12 +225,12 @@ function chartLayer(
       const x0 = Math.max(-half, station - width / 2)
       const x1 = Math.min(half, station + width / 2)
       if (x1 > x0) {
-        elements.push(
+        reference.push(
           `<rect x="${fmt(x0)}" y="0" width="${fmt(x1 - x0)}" height="${fmt(part.length)}" fill="${ZONE_FILL}" fill-opacity="${ZONE_OPACITY}"/>`,
         )
       }
     } else if (Math.abs(Math.abs(station) - half) >= 0.5) {
-      elements.push(
+      reference.push(
         `<line x1="${fmt(station)}" y1="0" x2="${fmt(station)}" y2="${fmt(part.length)}" stroke="${STOCK_EDGE}" stroke-width="${fmt(stroke * 0.6)}"/>`,
       )
     }
@@ -425,10 +426,18 @@ function chartLayer(
       : mode === 'flipY'
         ? `translate(0 ${fmt(offsetY + part.length)}) scale(1 -1)`
         : `translate(0 ${fmt(offsetY)})`
-  return `<g data-layer="chart:${escapeXml(chart.id)}" transform="${groupTransform}">
-${background}
+  const clipId = `clip-${chart.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+  const backgroundGroup = clip
+    ? `<g clip-path="url(#${clipId})">${background}${reference.join('\n')}</g>`
+    : `${background}${reference.join('\n')}`
+  return {
+    body: `<g data-layer="chart:${escapeXml(chart.id)}" transform="${groupTransform}">
+${backgroundGroup}
 ${body}
-</g>`
+</g>`,
+    clip,
+    clipId,
+  }
 }
 
 /**
@@ -454,6 +463,7 @@ export function partIrSvgParts(part: PartIr, options: PartIrSvgOptions = {}): Pa
   const extent = Math.max(part.length, maxSeam, 1)
   const stroke = Math.max(0.15, extent / 2000) * (options.stroke ?? 1)
   const layers: string[] = []
+  const clips: string[] = []
   let cursor = 0
   for (const chart of part.charts) {
     const half = chart.layout.seam / 2
@@ -461,7 +471,10 @@ export function partIrSvgParts(part: PartIr, options: PartIrSvgOptions = {}): Pa
     bounds.maxX = Math.max(bounds.maxX, half)
     bounds.minY = Math.min(bounds.minY, cursor)
     bounds.maxY = Math.max(bounds.maxY, cursor + part.length)
-    layers.push(chartLayer(chart, part, cursor, stroke, options.overlay, options))
+    const layer = chartLayer(chart, part, cursor, stroke, options.overlay, options)
+    layers.push(layer.body)
+    if (layer.clip)
+      clips.push(`<clipPath id="${layer.clipId}"><polygon points="${layer.clip}"/></clipPath>`)
     cursor += part.length + gap
   }
 
@@ -502,7 +515,8 @@ export function partIrSvgParts(part: PartIr, options: PartIrSvgOptions = {}): Pa
   const height = Math.max(1, bounds.maxY - bounds.minY)
   return {
     viewBox: `${fmt(bounds.minX)} ${fmt(bounds.minY)} ${fmt(width)} ${fmt(height)}`,
-    body: layers.join('\n'),
+    body: `${clips.length > 0 ? `<defs>${clips.join('')}</defs>` : ''}
+${layers.join('\n')}`,
   }
 }
 
