@@ -65,6 +65,11 @@ export interface NcProjection {
   toScene: (along: number, cross: [number, number], face: NcFace) => Vec3
   /** Outward unit normal of a face, in scene coordinates, for bevel spurs. */
   normal: (face: NcFace) => Vec3
+  /**
+   * The geometry is already on the final outer skin (e.g. STEP cut edges), so do not apply the
+   * NC root-line → outer-skin bevel shift.
+   */
+  onSurface?: boolean
 }
 
 /** Cut lines plus their welding-bevel indications, grouped by the wall thickness they cut. */
@@ -466,7 +471,7 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
   // outer skin. Start and end cuts shift in opposite directions.
   const midAlong = ncAlongMid(nc)
   const outerAlongShift = (face: NcFace, x0: number, x1: number, deg: number): number => {
-    if (!isTube || deg <= REGULAR_CUT_DEG) return 0
+    if (projection.onSurface || !isTube || deg <= REGULAR_CUT_DEG) return 0
     const wall = faceThickness(frame, section, face)
     const shift = wall * Math.tan((deg * Math.PI) / 180)
     return (x0 + x1) / 2 < midAlong ? shift : -shift

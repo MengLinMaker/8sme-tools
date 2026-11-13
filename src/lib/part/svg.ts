@@ -1,5 +1,6 @@
-import { arcSamples } from '@/lib/parsers/ncGeometry'
-import type { FeatureShape, PartChart, PartIr, UvPoint } from './ir'
+import { arcSamples, type NcFace } from '@/lib/parsers/ncGeometry'
+import { centeredStationFor, faceAtCenteredStation } from '@/lib/wisecam/layout'
+import type { FeatureShape, PartChart, PartFeature, PartIr, UvPoint } from './ir'
 
 /**
  * Render a PartIR as a layered 2-D SVG — the inspection/view layer, not the canonical model.
@@ -27,6 +28,13 @@ export interface PartIrSvgOptions {
   diffTolerance?: number
   /** Stroke-width multiplier (e.g. 1/zoom) to keep lines thin as the view zooms. */
   stroke?: number
+  /** Colour a cut/hole/slot by the wall thickness of its DSTV face (3D legend palette). */
+  colorForFace?: (face: NcFace) => string | undefined
+  /**
+   * `wisecam` (default) mirrors station and puts the positive beam direction up, matching
+   * WiseCAM's unrolled view. `raw` keeps the canonical UV coordinates unchanged.
+   */
+  orientation?: 'wisecam' | 'raw'
 }
 
 interface Bounds {
@@ -98,6 +106,10 @@ const STROKE = '#94a3b8'
 const HOLE = '#38bdf8'
 const MARK = '#fb923c'
 const ETCH = '#f5f5f5'
+const STOCK_EDGE = '#334155'
+/** Grey reference zones (rounded corners / non-machined areas). */
+const ZONE_FILL = '#94a3b8'
+const ZONE_OPACITY = '0.22'
 
 function chartLayer(
   chart: PartChart,
@@ -109,13 +121,79 @@ function chartLayer(
 ): string {
   const half = chart.layout.seam / 2
   const elements: string[] = []
+  const featureFace = (points: UvPoint[]): NcFace | null => {
+    for (const [station] of points) {
+      const hit = faceAtCenteredStation(chart.layout, station)
+      if (hit) return hit.face
+    }
+    return null
+  }
+  const faceColor = (face: NcFace | null, fallback: string): string =>
+    (face ? options.colorForFace?.(face) : undefined) ?? fallback
+  const aligned = (feature: PartFeature, points: UvPoint[]): UvPoint[] => {
+    if (!feature.rootLine || feature.shape.form !== 'polyline') return points
+    const wall = part.dimensions[2] ?? 0
+    if (!(wall > 0)) return points
+    const mid = part.length / 2
+    return points.map(([station, along], index) => {
+      const a = Math.abs(feature.bevels?.[index]?.[0] ?? 0)
+      const b = Math.abs(feature.bevels?.[index + 1]?.[0] ?? 0)
+      const deg = Math.max(a, b)
+      if (deg <= 8) return [station, along] as UvPoint
+      const shift = wall * Math.tan((deg * Math.PI) / 180)
+      return [station, along + (along < mid ? shift : -shift)] as UvPoint
+    })
+  }
+  const boundaries = new Map<number, number>()
+  for (const face of chart.faces) {
+    const region = chart.layout.faces[face]
+    if (!region) continue
+    const width = region.width ?? region.length
+    for (const y of [0, width]) {
+      const station = centeredStationFor(chart.layout, face, y)
+      if (station == null || station < -half - 0.5 || station > half + 0.5) continue
+      const key = Math.round(station * 100) / 100
+      boundaries.set(key, Math.max(boundaries.get(key) ?? 0, region.radius ?? 0))
+    }
+  }
+  let seamDrawn = false
+  for (const [station, radius] of boundaries) {
+    if (radius > 0) {
+      // A rounded corner is a developed strip, not a line: its unrolled width is r·π/2.
+      const width = (Math.PI / 2) * radius
+      const atSeam = Math.abs(Math.abs(station) - half) < 0.5
+      if (atSeam) {
+        if (seamDrawn) continue
+        seamDrawn = true
+        // The corner straddles the unwrapped seam: show its half on each edge.
+        elements.push(
+          `<rect x="${fmt(-half)}" y="0" width="${fmt(width / 2)}" height="${fmt(part.length)}" fill="${ZONE_FILL}" fill-opacity="${ZONE_OPACITY}"/>`,
+        )
+        elements.push(
+          `<rect x="${fmt(half - width / 2)}" y="0" width="${fmt(width / 2)}" height="${fmt(part.length)}" fill="${ZONE_FILL}" fill-opacity="${ZONE_OPACITY}"/>`,
+        )
+        continue
+      }
+      const x0 = Math.max(-half, station - width / 2)
+      const x1 = Math.min(half, station + width / 2)
+      if (x1 > x0) {
+        elements.push(
+          `<rect x="${fmt(x0)}" y="0" width="${fmt(x1 - x0)}" height="${fmt(part.length)}" fill="${ZONE_FILL}" fill-opacity="${ZONE_OPACITY}"/>`,
+        )
+      }
+    } else if (Math.abs(Math.abs(station) - half) >= 0.5) {
+      elements.push(
+        `<line x1="${fmt(station)}" y1="0" x2="${fmt(station)}" y2="${fmt(part.length)}" stroke="${STOCK_EDGE}" stroke-width="${fmt(stroke * 0.6)}"/>`,
+      )
+    }
+  }
   for (const feature of part.features) {
     if (feature.chart !== chart.id) continue
     const shape = feature.shape
     if (feature.kind === 'hole') {
       if (shape.form !== 'circle') continue
       elements.push(
-        `<circle cx="${fmt(shape.center[0])}" cy="${fmt(shape.center[1])}" r="${fmt(shape.radius)}" fill="none" stroke="${HOLE}" stroke-width="${fmt(stroke * 1.6)}"/>`,
+        `<circle cx="${fmt(shape.center[0])}" cy="${fmt(shape.center[1])}" r="${fmt(shape.radius)}" fill="none" stroke="${faceColor(featureFace([shape.center]), HOLE)}" stroke-width="${fmt(stroke * 1.6)}"/>`,
       )
       continue
     }
@@ -124,7 +202,7 @@ function chartLayer(
       const points = shapePoints(shape)
       // A slot is a closed stadium; a polyline would omit the final straight segment.
       elements.push(
-        `<polygon points="${pointsAttr(points)}" fill="none" stroke="${HOLE}" stroke-width="${fmt(stroke * 1.6)}"/>`,
+        `<polygon points="${pointsAttr(points)}" fill="none" stroke="${faceColor(featureFace([shape.center, shape.far]), HOLE)}" stroke-width="${fmt(stroke * 1.6)}"/>`,
       )
       continue
     }
@@ -137,11 +215,39 @@ function chartLayer(
       continue
     }
     if (shape.form !== 'polyline') continue
-    const points = sampledPoints(shape.points, shape.radii, shape.closed)
+    const alignedPoints = aligned(feature, shape.points)
+    const color = faceColor(featureFace(alignedPoints), STROKE)
+    if (feature.stock?.some(Boolean)) {
+      const source = alignedPoints
+      const segments: { a: UvPoint; b: UvPoint; stock: boolean }[] = []
+      const count = shape.closed ? source.length : source.length - 1
+      for (let index = 0; index < count; index++) {
+        const a = source[index] as UvPoint
+        const b = source[(index + 1) % source.length] as UvPoint
+        segments.push({ a, b, stock: Boolean(feature.stock[index]) })
+      }
+      let run: { a: UvPoint; b: UvPoint; stock: boolean }[] = []
+      const flush = (): void => {
+        if (run.length === 0) return
+        const points = [run[0]?.a as UvPoint, ...run.map((segment) => segment.b)]
+        if (points.length >= 2)
+          elements.push(
+            `<polyline points="${pointsAttr(points)}" fill="none" stroke="${run[0]?.stock ? STOCK_EDGE : color}" stroke-width="${fmt(run[0]?.stock ? stroke * 0.7 : stroke)}" stroke-linecap="round"/>`,
+          )
+        run = []
+      }
+      for (const segment of segments) {
+        if (run.length > 0 && run[0]?.stock !== segment.stock) flush()
+        run.push(segment)
+      }
+      flush()
+      continue
+    }
+    const points = sampledPoints(alignedPoints, shape.radii, shape.closed)
     if (points.length < 2) continue
     const tag = shape.closed ? 'polygon' : 'polyline'
     elements.push(
-      `<${tag} points="${pointsAttr(points)}" fill="none" stroke="${STROKE}" stroke-width="${fmt(stroke)}"${shape.closed ? '' : ' stroke-linecap="round"'}/>`,
+      `<${tag} points="${pointsAttr(points)}" fill="none" stroke="${color}" stroke-width="${fmt(stroke)}"${shape.closed ? '' : ' stroke-linecap="round"'}/>`,
     )
   }
   for (const mark of part.marks) {
@@ -150,7 +256,7 @@ function chartLayer(
     if (mark.text) {
       const [x, y] = mark.shape.form === 'polyline' ? (mark.shape.points[0] ?? [0, 0]) : [0, 0]
       elements.push(
-        `<text x="${fmt(x)}" y="${fmt(y)}" fill="${color}" font-size="${Math.max(2, mark.text.height)}" transform="rotate(${fmt(mark.text.angle)} ${fmt(x)} ${fmt(y)})" text-anchor="middle">${escapeXml(mark.text.value)}</text>`,
+        `<text x="${fmt(x)}" y="${fmt(y)}" fill="${color}" font-size="${Math.max(2, mark.text.height)}" transform="rotate(${fmt(mark.text.angle + ((options.orientation ?? 'wisecam') === 'wisecam' ? 180 : 0))} ${fmt(x)} ${fmt(y)})" text-anchor="middle">${escapeXml(mark.text.value)}</text>`,
       )
       continue
     }
@@ -170,11 +276,20 @@ function chartLayer(
     }
     const baseSegments: BaseSegment[] = []
     for (const feature of part.features) {
-      if (feature.chart !== chart.id || feature.kind !== 'cut') continue
-      if (feature.shape.form !== 'polyline') continue
-      const points = feature.shape.points
+      if (feature.chart !== chart.id) continue
+      if (feature.kind !== 'cut' && feature.kind !== 'hole' && feature.kind !== 'slot') continue
+      let points: UvPoint[]
+      let closed: boolean
+      if (feature.kind === 'cut') {
+        if (feature.shape.form !== 'polyline') continue
+        points = aligned(feature, feature.shape.points)
+        closed = feature.shape.closed
+      } else {
+        points = shapePoints(feature.shape)
+        closed = true
+      }
       let orientation = 1
-      if (feature.shape.closed && points.length >= 3) {
+      if (closed && points.length >= 3) {
         let twice = 0
         for (let index = 0; index < points.length; index++) {
           const p = points[index] as UvPoint
@@ -184,9 +299,11 @@ function chartLayer(
         orientation = twice >= 0 ? 1 : -1
       }
       // An outer contour's material is its interior; a hole's material is outside the loop.
-      const sign = feature.contour === 'inner' ? -orientation : orientation
-      const count = feature.shape.closed ? points.length : points.length - 1
+      const sign =
+        feature.kind !== 'cut' || feature.contour === 'inner' ? -orientation : orientation
+      const count = closed ? points.length : points.length - 1
       for (let index = 0; index < count; index++) {
+        if (feature.stock?.[index]) continue
         const a = points[index] as UvPoint
         const b = points[(index + 1) % points.length] as UvPoint
         const dx = b[0] - a[0]
@@ -196,7 +313,6 @@ function chartLayer(
       }
     }
     const tolerance = options.diffTolerance ?? 2
-    const SAME = '#64748b'
     const OVER = '#f87171'
     const UNDER = '#60a5fa'
     for (const feature of overlay.features) {
@@ -233,24 +349,23 @@ function chartLayer(
             signed = (mid[0] - cx) * segment.nx + (mid[1] - cy) * segment.ny
           }
         }
-        // Grey = coincident, red = STEP cuts deeper into material, blue = NC leaves material.
-        const color =
-          best > tolerance * 4
-            ? UNDER
-            : Math.abs(signed) <= tolerance
-              ? SAME
-              : signed > 0
-                ? OVER
-                : UNDER
+        // Only draw actual deviations: red = STEP cuts deeper into material, blue = undercut.
+        if (best <= tolerance && Math.abs(signed) <= tolerance) continue
+        const color = best > tolerance * 4 || signed <= 0 ? UNDER : OVER
         elements.push(
           `<line x1="${fmt(a[0])}" y1="${fmt(a[1])}" x2="${fmt(b[0])}" y2="${fmt(b[1])}" stroke="${color}" stroke-width="${fmt(stroke * 1.2)}" stroke-linecap="round"/>`,
         )
       }
     }
   }
-  return `<g data-layer="chart:${escapeXml(chart.id)}" transform="translate(0 ${fmt(offsetY)})">
+  const body = `${elements.join('\n')}`
+  const wisecam = (options.orientation ?? 'wisecam') === 'wisecam'
+  const groupTransform = wisecam
+    ? `translate(0 ${fmt(offsetY + part.length)}) scale(-1 -1)`
+    : `translate(0 ${fmt(offsetY)})`
+  return `<g data-layer="chart:${escapeXml(chart.id)}" transform="${groupTransform}">
 <rect x="${fmt(-half)}" y="0" width="${fmt(chart.layout.seam)}" height="${fmt(part.length)}" fill="#0f172a" stroke="#334155" stroke-width="${fmt(stroke * 0.7)}"/>
-${elements.join('\n')}
+${body}
 </g>`
 }
 
@@ -302,8 +417,12 @@ export function partIrSvgParts(part: PartIr, options: PartIrSvgOptions = {}): Pa
     }
     // Place the section above the first chart, preserving its own aspect.
     const translateY = -maxY - gap
+    const sectionRotate =
+      (options.orientation ?? 'wisecam') === 'wisecam'
+        ? ` translate(${fmt(minX + maxX)} ${fmt(minY + maxY)}) scale(-1 -1)`
+        : ''
     layers.push(
-      `<g data-layer="section" transform="translate(0 ${fmt(translateY)})"><polygon points="${pointsAttr(points)}" fill="none" stroke="${STROKE}" stroke-width="${fmt(stroke)}"/></g>`,
+      `<g data-layer="section" transform="translate(0 ${fmt(translateY)})"><g transform="${sectionRotate.trim()}"><polygon points="${pointsAttr(points)}" fill="none" stroke="${STROKE}" stroke-width="${fmt(stroke)}"/></g></g>`,
     )
     bounds.minX = Math.min(bounds.minX, minX)
     bounds.maxX = Math.max(bounds.maxX, maxX)

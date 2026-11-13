@@ -300,6 +300,8 @@ export function classifyEdgeSegments(
 export interface SeatedBrepEdge {
   points: number[]
   neighbours: number[]
+  /** OCC curve type (`LINE`, `CIRCLE`, `BSPLINE_CURVE`, …). */
+  curveType?: string
   /** Per neighbour (aligned with `neighbours`): a curved neighbour's normals at each point. */
   neighbourNormals?: (number[] | undefined)[]
 }
@@ -310,6 +312,8 @@ export interface SeatedBrepFace {
   planar: boolean
   /** Points sampled on the face *surface* (seated, flat XYZ) — the stock/cut outline test. */
   samples: number[]
+  /** Exact cylindrical surface parameters when this face is a cylinder. */
+  cylinder?: { center: Vec3; axis: Vec3; radius: number }
   wires: { enclosed: boolean; edges: SeatedBrepEdge[] }[]
 }
 

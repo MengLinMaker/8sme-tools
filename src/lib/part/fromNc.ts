@@ -86,6 +86,13 @@ export function partIrFromNc(ncText: string): PartIr | null {
       points.push(point)
     }
     if (!developed || points.length < 2) continue
+    const stock = points.map((point, index) => {
+      const next = points[(index + 1) % points.length]
+      if (!next) return false
+      return (
+        Math.abs(next[0] - point[0]) <= 0.5 && Math.abs(next[1] - point[1]) >= header.length * 0.25
+      )
+    })
     features.push({
       kind: 'cut',
       chart: chart.id,
@@ -98,6 +105,13 @@ export function partIrFromNc(ncText: string): PartIr | null {
       bevels: contour.bevels,
       contour: contour.kind,
       refs: contour.refs,
+      stock: stock.some(Boolean) ? stock : undefined,
+      rootLine:
+        header.profileType.trim().toUpperCase() === 'M' &&
+        contour.kind === 'outer' &&
+        contour.bevels.some((bevel) => Math.abs(bevel[0] ?? 0) > 8)
+          ? true
+          : undefined,
     })
   }
 

@@ -28,11 +28,18 @@ describe('PartIR SVG view', () => {
     expect(svg).toContain('stroke-dasharray="4 3"')
   })
 
-  it('renders coincident diff segments as ghost grey', () => {
+  it('omits coincident diff segments and only draws deviations', () => {
     const ir = part('M-1')
-    const svg = partIrSvg(ir, { overlay: ir, diff: true, diffTolerance: 0.1 })
-    expect(svg).toContain('<line')
-    expect(svg).toContain('stroke="#64748b"')
+    const same = partIrSvg(ir, { overlay: ir, diff: true, diffTolerance: 0.1 })
+    expect(same).not.toContain('stroke="#64748b"')
+
+    const shifted = structuredClone(ir)
+    for (const feature of shifted.features) {
+      if (feature.kind === 'cut' && feature.shape.form === 'polyline')
+        feature.shape.points = feature.shape.points.map(([station, along]) => [station + 5, along])
+    }
+    const diff = partIrSvg(ir, { overlay: shifted, diff: true, diffTolerance: 0.1 })
+    expect(diff).toMatch(/stroke="#(f87171|60a5fa)"/)
   })
 
   it('keeps slotted holes as visible cut geometry (m88)', () => {
@@ -41,6 +48,24 @@ describe('PartIR SVG view', () => {
     expect(ir.features.filter((feature) => feature.kind === 'slot')).toHaveLength(6)
     const svg = partIrSvg(ir)
     expect(svg.match(/<polygon[^>]*stroke="#38bdf8"/g) ?? []).toHaveLength(6)
+  })
+
+  it('defaults to WiseCAM orientation (station mirrored, beam up)', () => {
+    const ir = part('M-1')
+    expect(partIrSvg(ir)).toContain('scale(-1 -1)')
+    expect(partIrSvg(ir, { orientation: 'raw' })).not.toContain('scale(-1')
+  })
+
+  it('colours cuts by the supplied face-thickness palette', () => {
+    const ir = part('M-1')
+    const svg = partIrSvg(ir, { colorForFace: () => '#123456' })
+    expect(svg).toContain('stroke="#123456"')
+  })
+
+  it('draws rounded-corner strips between tube faces', () => {
+    const ir = part('M-35')
+    const svg = partIrSvg(ir)
+    expect(svg).toContain('fill-opacity="0.22"')
   })
 
   it('draws cut polylines and marks from the canonical UV geometry', () => {

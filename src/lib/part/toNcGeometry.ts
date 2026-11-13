@@ -1,8 +1,8 @@
 import type { NcContour, NcFace, NcGeometry, NcMark, NcNotch } from '@/lib/parsers/ncGeometry'
 import {
-  acrossAtCenteredStation,
+  acrossAtSurfaceStation,
   centeredStationRange,
-  faceAtCenteredStation,
+  faceAtSurfaceStation,
 } from '@/lib/wisecam/layout'
 import type { PartChart, PartFeature, PartIr, UvPoint } from './ir'
 
@@ -25,7 +25,7 @@ function inverse(chart: PartChart, point: UvPoint): FacePoint | null {
     const range = centeredStationRange(chart.layout, face)
     if (!range) continue
     if (point[0] <= range[0] + 0.005 || point[0] >= range[1] - 0.005) continue
-    const y = acrossAtCenteredStation(chart.layout, face, point[0])
+    const y = acrossAtSurfaceStation(chart.layout, face, point[0])
     if (y != null) return { face, x: point[1], y }
   }
   const tolerance = Math.max(2, chart.layout.seam * 0.02)
@@ -38,10 +38,10 @@ function inverse(chart: PartChart, point: UvPoint): FacePoint | null {
     if (!best || distance < best.distance) best = { face, distance }
   }
   if (best && best.distance <= tolerance) {
-    const y = acrossAtCenteredStation(chart.layout, best.face, point[0])
+    const y = acrossAtSurfaceStation(chart.layout, best.face, point[0])
     if (y != null) return { face: best.face, x: point[1], y }
   }
-  const hit = faceAtCenteredStation(chart.layout, point[0])
+  const hit = faceAtSurfaceStation(chart.layout, point[0])
   return hit ? { face: hit.face, x: point[1], y: hit.y } : null
 }
 
@@ -60,39 +60,66 @@ function commonFace(chart: PartChart, stations: number[]): NcFace | null {
   return best && best.count / stations.length >= 0.8 ? best.face : null
 }
 
-function contourFor(feature: PartFeature, chart: PartChart): NcContour | null {
-  if (feature.shape.form !== 'polyline') return null
+function contoursFor(feature: PartFeature, chart: PartChart): NcContour[] {
+  if (feature.shape.form !== 'polyline') return []
   const points = feature.shape.points
+  const radii = feature.shape.radii
   const face = commonFace(
     chart,
     points.map(([station]) => station),
   )
-  const mapped: [number, number][] = []
-  let contourFace: NcFace | null = face
-  if (face) {
-    for (const [station, along] of points) {
-      const y = acrossAtCenteredStation(chart.layout, face, station)
-      if (y == null) return null
-      mapped.push([along, y])
-    }
-  } else {
-    for (const point of points) {
-      const hit = inverse(chart, point)
-      if (!hit) return null
-      if (!contourFace) contourFace = hit.face
-      else if (hit.face !== contourFace) return null
-      mapped.push([hit.x, hit.y])
-    }
-  }
-  if (!contourFace || mapped.length < 2) return null
-  return {
-    face: contourFace,
+  const make = (mapped: [number, number][], faceName: NcFace, indices: number[]): NcContour => ({
+    face: faceName,
     kind: feature.contour === 'inner' ? 'inner' : 'outer',
     points: mapped,
-    bevels: feature.bevels ?? mapped.map(() => [0, 0, 0, 0]),
-    radii: feature.shape.radii,
-    refs: feature.refs,
+    bevels: indices.map((index) => feature.bevels?.[index] ?? [0, 0, 0, 0]),
+    radii: indices.map((index) => radii?.[index] ?? 0),
+    refs: indices.map((index) => feature.refs?.[index] ?? null),
+  })
+  if (face) {
+    const mapped: [number, number][] = []
+    for (const [station, along] of points) {
+      const y = acrossAtSurfaceStation(chart.layout, face, station)
+      if (y == null) return []
+      mapped.push([along, y])
+    }
+    return [
+      make(
+        mapped,
+        face,
+        points.map((_, index) => index),
+      ),
+    ]
   }
+
+  // A merged STEP run can span several DSTV faces; split it into per-face contours.
+  const mapped: { face: NcFace; point: [number, number]; index: number }[] = []
+  for (const [index, point] of points.entries()) {
+    const hit = inverse(chart, point)
+    if (!hit) continue
+    mapped.push({ face: hit.face, point: [hit.x, hit.y], index })
+  }
+  const contours: NcContour[] = []
+  let run: typeof mapped = []
+  const flush = (): void => {
+    if (run.length >= 2) {
+      const faceName = (run[0] as (typeof mapped)[number]).face
+      contours.push(
+        make(
+          run.map((entry) => entry.point),
+          faceName,
+          run.map((entry) => entry.index),
+        ),
+      )
+    }
+    run = []
+  }
+  for (const entry of mapped) {
+    if (run.length > 0 && entry.face !== (run[0] as (typeof mapped)[number]).face) flush()
+    run.push(entry)
+  }
+  flush()
+  return contours
 }
 
 export function partIrToNcGeometry(part: PartIr): NcGeometry {
@@ -131,8 +158,7 @@ export function partIrToNcGeometry(part: PartIr): NcGeometry {
         }
         continue
       }
-      const contour = contourFor(feature, chart)
-      if (contour) contours.push(contour)
+      contours.push(...contoursFor(feature, chart))
     }
 
     for (const mark of part.marks) {

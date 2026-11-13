@@ -267,3 +267,65 @@ export function faceAtCenteredStation(layout: UnrolledLayout, station: number): 
   }
   return null
 }
+
+/**
+ * Face coordinate → centred station, applying the true corner-arc correction when `y` overruns
+ * the authored face width. This is the forward mapping used by STEP extraction.
+ */
+export function surfaceStationFor(
+  layout: UnrolledLayout,
+  faceName: NcFace,
+  y: number,
+): number | null {
+  const region = layout.faces[faceName]
+  if (!region) return null
+  const width = region.width ?? region.length
+  const radius = region.radius ?? 0
+  if (radius <= 0 || (y >= 0 && y <= width)) return centeredStationFor(layout, faceName, y)
+  const boundaryY = y < 0 ? 0 : width
+  const boundaryStation = centeredStationFor(layout, faceName, boundaryY)
+  if (boundaryStation == null) return null
+  const overrun = Math.abs(y - boundaryY)
+  const theta = Math.asin(Math.min(1, overrun / radius))
+  const direction = (y > width ? 1 : -1) * (region.reversed ? -1 : 1)
+  return boundaryStation + direction * radius * theta
+}
+
+/** Inverse of {@link surfaceStationFor} for a specific face. */
+export function acrossAtSurfaceStation(
+  layout: UnrolledLayout,
+  faceName: NcFace,
+  station: number,
+): number | null {
+  const region = layout.faces[faceName]
+  if (!region) return null
+  const width = region.width ?? region.length
+  const radius = region.radius ?? 0
+  const margin = radius > 0 ? radius : Math.max(2, width * 0.25)
+  let lo = -margin
+  let hi = width + margin
+  const start = surfaceStationFor(layout, faceName, lo)
+  const end = surfaceStationFor(layout, faceName, hi)
+  if (start == null || end == null) return null
+  const min = Math.min(start, end)
+  const max = Math.max(start, end)
+  if (station < min - 0.01 || station > max + 0.01) return null
+  const ascending = end >= start
+  for (let step = 0; step < 48; step++) {
+    const mid = (lo + hi) / 2
+    const value = surfaceStationFor(layout, faceName, mid)
+    if (value == null) break
+    if ((ascending && value < station) || (!ascending && value > station)) lo = mid
+    else hi = mid
+  }
+  return (lo + hi) / 2
+}
+
+/** Inverse of {@link surfaceStationFor}: recover the DSTV face + authored across coordinate. */
+export function faceAtSurfaceStation(layout: UnrolledLayout, station: number): FaceStation | null {
+  for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
+    const y = acrossAtSurfaceStation(layout, face, station)
+    if (y != null) return { face, y }
+  }
+  return null
+}

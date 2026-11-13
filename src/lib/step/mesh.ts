@@ -48,6 +48,19 @@ interface WireLike {
 
 interface FaceLike {
   geomType: string
+  surface?: {
+    wrapped?: {
+      Cylinder?: () => {
+        Axis: () => {
+          Location: () => { X: () => number; Y: () => number; Z: () => number }
+          Direction: () => { X: () => number; Y: () => number; Z: () => number }
+        }
+        Radius: () => number
+        delete?: () => void
+      }
+    }
+    delete?: () => void
+  }
   normalAt(location?: [number, number, number]): VectorLike
   clone(): FaceLike
   outerWire(): WireLike
@@ -99,6 +112,8 @@ export interface BrepWire {
  */
 export interface BrepFace {
   normal: Vec3
+  /** Exact cylindrical surface parameters when this face is a cylinder. */
+  cylinder?: { center: Vec3; axis: Vec3; radius: number }
   /** A representative point on the face (centroid of its wire points), native frame. */
   center: Vec3
   planar: boolean
@@ -204,6 +219,7 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
   }
   interface RawFace {
     normal: Vec3
+    cylinder?: { center: Vec3; axis: Vec3; radius: number }
     center: Vec3
     planar: boolean
     samples: number[]
@@ -218,9 +234,26 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
     kept.push(face)
     let planar = false
     let normal: Vec3 = [0, 0, 0]
+    let cylinder: { center: Vec3; axis: Vec3; radius: number } | undefined
     const wires: RawWire[] = []
     try {
       planar = face.geomType === 'PLANE'
+      if (face.geomType === 'CYLINDRE' && face.surface?.wrapped?.Cylinder) {
+        const adaptor = face.surface.wrapped
+        const cyl = adaptor.Cylinder?.()
+        if (cyl) {
+          const axis = cyl.Axis()
+          const loc = axis.Location()
+          const dir = axis.Direction()
+          cylinder = {
+            center: [loc.X(), loc.Y(), loc.Z()],
+            axis: [dir.X(), dir.Y(), dir.Z()],
+            radius: cyl.Radius(),
+          }
+          cyl.delete?.()
+        }
+        face.surface.delete?.()
+      }
       const normalVec = face.normalAt()
       const length = Math.hypot(normalVec.x, normalVec.y, normalVec.z) || 1
       normal = [normalVec.x / length, normalVec.y / length, normalVec.z / length]
@@ -284,6 +317,7 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
     }
     raw.push({
       normal,
+      cylinder,
       center: count > 0 ? [cx / count, cy / count, cz / count] : [0, 0, 0],
       planar,
       samples,
@@ -293,6 +327,7 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
 
   const result = raw.map((face, index) => ({
     normal: face.normal,
+    cylinder: face.cylinder,
     center: face.center,
     planar: face.planar,
     samples: face.samples,

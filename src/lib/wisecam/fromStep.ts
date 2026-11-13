@@ -114,8 +114,24 @@ export function seatedStepGeometry(
     (body.brep ?? []).map((face) => {
       const normal = new Vector3(...face.normal).applyQuaternion(quaternion)
       const center = new Vector3(...face.center).applyMatrix4(seated.primary)
+      const cylinder = face.cylinder
+        ? {
+            center: new Vector3(...face.cylinder.center).applyMatrix4(seated.primary).toArray() as [
+              number,
+              number,
+              number,
+            ],
+            axis: new Vector3(...face.cylinder.axis).applyQuaternion(quaternion).toArray() as [
+              number,
+              number,
+              number,
+            ],
+            radius: face.cylinder.radius,
+          }
+        : undefined
       return {
         normal: [normal.x, normal.y, normal.z],
+        cylinder,
         center: [center.x, center.y, center.z],
         planar: face.planar,
         samples: transformVertices(face.samples, seated.primary),
@@ -124,6 +140,7 @@ export function seatedStepGeometry(
           edges: wire.edges.map((edge) => ({
             points: transformVertices(edge.points, seated.primary),
             neighbours: edge.neighbours,
+            curveType: edge.curveType,
             neighbourNormals: edge.neighbourNormals?.map((normals) =>
               normals ? transformVertices(normals, rotation) : undefined,
             ),

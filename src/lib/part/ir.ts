@@ -67,6 +67,10 @@ export interface PartFeature {
   contour?: 'outer' | 'inner'
   /** Per-vertex DSTV reference-edge suffixes, aligned with a polyline's points. */
   refs?: (string | null)[]
+  /** Per-vertex stock-edge flag: segment i→i+1 is a raw-stock boundary, not a laser cut. */
+  stock?: boolean[]
+  /** NC-authored on a tube bevel's root line; the view shifts it to the outer skin. */
+  rootLine?: boolean
   /** DSTV `BO` fabrication letter (`l`, `g`, `m`, `s`), for hole round-trip. */
   holeType?: string | null
   /** Remaining `BO` numeric fields (slot length/width, depth, …). */

@@ -1186,7 +1186,7 @@ function mountScene(
         }
         const projected = addNcLines(
           irCutGeometry,
-          { frame: stockFrame, section, toScene, normal },
+          { frame: stockFrame, section, toScene, normal, onSurface: true },
           ncResolution,
           ncMaterials,
         )
