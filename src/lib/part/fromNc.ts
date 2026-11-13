@@ -3,7 +3,15 @@ import { faceSpanAxis, ncAuthoredAcrossSign, resolveNcFaceFrame } from '@/lib/pa
 import { type NcFace, parseNcGeometry, slotOffset } from '@/lib/parsers/ncGeometry'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { centeredStationFor, type UnrolledLayout, unrolledLayout } from '@/lib/wisecam/layout'
-import type { PartChart, PartFeature, PartIr, PartMark, UvPoint } from './ir'
+import { developEndCut } from '@/lib/wisecam/surface'
+import {
+  centredStation,
+  type PartChart,
+  type PartFeature,
+  type PartIr,
+  type PartMark,
+  type UvPoint,
+} from './ir'
 
 /**
  * DSTV NC → canonical PartIR.
@@ -180,6 +188,24 @@ export function partIrFromNc(ncText: string): PartIr | null {
     })
   }
 
+  const wall = header.dimensions[2] ?? 0
+  const toCentred = (
+    points: [number, number][] | null,
+    chartLayout: UnrolledLayout,
+  ): UvPoint[] | undefined =>
+    points?.map(([station, along]) => [centredStation(chartLayout, station), along] as UvPoint)
+  const startCut = frontLayout
+    ? toCentred(
+        developEndCut(frontLayout, geometry.contours, header.length, 'start', wall),
+        frontLayout,
+      )
+    : undefined
+  const endCut = frontLayout
+    ? toCentred(
+        developEndCut(frontLayout, geometry.contours, header.length, 'end', wall),
+        frontLayout,
+      )
+    : undefined
   return {
     mark: header.mark,
     profile: header.profile,
@@ -194,5 +220,7 @@ export function partIrFromNc(ncText: string): PartIr | null {
     charts,
     features,
     marks,
+    startCut,
+    endCut,
   }
 }

@@ -406,12 +406,18 @@ function chartLayer(
     }
   }
   const body = `${elements.join('\n')}`
-  const clip = cutEnvelopeClip(part, chart)
-  const clipId = `clip-${chart.id}`
-  const clipDef = clip
-    ? `<defs><clipPath id="${clipId}"><polygon points="${clip}"/></clipPath></defs>`
-    : ''
-  const clipAttr = clip ? ` clip-path="url(#${clipId})"` : ''
+  const cutBoundary =
+    chart.id === 'front' && part.startCut && part.endCut
+      ? (() => {
+          const start = [...part.startCut].sort((a, b) => a[0] - b[0])
+          const end = [...part.endCut].sort((a, b) => a[0] - b[0])
+          return pointsAttr([...start, ...end.reverse()])
+        })()
+      : null
+  const clip = cutBoundary ?? cutEnvelopeClip(part, chart)
+  const background = clip
+    ? `<polygon points="${clip}" fill="#0f172a" stroke="#334155" stroke-width="${fmt(stroke * 0.7)}"/>`
+    : `<rect x="${fmt(-half)}" y="0" width="${fmt(chart.layout.seam)}" height="${fmt(part.length)}" fill="#0f172a" stroke="#334155" stroke-width="${fmt(stroke * 0.7)}"/>`
   const mode = options.orientation ?? 'wisecam'
   const groupTransform =
     mode === 'wisecam'
@@ -420,11 +426,8 @@ function chartLayer(
         ? `translate(0 ${fmt(offsetY + part.length)}) scale(1 -1)`
         : `translate(0 ${fmt(offsetY)})`
   return `<g data-layer="chart:${escapeXml(chart.id)}" transform="${groupTransform}">
-${clipDef}
-<g${clipAttr}>
-<rect x="${fmt(-half)}" y="0" width="${fmt(chart.layout.seam)}" height="${fmt(part.length)}" fill="#0f172a" stroke="#334155" stroke-width="${fmt(stroke * 0.7)}"/>
+${background}
 ${body}
-</g>
 </g>`
 }
 
@@ -479,9 +482,7 @@ export function partIrSvgParts(part: PartIr, options: PartIrSvgOptions = {}): Pa
     const sectionRotate =
       (options.orientation ?? 'wisecam') === 'wisecam'
         ? ` translate(${fmt(minX + maxX)} ${fmt(minY + maxY)}) scale(-1 -1)`
-        : options.orientation === 'flipY'
-          ? ` translate(0 ${fmt(minY + maxY)}) scale(1 -1)`
-          : ''
+        : ''
     layers.push(
       `<g data-layer="section" transform="translate(0 ${fmt(translateY)})"><g transform="${sectionRotate.trim()}"><polygon points="${pointsAttr(points)}" fill="none" stroke="${STROKE}" stroke-width="${fmt(stroke)}"/></g></g>`,
     )
