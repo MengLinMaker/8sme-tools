@@ -10,6 +10,7 @@ import {
   ncAuthoredStancePoints,
   placeNcFace,
   resolveNcFaceFrame,
+  snapToSectionSurface,
 } from './ncFaces'
 import type { NcContour, NcFace, NcGeometry } from './ncGeometry'
 import { parseNcGeometry } from './ncGeometry'
@@ -256,6 +257,18 @@ describe('projectNc hollow bevel end (RHS150*100*9.0)', () => {
     expect(has(51.32 + 9 * Math.tan((20 * Math.PI) / 180), -75, 50)).toBe(true)
     expect(has(4220.07 - 9 * Math.tan((20 * Math.PI) / 180), 75, -50)).toBe(true)
     expect(has(4271.39, -75, 50)).toBe(true)
+  })
+})
+
+describe('snapToSectionSurface', () => {
+  it('snaps a nominal top-face point past an SHS corner onto the rounded skin', () => {
+    const section = partSectionForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])?.points ?? []
+    const flat = snapToSectionSurface(section, [0, 50])
+    expect(flat).toEqual([0, 50])
+    const corner = snapToSectionSurface(section, [48, 50])
+    // The rounded corner pulls the point inward from the nominal plane; it is no longer floating.
+    expect(corner[1]).toBeLessThan(50)
+    expect(Math.hypot(corner[0] - 48, corner[1] - 50)).toBeGreaterThan(0)
   })
 })
 

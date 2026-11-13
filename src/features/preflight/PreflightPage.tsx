@@ -71,14 +71,17 @@ import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import {
   channelVToHShift,
   cutThicknesses,
-  ETCH_COLOR,
   faceThickness,
-  MARKING_COLOR,
   ncAlongMid,
-  THICKNESS_COLORS,
 } from '@/lib/parsers/ncProject'
 import { reemitPartNc } from '@/lib/parsers/ncReemit'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
+import { partIrFromNc } from '@/lib/part/fromNc'
+import { partIrFromStepMesh } from '@/lib/part/fromStep'
+import type { PartIr } from '@/lib/part/ir'
+import { partIrSvgParts } from '@/lib/part/svg'
+import { buildNcepFromIr } from '@/lib/part/toNcep'
+import { partIrToNcGeometry } from '@/lib/part/toNcGeometry'
 import type { PurchaseGroupInput } from '@/lib/purchasing/purchase'
 import type { InputBundle } from '@/lib/readInput'
 import { CUT_FACES, FACE_DIRECTIONS, profileFamily } from '@/lib/sections/canonical'
@@ -131,14 +134,14 @@ import {
   clearViewerModels,
   diffForViewer,
   meshForViewer,
+  peekMeshForViewer,
   peekReconstructForViewer,
   primeReconstructForViewer,
   reconstructForViewer,
   reconstructViewerWithSabre,
 } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
-import { buildNcepFromNc, partFromNc } from '@/lib/wisecam/fromNc'
-import type { NcexHole, NcexPalette, NcexPart } from '@/lib/wisecam/ncex'
+import { buildNcepFromNc } from '@/lib/wisecam/fromNc'
 import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
 import { NcLegend } from './NcLegend'
@@ -694,12 +697,22 @@ export function PreflightPage() {
     ? (stepOverrides.get(viewing.mark)?.bytes ??
       (viewing.step ? bytesByPath.get(viewing.step.path) : undefined))
     : undefined
-  // Parsed NC toolpath geometry, projected onto the manufactured model so the cut lines,
-  // holes and bevels read on the part the laser actually produces.
-  const viewingNcGeom = useMemo(
-    () => (ncBytes ? parseNcGeometry(new TextDecoder().decode(ncBytes)) : null),
-    [ncBytes],
-  )
+  /** Canonical PartIR from the effective NC — the source of truth for visualisation. */
+  const viewingNcIr = useMemo(() => {
+    if (!ncBytes) return null
+    try {
+      return partIrFromNc(new TextDecoder().decode(ncBytes))
+    } catch {
+      return null
+    }
+  }, [ncBytes])
+  // Face-space geometry for the existing 3D projector, transformed from the IR. Fall back to the
+  // raw NC only when the IR cannot be built (unsupported/malformed input).
+  const viewingNcGeom = useMemo(() => {
+    if (!ncBytes) return null
+    if (viewingNcIr) return partIrToNcGeometry(viewingNcIr)
+    return parseNcGeometry(new TextDecoder().decode(ncBytes))
+  }, [ncBytes, viewingNcIr])
   // The exact (un-inflated) section the NC was matched against, so the projected toolpath lands
   // on the real manufactured surface rather than the inflated ghost outline.
   const viewingNcSection = useMemo(() => {
@@ -746,31 +759,6 @@ export function PreflightPage() {
     const frame = resolveNcFaceFrame(section, viewingNcGeom, viewing?.nc?.profile)
     return cutThicknesses(frame, section, viewingNcGeom)
   }, [viewingNcGeom, viewingNcSection, stock, viewing])
-  // The NCEP part we would export for this mark — coloured with the same thickness palette as the
-  // cut-line legend, plus the marking colour for the etch, so the unroll reads like the viewer.
-  const viewingNcep = useMemo(() => {
-    if (!ncBytes) return null
-    const palette: NcexPalette | undefined =
-      viewingNcProfiles.length > 0
-        ? {
-            hole: (hole: NcexHole) => {
-              if (hole.thickness == null) return undefined
-              const index = viewingNcProfiles.indexOf(Math.round(hole.thickness * 10) / 10)
-              return index >= 0
-                ? cssColor(THICKNESS_COLORS[index % THICKNESS_COLORS.length] as number)
-                : undefined
-            },
-            mark: cssColor(MARKING_COLOR),
-            outline: '#94a3b8',
-          }
-        : undefined
-    try {
-      const part = partFromNc(new TextDecoder().decode(ncBytes), { mark: viewing?.mark })
-      return part ? { part, palette } : null
-    } catch {
-      return null
-    }
-  }, [ncBytes, viewingNcProfiles, viewing?.mark])
   // STEP cut-edge colouring: the ideal model's cut edges on its accessible faces, keyed to the
   // stock's face→thickness map. `profile` lets the viewer resolve the target faces for the right
   // family — including a STEP-only part, where the section detector still knows the code.
@@ -856,6 +844,72 @@ export function PreflightPage() {
       radius: viewingCornerRadius,
     }),
     [viewingCutThicknesses, viewingProfileCode, viewingCornerRadius],
+  )
+  /**
+   * STEP → NCEP (surface scaffold). Develop the real part's cut edges onto the *same* unrolled net
+   * the NC path uses, so the NCEP tab can show both conversions and their differences. Meshing is
+   * the viewer's cached worker result; the development itself is the shared surface core.
+   */
+  const [viewingStepIr, setViewingStepIr] = useState<PartIr | null>(null)
+  useEffect(() => {
+    setViewingStepIr(null)
+    if (!viewing || !stepBytes) return
+    const profile = viewingProfileCode
+    const section =
+      viewingNcSection ??
+      viewingStepSection?.points ??
+      (Array.isArray(stock?.points) ? stock.points : null)
+    if (!profile || !section || section.length < 3) return
+    const dims =
+      viewingDims.length >= 2 ? viewingDims : (sectionGuesses.get(viewing.mark)?.dims ?? [])
+    if (dims.length < 2) return
+    let cancelled = false
+    const build = (meshed: import('@/lib/step/mesh').MeshedStep): void => {
+      try {
+        const ir = partIrFromStepMesh(meshed, {
+          mark: `${viewing.mark} · STEP`,
+          profile,
+          dimensions: dims,
+          length: viewing.nc?.length ?? stepLengths.get(viewing.mark) ?? 0,
+          section,
+          innerSection: viewingStepSection?.holes?.[0],
+          radius: viewingCornerRadius,
+        })
+        if (!cancelled) setViewingStepIr(ir)
+      } catch {
+        if (!cancelled) setViewingStepIr(null)
+      }
+    }
+    const cached = peekMeshForViewer(stepBytes)
+    if (cached) {
+      build(cached)
+      return () => {
+        cancelled = true
+      }
+    }
+    void meshForViewer(viewing.step?.path ?? viewing.mark, stepBytes)
+      .then(build)
+      .catch(() => {
+        if (!cancelled) setViewingStepIr(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    viewing,
+    stepBytes,
+    viewingProfileCode,
+    viewingDims,
+    viewingNcSection,
+    viewingStepSection,
+    stock,
+    sectionGuesses,
+    stepLengths,
+    viewingCornerRadius,
+  ])
+  const viewingStepIrGeom = useMemo(
+    () => (viewingStepIr ? partIrToNcGeometry(viewingStepIr) : null),
+    [viewingStepIr],
   )
   // Legend chips only for the mark channels the parsed NC actually carries (`SI` etch,
   // `PU`/`KO` scribe), so the key never promises lines the viewer cannot draw.
@@ -1061,6 +1115,49 @@ export function PreflightPage() {
       : modelAspect != null && gridAspect != null && modelAspect >= gridAspect
         ? 'rows'
         : 'cols'
+  /** The IR mirrors the visible 3D panes: STEP, NC, and the NC/STEP cut diff. */
+  const irViews = useMemo<IrSurfaceView[]>(() => {
+    const views: IrSurfaceView[] = []
+    if (stepShown)
+      views.push({
+        id: 'step',
+        label: t('preflight.viewer.step'),
+        nc: null,
+        step: viewingStepIr,
+      })
+    if (manufacturedShown)
+      views.push({
+        id: 'nc',
+        label: t('preflight.viewer.ncSurface'),
+        nc: viewingNcIr,
+        step: null,
+      })
+    if (overlayShown && viewingNcIr && viewingStepIr)
+      views.push({
+        id: 'diff',
+        label: t('viewer.diff'),
+        nc: viewingNcIr,
+        step: viewingStepIr,
+        diff: true,
+      })
+    if (views.length === 0) {
+      if (viewingNcIr)
+        views.push({
+          id: 'nc',
+          label: t('preflight.viewer.ncSurface'),
+          nc: viewingNcIr,
+          step: null,
+        })
+      else if (viewingStepIr)
+        views.push({
+          id: 'step',
+          label: t('preflight.viewer.step'),
+          nc: null,
+          step: viewingStepIr,
+        })
+    }
+    return views
+  }, [stepShown, manufacturedShown, overlayShown, viewingNcIr, viewingStepIr, t])
 
   // One orbit bus per part, shared by the STEP and NC viewports so they rotate together.
   const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
@@ -2072,9 +2169,9 @@ export function PreflightPage() {
     [viewing, allFindings],
   )
 
-  // The right pane swaps between the drawing, the issues list and the generated NCEP unroll;
+  // The right pane swaps between the drawing, the issues list and the canonical surface view;
   // default to issues when there are any, since that's what needs attention.
-  const [rightTab, setRightTab] = useState<'info' | 'drawing' | 'issues' | 'ncep'>('drawing')
+  const [rightTab, setRightTab] = useState<'info' | 'drawing' | 'issues' | 'surface'>('drawing')
   useEffect(() => {
     if (!viewing) return
     setRightTab(
@@ -2082,7 +2179,7 @@ export function PreflightPage() {
         ? 'issues'
         : viewingPdfBytes
           ? 'drawing'
-          : 'ncep',
+          : 'surface',
     )
   }, [viewing, allFindings, viewingPdfBytes])
   /** Marker indices whose sub-cuts are shown in the 3D (row toggled on). */
@@ -3124,15 +3221,17 @@ export function PreflightPage() {
   /** Direct download of the viewed part's generated NCEP (the importable CAD-only package). */
   const downloadViewingNcep = useCallback(() => {
     if (!viewing) return
-    const bytes = ncBytes
-      ? buildNcepFromNc(new TextDecoder().decode(ncBytes), { mark: viewing.mark })
-      : null
+    const bytes = viewingNcIr
+      ? buildNcepFromIr(viewingNcIr, { mark: viewing.mark })
+      : ncBytes
+        ? buildNcepFromNc(new TextDecoder().decode(ncBytes), { mark: viewing.mark })
+        : null
     if (!bytes) return
     downloadBlob(
       `${viewing.mark}.ncep`,
       new Blob([new Uint8Array(bytes)], { type: 'application/zip' }),
     )
-  }, [viewing, ncBytes])
+  }, [viewing, ncBytes, viewingNcIr])
 
   /**
    * Exports the job with every fix substituted in, each STEP re-seated into the canonical
@@ -4102,6 +4201,7 @@ export function PreflightPage() {
                             ncSection={viewingNcSection}
                             faceFrame={viewingNcFrame}
                             cutEdges={viewingCutEdgeOptions}
+                            irCutGeometry={viewingStepIrGeom}
                             visibleSpans={visibleSpans}
                             visibleRuns={visibleRuns}
                             highlightRun={highlightRun}
@@ -4229,7 +4329,7 @@ export function PreflightPage() {
                         id: 'issues' as const,
                         label: t('preflight.warnings.issues', { count: viewerFindings.length }),
                       },
-                      { id: 'ncep' as const, label: t('preflight.viewer.ncep') },
+                      { id: 'surface' as const, label: t('preflight.viewer.surface') },
                     ]}
                     value={rightTab}
                     onChange={setRightTab}
@@ -4262,21 +4362,12 @@ export function PreflightPage() {
                         </div>
                       </div>
                     </div>
-                  ) : rightTab === 'ncep' ? (
-                    viewingNcep ? (
-                      <UnrolledDrawing
-                        key={viewing.mark}
-                        part={viewingNcep.part}
-                        palette={viewingNcep.palette}
-                        onExport={downloadViewingNcep}
-                      />
-                    ) : (
-                      <div className="grid h-full place-items-center px-4 text-center text-sm text-muted-foreground">
-                        {viewing.nc
-                          ? t('preflight.viewer.ncepUnsupported')
-                          : t('preflight.viewer.ncepNoNc')}
-                      </div>
-                    )
+                  ) : rightTab === 'surface' ? (
+                    <IrSurfaceDrawing
+                      views={irViews}
+                      layout={resolvedLayout}
+                      onExport={viewingNcIr ? downloadViewingNcep : undefined}
+                    />
                   ) : rightTab === 'issues' ? (
                     <ViewerWarnings
                       findings={viewerFindings}
@@ -5024,378 +5115,130 @@ function FaceMapSquare({ layout }: { layout: FaceMapEntry[] }) {
   )
 }
 
-/**
- * The generated NCEP part as WiseCAM sees it: the unrolled surface (x = perimeter station,
- * y = along the member), with the section profile drawn at the origin. Drawn natively rather
- * than from the package SVG, whose black millimetre-scale line classes are invisible on this
- * dark, fitted view (and outrank any presentation attributes we set).
- */
-function UnrolledDrawing({
-  part,
-  palette,
+export interface IrSurfaceView {
+  id: string
+  label: string
+  nc: PartIr | null
+  step: PartIr | null
+  diff?: boolean
+}
+
+function IrSurfaceDrawing({
+  views,
+  layout,
   onExport,
 }: {
-  part: NcexPart
-  palette?: NcexPalette
+  views: IrSurfaceView[]
+  layout: 'rows' | 'cols'
   onExport?: () => void
 }) {
   const { t } = useTranslation()
-  const geometry = useMemo(() => {
-    const seam = part.unrolledPerimeter ?? 0
-    const half = seam / 2
-    const left = part.profileType.trim().toUpperCase() === 'M' ? 0 : -half
-    const right = left + seam
-    // A net, not the package drawing: the developed surface alone, without the cross-section
-    // reference profile that WiseCAM overlays (and which intersects this rectangle).
-    const width = right - left
-    const height = part.length
-    const pad = Math.max(20, width * 0.03)
-    // Extra room above the net for the beam-direction arrow.
-    const beamPad = Math.max(80, height * 0.03)
-    const viewBox = [left - pad, -beamPad, width + pad * 2, height + beamPad + pad]
-      .map((value) => value.toFixed(2))
-      .join(' ')
-    const extent = Math.max(width, height)
-    return {
-      left,
-      right,
-      seam,
-      beamPad,
-      // Weights are in millimetres like the package, so scale them with the part: a 0.5 mm
-      // stroke on a 5 m part fitted into the pane is far below a pixel.
-      stroke: Math.max(0.35, extent / 1000),
-      fontSize: Math.max(40, extent / 60),
-      viewBox,
-    }
-  }, [part])
-  const outline = palette?.outline ?? '#94a3b8'
-  const markColor = (kind: 'etch' | 'marking'): string =>
-    cssColor(kind === 'etch' ? ETCH_COLOR : MARKING_COLOR)
-  const markKinds = new Set((part.marks ?? []).map((mark) => mark.kind))
-  const points = (section: [number, number][]): string =>
-    section.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(' ')
-  // WiseCAM's unrolled view is mirrored relative to the station axis; flip the net on display.
-  const mirror = `translate(${(geometry.left + geometry.right).toFixed(2)} 0) scale(-1 1)`
-  const mirrorX = (x: number): number => geometry.left + geometry.right - x
-  const mirroredPoints = (line: [number, number][]): string =>
-    points(line.map(([x, y]) => [mirrorX(x), y]))
-  // The developed faces cover most of the seam; the leftover strips are the flange/web corner
-  // zones WiseCAM shades as non-machined faces. Show them grey so the unroll reads like WiseCAM.
-  const nonMachinedZones = useMemo(() => {
-    const layout = part.unrolled
-    if (!layout || geometry.seam <= 0) return []
-    const right = geometry.left + geometry.seam
-    const spans: [number, number][] = []
-    for (const region of Object.values(layout.faces)) {
-      if (!region) continue
-      const start =
-        layout.origin === 'zero'
-          ? geometry.left + (((region.start % geometry.seam) + geometry.seam) % geometry.seam)
-          : region.start
-      const end = start + region.length
-      if (end > right) {
-        spans.push([start, right], [geometry.left, geometry.left + (end - right)])
-      } else {
-        spans.push([Math.max(geometry.left, start), Math.min(right, end)])
-      }
-    }
-    spans.sort((a, b) => a[0] - b[0])
-    const zones: [number, number][] = []
-    let cursor = geometry.left
-    for (const [start, end] of spans) {
-      if (start > cursor + 0.5) zones.push([cursor, Math.min(start, right)])
-      cursor = Math.max(cursor, end)
-    }
-    if (cursor < right - 0.5) zones.push([cursor, right])
-    return zones.filter(([start, end]) => end - start > 0.5)
-  }, [part.unrolled, geometry])
-  const faceDividers = useMemo(() => {
-    const layout = part.unrolled
-    if (!layout || geometry.seam <= 0) return []
-    const xs = new Set<number>()
-    for (const region of Object.values(layout.faces)) {
-      if (!region) continue
-      for (const edge of [region.start, region.start + region.length]) {
-        const wrapped =
-          layout.origin === 'zero'
-            ? geometry.left + (((edge % geometry.seam) + geometry.seam) % geometry.seam)
-            : edge
-        if (wrapped > geometry.left + 0.5 && wrapped < geometry.left + geometry.seam - 0.5) {
-          xs.add(Math.round(wrapped * 100) / 100)
+  const [view, setView] = useState<PanZoomView>({ x: 0, y: 0, k: 1 })
+  const zoom = Math.max(0.2, Math.min(20, Math.round(view.k * 100) / 100))
+  const rendered = useMemo(
+    () =>
+      views.map((entry) => {
+        const base = entry.nc ?? entry.step
+        if (!base) return { entry, parts: null }
+        return {
+          entry,
+          parts: partIrSvgParts(base, {
+            overlay: entry.nc && entry.step ? entry.step : undefined,
+            diff: entry.diff,
+            stroke: 1 / zoom,
+          }),
         }
-      }
-    }
-    return [...xs]
-  }, [part.unrolled, geometry])
-  // Split the developed face contours into raw-stock edges (lengthwise, constant station) and
-  // actual cut lines. The stock edges are the face boundary, not laser cuts, so draw them faintly.
-  const netLines = useMemo(() => {
-    const out: { points: string; stock: boolean; key: string }[] = []
-    for (const cut of part.cuts ?? []) {
-      let run: [number, number][] = [cut.points[0] as [number, number]]
-      const flush = () => {
-        if (run.length >= 2) {
-          const text = run.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(' ')
-          out.push({ points: text, stock: false, key: `cut-${text}` })
-        }
-        run = []
-      }
-      for (let index = 1; index < cut.points.length; index++) {
-        const previous = cut.points[index - 1] as [number, number]
-        const point = cut.points[index] as [number, number]
-        const stock = Math.abs(point[0] - previous[0]) < 0.5 && Math.abs(point[1] - previous[1]) > 1
-        if (stock) {
-          flush()
-          const text = [previous, point]
-            .map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`)
-            .join(' ')
-          out.push({ points: text, stock: true, key: `stock-${text}` })
-          run = [point]
-        } else {
-          run.push(point)
-        }
-      }
-      flush()
-    }
-    return out
-  }, [part.cuts])
-
-  // RHS/SHS: the four flat faces are separated by quarter-round corner radii. WiseCAM shades those
-  // radius strips as non-machined, so show them grey too (preview only; the package geometry is
-  // unchanged). The zone is centred on each face boundary because adjacent faces each own half.
-  const radiusZones = useMemo(() => {
-    if (part.profileType.trim().toUpperCase() !== 'M') return []
-    const radius = part.rootRadius ?? 0
-    if (!(radius > 0)) return []
-    const width = (Math.PI / 2) * radius
-    const right = geometry.left + geometry.seam
-    return faceDividers
-      .map(
-        (x) =>
-          [Math.max(geometry.left, x - width / 2), Math.min(right, x + width / 2)] as [
-            number,
-            number,
-          ],
-      )
-      .filter(([start, end]) => end - start > 0.5)
-  }, [part, faceDividers, geometry])
+      }),
+    [views, zoom],
+  )
+  if (rendered.length === 0) {
+    return (
+      <div className="grid h-full place-items-center px-4 text-center text-sm text-muted-foreground">
+        {t('preflight.viewer.surfaceEmpty')}
+      </div>
+    )
+  }
+  const columns = layout === 'rows' || rendered.length === 1 ? 1 : rendered.length
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">{part.mark}</span>
-        <span>{part.profile}</span>
-        <span>
-          {t('preflight.viewer.ncepSeam', {
-            seam: (part.unrolledPerimeter ?? 0).toFixed(2),
-          })}
+        <span className="font-medium text-foreground">{t('preflight.viewer.surface')}</span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-sm bg-red-400" />
+          {t('preflight.viewer.surfaceOvercut')}
         </span>
-        <span>{t('preflight.viewer.ncepHoles', { count: part.holes?.length ?? 0 })}</span>
-        {(nonMachinedZones.length > 0 || radiusZones.length > 0) && (
-          <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-sm bg-slate-400/40" />
-            {t('preflight.viewer.ncepNonMachined')}
-          </span>
-        )}
-        {markKinds.has('etch') && (
-          <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-sm" style={{ background: cssColor(ETCH_COLOR) }} />
-            {t('viewer.profileEtch')}
-          </span>
-        )}
-        {markKinds.has('marking') && (
-          <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-sm" style={{ background: cssColor(MARKING_COLOR) }} />
-            {t('viewer.profileMarking')}
-          </span>
-        )}
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-sm bg-blue-400" />
+          {t('preflight.viewer.surfaceUndercut')}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-sm bg-slate-400" />
+          {t('preflight.viewer.surfaceSame')}
+        </span>
         {onExport && (
           <Button variant="outline" size="sm" className="ml-auto" onClick={onExport}>
             {t('preflight.viewer.downloadNcep')}
           </Button>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-hidden">
-        <PanZoomSvg viewBox={geometry.viewBox} label={`${part.mark} NCEP`}>
-          <rect
-            x={geometry.left}
-            y={0}
-            width={geometry.seam}
-            height={part.length}
-            fill="#e2e8f0"
-            fillOpacity={0.05}
-          />
-          <g transform={mirror}>
-            {nonMachinedZones.map(([x0, x1]) => (
-              <rect
-                key={`nonmachined-${x0}-${x1}`}
-                x={x0}
-                y={0}
-                width={x1 - x0}
-                height={part.length}
-                fill="#94a3b8"
-                fillOpacity={0.22}
-              />
-            ))}
-            {radiusZones.map(([x0, x1]) => (
-              <rect
-                key={`radius-${x0}-${x1}`}
-                x={x0}
-                y={0}
-                width={x1 - x0}
-                height={part.length}
-                fill="#94a3b8"
-                fillOpacity={0.22}
-              />
-            ))}
-            {faceDividers.map((x) => (
-              <line
-                key={`face-${x}`}
-                x1={x}
-                y1={0}
-                x2={x}
-                y2={part.length}
-                stroke="#e2e8f0"
-                strokeOpacity={0.22}
-                strokeWidth={geometry.stroke * 0.5}
-                strokeDasharray={`${geometry.stroke * 3} ${geometry.stroke * 4}`}
-              />
-            ))}
-            <g stroke={outline} fill="none" strokeWidth={geometry.stroke} strokeLinejoin="round">
-              {netLines.map((line) => (
-                <polyline
-                  key={line.key}
-                  points={line.points}
-                  strokeOpacity={line.stock ? 0.22 : 1}
-                />
-              ))}
-            </g>
-            {!netLines.some((line) => !line.stock) && (
-              <>
-                <line
-                  x1={geometry.left}
-                  y1={0}
-                  x2={geometry.right}
-                  y2={0}
-                  stroke={outline}
-                  strokeWidth={geometry.stroke}
-                />
-                <line
-                  x1={geometry.right}
-                  y1={part.length}
-                  x2={geometry.left}
-                  y2={part.length}
-                  stroke={outline}
-                  strokeWidth={geometry.stroke}
-                />
-              </>
+      <div
+        className={cn(
+          'grid min-h-0 flex-1 auto-rows-fr gap-px bg-border',
+          columns === 1 ? 'grid-cols-1' : columns === 2 ? 'grid-cols-2' : 'grid-cols-3',
+        )}
+      >
+        {rendered.map(({ entry, parts }) => (
+          <div key={entry.id} className="relative min-h-0 bg-[#0b0f14]">
+            <span className="pointer-events-none absolute left-0 top-0 z-10 whitespace-nowrap rounded-br-sm bg-card/85 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground backdrop-blur">
+              {entry.label}
+            </span>
+            {parts ? (
+              <PanZoomSvg
+                viewBox={parts.viewBox}
+                label={entry.label}
+                view={view}
+                onViewChange={setView}
+              >
+                {/* biome-ignore lint/security/noDangerouslySetInnerHtml: local generated SVG */}
+                <g dangerouslySetInnerHTML={{ __html: parts.body }} />
+              </PanZoomSvg>
+            ) : (
+              <div className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
+                {t('preflight.viewer.surfaceEmpty')}
+              </div>
             )}
-            {(part.holes ?? []).map((hole) => (
-              <circle
-                key={`${hole.face ?? ''}-${hole.station}-${hole.along}-${hole.radius}`}
-                cx={hole.station}
-                cy={hole.along}
-                r={hole.radius}
-                fill="none"
-                stroke={palette?.hole?.(hole) ?? '#e2e8f0'}
-                // Keep the ring thin relative to the hole; using the part stroke width here makes
-                // a small hole read as a solid disc.
-                strokeWidth={Math.min(geometry.stroke, Math.max(0.25, hole.radius * 0.3))}
-              />
-            ))}
-          </g>
-          <g
-            stroke={outline}
-            fill={outline}
-            strokeWidth={geometry.stroke * 1.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <text
-              x={(geometry.left + geometry.right) / 2}
-              y={-geometry.beamPad * 0.72}
-              textAnchor="middle"
-              fontSize={geometry.beamPad * 0.4}
-              stroke="none"
-              opacity={0.8}
-            >
-              {t('preflight.viewer.ncepBeam')}
-            </text>
-            <line
-              x1={(geometry.left + geometry.right) / 2}
-              y1={-geometry.beamPad * 0.55}
-              x2={(geometry.left + geometry.right) / 2}
-              y2={-geometry.beamPad * 0.2}
-            />
-            <polygon
-              points={[
-                `${(geometry.left + geometry.right) / 2 - geometry.beamPad * 0.14},${-geometry.beamPad * 0.25}`,
-                `${(geometry.left + geometry.right) / 2 + geometry.beamPad * 0.14},${-geometry.beamPad * 0.25}`,
-                `${(geometry.left + geometry.right) / 2},${-geometry.beamPad * 0.05}`,
-              ].join(' ')}
-              stroke="none"
-            />
-          </g>
-          {(part.marks ?? []).map((mark) => {
-            const color = markColor(mark.kind)
-            const [mx, my] = mark.points[0] ?? [0, 0]
-            const key = `${mark.kind}-${mx.toFixed(2)}-${my.toFixed(2)}-${mark.points.length}`
-            if (mark.text) {
-              const [x, y] = mark.points[0] ?? [0, 0]
-              const tx = mirrorX(x)
-              // The NC angle is in the face plane; the unrolled drawing swaps the face axes
-              // (station across, along down), so a nc-0° baseline lies along the member.
-              const angle = mark.text.reversed ? 90 + mark.text.angle : 90 - mark.text.angle
-              return (
-                <text
-                  key={key}
-                  x={tx}
-                  y={y}
-                  transform={`rotate(${angle} ${tx} ${y})`}
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                  fontSize={Math.max(mark.text.height, geometry.fontSize * 0.5)}
-                  fill={color}
-                >
-                  {mark.text.value}
-                </text>
-              )
-            }
-            if (mark.points.length < 2) return null
-            return (
-              <polyline
-                key={key}
-                points={mirroredPoints(mark.points)}
-                fill="none"
-                stroke={color}
-                strokeWidth={geometry.stroke * 0.5}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-              />
-            )
-          })}
-        </PanZoomSvg>
+          </div>
+        ))}
       </div>
-      <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
-        {t('preflight.viewer.ncepHint')}
-      </p>
     </div>
   )
 }
 
-/** Numeric viewer colour (`0xRRGGBB`) → CSS hex string. */
-const cssColor = (value: number): string => `#${value.toString(16).padStart(6, '0')}`
+export interface PanZoomView {
+  x: number
+  y: number
+  k: number
+}
 
-/** Drag to pan, wheel to zoom, double-click to reset — for inspecting the unrolled NCEP. */
 function PanZoomSvg({
   viewBox,
   label,
   children,
+  view: controlledView,
+  onViewChange,
 }: {
   viewBox: string
   label: string
   children: ReactNode
+  view?: PanZoomView
+  onViewChange?: (view: PanZoomView) => void
 }) {
-  const [view, setView] = useState({ x: 0, y: 0, k: 1 })
+  const [localView, setLocalView] = useState<PanZoomView>({ x: 0, y: 0, k: 1 })
+  const view = controlledView ?? localView
+  const updateView = (next: PanZoomView): void => {
+    if (onViewChange) onViewChange(next)
+    else setLocalView(next)
+  }
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null)
   const [dragging, setDragging] = useState(false)
   return (
@@ -5414,11 +5257,11 @@ function PanZoomSvg({
       onPointerMove={(event) => {
         const start = drag.current
         if (!start) return
-        setView((current) => ({
-          ...current,
+        updateView({
+          ...view,
           x: start.vx + event.clientX - start.x,
           y: start.vy + event.clientY - start.y,
-        }))
+        })
       }}
       onPointerUp={() => {
         drag.current = null
@@ -5433,14 +5276,14 @@ function PanZoomSvg({
         const rect = event.currentTarget.getBoundingClientRect()
         const mx = event.clientX - rect.left
         const my = event.clientY - rect.top
-        setView((current) => {
+        {
           const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
-          const k = Math.min(20, Math.max(0.2, current.k * factor))
-          const scale = k / current.k
-          return { k, x: mx - (mx - current.x) * scale, y: my - (my - current.y) * scale }
-        })
+          const k = Math.min(20, Math.max(0.2, view.k * factor))
+          const scale = k / view.k
+          updateView({ k, x: mx - (mx - view.x) * scale, y: my - (my - view.y) * scale })
+        }
       }}
-      onDoubleClick={() => setView({ x: 0, y: 0, k: 1 })}
+      onDoubleClick={() => updateView({ x: 0, y: 0, k: 1 })}
     >
       <svg
         viewBox={viewBox}

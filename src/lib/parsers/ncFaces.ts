@@ -309,6 +309,68 @@ export function sectionSpanAt(
   return [lo, hi]
 }
 
+/** Closest point on segment `a`–`b`, plus its squared-free distance. */
+function closestOnSegment(
+  point: [number, number],
+  a: [number, number],
+  b: [number, number],
+): { point: [number, number]; distance: number } {
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  const length2 = dx * dx + dy * dy
+  const t =
+    length2 > 0
+      ? Math.max(0, Math.min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / length2))
+      : 0
+  const x = a[0] + t * dx
+  const y = a[1] + t * dy
+  return { point: [x, y], distance: Math.hypot(point[0] - x, point[1] - y) }
+}
+
+/** Even-odd point-in-polygon test (the section outline is closed). */
+function pointInPolygon(point: [number, number], polygon: [number, number][]): boolean {
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i] as [number, number]
+    const b = polygon[j] as [number, number]
+    const crosses =
+      a[1] > point[1] !== b[1] > point[1] &&
+      point[0] < ((b[0] - a[0]) * (point[1] - a[1])) / (b[1] - a[1]) + a[0]
+    if (crosses) inside = !inside
+  }
+  return inside
+}
+
+/**
+ * Puts a face-plane point **on the actual stock surface**. A flat face is already on the outline;
+ * a rounded corner is not — the nominal face plane keeps going straight past the tangent, so a
+ * cut near the edge floats off the tube/round section. If the point is outside the outline (the
+ * rounded-corner case), snap it to the nearest outline point. Interior points (e.g. an I-section
+ * web face at `tw/2`) are deliberately left alone: they are real faces inside the silhouette.
+ */
+export function snapToSectionSurface(
+  section: [number, number][],
+  point: [number, number],
+): [number, number] {
+  if (section.length < 3) return point
+  let best = Number.POSITIVE_INFINITY
+  let nearest: [number, number] = point
+  for (let i = 0; i < section.length; i++) {
+    const candidate = closestOnSegment(
+      point,
+      section[i] as [number, number],
+      section[(i + 1) % section.length] as [number, number],
+    )
+    if (candidate.distance < best) {
+      best = candidate.distance
+      nearest = candidate.point
+    }
+  }
+  // Already on the surface (flat face) or inside the stock (interior web face): keep it.
+  if (best <= 0.01 || pointInPolygon(point, section)) return point
+  return nearest
+}
+
 /**
  * Whether the section has material at a face's outward plane for a given across position. A cut
  * that lines up with the edge of the stock (no material on that side, e.g. the stem side of a T)

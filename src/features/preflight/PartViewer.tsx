@@ -50,6 +50,7 @@ import {
   type NcFaceFrame,
   placeNcFace,
   resolveNcFaceFrame,
+  snapToSectionSurface,
 } from '@/lib/parsers/ncFaces'
 import type { NcFace, NcGeometry } from '@/lib/parsers/ncGeometry'
 import {
@@ -189,6 +190,11 @@ function ncLineObject(
     // Error markers draw on top of the model (no occlusion): they render in the second pass
     // (layer 1, after the depth buffer is cleared) and ignore depth.
     depthTest: !onTop,
+    // Cut lines sit exactly on the surface (no positional offset). Bias them toward the camera so
+    // they do not z-fight the face they belong to.
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   })
   material.resolution.copy(resolution)
   materials.push(material)
@@ -662,6 +668,7 @@ function mountScene(
   onLocationChange?: (locationMm: number, lengthMm: number) => void,
   onAxisAngleChange?: (degrees: number) => void,
   cutEdges?: CutEdgeOptions | null,
+  irCutGeometry?: NcGeometry | null,
 ): SceneHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -962,7 +969,8 @@ function mountScene(
       const bevelGroups = new Map<number, number[]>()
       // Normals only rotate (no translation), unlike the point transforms.
       const rotationMatrix = new Matrix4().makeRotationFromQuaternion(rotation)
-      for (const body of step.bodies) {
+      const bodies = irCutGeometry && stockFrame ? [] : step.bodies
+      for (const body of bodies) {
         const seated: SeatedBrepFace[] = (body.brep ?? []).map((face) => {
           const normal = new Vector3(
             face.normal[0],
@@ -1029,8 +1037,10 @@ function mountScene(
             for (const seg of segs) {
               const a = placeNcFace(frame, face, seg.a.X, seg.a.Y, profile)
               const b = placeNcFace(frame, face, seg.b.X, seg.b.Y, profile)
-              const pa = toPoint(a.along, a.cross)
-              const pb = toPoint(b.along, b.cross)
+              // The projection is the cut plane's trace on the *nominal* face; snap it onto the
+              // rounded section so the tube/SHS line sits on the real outer skin.
+              const pa = toPoint(a.along, snapToSectionSurface(profile, a.cross))
+              const pb = toPoint(b.along, snapToSectionSurface(profile, b.cross))
               positions.push(pa[0], pa[1], pa[2], pb[0], pb[1], pb[2])
               // The fin sweeps the *projected* (straight) segment along the cut plane's lean, so it
               // matches the NC bevel instead of bowing to follow the rounded-corner rim.
@@ -1154,6 +1164,41 @@ function mountScene(
         scene.add(area)
         stepBevelObjects.push(area)
       }
+      if (irCutGeometry && stockFrame) {
+        const section = ncSection ?? profile
+        const OFF = 0
+        const toScene = (along: number, cross: [number, number], face: NcFace): Vec3 => {
+          const n = faceNormal(stockFrame, face, section)
+          const local: [number, number] = [cross[0], cross[1]]
+          local[n.axis] += n.sign * OFF
+          const snapped = snapToSectionSurface(section, local)
+          const x = along - length / 2
+          return [
+            x + snapped[0] * xAxis.x + snapped[1] * yAxis.x,
+            snapped[0] * xAxis.y + snapped[1] * yAxis.y,
+            snapped[0] * xAxis.z + snapped[1] * yAxis.z,
+          ]
+        }
+        const normal = (face: NcFace): Vec3 => {
+          const n = faceNormal(stockFrame, face, section)
+          const base = n.axis === 0 ? xAxis : yAxis
+          return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
+        }
+        const projected = addNcLines(
+          irCutGeometry,
+          { frame: stockFrame, section, toScene, normal },
+          ncResolution,
+          ncMaterials,
+        )
+        for (const line of projected.cutLines) {
+          scene.add(line)
+          cutEdgeObjects.push(line)
+        }
+        for (const area of projected.bevelAreas) {
+          scene.add(area)
+          stepBevelObjects.push(area)
+        }
+      }
     }
 
     const overlay = extrudeOverlay(
@@ -1173,11 +1218,18 @@ function mountScene(
     const section = ncSection ?? profile
     const frame = faceFrame ?? (nc ? resolveNcFaceFrame(section, nc) : null)
     if (frame) {
-      const OFF = 0.4
+      // Cut lines live exactly on the stock surface (`OFF = 0`): the laser cuts the material, not
+      // a plane floating above it. The line material uses a depth bias so it still beats the face.
+      const OFF = 0
       const toScene = (along: number, cross: [number, number], face: NcFace): Vec3 => {
         const n = faceNormal(frame, face, section)
         const local: [number, number] = [cross[0], cross[1]]
         local[n.axis] += n.sign * OFF
+        // Rounded stock (SHS/RHS/CHS): the nominal face plane runs past the corner tangent, so a
+        // line near the edge would float off the real surface. Snap it onto the section outline.
+        const snapped = snapToSectionSurface(section, local)
+        local[0] = snapped[0]
+        local[1] = snapped[1]
         const x = along - length / 2
         return [
           x + local[0] * xAxis.x + local[1] * yAxis.x,
@@ -1313,12 +1365,15 @@ function mountScene(
     // read on the solid that the beam NC produces.
     if (nc) {
       const frame = resolveNcFaceFrame(beam.profile, nc)
-      const OFF = 0.6
+      // Same rule as the model pane: the NC is developed from the actual cut surface, so draw it
+      // on the stock face itself (depth bias handles the z-fight).
+      const OFF = 0
       const toScene = (along: number, cross: [number, number], face: NcFace): Vec3 => {
         const n = faceNormal(frame, face, beam.profile)
         const local: [number, number] = [cross[0], cross[1]]
         local[n.axis] += n.sign * OFF
-        return [local[0], local[1], along - beam.length / 2]
+        const snapped = snapToSectionSurface(beam.profile, local)
+        return [snapped[0], snapped[1], along - beam.length / 2]
       }
       const normal = (face: NcFace): Vec3 => {
         const n = faceNormal(frame, face, beam.profile)
@@ -2379,6 +2434,8 @@ export interface PartViewerProps {
    * legend's thickness list. Omit to keep the plain dark edges.
    */
   cutEdges?: CutEdgeOptions | null
+  /** Face-space cut geometry transformed from PartIR. When present it replaces the B-rep extraction. */
+  irCutGeometry?: NcGeometry | null
 }
 
 export default function PartViewer({
@@ -2423,6 +2480,7 @@ export default function PartViewer({
   onShowSabreChange,
   hideControls = false,
   cutEdges = null,
+  irCutGeometry = null,
 }: PartViewerProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -2520,6 +2578,7 @@ export default function PartViewer({
         (mm, mmLength) => onLocationRef.current?.(mm, mmLength),
         (degrees) => onAxisAngleRef.current?.(degrees),
         cutEdges,
+        irCutGeometry,
       )
       handle = scene
       for (const overlay of scene.overlays) overlay.visible = showStockRef.current
