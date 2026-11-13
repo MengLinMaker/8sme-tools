@@ -31,10 +31,10 @@ export interface PartIrSvgOptions {
   /** Colour a cut/hole/slot by the wall thickness of its DSTV face (3D legend palette). */
   colorForFace?: (face: NcFace) => string | undefined
   /**
-   * `wisecam` (default) mirrors station and puts the positive beam direction up, matching
-   * WiseCAM's unrolled view. `raw` keeps the canonical UV coordinates unchanged.
+   * `wisecam` (default) is a 180° rotation (station mirrored, beam up). `flipY` mirrors only
+   * across the horizontal axis. `raw` keeps the canonical UV coordinates unchanged.
    */
-  orientation?: 'wisecam' | 'raw'
+  orientation?: 'wisecam' | 'flipY' | 'raw'
 }
 
 interface Bounds {
@@ -256,7 +256,7 @@ function chartLayer(
     if (mark.text) {
       const [x, y] = mark.shape.form === 'polyline' ? (mark.shape.points[0] ?? [0, 0]) : [0, 0]
       elements.push(
-        `<text x="${fmt(x)}" y="${fmt(y)}" fill="${color}" font-size="${Math.max(2, mark.text.height)}" transform="rotate(${fmt(mark.text.angle + ((options.orientation ?? 'wisecam') === 'wisecam' ? 180 : 0))} ${fmt(x)} ${fmt(y)})" text-anchor="middle">${escapeXml(mark.text.value)}</text>`,
+        `<text x="${fmt(x)}" y="${fmt(y)}" fill="${color}" font-size="${Math.max(2, mark.text.height)}" transform="rotate(${fmt(mark.text.angle + ((options.orientation ?? 'wisecam') !== 'raw' ? 180 : 0))} ${fmt(x)} ${fmt(y)})" text-anchor="middle">${escapeXml(mark.text.value)}</text>`,
       )
       continue
     }
@@ -359,10 +359,13 @@ function chartLayer(
     }
   }
   const body = `${elements.join('\n')}`
-  const wisecam = (options.orientation ?? 'wisecam') === 'wisecam'
-  const groupTransform = wisecam
-    ? `translate(0 ${fmt(offsetY + part.length)}) scale(-1 -1)`
-    : `translate(0 ${fmt(offsetY)})`
+  const mode = options.orientation ?? 'wisecam'
+  const groupTransform =
+    mode === 'wisecam'
+      ? `translate(0 ${fmt(offsetY + part.length)}) scale(-1 -1)`
+      : mode === 'flipY'
+        ? `translate(0 ${fmt(offsetY + part.length)}) scale(1 -1)`
+        : `translate(0 ${fmt(offsetY)})`
   return `<g data-layer="chart:${escapeXml(chart.id)}" transform="${groupTransform}">
 <rect x="${fmt(-half)}" y="0" width="${fmt(chart.layout.seam)}" height="${fmt(part.length)}" fill="#0f172a" stroke="#334155" stroke-width="${fmt(stroke * 0.7)}"/>
 ${body}
@@ -420,7 +423,9 @@ export function partIrSvgParts(part: PartIr, options: PartIrSvgOptions = {}): Pa
     const sectionRotate =
       (options.orientation ?? 'wisecam') === 'wisecam'
         ? ` translate(${fmt(minX + maxX)} ${fmt(minY + maxY)}) scale(-1 -1)`
-        : ''
+        : options.orientation === 'flipY'
+          ? ` translate(0 ${fmt(minY + maxY)}) scale(1 -1)`
+          : ''
     layers.push(
       `<g data-layer="section" transform="translate(0 ${fmt(translateY)})"><g transform="${sectionRotate.trim()}"><polygon points="${pointsAttr(points)}" fill="none" stroke="${STROKE}" stroke-width="${fmt(stroke)}"/></g></g>`,
     )

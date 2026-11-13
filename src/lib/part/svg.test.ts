@@ -56,6 +56,13 @@ describe('PartIR SVG view', () => {
     expect(partIrSvg(ir, { orientation: 'raw' })).not.toContain('scale(-1')
   })
 
+  it('supports a horizontal-axis flip for PFC display', () => {
+    const ir = part('M-1')
+    const svg = partIrSvg(ir, { orientation: 'flipY' })
+    expect(svg).toContain('scale(1 -1)')
+    expect(svg).not.toContain('scale(-1 -1)')
+  })
+
   it('colours cuts by the supplied face-thickness palette', () => {
     const ir = part('M-1')
     const svg = partIrSvg(ir, { colorForFace: () => '#123456' })

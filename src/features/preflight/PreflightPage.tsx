@@ -5186,6 +5186,7 @@ function IrSurfaceDrawing({
         diff: entry.diff,
         stroke: 1 / zoom,
         colorForFace,
+        orientation: base.profileType.trim().toUpperCase() === 'U' ? 'flipY' : 'wisecam',
       }),
     }
   })
