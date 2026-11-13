@@ -73,6 +73,7 @@ import {
   cutThicknesses,
   faceThickness,
   ncAlongMid,
+  THICKNESS_COLORS,
 } from '@/lib/parsers/ncProject'
 import { reemitPartNc } from '@/lib/parsers/ncReemit'
 import { type DrawingMaterial, resolveDrawingMaterial } from '@/lib/parsers/pdfText'
@@ -845,6 +846,31 @@ export function PreflightPage() {
     }),
     [viewingCutThicknesses, viewingProfileCode, viewingCornerRadius],
   )
+  /** Face-thickness colours for the IR view, using the same palette as the 3D cut legend. */
+  const viewingIrColorForFace = useMemo(() => {
+    const section =
+      viewingNcSection ??
+      viewingStepSection?.points ??
+      (Array.isArray(stock?.points) ? stock.points : null)
+    if (!section || viewingCutThicknesses.length === 0) return undefined
+    const frame =
+      viewingNcFrame ?? (viewingProfileCode ? frameForProfile(viewingProfileCode, section) : null)
+    if (!frame) return undefined
+    return (face: NcFace): string | undefined => {
+      const thickness = Math.round(faceThickness(frame, section, face) * 10) / 10
+      const index = viewingCutThicknesses.indexOf(thickness)
+      if (index < 0) return undefined
+      const color = THICKNESS_COLORS[index % THICKNESS_COLORS.length] as number
+      return `#${color.toString(16).padStart(6, '0')}`
+    }
+  }, [
+    viewingNcSection,
+    viewingStepSection,
+    stock,
+    viewingNcFrame,
+    viewingProfileCode,
+    viewingCutThicknesses,
+  ])
   /**
    * STEP → NCEP (surface scaffold). Develop the real part's cut edges onto the *same* unrolled net
    * the NC path uses, so the NCEP tab can show both conversions and their differences. Meshing is
@@ -2172,8 +2198,17 @@ export function PreflightPage() {
   // The right pane swaps between the drawing, the issues list and the canonical surface view;
   // default to issues when there are any, since that's what needs attention.
   const [rightTab, setRightTab] = useState<'info' | 'drawing' | 'issues' | 'surface'>('drawing')
+  /**
+   * The part mark whose tab the operator chose manually. The default-tab effect keeps running as
+   * analysis findings arrive; without this guard it yanks the pane back to Drawing/Issues.
+   */
+  const rightTabMark = useRef<string | null>(null)
   useEffect(() => {
-    if (!viewing) return
+    if (!viewing) {
+      rightTabMark.current = null
+      return
+    }
+    if (rightTabMark.current === viewing.mark) return
     setRightTab(
       allFindings.some((finding) => finding.mark === viewing.mark)
         ? 'issues'
@@ -4332,7 +4367,10 @@ export function PreflightPage() {
                       { id: 'surface' as const, label: t('preflight.viewer.surface') },
                     ]}
                     value={rightTab}
-                    onChange={setRightTab}
+                    onChange={(id) => {
+                      rightTabMark.current = viewing?.mark ?? null
+                      setRightTab(id)
+                    }}
                   />
                 </div>
                 <div className="min-h-0 flex-1 overflow-hidden">
@@ -4366,6 +4404,7 @@ export function PreflightPage() {
                     <IrSurfaceDrawing
                       views={irViews}
                       layout={resolvedLayout}
+                      colorForFace={viewingIrColorForFace}
                       onExport={viewingNcIr ? downloadViewingNcep : undefined}
                     />
                   ) : rightTab === 'issues' ? (
@@ -5126,31 +5165,30 @@ export interface IrSurfaceView {
 function IrSurfaceDrawing({
   views,
   layout,
+  colorForFace,
   onExport,
 }: {
   views: IrSurfaceView[]
   layout: 'rows' | 'cols'
+  colorForFace?: (face: NcFace) => string | undefined
   onExport?: () => void
 }) {
   const { t } = useTranslation()
   const [view, setView] = useState<PanZoomView>({ x: 0, y: 0, k: 1 })
-  const zoom = Math.max(0.2, Math.min(20, Math.round(view.k * 100) / 100))
-  const rendered = useMemo(
-    () =>
-      views.map((entry) => {
-        const base = entry.nc ?? entry.step
-        if (!base) return { entry, parts: null }
-        return {
-          entry,
-          parts: partIrSvgParts(base, {
-            overlay: entry.nc && entry.step ? entry.step : undefined,
-            diff: entry.diff,
-            stroke: 1 / zoom,
-          }),
-        }
+  const zoom = Math.max(0.2, Math.min(200, Math.round(view.k * 100) / 100))
+  const rendered = views.map((entry) => {
+    const base = entry.nc ?? entry.step
+    if (!base) return { entry, parts: null }
+    return {
+      entry,
+      parts: partIrSvgParts(base, {
+        overlay: entry.nc && entry.step ? entry.step : undefined,
+        diff: entry.diff,
+        stroke: 1 / zoom,
+        colorForFace,
       }),
-    [views, zoom],
-  )
+    }
+  })
   if (rendered.length === 0) {
     return (
       <div className="grid h-full place-items-center px-4 text-center text-sm text-muted-foreground">
@@ -5170,10 +5208,6 @@ function IrSurfaceDrawing({
         <span className="flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-sm bg-blue-400" />
           {t('preflight.viewer.surfaceUndercut')}
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-sm bg-slate-400" />
-          {t('preflight.viewer.surfaceSame')}
         </span>
         {onExport && (
           <Button variant="outline" size="sm" className="ml-auto" onClick={onExport}>
@@ -5278,7 +5312,7 @@ function PanZoomSvg({
         const my = event.clientY - rect.top
         {
           const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
-          const k = Math.min(20, Math.max(0.2, view.k * factor))
+          const k = Math.min(200, Math.max(0.2, view.k * factor))
           const scale = k / view.k
           updateView({ k, x: mx - (mx - view.x) * scale, y: my - (my - view.y) * scale })
         }
