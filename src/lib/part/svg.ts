@@ -1,0 +1,339 @@
+import { arcSamples } from '@/lib/parsers/ncGeometry'
+import type { FeatureShape, PartChart, PartIr, UvPoint } from './ir'
+
+/**
+ * Render a PartIR as a layered 2-D SVG — the inspection/view layer, not the canonical model.
+ *
+ * Layers:
+ * - `section` — the cross-section outline (the "prism" shape).
+ * - `chart:<id>` — one unrolled net per chart, with cuts, holes and marks.
+ *
+ * The IR itself stays format-agnostic; this is just a deterministic view so NC/STEP/NCEP
+ * conversions can be compared visually.
+ */
+
+export interface PartIrSvgOptions {
+  /** Extra space (mm) between the section and the first chart, and between charts. */
+  gap?: number
+  /** Include the section layer (default true). */
+  section?: boolean
+  /** Fill the container (`width`/`height` 100%) instead of emitting millimetre dimensions. */
+  responsive?: boolean
+  /** A second IR drawn over the base cuts (e.g. STEP over NC) in orange dashed lines. */
+  overlay?: PartIr
+  /** Colour overlay segments by distance from the base cuts (IR diff). */
+  diff?: boolean
+  /** Distance (mm) above which an overlay segment is treated as a difference. */
+  diffTolerance?: number
+  /** Stroke-width multiplier (e.g. 1/zoom) to keep lines thin as the view zooms. */
+  stroke?: number
+}
+
+interface Bounds {
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+}
+
+function shapePoints(shape: FeatureShape): UvPoint[] {
+  if (shape.form === 'circle') {
+    const points: UvPoint[] = []
+    for (let i = 0; i <= 24; i++) {
+      const angle = (i / 24) * Math.PI * 2
+      points.push([
+        shape.center[0] + Math.cos(angle) * shape.radius,
+        shape.center[1] + Math.sin(angle) * shape.radius,
+      ])
+    }
+    return points
+  }
+  if (shape.form === 'slot') {
+    const dx = shape.far[0] - shape.center[0]
+    const dy = shape.far[1] - shape.center[1]
+    const base = Math.atan2(dy, dx)
+    const points: UvPoint[] = []
+    for (let i = 0; i <= 12; i++) {
+      const angle = base - Math.PI / 2 + (i / 12) * Math.PI
+      points.push([
+        shape.far[0] + Math.cos(angle) * shape.radius,
+        shape.far[1] + Math.sin(angle) * shape.radius,
+      ])
+    }
+    for (let i = 0; i <= 12; i++) {
+      const angle = base + Math.PI / 2 + (i / 12) * Math.PI
+      points.push([
+        shape.center[0] + Math.cos(angle) * shape.radius,
+        shape.center[1] + Math.sin(angle) * shape.radius,
+      ])
+    }
+    return points
+  }
+  return shape.points
+}
+
+/** Expand a polyline's arc radii into a sampled polyline (view-only). */
+function sampledPoints(points: UvPoint[], radii?: number[], closed = false): UvPoint[] {
+  if (!radii?.some((radius) => radius) || points.length < 2) return points
+  const out: UvPoint[] = []
+  const count = closed ? points.length : points.length - 1
+  for (let index = 0; index < count; index++) {
+    const from = points[index] as UvPoint
+    const to = points[(index + 1) % points.length] as UvPoint
+    const samples = arcSamples(from, to, radii[index] ?? 0)
+    for (let step = 0; step < samples.length - 1; step++) out.push(samples[step] as UvPoint)
+  }
+  if (!closed) out.push(points[points.length - 1] as UvPoint)
+  return out
+}
+
+const fmt = (value: number): string => value.toFixed(3)
+const pointsAttr = (points: UvPoint[]): string =>
+  points.map(([x, y]) => `${fmt(x)},${fmt(y)}`).join(' ')
+
+const escapeXml = (value: string): string =>
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+const STROKE = '#94a3b8'
+const HOLE = '#38bdf8'
+const MARK = '#fb923c'
+const ETCH = '#f5f5f5'
+
+function chartLayer(
+  chart: PartChart,
+  part: PartIr,
+  offsetY: number,
+  stroke: number,
+  overlay?: PartIr,
+  options: PartIrSvgOptions = {},
+): string {
+  const half = chart.layout.seam / 2
+  const elements: string[] = []
+  for (const feature of part.features) {
+    if (feature.chart !== chart.id) continue
+    const shape = feature.shape
+    if (feature.kind === 'hole') {
+      if (shape.form !== 'circle') continue
+      elements.push(
+        `<circle cx="${fmt(shape.center[0])}" cy="${fmt(shape.center[1])}" r="${fmt(shape.radius)}" fill="none" stroke="${HOLE}" stroke-width="${fmt(stroke * 1.6)}"/>`,
+      )
+      continue
+    }
+    if (feature.kind === 'slot') {
+      if (shape.form !== 'slot') continue
+      const points = shapePoints(shape)
+      // A slot is a closed stadium; a polyline would omit the final straight segment.
+      elements.push(
+        `<polygon points="${pointsAttr(points)}" fill="none" stroke="${HOLE}" stroke-width="${fmt(stroke * 1.6)}"/>`,
+      )
+      continue
+    }
+    if (feature.kind === 'notch') {
+      const points = shapePoints(shape)
+      for (const [x, y] of points)
+        elements.push(
+          `<circle cx="${fmt(x)}" cy="${fmt(y)}" r="0.8" fill="none" stroke="${MARK}" stroke-width="${fmt(stroke * 0.7)}"/>`,
+        )
+      continue
+    }
+    if (shape.form !== 'polyline') continue
+    const points = sampledPoints(shape.points, shape.radii, shape.closed)
+    if (points.length < 2) continue
+    const tag = shape.closed ? 'polygon' : 'polyline'
+    elements.push(
+      `<${tag} points="${pointsAttr(points)}" fill="none" stroke="${STROKE}" stroke-width="${fmt(stroke)}"${shape.closed ? '' : ' stroke-linecap="round"'}/>`,
+    )
+  }
+  for (const mark of part.marks) {
+    if (mark.chart !== chart.id) continue
+    const color = mark.kind === 'etch' ? ETCH : MARK
+    if (mark.text) {
+      const [x, y] = mark.shape.form === 'polyline' ? (mark.shape.points[0] ?? [0, 0]) : [0, 0]
+      elements.push(
+        `<text x="${fmt(x)}" y="${fmt(y)}" fill="${color}" font-size="${Math.max(2, mark.text.height)}" transform="rotate(${fmt(mark.text.angle)} ${fmt(x)} ${fmt(y)})" text-anchor="middle">${escapeXml(mark.text.value)}</text>`,
+      )
+      continue
+    }
+    const points = shapePoints(mark.shape)
+    if (points.length < 2) continue
+    elements.push(
+      `<polyline points="${pointsAttr(points)}" fill="none" stroke="${color}" stroke-width="${fmt(stroke)}" stroke-dasharray="4 3"/>`,
+    )
+  }
+  if (overlay) {
+    interface BaseSegment {
+      a: UvPoint
+      b: UvPoint
+      /** Unit normal pointing *into the material* (outside a hole, inside an outer cut). */
+      nx: number
+      ny: number
+    }
+    const baseSegments: BaseSegment[] = []
+    for (const feature of part.features) {
+      if (feature.chart !== chart.id || feature.kind !== 'cut') continue
+      if (feature.shape.form !== 'polyline') continue
+      const points = feature.shape.points
+      let orientation = 1
+      if (feature.shape.closed && points.length >= 3) {
+        let twice = 0
+        for (let index = 0; index < points.length; index++) {
+          const p = points[index] as UvPoint
+          const q = points[(index + 1) % points.length] as UvPoint
+          twice += p[0] * q[1] - q[0] * p[1]
+        }
+        orientation = twice >= 0 ? 1 : -1
+      }
+      // An outer contour's material is its interior; a hole's material is outside the loop.
+      const sign = feature.contour === 'inner' ? -orientation : orientation
+      const count = feature.shape.closed ? points.length : points.length - 1
+      for (let index = 0; index < count; index++) {
+        const a = points[index] as UvPoint
+        const b = points[(index + 1) % points.length] as UvPoint
+        const dx = b[0] - a[0]
+        const dy = b[1] - a[1]
+        const length = Math.hypot(dx, dy) || 1
+        baseSegments.push({ a, b, nx: (-dy / length) * sign, ny: (dx / length) * sign })
+      }
+    }
+    const tolerance = options.diffTolerance ?? 2
+    const SAME = '#64748b'
+    const OVER = '#f87171'
+    const UNDER = '#60a5fa'
+    for (const feature of overlay.features) {
+      if (feature.chart !== chart.id || feature.kind !== 'cut') continue
+      if (feature.shape.form !== 'polyline') continue
+      const points = sampledPoints(feature.shape.points, feature.shape.radii, feature.shape.closed)
+      if (points.length < 2) continue
+      if (!options.diff) {
+        elements.push(
+          `<polyline points="${pointsAttr(points)}" fill="none" stroke="${MARK}" stroke-width="${fmt(stroke * 1.2)}" stroke-dasharray="5 4" stroke-linecap="round"/>`,
+        )
+        continue
+      }
+      for (let index = 0; index + 1 < points.length; index++) {
+        const a = points[index] as UvPoint
+        const b = points[index + 1] as UvPoint
+        const mid: UvPoint = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+        let best = Number.POSITIVE_INFINITY
+        let signed = 0
+        for (const segment of baseSegments) {
+          const dx = segment.b[0] - segment.a[0]
+          const dy = segment.b[1] - segment.a[1]
+          const length2 = dx * dx + dy * dy
+          let t =
+            length2 > 0
+              ? ((mid[0] - segment.a[0]) * dx + (mid[1] - segment.a[1]) * dy) / length2
+              : 0
+          t = Math.max(0, Math.min(1, t))
+          const cx = segment.a[0] + t * dx
+          const cy = segment.a[1] + t * dy
+          const distance = Math.hypot(mid[0] - cx, mid[1] - cy)
+          if (distance < best) {
+            best = distance
+            signed = (mid[0] - cx) * segment.nx + (mid[1] - cy) * segment.ny
+          }
+        }
+        // Grey = coincident, red = STEP cuts deeper into material, blue = NC leaves material.
+        const color =
+          best > tolerance * 4
+            ? UNDER
+            : Math.abs(signed) <= tolerance
+              ? SAME
+              : signed > 0
+                ? OVER
+                : UNDER
+        elements.push(
+          `<line x1="${fmt(a[0])}" y1="${fmt(a[1])}" x2="${fmt(b[0])}" y2="${fmt(b[1])}" stroke="${color}" stroke-width="${fmt(stroke * 1.2)}" stroke-linecap="round"/>`,
+        )
+      }
+    }
+  }
+  return `<g data-layer="chart:${escapeXml(chart.id)}" transform="translate(0 ${fmt(offsetY)})">
+<rect x="${fmt(-half)}" y="0" width="${fmt(chart.layout.seam)}" height="${fmt(part.length)}" fill="#0f172a" stroke="#334155" stroke-width="${fmt(stroke * 0.7)}"/>
+${elements.join('\n')}
+</g>`
+}
+
+/**
+ * Render every layer into one deterministic SVG string. Coordinates are millimetres, so callers
+ * can fit the `viewBox` to their viewport.
+ */
+export interface PartIrSvgParts {
+  viewBox: string
+  body: string
+}
+
+export function partIrSvgParts(part: PartIr, options: PartIrSvgOptions = {}): PartIrSvgParts {
+  const includeSection = options.section !== false
+  const gap = options.gap ?? Math.max(20, part.length * 0.03)
+  const bounds: Bounds = {
+    minX: Number.POSITIVE_INFINITY,
+    maxX: Number.NEGATIVE_INFINITY,
+    minY: Number.POSITIVE_INFINITY,
+    maxY: Number.NEGATIVE_INFINITY,
+  }
+
+  const maxSeam = part.charts.reduce((max, chart) => Math.max(max, chart.layout.seam), 0)
+  const extent = Math.max(part.length, maxSeam, 1)
+  const stroke = Math.max(0.15, extent / 2000) * (options.stroke ?? 1)
+  const layers: string[] = []
+  let cursor = 0
+  for (const chart of part.charts) {
+    const half = chart.layout.seam / 2
+    bounds.minX = Math.min(bounds.minX, -half)
+    bounds.maxX = Math.max(bounds.maxX, half)
+    bounds.minY = Math.min(bounds.minY, cursor)
+    bounds.maxY = Math.max(bounds.maxY, cursor + part.length)
+    layers.push(chartLayer(chart, part, cursor, stroke, options.overlay, options))
+    cursor += part.length + gap
+  }
+
+  if (includeSection) {
+    const points = part.section as UvPoint[]
+    let minX = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let minY = Number.POSITIVE_INFINITY
+    let maxY = Number.NEGATIVE_INFINITY
+    for (const [x, y] of points) {
+      minX = Math.min(minX, x)
+      maxX = Math.max(maxX, x)
+      minY = Math.min(minY, y)
+      maxY = Math.max(maxY, y)
+    }
+    // Place the section above the first chart, preserving its own aspect.
+    const translateY = -maxY - gap
+    layers.push(
+      `<g data-layer="section" transform="translate(0 ${fmt(translateY)})"><polygon points="${pointsAttr(points)}" fill="none" stroke="${STROKE}" stroke-width="${fmt(stroke)}"/></g>`,
+    )
+    bounds.minX = Math.min(bounds.minX, minX)
+    bounds.maxX = Math.max(bounds.maxX, maxX)
+    bounds.minY = Math.min(bounds.minY, minY + translateY)
+    bounds.maxY = Math.max(bounds.maxY, maxY + translateY)
+  }
+
+  if (!Number.isFinite(bounds.minX)) {
+    bounds.minX = 0
+    bounds.maxX = 1
+    bounds.minY = 0
+    bounds.maxY = 1
+  }
+  const width = Math.max(1, bounds.maxX - bounds.minX)
+  const height = Math.max(1, bounds.maxY - bounds.minY)
+  return {
+    viewBox: `${fmt(bounds.minX)} ${fmt(bounds.minY)} ${fmt(width)} ${fmt(height)}`,
+    body: layers.join('\n'),
+  }
+}
+
+export function partIrSvg(part: PartIr, options: PartIrSvgOptions = {}): string {
+  const { viewBox, body } = partIrSvgParts(part, options)
+  const size = options.responsive
+    ? 'width="100%" height="100%"'
+    : (() => {
+        const [, , width, height] = viewBox.split(' ')
+        return `width="${width}" height="${height}"`
+      })()
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" ${size}>
+${body}
+</svg>`
+}

@@ -98,6 +98,8 @@ export interface NcMark {
   kind: 'etch' | 'marking'
   /** Scribe polyline in face coordinates (a single point for `SI` text). */
   points: [number, number][]
+  /** DSTV block that carried the mark (`SI`, `PU` or `KO`). */
+  block?: 'SI' | 'PU' | 'KO'
   /** Present for `SI` text marks. */
   text?: NcMarkText
 }
@@ -154,11 +156,21 @@ export function parseNcGeometry(text: string): NcGeometry {
   let currentBevels: number[][] = []
   let currentRadii: number[] = []
   let currentRefs: (string | null)[] = []
-  let currentMark: { face: NcFace; kind: 'marking'; points: [number, number][] } | null = null
+  let currentMark: {
+    face: NcFace
+    kind: 'marking'
+    block: 'PU' | 'KO'
+    points: [number, number][]
+  } | null = null
 
   const flushMark = () => {
     if (currentMark && currentMark.points.length >= 2) {
-      marks.push({ face: currentMark.face, kind: currentMark.kind, points: currentMark.points })
+      marks.push({
+        face: currentMark.face,
+        kind: currentMark.kind,
+        block: currentMark.block,
+        points: currentMark.points,
+      })
     }
     currentMark = null
   }
@@ -222,6 +234,7 @@ export function parseNcGeometry(text: string): NcGeometry {
       marks.push({
         face,
         kind: 'etch',
+        block: 'SI',
         points: [[x, y]],
         text: {
           value,
@@ -234,7 +247,12 @@ export function parseNcGeometry(text: string): NcGeometry {
     if (block === 'PU' || block === 'KO') {
       if (!currentMark || currentMark.face !== face) {
         flushMark()
-        currentMark = { face, kind: 'marking', points: [] }
+        currentMark = {
+          face,
+          kind: 'marking',
+          block: block === 'KO' ? 'KO' : 'PU',
+          points: [],
+        }
       }
       currentMark.points.push([x, y])
       continue
