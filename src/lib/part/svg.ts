@@ -111,6 +111,53 @@ const STOCK_EDGE = '#334155'
 const ZONE_FILL = '#94a3b8'
 const ZONE_OPACITY = '0.22'
 
+/** Clip polygon following the start/end cut envelope, or null when cuts are unavailable. */
+function cutEnvelopeClip(part: PartIr, chart: PartChart): string | null {
+  const points: UvPoint[] = []
+  for (const feature of part.features) {
+    if (feature.chart !== chart.id || feature.kind !== 'cut' || feature.shape.form !== 'polyline')
+      continue
+    const source = feature.shape.points
+    for (let index = 0; index < source.length; index++) {
+      if (feature.stock?.[index]) continue
+      points.push(source[index] as UvPoint)
+    }
+  }
+  if (points.length < 4) return null
+  const alongs = points.map((point) => point[1])
+  const minAlong = Math.min(...alongs)
+  const maxAlong = Math.max(...alongs)
+  const span = maxAlong - minAlong
+  if (!(span > 0.1)) return null
+  const margin = Math.max(2, span * 0.12)
+  const start = points.filter((point) => point[1] <= minAlong + margin)
+  const end = points.filter((point) => point[1] >= maxAlong - margin)
+  if (start.length < 2 || end.length < 2) return null
+  const half = chart.layout.seam / 2
+  const bins = 64
+  const envelope = (source: UvPoint[], pick: (values: number[]) => number): UvPoint[] => {
+    const buckets = new Map<number, number[]>()
+    for (const [station, along] of source) {
+      const bin = Math.round(((station + half) / chart.layout.seam) * bins)
+      const bucket = buckets.get(bin)
+      if (bucket) bucket.push(along)
+      else buckets.set(bin, [along])
+    }
+    const out: UvPoint[] = []
+    let last = pick(source.map((point) => point[1]))
+    for (let bin = 0; bin <= bins; bin++) {
+      const values = buckets.get(bin)
+      if (values && values.length > 0) last = pick(values)
+      out.push([-half + (bin / bins) * chart.layout.seam, last])
+    }
+    return out
+  }
+  const startEdge = envelope(start, (values) => Math.min(...values))
+  const endEdge = envelope(end, (values) => Math.max(...values))
+  const polygon = [...startEdge, ...endEdge.reverse()]
+  return pointsAttr(polygon)
+}
+
 function chartLayer(
   chart: PartChart,
   part: PartIr,
@@ -359,6 +406,12 @@ function chartLayer(
     }
   }
   const body = `${elements.join('\n')}`
+  const clip = cutEnvelopeClip(part, chart)
+  const clipId = `clip-${chart.id}`
+  const clipDef = clip
+    ? `<defs><clipPath id="${clipId}"><polygon points="${clip}"/></clipPath></defs>`
+    : ''
+  const clipAttr = clip ? ` clip-path="url(#${clipId})"` : ''
   const mode = options.orientation ?? 'wisecam'
   const groupTransform =
     mode === 'wisecam'
@@ -367,8 +420,11 @@ function chartLayer(
         ? `translate(0 ${fmt(offsetY + part.length)}) scale(1 -1)`
         : `translate(0 ${fmt(offsetY)})`
   return `<g data-layer="chart:${escapeXml(chart.id)}" transform="${groupTransform}">
+${clipDef}
+<g${clipAttr}>
 <rect x="${fmt(-half)}" y="0" width="${fmt(chart.layout.seam)}" height="${fmt(part.length)}" fill="#0f172a" stroke="#334155" stroke-width="${fmt(stroke * 0.7)}"/>
 ${body}
+</g>
 </g>`
 }
 
