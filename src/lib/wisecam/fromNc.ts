@@ -1,21 +1,19 @@
 import { parseDstv } from '@/lib/parsers/dstv'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
-import { arcSamples, type NcContour, type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { faceThickness } from '@/lib/parsers/ncProject'
 import { partSectionForCode } from '@/lib/sections/stock'
-import { rawStationFor, stationFor, type UnrolledLayout, unrolledLayout } from './layout'
-import {
-  buildNcex,
-  type NcexCut,
-  type NcexHole,
-  type NcexMark,
-  type NcexPalette,
-  type NcexPart,
-  ncexPartSvg,
-} from './ncex'
+import { unrolledLayout } from './layout'
+import { buildNcex, type NcexPalette, type NcexPart, ncexPartSvg } from './ncex'
+import { developNcGeometry } from './surface'
 
 /**
  * Turns a DSTV `.nc1` into the geometry WiseCAM expects in an NCEP part.
+ *
+ * The NC is first kept in its native **face coordinates** — `(along the member, across the face)`
+ * for each DSTV face, exactly on the stock surface — then developed to the unrolled NCEP net by
+ * the shared surface layer (`surface.ts`). A future STEP→NCEP path uses the same layer, so both
+ * sources converge on one surface representation and are directly comparable/debuggable.
  *
  * Supported families are the ones validated against real `.ncep` exports: `I` (UB/WB/UC/WC),
  * `U` (PFC) and `M` (RHS/SHS). `T`, `L` and round sections return `null` until a sample exists.
@@ -44,452 +42,6 @@ export function canDevelop(profileType: string | undefined): boolean {
   return unrolledLayout(profileType, [1, 1, 1, 1, 0]) != null
 }
 
-interface ContourEnds {
-  start: [number, number][]
-  end: [number, number][]
-}
-
-/**
- * Expands a DSTV contour so its radius arcs (the `R` field on each vertex) are sampled into the
- * polyline. Without this the developed cut chords every fillet/notch arc, drawing a straight
- * line across the real curve (the NCEP view's overlay artifacts and the missed end-cut curve).
- */
-function densifyContour(contour: NcContour): [number, number][] {
-  const radii = contour.radii
-  if (!radii?.some((radius) => radius)) return contour.points
-  const count = contour.points.length
-  const out: [number, number][] = []
-  for (let index = 0; index < count; index++) {
-    const from = contour.points[index] as [number, number]
-    const to = contour.points[(index + 1) % count] as [number, number]
-    const samples = arcSamples(from, to, radii[index] ?? 0)
-    // Drop each segment's end point; it is the next segment's start (or the closing duplicate).
-    for (let step = 0; step < samples.length - 1; step++)
-      out.push(samples[step] as [number, number])
-  }
-  return out
-}
-
-/**
- * Splits a face's closed `AK` contour into the start-cut and end-cut arcs. The stock edges are
- * the long segments at constant face coordinate; everything between them is an end cut.
- */
-function splitContourEnds(points: [number, number][], length: number): ContourEnds | null {
-  const contour = points.slice()
-  if (contour.length > 2) {
-    const first = contour[0] as [number, number]
-    const last = contour[contour.length - 1] as [number, number]
-    if (Math.hypot(first[0] - last[0], first[1] - last[1]) < 1e-6) contour.pop()
-  }
-  const count = contour.length
-  if (count < 3) return null
-
-  const minLong = Math.max(5, length * 0.25)
-  const longEdge = (index: number): boolean => {
-    const from = contour[index] as [number, number]
-    const to = contour[(index + 1) % count] as [number, number]
-    return Math.abs(to[0] - from[0]) >= minLong && Math.abs(to[1] - from[1]) <= 0.5
-  }
-  let firstLong = -1
-  for (let index = 0; index < count; index++) {
-    if (longEdge(index)) {
-      firstLong = index
-      break
-    }
-  }
-  if (firstLong < 0) return null
-
-  const arcs: [number, number][][] = []
-  let current: [number, number][] | null = null
-  for (let step = 1; step <= count; step++) {
-    const index = (firstLong + step) % count
-    const from = contour[index] as [number, number]
-    const to = contour[(index + 1) % count] as [number, number]
-    if (longEdge(index)) {
-      if (current) arcs.push(current)
-      current = null
-      continue
-    }
-    if (!current) current = [from]
-    current.push(to)
-  }
-  if (current) arcs.push(current)
-  if (arcs.length !== 2) return null
-
-  const meanX = (arc: [number, number][]): number =>
-    arc.reduce((sum, point) => sum + point[0], 0) / arc.length
-  arcs.sort((a, b) => meanX(a) - meanX(b))
-  return { start: arcs[0] as [number, number][], end: arcs[1] as [number, number][] }
-}
-
-function dedupePoints(points: [number, number][]): [number, number][] {
-  const merged: [number, number][] = []
-  for (const point of points) {
-    const last = merged[merged.length - 1]
-    if (!last || Math.hypot(last[0] - point[0], last[1] - point[1]) > 0.01) merged.push(point)
-  }
-  return merged
-}
-
-/** Drops vertices that lie on the straight line between their neighbours. */
-function simplifyCollinear(points: [number, number][]): [number, number][] {
-  const out: [number, number][] = []
-  for (const point of points) {
-    while (out.length >= 2) {
-      const a = out[out.length - 2] as [number, number]
-      const b = out[out.length - 1] as [number, number]
-      const cross = (b[0] - a[0]) * (point[1] - b[1]) - (b[1] - a[1]) * (point[0] - b[0])
-      if (Math.abs(cross) > 1e-6) break
-      out.pop()
-    }
-    out.push(point)
-  }
-  return out
-}
-
-function inRange(points: [number, number][], min: number, max: number): [number, number][] | null {
-  if (points.length < 2) return null
-  const stations = points.map(([x]) => x)
-  if (Math.min(...stations) < min - 0.5 || Math.max(...stations) > max + 0.5) return null
-  return points
-}
-
-/** Along-coordinate on a face end polyline at across-coordinate `y`. */
-function alongAt(points: [number, number][], y: number): number {
-  let nearest = points[0] as [number, number]
-  let nearestDist = Infinity
-  for (let index = 0; index < points.length - 1; index++) {
-    const from = points[index] as [number, number]
-    const to = points[index + 1] as [number, number]
-    const span = to[1] - from[1]
-    if (Math.abs(span) < 1e-9) {
-      const dist = Math.abs(y - from[1])
-      if (dist < nearestDist) {
-        nearest = from
-        nearestDist = dist
-      }
-      continue
-    }
-    const t = (y - from[1]) / span
-    if (t >= -1e-6 && t <= 1 + 1e-6)
-      return from[0] + Math.min(1, Math.max(0, t)) * (to[0] - from[0])
-    const end = t < 0 ? from : to
-    const dist = Math.abs(y - end[1])
-    if (dist < nearestDist) {
-      nearest = end
-      nearestDist = dist
-    }
-  }
-  return nearest[0]
-}
-
-function alongSlope(points: [number, number][], y: number): number {
-  for (let index = 0; index < points.length - 1; index++) {
-    const from = points[index] as [number, number]
-    const to = points[index + 1] as [number, number]
-    const span = to[1] - from[1]
-    if (Math.abs(span) < 1e-9) continue
-    const t = (y - from[1]) / span
-    if (t >= -0.05 && t <= 1.05) return (to[0] - from[0]) / span
-  }
-  return 0
-}
-
-function bevelOnArc(contour: NcContour, arc: [number, number][]): number {
-  let angle = 0
-  contour.points.forEach((point, index) => {
-    const onArc = arc.some(([along, y]) => Math.hypot(point[0] - along, point[1] - y) < 0.5)
-    if (!onArc) return
-    const value = contour.bevels[index]?.[0] ?? 0
-    if (Math.abs(value) > Math.abs(angle)) angle = value
-  })
-  return angle
-}
-
-/**
- * A tube end cut is the mitre plane meeting the outer skin. On each flat that is a straight
- * line in the development; through a corner it is the unrolled cylinder intersection
- * `along = A0 + r·m0·sinθ + (A1 − A0 − r·m0)·(1 − cosθ)`. A square face whose AK line is
- * short of the neighbouring mitre by `wall·tan(bevel)` is the inner/root line — the outer
- * trim snaps onto the mitre.
- */
-function developTubeEnd(
-  layout: UnrolledLayout,
-  contours: NcContour[],
-  length: number,
-  end: 'start' | 'end',
-  wall: number,
-): [number, number][] | null {
-  const order: NcFace[] = ['v', 'o', 'h', 'u']
-  const cuts = new Map<NcFace, [number, number][]>()
-  const angles = new Map<NcFace, number>()
-  let radius = 0
-  for (const face of order) {
-    const region = layout.faces[face]
-    const contour = contours.find((entry) => entry.kind === 'outer' && entry.face === face)
-    if (!region || !contour || !(region.radius && region.radius > 0)) return null
-    radius = region.radius
-    const ends = splitContourEnds(densifyContour(contour), length)
-    if (!ends) return null
-    const arc = (end === 'start' ? ends.start : ends.end).map(
-      (point) => [point[0], point[1]] as [number, number],
-    )
-    cuts.set(face, arc)
-    angles.set(face, bevelOnArc(contour, arc))
-  }
-  const web = layout.faces.v
-  if (!web || web.start >= 0 || radius >= (web.width ?? web.length) / 2) return null
-
-  const boundaryY = (face: NcFace, side: 'low' | 'high'): number => {
-    const region = layout.faces[face]
-    const width = region?.width ?? region?.length ?? 0
-    if (!region) return 0
-    if (side === 'high') return region.reversed ? 0 : width
-    return region.reversed ? width : 0
-  }
-  const shift = (face: NcFace, delta: number): void => {
-    const points = cuts.get(face)
-    if (!points) return
-    cuts.set(
-      face,
-      points.map(([along, y]) => [along + delta, y]),
-    )
-  }
-  if (wall > 0) {
-    for (const face of order) {
-      const points = cuts.get(face)
-      if (!points) continue
-      const alongs = points.map(([along]) => along)
-      if (Math.max(...alongs) - Math.min(...alongs) > 0.05) continue
-      const deltas: number[] = []
-      for (const side of ['low', 'high'] as const) {
-        const index = order.indexOf(face)
-        const neighbor = order[
-          (index + (side === 'high' ? 1 : order.length - 1)) % order.length
-        ] as NcFace
-        const neighborSide = side === 'high' ? 'low' : 'high'
-        const mine = alongAt(points, boundaryY(face, side))
-        const theirs = alongAt(cuts.get(neighbor) ?? [], boundaryY(neighbor, neighborSide))
-        const angle = Math.max(Math.abs(angles.get(face) ?? 0), Math.abs(angles.get(neighbor) ?? 0))
-        const expected = wall * Math.tan((angle * Math.PI) / 180)
-        const delta = theirs - mine
-        if (expected > 0.2 && Math.abs(Math.abs(delta) - expected) < 0.4) deltas.push(delta)
-      }
-      if (deltas.length > 0 && deltas.every((delta) => Math.abs(delta - (deltas[0] ?? 0)) < 0.4)) {
-        shift(face, deltas[0] ?? 0)
-      }
-    }
-  }
-
-  const tangentY = (face: NcFace, side: 'low' | 'high'): number => {
-    const region = layout.faces[face]
-    const width = region?.width ?? region?.length ?? 0
-    const corner = region?.radius ?? 0
-    if (!region) return 0
-    const highY = region.reversed ? corner : width - corner
-    const lowY = region.reversed ? width - corner : corner
-    return side === 'high' ? highY : lowY
-  }
-  const tangent = (
-    face: NcFace,
-    side: 'low' | 'high',
-  ): { station: number; along: number; slope: number } => {
-    const region = layout.faces[face]
-    const y = tangentY(face, side)
-    const raw = rawStationFor(layout, face, y) ?? 0
-    const station = raw < -1e-6 ? raw + layout.seam : raw
-    const points = cuts.get(face) ?? []
-    const dAlong = alongSlope(points, y)
-    return {
-      station,
-      along: alongAt(points, y),
-      slope: region?.reversed ? -dAlong : dAlong,
-    }
-  }
-  const appendArc = (
-    points: [number, number][],
-    from: { station: number; along: number; slope: number },
-    to: { station: number; along: number },
-  ): void => {
-    const steps = 36
-    for (let step = 1; step <= steps; step++) {
-      const theta = ((Math.PI / 2) * step) / steps
-      const along =
-        from.along +
-        radius * from.slope * Math.sin(theta) +
-        (to.along - from.along - radius * from.slope) * (1 - Math.cos(theta))
-      points.push([from.station + radius * theta, along])
-    }
-  }
-
-  const centerY = (web.width ?? web.length) / 2
-  const centerAlong = alongAt(cuts.get('v') ?? [], centerY)
-  const points: [number, number][] = [[0, centerAlong]]
-  let cursor = tangent('v', 'high')
-  points.push([cursor.station, cursor.along])
-  for (const face of ['o', 'h', 'u', 'v'] as const) {
-    const low = tangent(face, 'low')
-    appendArc(points, cursor, low)
-    if (face === 'v') {
-      points.push([layout.seam, centerAlong])
-      break
-    }
-    cursor = tangent(face, 'high')
-    points.push([cursor.station, cursor.along])
-  }
-  const simplified = simplifyCollinear(dedupePoints(points))
-  for (let index = 1; index < simplified.length; index++) {
-    const previous = simplified[index - 1] as [number, number]
-    const point = simplified[index] as [number, number]
-    if (Math.abs(point[0] - previous[0]) > layout.seam / 2) return null
-  }
-  return inRange(simplified, 0, layout.seam)
-}
-
-/**
- * Develops one end cut onto the unrolled surface. Returns null when the NC does not give a
- * complete shaped boundary; the writer then falls back to a straight cut.
- */
-function developEndCut(
-  layout: UnrolledLayout,
-  contours: NcContour[],
-  length: number,
-  end: 'start' | 'end',
-  wall = 0,
-): [number, number][] | null {
-  if (layout.origin === 'zero') {
-    const tube = developTubeEnd(layout, contours, length, end, wall)
-    if (tube) return tube
-  }
-  // Raw stations are unwrapped so a zero-origin tube's `v` face can straddle the seam.
-  const arcs: [number, number][][] = []
-  // Follow the developed perimeter, not the DSTV letter order: at a station shared by two faces
-  // (a step in a notched/offset end) the stable sort below must keep the incoming face first.
-  const faces = (['v', 'o', 'u', 'h'] as NcFace[])
-    .filter((face) => layout.faces[face])
-    .sort((a, b) => (layout.faces[a]?.start ?? 0) - (layout.faces[b]?.start ?? 0))
-  for (const face of faces) {
-    const contour = contours.find((entry) => entry.kind === 'outer' && entry.face === face)
-    if (!contour) return null
-    const ends = splitContourEnds(densifyContour(contour), length)
-    if (!ends) return null
-    const arc = end === 'start' ? ends.start : ends.end
-    const developed: [number, number][] = []
-    for (const [x, y] of arc) {
-      const station = rawStationFor(layout, face, y)
-      if (station == null) continue
-      developed.push([station, x])
-    }
-    if (developed.length < 2) return null
-    arcs.push(developed)
-  }
-  if (arcs.length === 0) return null
-
-  if (layout.origin === 'centered') {
-    // A notched end is not a function of station (two vertices can share a station), so sorting
-    // by station moves its steps. Preserve the per-face contour order for those ends only.
-    if (hasRepeatedStation(arcs)) {
-      const stitched = stitchEndArcs(arcs)
-      if (stitched) return inRange(dedupePoints(stitched), -layout.seam / 2, layout.seam / 2)
-    }
-    const points = simplifyCollinear(dedupePoints(arcs.flat().sort((a, b) => a[0] - b[0])))
-    return inRange(points, -layout.seam / 2, layout.seam / 2)
-  }
-
-  // Zero origin: split at the seam (raw station 0), then concatenate 0…max and min…seam.
-  const seam = layout.seam
-  const right: [number, number][] = []
-  const left: [number, number][] = []
-  let alongAtSeam: number | null = null
-  for (const arc of arcs) {
-    for (let index = 0; index < arc.length; index++) {
-      const point = arc[index] as [number, number]
-      const [raw, along] = point
-      if (raw > 1e-9) right.push([raw, along])
-      else if (raw < -1e-9) left.push([raw + seam, along])
-      else {
-        right.push([0, along])
-        left.push([seam, along])
-        alongAtSeam = along
-      }
-      const next = arc[index + 1]
-      if (!next) continue
-      const [nextRaw, nextAlong] = next
-      if ((raw < 0 && nextRaw > 0) || (raw > 0 && nextRaw < 0)) {
-        const t = -raw / (nextRaw - raw)
-        alongAtSeam = along + t * (nextAlong - along)
-      }
-    }
-  }
-  if (alongAtSeam == null) return null
-  right.push([0, alongAtSeam])
-  left.push([seam, alongAtSeam])
-  right.sort((a, b) => a[0] - b[0])
-  left.sort((a, b) => a[0] - b[0])
-  const points = simplifyCollinear(dedupePoints([...dedupePoints(right), ...dedupePoints(left)]))
-  return inRange(points, 0, seam)
-}
-
-function hasRepeatedStation(arcs: [number, number][][]): boolean {
-  const seen = new Map<string, number>()
-  for (const arc of arcs) {
-    for (const [station, along] of arc) {
-      const key = station.toFixed(6)
-      const existing = seen.get(key)
-      if (existing != null && Math.abs(existing - along) > 1e-6) return true
-      seen.set(key, along)
-    }
-  }
-  return false
-}
-function markPointDistance(a: [number, number], b: [number, number]): number {
-  return Math.hypot(a[0] - b[0], a[1] - b[1])
-}
-
-/**
- * Joins the per-face end arcs by their shared endpoints, preserving the contour order. Sorting
- * all points by station destroys small steps at a notched end: two vertices at the same station
- * can belong to different sides of a notch. Returns null if the pieces do not meet.
- */
-function stitchEndArcs(arcs: [number, number][][]): [number, number][] | null {
-  const remaining = arcs.filter((arc) => arc.length > 0).map((arc) => arc.slice())
-  // Start at the leftmost piece so the path runs left-to-right across the developed net.
-  remaining.sort(
-    (a, b) =>
-      Math.min(...a.map(([station]) => station)) - Math.min(...b.map(([station]) => station)),
-  )
-  const path = remaining.shift()
-  if (!path) return null
-  if ((path[0] as [number, number])[0] > (path[path.length - 1] as [number, number])[0]) {
-    path.reverse()
-  }
-  while (remaining.length > 0) {
-    const head = path[0] as [number, number]
-    const tail = path[path.length - 1] as [number, number]
-    let best: { index: number; distance: number; reverse: boolean; atTail: boolean } | null = null
-    for (let index = 0; index < remaining.length; index++) {
-      const arc = remaining[index] as [number, number][]
-      const first = arc[0] as [number, number]
-      const last = arc[arc.length - 1] as [number, number]
-      const options = [
-        { distance: markPointDistance(tail, first), reverse: false, atTail: true },
-        { distance: markPointDistance(tail, last), reverse: true, atTail: true },
-        { distance: markPointDistance(head, last), reverse: false, atTail: false },
-        { distance: markPointDistance(head, first), reverse: true, atTail: false },
-      ]
-      for (const option of options) {
-        if (!best || option.distance < best.distance) best = { index, ...option }
-      }
-    }
-    if (!best || best.distance > 10) return null
-    const arc = remaining.splice(best.index, 1)[0] as [number, number][]
-    if (best.reverse) arc.reverse()
-    if (best.atTail) path.push(...arc.slice(1))
-    else path.unshift(...arc.slice(0, -1))
-  }
-  return dedupePoints(path)
-}
-
 export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPart | null {
   const file = parseDstv(ncText)
   const header = file.header
@@ -503,88 +55,23 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
   const geometry = parseNcGeometry(ncText)
   const frame = resolveNcFaceFrame(section.points, geometry, header.profile)
   const thicknessByFace = new Map<NcFace, number>()
-  const holes: NcexHole[] = []
-  for (const hole of geometry.holes) {
-    if (!(hole.diameter > 0)) continue
-    const station = stationFor(layout, hole.face, hole.y)
-    if (station == null) continue
-    let thickness = thicknessByFace.get(hole.face)
+  const thicknessForFace = (face: NcFace): number => {
+    let thickness = thicknessByFace.get(face)
     if (thickness == null) {
-      thickness = faceThickness(frame, section.points, hole.face)
-      thicknessByFace.set(hole.face, thickness)
+      thickness = faceThickness(frame, section.points, face)
+      thicknessByFace.set(face, thickness)
     }
-    holes.push({ station, along: hole.x, radius: hole.diameter / 2, face: hole.face, thickness })
+    return thickness
   }
 
   const [, , legThickness, thickness] = header.dimensions
-  const marks: NcexMark[] = []
-  const seenMarks = new Set<string>()
-  for (const mark of geometry.marks) {
-    const region = layout.faces[mark.face]
-    if (!region) continue
-    const points: [number, number][] = []
-    let developed = true
-    for (const [x, y] of mark.points) {
-      const station = stationFor(layout, mark.face, y)
-      if (station == null) {
-        developed = false
-        break
-      }
-      points.push([station, x])
-    }
-    if (!developed || points.length === 0) continue
-    // DSTV often carries the same mark twice (KO punch + PU scribe); keep one.
-    const signature = `${mark.text?.value ?? ''}|${points
-      .map(([station, along]) => `${station.toFixed(3)},${along.toFixed(3)}`)
-      .join(';')}`
-    if (seenMarks.has(signature)) continue
-    seenMarks.add(signature)
-    marks.push({
-      kind: mark.kind,
-      points,
-      text: mark.text ? { ...mark.text, reversed: region.reversed } : undefined,
-    })
-  }
-
-  const cuts: NcexCut[] = []
-  for (const contour of geometry.contours) {
-    if (!layout.faces[contour.face]) continue
-    const points: [number, number][] = []
-    let developed = true
-    for (const [x, y] of densifyContour(contour)) {
-      const station = stationFor(layout, contour.face, y)
-      if (station == null) {
-        developed = false
-        break
-      }
-      points.push([station, x])
-    }
-    if (!developed || points.length < 2) continue
-    if (layout.origin === 'zero') {
-      // The tube's `v` face straddles the seam, so wrapped stations jump from ~seam to ~0 in the
-      // middle of its contour. Draw the two seam halves as separate polylines instead of one line
-      // across the unrolled net.
-      let run: [number, number][] = []
-      for (let index = 0; index < points.length; index++) {
-        const point = points[index] as [number, number]
-        const previous = points[index - 1]
-        if (previous && Math.abs(point[0] - previous[0]) > layout.seam / 2) {
-          if (run.length >= 2) cuts.push({ kind: contour.kind, points: run })
-          run = []
-        }
-        run.push(point)
-      }
-      if (run.length >= 2) cuts.push({ kind: contour.kind, points: run })
-    } else {
-      cuts.push({ kind: contour.kind, points })
-    }
-  }
+  const developed = developNcGeometry(geometry, layout, {
+    length: header.length,
+    wall: header.dimensions[2] ?? 0,
+    thicknessForFace,
+  })
 
   const profileType = header.profileType.trim().toUpperCase()
-  const wall = header.dimensions[2] ?? 0
-  const startCut =
-    developEndCut(layout, geometry.contours, header.length, 'start', wall) ?? undefined
-  const endCut = developEndCut(layout, geometry.contours, header.length, 'end', wall) ?? undefined
   return {
     mark: options.mark ?? header.mark,
     profile: header.profile,
@@ -598,11 +85,11 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
     grade: header.grade,
     section: section.points,
     innerSection: section.innerSection ?? section.holes?.[0],
-    holes,
-    marks,
-    cuts,
-    startCut,
-    endCut,
+    holes: developed.holes,
+    marks: developed.marks,
+    cuts: developed.cuts,
+    startCut: developed.startCut,
+    endCut: developed.endCut,
     unrolledPerimeter: layout.seam,
     unrolled: layout,
     rotateAngle: options.rotateAngle,

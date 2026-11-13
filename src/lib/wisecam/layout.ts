@@ -175,3 +175,95 @@ export function stationFor(layout: UnrolledLayout, faceName: NcFace, y: number):
   const raw = rawStationFor(layout, faceName, y)
   return raw == null ? null : wrapStation(raw, layout)
 }
+
+/**
+ * Midpoint of the layout's raw station span. Centred layouts (`I`/`U`) are already around 0;
+ * a zero-origin tube (`M`) starts at the `v` face edge, so its raw span is shifted. Subtracting
+ * this makes one canonical UV origin for every family: the seam is at `±seam/2`.
+ */
+export function layoutCenter(layout: UnrolledLayout): number {
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (const region of Object.values(layout.faces)) {
+    if (!region) continue
+    min = Math.min(min, region.start)
+    max = Math.max(max, region.start + region.length)
+  }
+  return Number.isFinite(min) && Number.isFinite(max) ? (min + max) / 2 : 0
+}
+
+/** Raw station mapped to the canonical centred UV origin (seam at `±seam/2`). */
+export function centeredStationFor(
+  layout: UnrolledLayout,
+  faceName: NcFace,
+  y: number,
+): number | null {
+  const raw = rawStationFor(layout, faceName, y)
+  if (raw == null) return null
+  return raw - layoutCenter(layout)
+}
+
+/** A DSTV face + authored across coordinate recovered from a centred chart station. */
+export interface FaceStation {
+  face: NcFace
+  y: number
+}
+
+/**
+ * Inverse of {@link centeredStationFor}: recover the face and authored across coordinate for a
+ * chart point. Each face region is monotonic in `y`, so a short binary search is exact enough for
+ * export. Returns null when the station falls in a non-developed gap.
+ */
+export function centeredStationRange(
+  layout: UnrolledLayout,
+  faceName: NcFace,
+): [number, number] | null {
+  const region = layout.faces[faceName]
+  if (!region) return null
+  const width = region.width ?? region.length
+  const start = centeredStationFor(layout, faceName, 0)
+  const end = centeredStationFor(layout, faceName, width)
+  if (start == null || end == null) return null
+  return [Math.min(start, end), Math.max(start, end)]
+}
+
+export function acrossAtCenteredStation(
+  layout: UnrolledLayout,
+  faceName: NcFace,
+  station: number,
+  clamp = true,
+): number | null {
+  const region = layout.faces[faceName]
+  if (!region) return null
+  const width = region.width ?? region.length
+  const range = centeredStationRange(layout, faceName)
+  if (!range) return null
+  const [min, max] = range
+  if (!clamp && (station < min - 0.01 || station > max + 0.01)) return null
+  const start = centeredStationFor(layout, faceName, 0)
+  const end = centeredStationFor(layout, faceName, width)
+  if (start == null || end == null) return null
+  // A cut may overrun the nominal face at a mitre/corner. The developed mapping is still defined
+  // just outside `0…width`, so search a margin and return the real across value instead of
+  // clamping (which would move the cut line).
+  const margin = Math.max(2, width * 0.25)
+  let lo = -margin
+  let hi = width + margin
+  const ascending = end >= start
+  for (let step = 0; step < 48; step++) {
+    const mid = (lo + hi) / 2
+    const value = centeredStationFor(layout, faceName, mid)
+    if (value == null) break
+    if ((ascending && value < station) || (!ascending && value > station)) lo = mid
+    else hi = mid
+  }
+  return (lo + hi) / 2
+}
+
+export function faceAtCenteredStation(layout: UnrolledLayout, station: number): FaceStation | null {
+  for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
+    const y = acrossAtCenteredStation(layout, face, station, false)
+    if (y != null) return { face, y }
+  }
+  return null
+}

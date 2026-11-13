@@ -9,6 +9,30 @@ Emit a **production-ready NCEP from our NC/STEP pipeline** that WiseCAM imports 
 manual repair, preserving everything NCEP can carry natively. NCEP is the richest of our three
 formats, so it is the preferred export target.
 
+## Surface-first conversion (2026-11-13)
+
+Both sources converge on one **on-surface** representation before anything is unrolled. A cut is
+`(along the member, across the stock face)` on a DSTV face — exactly where the laser meets the
+material, assuming 100% stock alignment. The unroll to WiseCAM's NCEP rectangle (`station`,
+`along`) is then a pure mapping, so the conversion is debuggable and both flavours share it:
+
+- `src/lib/wisecam/surface.ts` — the shared core. `developNcGeometry` keeps NC contours/holes/marks
+  in face space and maps `across → station`; `developStepCutEdges` takes the seated STEP B-rep,
+  projects cut edges onto the stock faces (`projectCutEdgesToFaces`), and develops the same way.
+- **NC → NCEP**: `fromNc.ts` is now a thin adapter over `developNcGeometry`.
+- **STEP → NCEP**: `fromStep.ts` is the scaffold (`partFromStepSurface` / `buildNcepFromStepSurface`)
+  over `developStepCutEdges`. Cut boundaries round-trip to the surface; holes, marks and shaped
+  start/end trims are the next step.
+- The viewer draws NC cut lines **on** the stock face (`OFF = 0`, depth-biased) instead of floating
+  above it, so they overlay the STEP cut edges directly. On rounded stock (SHS/RHS/CHS) a nominal
+  face point past the corner tangent is snapped to the real section outline, so the line follows
+  the rounded skin instead of the flat face plane.
+- The **NCEP tab** now shows the STEP surface too: a STEP-only part gets a STEP-surface net, and a
+  part with both sources shows the STEP cuts as orange dashed lines over the NC net.
+
+Regression: `surface.test.ts` develops a real NC+STEP fixture (`m117`) both ways and checks the NC
+cut points land on the STEP-developed surface within 2.5 mm.
+
 ## Export priorities
 
 1. **Feature-full NCEP.** Preserve holes, enclosed cuts, inner cuts, slots, notches, counterbores,
