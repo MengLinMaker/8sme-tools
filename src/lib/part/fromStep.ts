@@ -480,7 +480,7 @@ function wireCuts(
 ): StepCut[] | null {
   const member = seated.memberAxis
   const stock = seated.faces.map((face) => {
-    if (Math.abs(dot(face.normal, member)) > 0.05) return false
+    if (Math.abs(dot(face.normal, member)) > 0.3) return false
     if (face.samples.length === 0) return false
     let on = 0
     let total = 0
@@ -551,6 +551,15 @@ function wireCuts(
       if (cutIndex == null) return 0
       const cut = seated.faces[cutIndex]
       if (!cut) return 0
+      const nf = brepFace.normal
+      const into = dot(nf, cut.normal)
+      const angle = (Math.asin(Math.min(1, Math.abs(into))) * 180) / Math.PI
+      if (angle < 8 || angle > 80) return 0
+      const direction = unit([
+        nf[0] - into * cut.normal[0],
+        nf[1] - into * cut.normal[1],
+        nf[2] - into * cut.normal[2],
+      ])
       const count = Math.floor(edge.points.length / 3)
       const first: [number, number, number] = [
         edge.points[0] as number,
@@ -562,35 +571,6 @@ function wireCuts(
         edge.points[(count - 1) * 3 + 1] as number,
         edge.points[(count - 1) * 3 + 2] as number,
       ]
-      const mid: [number, number, number] = [
-        (first[0] + last[0]) / 2,
-        (first[1] + last[1]) / 2,
-        (first[2] + last[2]) / 2,
-      ]
-      // A cylindrical stock face's local outward normal is radial, not its representative normal.
-      let nf = brepFace.normal
-      if (brepFace.cylinder) {
-        const q: [number, number] = [dot(mid, seated.xAxis), dot(mid, seated.yAxis)]
-        const centre: [number, number] = [
-          dot(brepFace.cylinder.center, seated.xAxis),
-          dot(brepFace.cylinder.center, seated.yAxis),
-        ]
-        const radial: [number, number] = [q[0] - centre[0], q[1] - centre[1]]
-        const length = Math.hypot(radial[0], radial[1]) || 1
-        nf = [
-          (radial[0] / length) * seated.xAxis[0] + (radial[1] / length) * seated.yAxis[0],
-          (radial[0] / length) * seated.xAxis[1] + (radial[1] / length) * seated.yAxis[1],
-          (radial[0] / length) * seated.xAxis[2] + (radial[1] / length) * seated.yAxis[2],
-        ]
-      }
-      const into = dot(nf, cut.normal)
-      const angle = (Math.asin(Math.min(1, Math.abs(into))) * 180) / Math.PI
-      if (angle < 8 || angle > 80) return 0
-      const direction = unit([
-        nf[0] - into * cut.normal[0],
-        nf[1] - into * cut.normal[1],
-        nf[2] - into * cut.normal[2],
-      ])
       const along = unit([last[0] - first[0], last[1] - first[1], last[2] - first[2]])
       const side = dot(direction, cross(nf, along)) >= 0 ? 1 : -1
       return angle * side
@@ -888,8 +868,8 @@ export function partIrFromStepGeometry(
   if (!layout) return null
   const frame = frameForProfile(options.profile, section)
   const cuts =
-    projectedCuts(seated, section, frame, layout, options.radius) ??
-    wireCuts(seated, section, frame, layout)
+    wireCuts(seated, section, frame, layout) ??
+    projectedCuts(seated, section, frame, layout, options.radius)
   const features: PartFeature[] = []
   for (const cut of mergeCutRuns(cuts, layout.seam)) {
     if (cut.points.length < 2) continue
