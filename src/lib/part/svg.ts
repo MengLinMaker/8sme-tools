@@ -359,6 +359,20 @@ function chartLayer(
       }
     }
   }
+  // Debug: label every face interval with its spec width (mm), centred on the face.
+  const labelSize = Math.max(2, stroke * 6)
+  const labelRotate = (options.orientation ?? 'wisecam') === 'raw' ? 0 : 180
+  for (const face of chart.faces) {
+    const region = chart.layout.faces[face]
+    if (!region) continue
+    const width = region.width ?? region.length
+    const station = centeredStationFor(chart.layout, face, width / 2)
+    if (station == null) continue
+    const y = part.length / 2
+    elements.push(
+      `<text data-layer="face-width" x="${fmt(station)}" y="${fmt(y)}" fill="#94a3b8" font-size="${fmt(labelSize)}" text-anchor="middle" transform="rotate(${labelRotate} ${fmt(station)} ${fmt(y)})">${escapeXml(`${face} ${Math.round(width * 10) / 10}`)}</text>`,
+    )
+  }
   const body = `${elements.join('\n')}`
   const cutBoundary =
     chart.id === 'front' && part.startCut && part.endCut
