@@ -43,6 +43,28 @@ function dedupeRuns(runs: UvPoint[][], tolerance = 0.3): UvPoint[][] {
   return out
 }
 
+function pointSegmentDistance(point: UvPoint, a: UvPoint, b: UvPoint): number {
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  const length2 = dx * dx + dy * dy
+  let t = length2 > 0 ? ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / length2 : 0
+  t = Math.max(0, Math.min(1, t))
+  return Math.hypot(point[0] - (a[0] + t * dx), point[1] - (a[1] + t * dy))
+}
+
+/** True when a cut-run point is inside or on a classified hole/slot. */
+function insideFeature(point: UvPoint, feature: PartFeature, tolerance = 0.5): boolean {
+  if (feature.kind === 'hole' && feature.shape.form === 'circle') {
+    const { center, radius } = feature.shape
+    return Math.hypot(point[0] - center[0], point[1] - center[1]) <= radius + tolerance
+  }
+  if (feature.kind === 'slot' && feature.shape.form === 'slot') {
+    const { center, far, radius } = feature.shape
+    return pointSegmentDistance(point, center, far) <= radius + tolerance
+  }
+  return false
+}
+
 /** A closed, small rim loop is a hole or slot; end cuts are left as cut polylines. */
 function classifiedLoop(points: UvPoint[], length: number): PartFeature | null {
   if (points.length < 6) return null
@@ -137,12 +159,16 @@ export function partIrFromStepGeometry(
     if (points.length >= 2) runs.push(points)
   }
   const features: PartFeature[] = []
+  const cutRuns: UvPoint[][] = []
   for (const points of dedupeRuns(runs)) {
     const loop = classifiedLoop(points, options.length)
-    if (loop) {
-      features.push(loop)
-      continue
-    }
+    if (loop) features.push(loop)
+    else cutRuns.push(points)
+  }
+  // Drop short cut fragments that lie on/inside a hole or slot: they are duplicate rim/wall
+  // edges already represented by the classified feature.
+  for (const points of cutRuns) {
+    if (points.every((point) => features.some((feature) => insideFeature(point, feature)))) continue
     features.push({
       kind: 'cut',
       chart: 'front',

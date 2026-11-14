@@ -258,10 +258,29 @@ describe('m71 STEP cut-line round trip', () => {
         }
       }
       const actual = sampledPart(stepIr)
-      expect(expected.length).toBeGreaterThan(0)
+      // Intentionally dropped: cut fragments strictly inside a classified hole/slot are duplicate
+      // interior lines, not part of the hole/slot boundary the IR keeps.
+      const interiorTests = stepIr.features.flatMap((feature) => {
+        if (feature.kind === 'hole' && feature.shape.form === 'circle') {
+          const { center, radius } = feature.shape
+          return [
+            (point: UvPoint): boolean =>
+              Math.hypot(point[0] - center[0], point[1] - center[1]) < radius - 0.5,
+          ]
+        }
+        if (feature.kind === 'slot' && feature.shape.form === 'slot') {
+          const { center, far, radius } = feature.shape
+          return [(point: UvPoint): boolean => pointSeg(point, center, far) < radius - 0.5]
+        }
+        return []
+      })
+      const keptExpected = expected.filter(
+        (point) => !interiorTests.some((inside) => inside(point)),
+      )
+      expect(keptExpected.length).toBeGreaterThan(0)
       expect(actual.length).toBeGreaterThan(0)
-      const expectedToActual = deviation(expected, actual)
-      const actualToExpected = deviation(actual, expected)
+      const expectedToActual = deviation(keptExpected, actual)
+      const actualToExpected = deviation(actual, keptExpected)
       console.log('m71 cut-line round trip', { expectedToActual, actualToExpected })
       expect(expectedToActual.mean).toBeLessThan(0.05)
       expect(expectedToActual.max).toBeLessThan(0.5)
@@ -350,6 +369,25 @@ describe('m71 STEP holes and slots match NC', () => {
         }
         expect(best).toBeLessThan(1)
         expect(bestRadius).toBeLessThan(0.5)
+      }
+
+      // No leftover cut fragments on/inside a hole or slot.
+      const shapes = [...holes(stepIr), ...slots(stepIr)]
+      for (const feature of stepIr.features) {
+        if (feature.kind !== 'cut' || feature.shape.form !== 'polyline') continue
+        for (const point of feature.shape.points as UvPoint[]) {
+          for (const shape of shapes) {
+            const center = shape.center as UvPoint
+            if ('far' in shape) {
+              const far = shape.far as UvPoint
+              expect(pointSeg(point, center, far)).toBeGreaterThan(shape.radius + 0.5)
+            } else {
+              expect(Math.hypot(point[0] - center[0], point[1] - center[1])).toBeGreaterThan(
+                shape.radius + 0.5,
+              )
+            }
+          }
+        }
       }
     },
     120_000,
