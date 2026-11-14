@@ -274,7 +274,6 @@ function brepProjectedRuns(
   for (const segment of segments) {
     if (!segment.faceNormal) continue
     let plane: (typeof planes)[number] | undefined
-    let bestScore = 0.98
     let bestDistance = Number.POSITIVE_INFINITY
     const mid: Vec3 = [
       ((segment.points[0] as number) + (segment.points[3] as number)) / 2,
@@ -282,11 +281,11 @@ function brepProjectedRuns(
       ((segment.points[2] as number) + (segment.points[5] as number)) / 2,
     ]
     for (const entry of planes) {
-      const score = Math.abs(dot3(entry.normal, segment.faceNormal))
-      if (score < bestScore) continue
+      if (Math.abs(dot3(entry.normal, segment.faceNormal)) < 0.98) continue
+      // Parallel faces (outer vs inner flange/web) share a normal; the exact plane offset picks
+      // the right one. Picking the first match mis-stations whole cuts.
       const distance = Math.abs(dot3(mid, entry.normal) - entry.q)
-      if (score > bestScore + 1e-9 || distance < bestDistance) {
-        bestScore = score
+      if (distance < bestDistance) {
         bestDistance = distance
         plane = entry
       }
