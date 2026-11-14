@@ -486,6 +486,10 @@ A cut line that crosses from one face to the next must meet at the **exact share
 - A segment crossing a junction is split there; both adjacent face segments use that same station.
 - A corner must sit exactly on the IR line between the two face intervals; no tolerance snap, gap
   or overlap.
+- **Obtuse corners:** never compute a junction by interpolating UV endpoints. A small station
+  error becomes a large along-direction gap when the cut is very obtuse. Intersect the cut face
+  plane with the section junction line (or the 3-D cut segment with the face-boundary plane) to get
+  the exact along, then apply the face transform.
 - Holes/slots and cuts use the same section-derived junction, so they cannot disagree.
 
 Invariants:
