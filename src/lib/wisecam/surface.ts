@@ -47,6 +47,8 @@ export interface DevelopNcOptions {
 export interface DevelopStepOptions {
   /** Outer corner radius (mm) — how far a rounded-corner cut reaches onto adjacent flats. */
   radius?: number
+  /** Open sections: include channel-side faces in the developed perimeter. */
+  includeInner?: boolean
   /**
    * Add this to every `X` from the STEP projection. The seated model is usually centred on 0,
    * while NCEP `along` runs from the piece start, so pass `-minAlong`.
@@ -718,7 +720,7 @@ export function developStepCutEdges(
     input.xAxis,
     input.yAxis,
     input.memberAxis,
-    { radius: options.radius ?? 0 },
+    { radius: options.radius ?? 0, includeInner: options.includeInner },
   )
   const cuts: NcexCut[] = []
   for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {

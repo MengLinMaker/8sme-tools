@@ -396,6 +396,13 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
   are a slot. Intersect the cylinder **axis with the entry face plane** for the centre; do not use
   the mid-wall centre. Unpaired open cylinders are rounded cuts, not holes. This is what stopped
   PFC holes from disappearing when rim chaining failed.
+- **End cuts must be continuous.** Per-face chaining leaves breaks at face boundaries. Merge cut
+  runs whose endpoints meet (up to 5 mm) before emitting IR features. For open sections (`U`),
+  include the channel-side faces in the projection (`includeInner`); the outer-outline-only test
+  drops half the PFC end cut.
+- **Direct BREP wire development was tried and rejected** for tubes: mapping raw wire points to
+  the nearest DSTV plane mis-stations rounded corners. Keep the cut-plane projection plus run
+  merging; do not reintroduce a second wire-to-face mapping without a tube-corner regression.
 - **Pipelines stay independent.** STEP never reads NC. Only the explicit NC → STEP path shares
   code. Do not use NC face letters to choose a STEP rim.
 - NC outer contours include stock edges; STEP IR only has cut rims. Compare **end cuts** and

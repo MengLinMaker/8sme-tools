@@ -236,6 +236,42 @@ function cylinderFeatures(
   return features
 }
 
+/** Joins runs whose endpoints meet at a face boundary, so an end cut is one continuous polyline. */
+function mergeRuns(runs: UvPoint[][], tolerance = 5): UvPoint[][] {
+  const list = runs.map((run) => [...run])
+  let merged = true
+  while (merged) {
+    merged = false
+    outer: for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i] as UvPoint[]
+        const b = list[j] as UvPoint[]
+        const a0 = a[0] as UvPoint
+        const a1 = a[a.length - 1] as UvPoint
+        const b0 = b[0] as UvPoint
+        const b1 = b[b.length - 1] as UvPoint
+        const distance = (p: UvPoint, q: UvPoint): number => Math.hypot(p[0] - q[0], p[1] - q[1])
+        const options: [number, boolean, boolean][] = [
+          [distance(a1, b0), false, false],
+          [distance(a1, b1), false, true],
+          [distance(a0, b0), true, false],
+          [distance(a0, b1), true, true],
+        ]
+        options.sort((left, right) => left[0] - right[0])
+        const best = options[0]
+        if (!best || best[0] > tolerance) continue
+        const first = best[1] ? [...a].reverse() : a
+        const second = best[2] ? [...b].reverse() : b
+        list.splice(j, 1)
+        list[i] = [...first, ...second]
+        merged = true
+        break outer
+      }
+    }
+  }
+  return list
+}
+
 /** A closed, small rim loop is a hole or slot; end cuts are left as cut polylines. */
 function classifiedLoop(points: UvPoint[], length: number): PartFeature | null {
   if (points.length < 6) return null
@@ -325,7 +361,11 @@ export function partIrFromStepGeometry(
   const frame = frameForProfile(options.profile, section)
   const cuts = developStepCutEdges(
     { ...seated, section, frame, layout },
-    { radius: options.radius, alongOffset: seated.alongOffset },
+    {
+      radius: options.radius,
+      alongOffset: seated.alongOffset,
+      includeInner: profileType === 'U',
+    },
   )
   const runs: UvPoint[][] = []
   for (const cut of cuts) {
@@ -353,8 +393,9 @@ export function partIrFromStepGeometry(
     else cutRuns.push(points)
   }
   // Drop short cut fragments that lie on/inside a hole or slot: they are duplicate rim/wall
-  // edges already represented by the classified feature.
-  for (const points of cutRuns) {
+  // edges already represented by the classified feature. Merge the remaining runs across face
+  // boundaries so the IR draws a continuous end cut instead of separate per-face chains.
+  for (const points of mergeRuns(cutRuns)) {
     if (points.every((point) => features.some((feature) => insideFeature(point, feature)))) continue
     features.push({
       kind: 'cut',

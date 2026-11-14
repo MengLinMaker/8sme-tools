@@ -65,6 +65,8 @@ function normalize(a: Vec3): Vec3 {
 export interface CutProjectionOptions {
   /** Outer corner radius (mm) — how far a corner point reaches onto the adjacent face. Default 0. */
   radius?: number
+  /** Open sections (PFC/angle/T): the channel-side faces are part of the developed perimeter. */
+  includeInner?: boolean
 }
 
 const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -161,7 +163,11 @@ export function projectCutEdgesToFaces(
           edge.points[midIndex + 1] as number,
           edge.points[midIndex + 2] as number,
         ]
-        if (distanceToOutline(section, [dot(mid, xAxis), dot(mid, yAxis)]) > 2.5) continue
+        if (
+          !options.includeInner &&
+          distanceToOutline(section, [dot(mid, xAxis), dot(mid, yAxis)]) > 2.5
+        )
+          continue
         // A through hole/slot has two rims. Keep the one on the nearest outer face — the side
         // where the cut cylinder actually sits — so STEP matches the single machined line the NC
         // authors without reading NC.
