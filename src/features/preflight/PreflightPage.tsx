@@ -5409,7 +5409,7 @@ function PanZoomSvg({
     >
       <svg
         viewBox={viewBox}
-        preserveAspectRatio="xMidYMid meet"
+        preserveAspectRatio="xMinYMid meet"
         className="absolute inset-0 h-full w-full select-none"
         style={{
           transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`,

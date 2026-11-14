@@ -359,18 +359,25 @@ function chartLayer(
       }
     }
   }
-  // Debug: label every face interval with its spec width (mm), centred on the face.
+  // Debug: label every face interval at the top with its measured STEP width (spec fallback).
   const labelSize = Math.max(2, stroke * 6)
-  const labelRotate = (options.orientation ?? 'wisecam') === 'raw' ? 0 : 180
+  const orientation = options.orientation ?? 'wisecam'
+  const labelTop = labelSize * 1.4
+  const labelY = orientation === 'raw' ? labelTop : part.length - labelTop
   for (const face of chart.faces) {
     const region = chart.layout.faces[face]
     if (!region) continue
-    const width = region.width ?? region.length
-    const station = centeredStationFor(chart.layout, face, width / 2)
+    const width = chart.faceWidths?.[face] ?? region.width ?? region.length
+    const station = centeredStationFor(chart.layout, face, (region.width ?? region.length) / 2)
     if (station == null) continue
-    const y = part.length / 2
+    const transform =
+      orientation === 'wisecam'
+        ? `rotate(180 ${fmt(station)} ${fmt(labelY)})`
+        : orientation === 'flipY'
+          ? `translate(0 ${fmt(2 * labelY)}) scale(1 -1)`
+          : ''
     elements.push(
-      `<text data-layer="face-width" x="${fmt(station)}" y="${fmt(y)}" fill="#94a3b8" font-size="${fmt(labelSize)}" text-anchor="middle" transform="rotate(${labelRotate} ${fmt(station)} ${fmt(y)})">${escapeXml(`${face} ${Math.round(width * 10) / 10}`)}</text>`,
+      `<text data-layer="face-width" data-face="${face}" x="${fmt(station)}" y="${fmt(labelY)}" fill="#94a3b8" font-size="${fmt(labelSize)}" text-anchor="middle"${transform ? ` transform="${transform}"` : ''}>${Math.round(width * 10) / 10}</text>`,
     )
   }
   const body = `${elements.join('\n')}`

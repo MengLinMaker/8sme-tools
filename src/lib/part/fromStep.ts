@@ -1,12 +1,13 @@
 import {
   faceHalf,
+  facePlaneHalf,
   faceSpanAxis,
   frameForProfile,
   ncAuthoredAcrossSign,
   resolveFaceSign,
 } from '@/lib/parsers/ncFaces'
 import type { NcFace } from '@/lib/parsers/ncGeometry'
-import { brepCutSegments, type Vec3 } from '@/lib/step/cutEdges'
+import { brepCutSegments, isStockFace, type Vec3 } from '@/lib/step/cutEdges'
 import type { MeshedStep } from '@/lib/step/mesh'
 import type { SectionSeat } from '@/lib/step/seat'
 import { profileTypeFor, type SeatedStepGeometry, seatedStepGeometry } from '@/lib/wisecam/fromStep'
@@ -369,6 +370,55 @@ function brepProjectedRuns(
   return runs
 }
 
+/** Measured widths of the STEP's planar stock faces, keyed by DSTV face. */
+function measuredFaceWidths(
+  seated: SeatedStepGeometry,
+  frame: ReturnType<typeof frameForProfile>,
+  section: [number, number][],
+): Partial<Record<NcFace, number>> {
+  const planes = (['v', 'o', 'u', 'h'] as NcFace[]).map((face) => {
+    const spanAxis = faceSpanAxis(frame, face)
+    const axis = (1 - spanAxis) as 0 | 1
+    const sign = resolveFaceSign(frame, section, face)
+    const base = axis === 0 ? seated.xAxis : seated.yAxis
+    const spanVec = spanAxis === 0 ? seated.xAxis : seated.yAxis
+    return {
+      face,
+      normal: [base[0] * sign, base[1] * sign, base[2] * sign] as Vec3,
+      spanVec: spanVec as Vec3,
+      q: facePlaneHalf(frame, face),
+    }
+  })
+  const widths: Partial<Record<NcFace, number>> = {}
+  for (const face of seated.faces) {
+    if (!face.planar) continue
+    if (!isStockFace(face, section, seated.xAxis, seated.yAxis, seated.memberAxis)) continue
+    for (const plane of planes) {
+      if (Math.abs(dot3(face.normal, plane.normal)) < 0.98) continue
+      if (Math.abs(dot3(face.center, plane.normal) - plane.q) > 1.5) continue
+      let min = Number.POSITIVE_INFINITY
+      let max = Number.NEGATIVE_INFINITY
+      for (const wire of face.wires)
+        for (const edge of wire.edges)
+          for (let index = 0; index + 2 < edge.points.length; index += 3) {
+            const value = dot3(
+              [
+                edge.points[index] as number,
+                edge.points[index + 1] as number,
+                edge.points[index + 2] as number,
+              ],
+              plane.spanVec,
+            )
+            min = Math.min(min, value)
+            max = Math.max(max, value)
+          }
+      if (Number.isFinite(min) && max > min)
+        widths[plane.face] = Math.max(widths[plane.face] ?? 0, max - min)
+    }
+  }
+  return widths
+}
+
 /** Joins runs whose endpoints meet at a face boundary, so an end cut is one continuous polyline. */
 function mergeRuns(runs: UvPoint[][], tolerance = 5): UvPoint[][] {
   const list = runs.map((run) => [...run])
@@ -544,6 +594,7 @@ export function partIrFromStepGeometry(
     role: 'front',
     faces: (['v', 'o', 'u', 'h'] as NcFace[]).filter((face) => layout.faces[face]),
     layout,
+    faceWidths: measuredFaceWidths(seated, frame, section),
   }
   return {
     mark: options.mark,

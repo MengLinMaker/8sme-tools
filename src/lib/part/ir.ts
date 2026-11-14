@@ -38,6 +38,8 @@ export interface PartChart {
   faces: NcFace[]
   /** Maps `(face, across)` → centred station. */
   layout: UnrolledLayout
+  /** Measured STEP face widths (mm), for debug labels; falls back to the spec width. */
+  faceWidths?: Partial<Record<NcFace, number>>
 }
 
 export type FeatureKind = 'cut' | 'hole' | 'slot' | 'notch'
