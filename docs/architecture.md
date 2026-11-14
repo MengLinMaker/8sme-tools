@@ -381,6 +381,10 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
 
 - **One projection only.** 3-D and IR both use `projectCutEdgesToFaces`. Do not add an IR-only
   rim variant. The cut-plane trace is intentional (sharp-corner NC convention).
+- **Stock/cut classification uses `isStockFace`** (surface on the section outline), not a
+  normal-angle threshold: a shallow bevel (m137/m176) otherwise reads as stock and its end line
+  disappears. For open sections (`includeInner`), every lengthwise face is stock; the transverse
+  test (`|dot(cutFace.normal, member)| > 0.05`) still rejects long inner-face stock edges.
 - **Cylinder stock test uses the axis:** `|dot(cylinder.axis, memberAxis)| > 0.9` = lengthwise
   (rounded stock corner); otherwise it is a hole/slot wall (cut). Planar stock still uses
   `|dot(face.normal, memberAxis)| <= 0.3`.

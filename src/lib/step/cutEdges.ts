@@ -372,7 +372,7 @@ function edgeBevel(stockNormal: Vec3, cutNormal: Vec3): Bevel {
  * rounded stock corner (its arc *is* the outline) from a chamfer cut across that corner (whose
  * boundary edges touch the outline but whose surface is inset).
  */
-function isStockFace(
+export function isStockFace(
   face: SeatedBrepFace,
   section: [number, number][],
   xAxis: Vec3,

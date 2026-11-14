@@ -23,7 +23,7 @@ import {
   resolveFaceSign,
 } from '@/lib/parsers/ncFaces'
 import type { NcFace } from '@/lib/parsers/ncGeometry'
-import { distanceToOutline, type SeatedBrepFace, type Vec3 } from './cutEdges'
+import { distanceToOutline, isStockFace, type SeatedBrepFace, type Vec3 } from './cutEdges'
 
 /** One projected contour point: `X` along the member (mm), `Y` across the face (mm from the edge). */
 export interface FacePoint {
@@ -107,7 +107,13 @@ export function projectCutEdgesToFaces(
       const length = Math.hypot(axis[0], axis[1], axis[2]) || 1
       return Math.abs(dot(axis, memberAxis)) / length > 0.9
     }
-    return Math.abs(dot(face.normal, memberAxis)) <= 0.3
+    // Open sections: inner channel faces are part of the developed perimeter, so every
+    // lengthwise face is stock. Tubes still use the surface-on-outline classifier to exclude the
+    // inner void wall.
+    if (options.includeInner) return Math.abs(dot(face.normal, memberAxis)) <= 0.3
+    // Surface-on-outline (pre-IR classifier): a normal-angle threshold treats a shallow bevel
+    // (m137/m176's end cut) as stock and drops the end line.
+    return isStockFace(face, section, xAxis, yAxis, memberAxis)
   })
   // Cross-section centroid in seated 3-D coords, used to pick the nearest outer face for a
   // through-hole/slot rim (both rims are otherwise geometrically valid).
@@ -151,7 +157,17 @@ export function projectCutEdgesToFaces(
     if (!stock[i]) return
     for (const wire of face.wires) {
       for (const edge of wire.edges) {
-        const cutIndex = edge.neighbours.find((n) => n !== i && !stock[n])
+        const cutIndex = edge.neighbours.find((n) => {
+          const neighbour = faces[n]
+          // Transverse only: a lengthwise inner/channel face must not turn its stock edge into a
+          // cut (m137/m176 extra long lines). Holes are handled from cylinder metadata.
+          return (
+            n !== i &&
+            neighbour != null &&
+            !stock[n] &&
+            Math.abs(dot(neighbour.normal, memberAxis)) > 0.05
+          )
+        })
         if (cutIndex == null) continue
         const cut = faces[cutIndex]
         if (!cut) continue
