@@ -118,9 +118,15 @@ function classifiedLoop(points: UvPoint[], length: number): PartFeature | null {
  *
  * The real part's cut edges are projected onto the stock faces (the same
  * `projectCutEdgesToFaces` pass the 3D viewer uses), then developed by the shared surface core
- * and converted from WiseCAM's wrapped station to the IR's centred station. This is the STEP
- * half of the canonical model: no holes/marks yet (the cut-edge boundaries already include hole
- * rims as closed loops), but enough to render and compare against NC-derived IR.
+ * and converted from WiseCAM's wrapped station to the IR's centred station.
+ *
+ * Do **not** add a second IR-only projection variant. The 3-D viewer and IR diverged once when
+ * this file used a rim-preserving projection; see `docs/architecture.md` §16. The projection
+ * keeps the cut-plane trace (sharp-corner convention) on purpose.
+ *
+ * Through holes/slots are collapsed to the nearest outer-face rim inside `projectCutEdgesToFaces`.
+ * Here, closed rims become `hole`/`slot`; cut runs wholly inside one are duplicate interior edges
+ * and are dropped.
  */
 
 export interface FromStepIrOptions {

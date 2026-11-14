@@ -347,3 +347,64 @@ blocks the UI and can be prewarmed.
   and its neighbour prefetch; they resume a settle interval after the part's manufactured model
   lands. In-flight tasks still finish (unstoppable), but the pile-up ahead of the viewer is cleared.
 
+
+## 16. STEP → IR cut-line projection — m71 post-mortem
+
+Status: **adopted**. Read before changing `src/lib/step/cutProjection.ts`,
+`src/lib/wisecam/surface.ts`, or `src/lib/part/fromStep.ts`.
+
+Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not match the NC IR
+(missing slot arcs, duplicated hole rims, minor lines inside holes). NC was correct for m71
+(NW30 Bottom, PFC100*50 with a bevel), so m71 is now a strict cut-line regression.
+
+### What went wrong
+
+1. **Two projection implementations existed.** The 3-D viewer used
+   `projectCutEdgesToFaces` (the cut-plane trace on the nominal face, reaching the theoretical
+   sharp corner). The IR used a second `preserveRim` path that kept the real B-rep rim X instead.
+   They diverged; the IR could be wrong while 3-D looked right.
+2. **The "round-trip" test hid the divergence.** It projected the IR back with the *same* IR
+   variant, so it passed while the IR disagreed with the viewer/NC. A round-trip must compare
+   against the *original* projection, not a second copy of the same transform.
+3. **Cylinders were classified by `face.normal`.** For a cylinder that is one representative
+   radial normal. A hole/slot wall is a cylinder **crosswise** to the member (a cut); a rounded
+   stock corner is a cylinder **parallel** to the member (stock). Using the radial normal
+   misclassified walls and silently dropped their rim arcs.
+4. **Through holes/slots have two B-rep rims.** NC authors one machined line (the entry side).
+   Emitting both looked duplicated: m71 had 8 holes and 8 slots instead of 4 + 4.
+5. **Closed rims were emitted as `cut`.** Holes/slots need their own IR kinds, and the extra
+   straight/interior fragments left over from the rim were drawn as minor lines inside the hole.
+6. **Tests only compared end cuts.** They did not assert hole/slot kinds, counts, or that no cut
+   fragment lay inside a hole/slot.
+
+### Rules (do not re-litigate)
+
+- **One projection only.** 3-D and IR both use `projectCutEdgesToFaces`. Do not add an IR-only
+  rim variant. The cut-plane trace is intentional (sharp-corner NC convention).
+- **Cylinder stock test uses the axis:** `|dot(cylinder.axis, memberAxis)| > 0.9` = lengthwise
+  (rounded stock corner); otherwise it is a hole/slot wall (cut). Planar stock still uses
+  `|dot(face.normal, memberAxis)| <= 0.3`.
+- **Outer skin is an edge test:** classify a stock face by its normal/axis, then test each edge
+  **midpoint** against the section outline. Do not require the face's samples to fit the outline;
+  real PFC/web faces miss it.
+- **Through-rim collapse is geometric.** Keep the rim on the stock face where
+  `dot(face outward normal, cutCylinder.center − sectionCentroid) > 0` — the nearest outer face.
+  This reproduces m71 (`u` for Ø14 holes, `o` for Ø10 slots) without reading NC.
+- **Classify closed rims as holes/slots**, then drop any cut run wholly inside one. Do not leave
+  rim/wall duplicates as cuts.
+- **Pipelines stay independent.** STEP never reads NC. Only the explicit NC → STEP path shares
+  code. Do not use NC face letters to choose a STEP rim.
+- NC outer contours include stock edges; STEP IR only has cut rims. Compare **end cuts** and
+  hole/slot geometry, not raw cut-feature counts.
+
+### Guarding tests
+
+| test | what it locks |
+|---|---|
+| `toNc.test.ts` | NC → IR → NC exact (`1e-9`) |
+| `fromStep.test.ts` m71 end cuts | STEP end cuts match NC `startCut`/`endCut` (mean <1 mm, max <4 mm) |
+| `fromStep.test.ts` m71 cut-line round trip | STEP → IR → face projection returns the same lines |
+| `fromStep.test.ts` m71 holes/slots | 4 holes + 4 slots, same centres/radii as NC; no cut point on/inside a hole/slot |
+| `cutProjection.test.ts` / `ncStepAgreement.test.ts` | NC vs STEP face projection stays aligned |
+
+Run: `pnpm vitest run src/lib/part/fromStep.test.ts src/lib/step/cutProjection.test.ts`.
