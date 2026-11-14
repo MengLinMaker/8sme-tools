@@ -272,6 +272,7 @@ function brepProjectedRuns(
   section: [number, number][],
   innerSection: [number, number][] | undefined,
   alongOffset: number,
+  wrapSeam: boolean,
 ): UvPoint[][] {
   const planes = (['v', 'o', 'u', 'h'] as NcFace[]).map((face) => {
     const spanAxis = faceSpanAxis(frame, face)
@@ -342,8 +343,10 @@ function brepProjectedRuns(
     }
     const a = mapPoint(0)
     const b = mapPoint(3)
-    if (a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.05)
-      runs.push(...splitAtSeam(a, b, layout.seam))
+    if (a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.05) {
+      if (wrapSeam) runs.push(...splitAtSeam(a, b, layout.seam))
+      else runs.push([a, b])
+    }
   }
   return runs
 }
@@ -427,6 +430,19 @@ function splitAtSeam(a: UvPoint, b: UvPoint, seam: number): UvPoint[][] {
       [sb + seam, b[1]],
     ],
   ]
+}
+
+/** Test seam: expose the exact projected cut runs used by open-section IR. */
+export function projectStepCutRuns(
+  seated: SeatedStepGeometry,
+  layout: UnrolledLayout,
+  frame: ReturnType<typeof frameForProfile>,
+  section: [number, number][],
+  innerSection: [number, number][] | undefined,
+  alongOffset: number,
+  wrapSeam = false,
+): UvPoint[][] {
+  return brepProjectedRuns(seated, layout, frame, section, innerSection, alongOffset, wrapSeam)
 }
 
 /** Joins runs whose endpoints meet at a face boundary, so an end cut is one continuous polyline. */
@@ -557,7 +573,15 @@ export function partIrFromStepGeometry(
   const openRuns =
     profileType === 'M'
       ? []
-      : brepProjectedRuns(seated, layout, frame, section, options.innerSection, seated.alongOffset)
+      : brepProjectedRuns(
+          seated,
+          layout,
+          frame,
+          section,
+          options.innerSection,
+          seated.alongOffset,
+          profileType === 'M',
+        )
   const runs: UvPoint[][] =
     openRuns.length > 0
       ? openRuns
@@ -578,26 +602,37 @@ export function partIrFromStepGeometry(
     section,
     seated.alongOffset,
   )
-  const cutRuns: UvPoint[][] = []
-  for (const points of dedupeRuns(runs)) {
-    // A rim loop for a hole/slot is already represented by the exact cylinder feature.
-    if (points.every((point) => features.some((feature) => insideFeature(point, feature)))) {
-      continue
+  if (openRuns.length > 0) {
+    // Exact projection fidelity for open sections: one IR segment per projected segment. Do not
+    // merge/chain, which invented horizontal connectors that were absent from the 3-D cut lines.
+    for (const points of openRuns) {
+      if (points.every((point) => features.some((feature) => insideFeature(point, feature)))) {
+        continue
+      }
+      features.push({
+        kind: 'cut',
+        chart: 'front',
+        shape: { form: 'polyline', points, closed: false },
+      })
     }
-    const loop = classifiedLoop(points, options.length)
-    if (loop) features.push(loop)
-    else cutRuns.push(points)
-  }
-  // Drop short cut fragments that lie on/inside a hole or slot: they are duplicate rim/wall
-  // edges already represented by the classified feature. Merge the remaining runs across face
-  // boundaries so the IR draws a continuous end cut instead of separate per-face chains.
-  for (const points of mergeRuns(cutRuns)) {
-    if (points.every((point) => features.some((feature) => insideFeature(point, feature)))) continue
-    features.push({
-      kind: 'cut',
-      chart: 'front',
-      shape: { form: 'polyline', points, closed: false },
-    })
+  } else {
+    const cutRuns: UvPoint[][] = []
+    for (const points of dedupeRuns(runs)) {
+      if (points.every((point) => features.some((feature) => insideFeature(point, feature))))
+        continue
+      const loop = classifiedLoop(points, options.length)
+      if (loop) features.push(loop)
+      else cutRuns.push(points)
+    }
+    for (const points of mergeRuns(cutRuns)) {
+      if (points.every((point) => features.some((feature) => insideFeature(point, feature))))
+        continue
+      features.push({
+        kind: 'cut',
+        chart: 'front',
+        shape: { form: 'polyline', points, closed: false },
+      })
+    }
   }
   const chart: PartChart = {
     id: 'front',

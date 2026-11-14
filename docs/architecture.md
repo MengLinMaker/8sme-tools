@@ -405,8 +405,11 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
   half-span/across-sign maths in a second path.
 - **Face-region mapping:** identify the target face once per segment and map every point through
   that face. Do **not** clamp or clip the authored coordinate or station; let the cut continue with
-  the mapping. If it crosses the chart seam, split it there and continue on the other side (seam
-  wrapping). The SVG renderer draws IR coordinates exactly; it does not offset faces.
+  the mapping. **Closed tubes (`M`) may split/wrap at the seam. Open sections (`U`/PFC) must not
+  wrap** — the cut continues and may overrun the nominal chart edge. The SVG renderer draws IR
+  coordinates exactly; it does not offset faces.
+- **Length preservation:** the sum of IR cut lengths for an open section must equal the sum of the
+  projected cut lengths (excluding hole/slot rims); `cut-lengths.test.ts` enforces this.
 - **End cuts must be continuous.** Per-face chaining leaves breaks at face boundaries. Merge cut
   runs whose endpoints meet (up to 5 mm) before emitting IR features. For open sections (`U`),
   include the channel-side faces in the projection (`includeInner`); the outer-outline-only test

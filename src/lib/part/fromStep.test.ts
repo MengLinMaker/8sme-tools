@@ -320,7 +320,7 @@ describe('STEP IR UV containment', () => {
     const ncPath = fixture('part-ir', `${mark}.nc1`)
     const stpPath = fixture('part-ir', `${mark}.stp`)
     it.skipIf(!existsSync(ncPath) || !existsSync(stpPath))(
-      `${mark}: every cut/slot/hole station stays inside the chart`,
+      `${mark}: closed charts contain cut stations; open sections may overrun`,
       async () => {
         const header = parseDstv(readFileSync(ncPath, 'utf8')).header
         const section = partSectionForCode(header.profile, header.dimensions)
@@ -339,14 +339,16 @@ describe('STEP IR UV containment', () => {
           },
         )
         if (!ir) throw new Error('no STEP IR')
+        const closed = header.profileType.trim().toUpperCase() === 'M'
         const half = layout.seam / 2
         const stationOf = (point: UvPoint): number => point[0]
         const seen = new Set<string>()
         for (const feature of ir.features) {
           if (feature.kind === 'cut' && feature.shape.form === 'polyline') {
-            for (const point of feature.shape.points) {
-              expect(Math.abs(stationOf(point))).toBeLessThanOrEqual(half + 0.01)
-            }
+            if (closed)
+              for (const point of feature.shape.points) {
+                expect(Math.abs(stationOf(point))).toBeLessThanOrEqual(half + 0.01)
+              }
             const key = feature.shape.points
               .map((point) => `${point[0].toFixed(1)},${point[1].toFixed(1)}`)
               .join('|')
