@@ -16,7 +16,7 @@ const FIXTURES = [
   })),
 ] as const
 
-function close(a: number, b: number, tolerance = 0.05): boolean {
+function close(a: number, b: number, tolerance = 1e-9): boolean {
   return Math.abs(a - b) <= tolerance
 }
 
@@ -61,8 +61,8 @@ describe('NC → PartIR → NC', () => {
           const sourceStation = station(part, expected.face, point[1])
           const outputStation = station(part, actual.face, other[1])
           expect(outputStation).not.toBeNull()
-          expect(close(outputStation ?? 0, sourceStation ?? 0, 0.1)).toBe(true)
-          expect(close(other[0], point[0], 0.1)).toBe(true)
+          expect(close(outputStation ?? 0, sourceStation ?? 0, 1e-9)).toBe(true)
+          expect(close(other[0], point[0], 1e-9)).toBe(true)
           expect(close(actual.radii?.[pointIndex] ?? 0, expected.radii?.[pointIndex] ?? 0)).toBe(
             true,
           )
@@ -81,17 +81,17 @@ describe('NC → PartIR → NC', () => {
         const sourceStation = station(part, expected.face, expected.y)
         const outputStation = station(part, actual.face, actual.y)
         expect(outputStation).not.toBeNull()
-        expect(close(outputStation ?? 0, sourceStation ?? 0, 0.1)).toBe(true)
-        expect(close(actual.x, expected.x, 0.1)).toBe(true)
-        expect(close(actual.diameter, expected.diameter, 0.1)).toBe(true)
+        expect(close(outputStation ?? 0, sourceStation ?? 0, 1e-9)).toBe(true)
+        expect(close(actual.x, expected.x, 1e-9)).toBe(true)
+        expect(close(actual.diameter, expected.diameter, 1e-9)).toBe(true)
         const expectedSlot = expected.slot ? slotOffset(expected.slot) : null
         const actualSlot = actual.slot ? slotOffset(actual.slot) : null
         if (expectedSlot) {
           expect(actualSlot).not.toBeNull()
           const expectedFar = station(part, expected.face, expected.y + expectedSlot[1])
           const actualFar = station(part, actual.face, actual.y + (actualSlot?.[1] ?? 0))
-          expect(close(actualFar ?? 0, expectedFar ?? 0, 0.1)).toBe(true)
-          expect(close(actual.x + (actualSlot?.[0] ?? 0), expected.x + expectedSlot[0], 0.1)).toBe(
+          expect(close(actualFar ?? 0, expectedFar ?? 0, 1e-9)).toBe(true)
+          expect(close(actual.x + (actualSlot?.[0] ?? 0), expected.x + expectedSlot[0], 1e-9)).toBe(
             true,
           )
         } else {
@@ -104,7 +104,7 @@ describe('NC → PartIR → NC', () => {
         const actual = after.notches[index]
         if (!actual) throw new Error(`missing notch ${index}`)
         expect(actual.type).toBe(expected.type)
-        expect(close(actual.x, expected.x, 0.1)).toBe(true)
+        expect(close(actual.x, expected.x, 1e-9)).toBe(true)
         expect(
           close(
             station(part, actual.face, actual.y) ?? 0,
@@ -131,7 +131,7 @@ describe('NC → PartIR → NC', () => {
               0.1,
             ),
           ).toBe(true)
-          expect(close(other[0], point[0], 0.1)).toBe(true)
+          expect(close(other[0], point[0], 1e-9)).toBe(true)
         }
       }
     })

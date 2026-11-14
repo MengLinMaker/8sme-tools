@@ -27,6 +27,9 @@ import {
 
 const n2 = (value: number): string => (Math.abs(value) < 0.005 ? '0.00' : value.toFixed(2))
 
+/** Header values are not face geometry; preserve their authored precision instead of rounding. */
+const headerNumber = (value: number): string => Number(value.toFixed(6)).toString()
+
 interface FacePoint {
   face: NcFace
   x: number
@@ -248,8 +251,8 @@ export function partIrToNc(part: PartIr): string {
     `  ${part.quantity}`,
     `  ${part.profile}`,
     `  ${part.profileType}`,
-    `    ${n2(part.length)}`,
-    ...part.dimensions.map((value) => `    ${n2(value)}`),
+    `    ${headerNumber(part.length)}`,
+    ...part.dimensions.map((value) => `    ${headerNumber(value)}`),
   ]
 
   const blocks: string[] = []

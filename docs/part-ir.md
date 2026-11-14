@@ -33,10 +33,12 @@ No provenance, confidence, source blobs or duplicate interpretations. Importers 
 
 ## Round-trip contracts
 
-- **NC → IR → NC: strict at the semantic level.** Same contours, radii, bevels, refs, holes/slots,
-  notches, marks, quantity and dimensions. Output is a clean canonical NC, not byte-identical.
-  At a shared face edge the face letter may legitimately canonicalise to the adjacent face; compare
-  the **chart station**, not the letter. Small mitre/corner overshoots are extrapolated, not clamped.
+- **NC → IR → NC: numerically exact at DSTV precision.** Every contour/hole/notch/mark station,
+  along-coordinate, radius, bevel, ref and header value round-trips with **0.0 mm** difference;
+  `toNc.test.ts` asserts this with a `1e-9` tolerance. Output is a clean canonical NC, not
+  byte-identical. At a shared face edge the face letter may legitimately canonicalise to the
+  adjacent face; compare the **chart station**, not the letter. Small mitre/corner overshoots are
+  extrapolated, not clamped.
 - **NCEP → IR → NCEP: ideal at part level.** Exact package reproduction is not expected
   (Adobe/Technology/section presentation); compare section, cuts, holes, marks and quantity.
   The importer/exporter round-trip is covered by `toNcep.test.ts`.
