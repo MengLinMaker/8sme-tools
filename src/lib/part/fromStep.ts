@@ -9,7 +9,12 @@ import type { NcFace } from '@/lib/parsers/ncGeometry'
 import { brepCutSegments, type Vec3 } from '@/lib/step/cutEdges'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { profileTypeFor, type SeatedStepGeometry, seatedStepGeometry } from '@/lib/wisecam/fromStep'
-import { centeredStationFor, type UnrolledLayout, unrolledLayout } from '@/lib/wisecam/layout'
+import {
+  centeredStationFor,
+  centeredStationRange,
+  type UnrolledLayout,
+  unrolledLayout,
+} from '@/lib/wisecam/layout'
 import { developStepCutEdges } from '@/lib/wisecam/surface'
 import { centredStation, type PartChart, type PartFeature, type PartIr, type UvPoint } from './ir'
 
@@ -261,6 +266,17 @@ function brepProjectedRuns(
       acrossSign: ncAuthoredAcrossSign(frame, face),
     }
   })
+  const boundaries: number[] = []
+  for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
+    const range = centeredStationRange(layout, face)
+    if (range) boundaries.push(range[0], range[1])
+  }
+  const snap = (station: number): number => {
+    for (const boundary of boundaries) {
+      if (Math.abs(station - boundary) <= 1.5) return boundary
+    }
+    return station
+  }
   const segments = brepCutSegments(
     seated.faces,
     section,
@@ -303,7 +319,7 @@ function brepProjectedRuns(
         plane.face,
         plane.halfSpan + plane.acrossSign * dot3(point, plane.spanVec),
       )
-      return station == null ? null : [station, dot3(point, seated.memberAxis) + alongOffset]
+      return station == null ? null : [snap(station), dot3(point, seated.memberAxis) + alongOffset]
     }
     const a = map(0)
     const b = map(3)
