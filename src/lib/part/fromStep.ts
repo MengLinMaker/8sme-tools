@@ -280,11 +280,12 @@ function brepProjectedRuns(
       ((segment.points[1] as number) + (segment.points[4] as number)) / 2,
       ((segment.points[2] as number) + (segment.points[5] as number)) / 2,
     ]
+    const identityPoint = segment.faceCenter ?? mid
     for (const entry of planes) {
       if (Math.abs(dot3(entry.normal, segment.faceNormal)) < 0.98) continue
-      // Parallel faces (outer vs inner flange/web) share a normal; the exact plane offset picks
-      // the right one. Picking the first match mis-stations whole cuts.
-      const distance = Math.abs(dot3(mid, entry.normal) - entry.q)
+      // Parallel faces (outer vs inner flange/web) share a normal; the exact target-face centre
+      // offset identifies the manufacturing face once for the whole segment.
+      const distance = Math.abs(dot3(identityPoint, entry.normal) - entry.q)
       if (distance < bestDistance) {
         bestDistance = distance
         plane = entry

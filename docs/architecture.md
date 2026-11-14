@@ -406,8 +406,9 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
   drops half the PFC end cut.
 - **Open-section STEP IR is generated from `brepCutSegments`** — the same projected 3-D
   segments the viewer draws — not from a second `developStepCutEdges` detection. Carry each
-  segment's projected stock-face normal and map it through the DSTV plane; do not re-classify or
-  re-project it in the IR path.
+  segment's projected stock-face **normal and centre**, identify that manufacturing face once
+  (normal + exact plane offset), then map every point through that one DSTV face. Do not re-classify
+  or re-project per point.
 - **Direct BREP wire development was tried and rejected** for tubes: mapping raw wire points to
   the nearest DSTV plane mis-stations rounded corners. Keep the cut-plane projection plus run
   merging; do not reintroduce a second wire-to-face mapping without a tube-corner regression.

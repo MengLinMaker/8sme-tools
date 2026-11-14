@@ -52,6 +52,8 @@ export interface CutEdgeSegment {
   points: number[]
   /** Stock face plane this segment was projected onto (seated frame). */
   faceNormal?: Vec3 | null
+  /** A point on that same stock face, for exact face identification. */
+  faceCenter?: Vec3 | null
 }
 
 export interface ClassifyCutEdgesOptions {
@@ -590,6 +592,7 @@ export function brepCutSegments(
     thickness: number,
     bevels: Bevel[],
     faceNormal: Vec3 | null,
+    faceCenter: Vec3 | null,
   ): void => {
     const value = Math.round(thickness * 10) / 10
     for (let k = 0, s = 0; k + 5 < points.length; k += 3, s++) {
@@ -599,6 +602,7 @@ export function brepCutSegments(
         bevel: Math.round(bevel.angle * 10) / 10,
         bevelDir: bevel.dir,
         faceNormal,
+        faceCenter,
         points: [
           points[k] as number,
           points[k + 1] as number,
@@ -650,7 +654,13 @@ export function brepCutSegments(
         })
         if (!wire.enclosed && !transverseCut) continue
         if (face.planar) {
-          pushSegments(edge.points, ownThickness, edgeBevels(edge, face.normal), face.normal)
+          pushSegments(
+            edge.points,
+            ownThickness,
+            edgeBevels(edge, face.normal),
+            face.normal,
+            face.center,
+          )
         } else {
           const cutIndex = edge.neighbours.find((n) => !stock[n])
           const cutFace = cutIndex == null ? null : (faces[cutIndex] ?? null)
@@ -660,6 +670,7 @@ export function brepCutSegments(
             projected.plane ? thicknessOf(projected.plane) : ownThickness,
             edgeBevels(edge, projected.plane?.normal ?? face.normal),
             projected.plane?.normal ?? null,
+            projected.plane?.center ?? null,
           )
         }
       }
