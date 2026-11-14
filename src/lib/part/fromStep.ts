@@ -6,7 +6,7 @@ import {
   resolveFaceSign,
 } from '@/lib/parsers/ncFaces'
 import type { NcFace } from '@/lib/parsers/ncGeometry'
-import type { Vec3 } from '@/lib/step/cutEdges'
+import { brepCutSegments, type Vec3 } from '@/lib/step/cutEdges'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { profileTypeFor, type SeatedStepGeometry, seatedStepGeometry } from '@/lib/wisecam/fromStep'
 import { centeredStationFor, type UnrolledLayout, unrolledLayout } from '@/lib/wisecam/layout'
@@ -236,6 +236,82 @@ function cylinderFeatures(
   return features
 }
 
+/** Converts the pre-IR open-section cut segments (the 3-D projection) directly into IR runs. */
+function brepProjectedRuns(
+  seated: SeatedStepGeometry,
+  layout: UnrolledLayout,
+  frame: ReturnType<typeof frameForProfile>,
+  section: [number, number][],
+  innerSection: [number, number][] | undefined,
+  alongOffset: number,
+): UvPoint[][] {
+  const planes = (['v', 'o', 'u', 'h'] as NcFace[]).map((face) => {
+    const spanAxis = faceSpanAxis(frame, face)
+    const axis = (1 - spanAxis) as 0 | 1
+    const sign = resolveFaceSign(frame, section, face)
+    const base = axis === 0 ? seated.xAxis : seated.yAxis
+    const spanVec = spanAxis === 0 ? seated.xAxis : seated.yAxis
+    return {
+      face,
+      sign,
+      normal: [base[0] * sign, base[1] * sign, base[2] * sign] as Vec3,
+      spanVec: spanVec as Vec3,
+      q: faceHalf(frame, axis),
+      halfSpan: faceHalf(frame, spanAxis),
+      acrossSign: ncAuthoredAcrossSign(frame, face),
+    }
+  })
+  const segments = brepCutSegments(
+    seated.faces,
+    section,
+    innerSection ? [innerSection] : [],
+    seated.xAxis,
+    seated.yAxis,
+    seated.memberAxis,
+    null,
+  )
+  const runs: UvPoint[][] = []
+  for (const segment of segments) {
+    if (!segment.faceNormal) continue
+    let plane: (typeof planes)[number] | undefined
+    let bestScore = 0.98
+    let bestDistance = Number.POSITIVE_INFINITY
+    const mid: Vec3 = [
+      ((segment.points[0] as number) + (segment.points[3] as number)) / 2,
+      ((segment.points[1] as number) + (segment.points[4] as number)) / 2,
+      ((segment.points[2] as number) + (segment.points[5] as number)) / 2,
+    ]
+    for (const entry of planes) {
+      const score = Math.abs(dot3(entry.normal, segment.faceNormal))
+      if (score < bestScore) continue
+      const distance = Math.abs(dot3(mid, entry.normal) - entry.q)
+      if (score > bestScore + 1e-9 || distance < bestDistance) {
+        bestScore = score
+        bestDistance = distance
+        plane = entry
+      }
+    }
+    if (!plane) continue
+    const map = (index: number): UvPoint | null => {
+      const point: Vec3 = [
+        segment.points[index] as number,
+        segment.points[index + 1] as number,
+        segment.points[index + 2] as number,
+      ]
+      const station = centeredStationFor(
+        layout,
+        plane.face,
+        plane.halfSpan + plane.acrossSign * dot3(point, plane.spanVec),
+      )
+      return station == null ? null : [station, dot3(point, seated.memberAxis) + alongOffset]
+    }
+    const a = map(0)
+    const b = map(3)
+    if (a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.05) runs.push([a, b])
+  }
+  return runs
+}
+
 /** Joins runs whose endpoints meet at a face boundary, so an end cut is one continuous polyline. */
 function mergeRuns(runs: UvPoint[][], tolerance = 5): UvPoint[][] {
   const list = runs.map((run) => [...run])
@@ -359,22 +435,23 @@ export function partIrFromStepGeometry(
   if (!layout) return null
   const section = options.section
   const frame = frameForProfile(options.profile, section)
-  const cuts = developStepCutEdges(
-    { ...seated, section, frame, layout },
-    {
-      radius: options.radius,
-      alongOffset: seated.alongOffset,
-      includeInner: profileType === 'U',
-    },
-  )
-  const runs: UvPoint[][] = []
-  for (const cut of cuts) {
-    const points: UvPoint[] = cut.points.map(([station, along]) => [
-      centredStation(layout, station),
-      along,
-    ])
-    if (points.length >= 2) runs.push(points)
-  }
+  const openRuns =
+    profileType === 'M'
+      ? []
+      : brepProjectedRuns(seated, layout, frame, section, options.innerSection, seated.alongOffset)
+  const runs: UvPoint[][] =
+    openRuns.length > 0
+      ? openRuns
+      : developStepCutEdges(
+          { ...seated, section, frame, layout },
+          {
+            radius: options.radius,
+            alongOffset: seated.alongOffset,
+            includeInner: profileType === 'U',
+          },
+        ).map((cut) =>
+          cut.points.map(([station, along]) => [centredStation(layout, station), along] as UvPoint),
+        )
   const features: PartFeature[] = cylinderFeatures(
     seated,
     layout,
