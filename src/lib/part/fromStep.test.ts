@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { nw30Bottom, nw31Top } from '@test/fixtures'
+import { fixture, nw30Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { partSectionForCode } from '@/lib/sections/stock'
@@ -313,4 +313,68 @@ describe('m71 STEP holes and slots match NC', () => {
     },
     120_000,
   )
+})
+
+describe('STEP IR UV containment', () => {
+  for (const mark of ['m137', 'm176']) {
+    const ncPath = fixture('part-ir', `${mark}.nc1`)
+    const stpPath = fixture('part-ir', `${mark}.stp`)
+    it.skipIf(!existsSync(ncPath) || !existsSync(stpPath))(
+      `${mark}: every cut/slot/hole station stays inside the chart`,
+      async () => {
+        const header = parseDstv(readFileSync(ncPath, 'utf8')).header
+        const section = partSectionForCode(header.profile, header.dimensions)
+        const layout = unrolledLayout(header.profileType, header.dimensions)
+        if (!section || !layout) throw new Error('no section/layout')
+        const ir = partIrFromStepMesh(
+          await meshStepFile(mark, new Uint8Array(readFileSync(stpPath))),
+          {
+            mark,
+            profile: header.profile,
+            dimensions: header.dimensions,
+            length: header.length,
+            section: section.points,
+            innerSection: section.holes?.[0],
+            radius: header.dimensions[4] ?? 0,
+          },
+        )
+        if (!ir) throw new Error('no STEP IR')
+        const half = layout.seam / 2
+        const stationOf = (point: UvPoint): number => point[0]
+        const seen = new Set<string>()
+        for (const feature of ir.features) {
+          if (feature.kind === 'cut' && feature.shape.form === 'polyline') {
+            for (const point of feature.shape.points) {
+              expect(Math.abs(stationOf(point))).toBeLessThanOrEqual(half + 0.01)
+            }
+            const key = feature.shape.points
+              .map((point) => `${point[0].toFixed(1)},${point[1].toFixed(1)}`)
+              .join('|')
+            const reverse = [...feature.shape.points]
+              .reverse()
+              .map((point) => `${point[0].toFixed(1)},${point[1].toFixed(1)}`)
+              .join('|')
+            const signature = key < reverse ? key : reverse
+            expect(seen.has(signature)).toBe(false)
+            seen.add(signature)
+          }
+          if (feature.kind === 'hole' && feature.shape.form === 'circle') {
+            expect(Math.abs(feature.shape.center[0] - feature.shape.radius)).toBeLessThanOrEqual(
+              half + 0.01,
+            )
+            expect(Math.abs(feature.shape.center[0] + feature.shape.radius)).toBeLessThanOrEqual(
+              half + 0.01,
+            )
+          }
+          if (feature.kind === 'slot' && feature.shape.form === 'slot') {
+            for (const point of [feature.shape.center, feature.shape.far]) {
+              expect(Math.abs(point[0] - feature.shape.radius)).toBeLessThanOrEqual(half + 0.01)
+              expect(Math.abs(point[0] + feature.shape.radius)).toBeLessThanOrEqual(half + 0.01)
+            }
+          }
+        }
+      },
+      120_000,
+    )
+  }
 })

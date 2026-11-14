@@ -266,17 +266,8 @@ function brepProjectedRuns(
       acrossSign: ncAuthoredAcrossSign(frame, face),
     }
   })
-  const boundaries: number[] = []
-  for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
-    const range = centeredStationRange(layout, face)
-    if (range) boundaries.push(range[0], range[1])
-  }
-  const snap = (station: number): number => {
-    for (const boundary of boundaries) {
-      if (Math.abs(station - boundary) <= 1.5) return boundary
-    }
-    return station
-  }
+  const ranges = new Map<NcFace, [number, number] | null>()
+  for (const entry of planes) ranges.set(entry.face, centeredStationRange(layout, entry.face))
   const segments = brepCutSegments(
     seated.faces,
     section,
@@ -314,12 +305,32 @@ function brepProjectedRuns(
         segment.points[index + 1] as number,
         segment.points[index + 2] as number,
       ]
-      const station = centeredStationFor(
-        layout,
-        plane.face,
-        plane.halfSpan + plane.acrossSign * dot3(point, plane.spanVec),
-      )
-      return station == null ? null : [snap(station), dot3(point, seated.memberAxis) + alongOffset]
+      // Map through the face whose station range actually contains this point. A trace that runs
+      // past its target face belongs to the adjacent face; do not clamp it into the wrong one.
+      let best: { station: number; distance: number; preferred: boolean } | null = null
+      for (const entry of planes) {
+        const station = centeredStationFor(
+          layout,
+          entry.face,
+          entry.halfSpan + entry.acrossSign * dot3(point, entry.spanVec),
+        )
+        if (station == null) continue
+        const range = ranges.get(entry.face)
+        if (!range) continue
+        const inside = station >= range[0] - 0.5 && station <= range[1] + 0.5
+        const distance = Math.abs(dot3(point, entry.normal) - entry.q)
+        const preferred = entry.face === plane.face
+        if (!inside) continue
+        if (
+          !best ||
+          (preferred && !best.preferred) ||
+          (preferred === best.preferred && distance < best.distance)
+        ) {
+          best = { station, distance, preferred }
+        }
+      }
+      if (!best) return null
+      return [best.station, dot3(point, seated.memberAxis) + alongOffset]
     }
     const a = map(0)
     const b = map(3)

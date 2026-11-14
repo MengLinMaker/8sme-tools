@@ -400,9 +400,10 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
   are a slot. Intersect the cylinder **axis with the entry face plane** for the centre; do not use
   the mid-wall centre. Unpaired open cylinders are rounded cuts, not holes. This is what stopped
   PFC holes from disappearing when rim chaining failed.
-- **Snap face-boundary endpoints:** a projected point within 1.5 mm of a layout face boundary is
-  snapped to the exact boundary station, so cut ends on adjacent faces meet instead of leaving a
-  sub-mm gap. The SVG renderer draws IR coordinates exactly; it does not offset faces.
+- **Face-region mapping:** a projected point is mapped through the DSTV face whose station interval
+  actually contains it. A cut-plane trace that runs past its target face belongs to the adjacent
+  face; do not clamp it into the wrong region. The SVG renderer draws IR coordinates exactly; it
+  does not offset faces.
 - **End cuts must be continuous.** Per-face chaining leaves breaks at face boundaries. Merge cut
   runs whose endpoints meet (up to 5 mm) before emitting IR features. For open sections (`U`),
   include the channel-side faces in the projection (`includeInner`); the outer-outline-only test
