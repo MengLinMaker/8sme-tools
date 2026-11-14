@@ -391,7 +391,11 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
   `dot(face outward normal, cutCylinder.center − sectionCentroid) > 0` — the nearest outer face.
   This reproduces m71 (`u` for Ø14 holes, `o` for Ø10 slots) without reading NC.
 - **Classify closed rims as holes/slots**, then drop any cut run wholly inside one. Do not leave
-  rim/wall duplicates as cuts.
+  rim/wall duplicates as cuts. Better: take holes/slots from the BREP **cylinder metadata**
+  (`cylinderFeatures`): a closed-rim cylinder is a hole, two open half-cylinders one diameter apart
+  are a slot. Intersect the cylinder **axis with the entry face plane** for the centre; do not use
+  the mid-wall centre. Unpaired open cylinders are rounded cuts, not holes. This is what stopped
+  PFC holes from disappearing when rim chaining failed.
 - **Pipelines stay independent.** STEP never reads NC. Only the explicit NC → STEP path shares
   code. Do not use NC face letters to choose a STEP rim.
 - NC outer contours include stock edges; STEP IR only has cut rims. Compare **end cuts** and
