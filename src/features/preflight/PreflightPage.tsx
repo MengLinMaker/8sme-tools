@@ -806,14 +806,6 @@ export function PreflightPage() {
     return wall > 0 ? 2.5 * wall : 0
   }, [stepIrGuess, stepIrSection])
 
-  const stepViewerStock = useMemo<StockOutline | null>(() => {
-    if (!stepIrSection || stepIrSection.points.length < 3) return null
-    return {
-      points: stepIrSection.points,
-      holes: stepIrSection.holes,
-      label: stepIrProfile ?? 'section',
-    }
-  }, [stepIrSection, stepIrProfile])
   const stepFaceFrame = useMemo(
     () =>
       stepIrProfile && stepIrSection ? frameForProfile(stepIrProfile, stepIrSection.points) : null,
