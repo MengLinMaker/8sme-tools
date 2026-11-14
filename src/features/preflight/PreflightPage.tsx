@@ -985,10 +985,7 @@ export function PreflightPage() {
       cancelled = true
     }
   }, [viewing, stepBytes, stepIrProfile, stepIrDims, stepIrSection, stepLengths, stepIrRadius])
-  const viewingStepIrGeom = useMemo(
-    () => (viewingStepIr ? partIrToNcGeometry(viewingStepIr) : null),
-    [viewingStepIr],
-  )
+
   // Legend chips only for the mark channels the parsed NC actually carries (`SI` etch,
   // `PU`/`KO` scribe), so the key never promises lines the viewer cannot draw.
   const viewingMarkKinds = useMemo(() => {
@@ -4288,7 +4285,6 @@ export function PreflightPage() {
                             ncSection={stepIrSection?.points ?? null}
                             faceFrame={stepFaceFrame}
                             cutEdges={stepCutEdgeOptions}
-                            irCutGeometry={viewingStepIrGeom}
                             visibleSpans={visibleSpans}
                             visibleRuns={visibleRuns}
                             highlightRun={highlightRun}
