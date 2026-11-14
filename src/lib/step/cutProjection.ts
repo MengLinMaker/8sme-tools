@@ -97,19 +97,10 @@ export function projectCutEdgesToFaces(
   // A stock face is lengthwise **and** lies on the section outline (the outer surface). The tube's
   // inner walls are also lengthwise, so without the outline test their cut edges would be emitted
   // too — the same cut drawn twice on the outer face.
-  const stock = faces.map((face) => {
-    if (Math.abs(dot(face.normal, memberAxis)) > 0.3) return false
-    const samples = face.samples
-    if (samples.length === 0) return false
-    let on = 0
-    let total = 0
-    for (let i = 0; i + 2 < samples.length; i += 3) {
-      const s: Vec3 = [samples[i] as number, samples[i + 1] as number, samples[i + 2] as number]
-      total++
-      if (distanceToOutline(section, [dot(s, xAxis), dot(s, yAxis)]) <= 2) on++
-    }
-    return total > 0 && on / total >= 0.7
-  })
+  // A stock face runs lengthwise. Do **not** require its samples to fit the catalogue outline:
+  // real PFC/web faces can miss it, and that silently dropped all their cut edges. The outer-skin
+  // test is applied per edge below instead, which also excludes tube inner walls.
+  const stock = faces.map((face) => Math.abs(dot(face.normal, memberAxis)) <= 0.3)
   const crossAxis = (axis: 0 | 1): Vec3 => (axis === 0 ? xAxis : yAxis)
 
   // Each DSTV face's nominal plane: outward normal axis + side, plane offset, and span axis.
@@ -140,6 +131,15 @@ export function projectCutEdgesToFaces(
         if (cutIndex == null) continue
         const cut = faces[cutIndex]
         if (!cut) continue
+        const count = edge.points.length / 3
+        if (count === 0) continue
+        const midIndex = Math.floor(count / 2) * 3
+        const mid: Vec3 = [
+          edge.points[midIndex] as number,
+          edge.points[midIndex + 1] as number,
+          edge.points[midIndex + 2] as number,
+        ]
+        if (distanceToOutline(section, [dot(mid, xAxis), dot(mid, yAxis)]) > 2.5) continue
         const planarCut = cut.planar
         const nCut = cut.normal
         const cCut = dot(nCut, cut.center)
@@ -147,7 +147,6 @@ export function projectCutEdgesToFaces(
 
         // Project this edge's points onto each face, then emit the consecutive pairs that land on
         // the same face as segments (so the caller can draw clean polylines).
-        const count = edge.points.length / 3
         const onFace = new Map<NcFace, (FacePoint | null)[]>()
         for (const plane of planes) onFace.set(plane.face, new Array(count).fill(null))
         for (let s = 0; s < count; s++) {

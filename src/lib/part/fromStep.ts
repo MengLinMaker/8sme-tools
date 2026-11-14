@@ -6,6 +6,43 @@ import { unrolledLayout } from '@/lib/wisecam/layout'
 import { developStepRimEdges } from '@/lib/wisecam/surface'
 import { centredStation, type PartChart, type PartFeature, type PartIr, type UvPoint } from './ir'
 
+function distanceToSegment(point: UvPoint, a: UvPoint, b: UvPoint): number {
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  const length2 = dx * dx + dy * dy
+  let t = length2 > 0 ? ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / length2 : 0
+  t = Math.max(0, Math.min(1, t))
+  return Math.hypot(point[0] - (a[0] + t * dx), point[1] - (a[1] + t * dy))
+}
+
+/** Drops STEP rim segments that repeat an already-emitted segment (corner faces overlap flats). */
+function dedupeRuns(runs: UvPoint[][], tolerance = 0.3): UvPoint[][] {
+  const kept: [UvPoint, UvPoint][] = []
+  const out: UvPoint[][] = []
+  for (const run of runs) {
+    let current: UvPoint[] = []
+    for (let index = 0; index + 1 < run.length; index++) {
+      const a = run[index] as UvPoint
+      const b = run[index + 1] as UvPoint
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.05) continue
+      const repeated = kept.some(
+        ([ka, kb]) =>
+          distanceToSegment(a, ka, kb) < tolerance && distanceToSegment(b, ka, kb) < tolerance,
+      )
+      if (repeated) {
+        if (current.length >= 2) out.push(current)
+        current = []
+        continue
+      }
+      kept.push([a, b])
+      if (current.length === 0) current.push(a)
+      current.push(b)
+    }
+    if (current.length >= 2) out.push(current)
+  }
+  return out
+}
+
 /**
  * STEP → PartIR (cut boundaries).
  *
@@ -42,13 +79,16 @@ export function partIrFromStepGeometry(
     { ...seated, section, frame, layout },
     { radius: options.radius, alongOffset: seated.alongOffset },
   )
-  const features: PartFeature[] = []
+  const runs: UvPoint[][] = []
   for (const cut of cuts) {
     const points: UvPoint[] = cut.points.map(([station, along]) => [
       centredStation(layout, station),
       along,
     ])
-    if (points.length < 2) continue
+    if (points.length >= 2) runs.push(points)
+  }
+  const features: PartFeature[] = []
+  for (const points of dedupeRuns(runs)) {
     features.push({
       kind: 'cut',
       chart: 'front',

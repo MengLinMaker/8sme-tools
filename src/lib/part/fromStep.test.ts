@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { nw31Top } from '@test/fixtures'
+import { nw30Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { partSectionForCode } from '@/lib/sections/stock'
@@ -17,6 +17,11 @@ setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 const m117 = {
   nc: nw31Top('NC files', 'm117.nc1'),
   stp: nw31Top('STP files', 'm117.stp'),
+}
+
+const m71 = {
+  nc: nw30Bottom('m71.nc1'),
+  stp: nw30Bottom('m71.stp'),
 }
 
 function pointSeg(point: UvPoint, a: UvPoint, b: UvPoint): number {
@@ -75,6 +80,81 @@ describe('STEP → PartIR', () => {
       const svg = partIrSvg(stepIr)
       expect(svg).toContain('data-layer="section"')
       expect(svg).toContain('data-layer="chart:front"')
+    },
+    120_000,
+  )
+})
+
+function sampleRuns(runs: UvPoint[][]): UvPoint[] {
+  const out: UvPoint[] = []
+  for (const run of runs) {
+    for (let index = 0; index + 1 < run.length; index++) {
+      const a = run[index] as UvPoint
+      const b = run[index + 1] as UvPoint
+      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1])))
+      for (let step = 0; step < steps; step++) {
+        const t = step / steps
+        out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])
+      }
+    }
+  }
+  return out
+}
+
+function deviation(from: UvPoint[], to: UvPoint[]): { mean: number; max: number } {
+  let sum = 0
+  let max = 0
+  for (const point of from) {
+    let best = Number.POSITIVE_INFINITY
+    for (let index = 0; index + 1 < to.length; index++)
+      best = Math.min(best, pointSeg(point, to[index] as UvPoint, to[index + 1] as UvPoint))
+    sum += best
+    max = Math.max(max, best)
+  }
+  return { mean: from.length ? sum / from.length : 0, max }
+}
+
+describe('m71 strict STEP↔NC IR', () => {
+  it.skipIf(!existsSync(m71.nc) || !existsSync(m71.stp))(
+    'develops the same end cuts as the NC (bevel is identical)',
+    async () => {
+      const ncText = readFileSync(m71.nc, 'utf8')
+      const header = parseDstv(ncText).header
+      const section = partSectionForCode(header.profile, header.dimensions)
+      if (!section) throw new Error('no section')
+      const ncIr = partIrFromNc(ncText)
+      if (!ncIr) throw new Error('no NC IR')
+      const meshed = await meshStepFile('m71-part-ir', new Uint8Array(readFileSync(m71.stp)))
+      const stepIr = partIrFromStepMesh(meshed, {
+        mark: 'm71-step',
+        profile: header.profile,
+        dimensions: header.dimensions,
+        length: header.length,
+        section: section.points,
+        innerSection: section.innerSection ?? section.holes?.[0],
+        radius: header.dimensions[4] ?? 0,
+      })
+      if (!stepIr) throw new Error('no STEP IR')
+
+      const nearEnd = (point: UvPoint): boolean => point[1] < 80 || point[1] > header.length - 80
+      const ncEnds = [...(ncIr.startCut ?? []), ...(ncIr.endCut ?? [])]
+      const stepEndRuns = stepIr.features.flatMap((feature) =>
+        feature.kind === 'cut' &&
+        feature.shape.form === 'polyline' &&
+        feature.shape.points.some(nearEnd)
+          ? [feature.shape.points]
+          : [],
+      )
+      const stepEnds = sampleRuns(stepEndRuns)
+      expect(ncEnds.length).toBeGreaterThan(2)
+      expect(stepEnds.length).toBeGreaterThan(0)
+
+      const ncToStep = deviation(ncEnds, stepEnds)
+      const stepToNc = deviation(stepEnds, ncEnds)
+      expect(ncToStep.mean).toBeLessThan(1)
+      expect(ncToStep.max).toBeLessThan(4)
+      expect(stepToNc.mean).toBeLessThan(1)
+      expect(stepToNc.max).toBeLessThan(4)
     },
     120_000,
   )
