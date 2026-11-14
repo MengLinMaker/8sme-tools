@@ -4281,10 +4281,11 @@ export function PreflightPage() {
                           <PartViewer
                             name={viewing.step?.path ?? t('preflight.viewer.stepPath')}
                             bytes={stepBytes}
-                            stock={stepViewerStock}
+                            stock={viewerStock}
                             bus={orbitBus}
                             highlightStray
                             smoothLines
+                            alignReference={manufactured}
                             seatProfile={stepIrSection?.points ?? null}
                             stepSeat={stepIrGuess?.seat ?? null}
                             focus={findingFocus}
