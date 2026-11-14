@@ -98,6 +98,29 @@ function faceStation(
   return station == null ? null : [station, dot3(point, memberAxis) + alongOffset]
 }
 
+/**
+ * Spec-constrained variant for cut segments: clamp the authored across coordinate to the face's
+ * exact 0…width interval before mapping. This forces each face section to start/end on the
+ * designated IR face boundary instead of spilling into a neighbour.
+ */
+function faceStationClamped(
+  face: NcFace,
+  point: Vec3,
+  spanVec: Vec3,
+  layout: UnrolledLayout,
+  frame: ReturnType<typeof frameForProfile>,
+  alongOffset: number,
+  memberAxis: Vec3,
+): UvPoint | null {
+  const spanAxis = faceSpanAxis(frame, face)
+  const width = layout.faces[face]?.width ?? faceHalf(frame, spanAxis) * 2
+  const authored =
+    faceHalf(frame, spanAxis) + ncAuthoredAcrossSign(frame, face) * dot3(point, spanVec)
+  const y = Math.max(0, Math.min(width, authored))
+  const station = centeredStationFor(layout, face, y)
+  return station == null ? null : [station, dot3(point, memberAxis) + alongOffset]
+}
+
 /** Holes/slots from the BREP cylinder faces themselves, not from chained rim loops. */
 function cylinderFeatures(
   seated: SeatedStepGeometry,
@@ -329,7 +352,7 @@ function brepProjectedRuns(
         segment.points[index + 1] as number,
         segment.points[index + 2] as number,
       ]
-      return faceStation(
+      return faceStationClamped(
         plane.face,
         point,
         plane.spanVec,
@@ -339,31 +362,8 @@ function brepProjectedRuns(
         seated.memberAxis,
       )
     }
-    let a = mapPoint(0)
-    let b = mapPoint(3)
-    const range = ranges.get(plane.face)
-    if (range) {
-      const [low, high] = range
-      if (a && b) {
-        const aOutside = a[0] < low || a[0] > high
-        const bOutside = b[0] < low || b[0] > high
-        if (aOutside && bOutside) {
-          if ((a[0] < low && b[0] < low) || (a[0] > high && b[0] > high)) {
-            a = null
-            b = null
-          }
-        } else if (aOutside || bOutside) {
-          const outside = (aOutside ? a : b) as UvPoint
-          const inside = (aOutside ? b : a) as UvPoint
-          const boundary = outside[0] < low ? low : high
-          const span = outside[0] - inside[0]
-          const t = span === 0 ? 0 : (boundary - inside[0]) / span
-          const clipped: UvPoint = [boundary, inside[1] + (outside[1] - inside[1]) * t]
-          if (aOutside) a = clipped
-          else b = clipped
-        }
-      }
-    }
+    const a = mapPoint(0)
+    const b = mapPoint(3)
     if (a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.05) runs.push([a, b])
   }
   return runs
