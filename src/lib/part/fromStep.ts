@@ -3,7 +3,7 @@ import type { NcFace } from '@/lib/parsers/ncGeometry'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { profileTypeFor, type SeatedStepGeometry, seatedStepGeometry } from '@/lib/wisecam/fromStep'
 import { unrolledLayout } from '@/lib/wisecam/layout'
-import { developStepCutEdges } from '@/lib/wisecam/surface'
+import { developStepRimEdges } from '@/lib/wisecam/surface'
 import { centredStation, type PartChart, type PartFeature, type PartIr, type UvPoint } from './ir'
 
 /**
@@ -38,7 +38,7 @@ export function partIrFromStepGeometry(
   if (!layout) return null
   const section = options.section
   const frame = frameForProfile(options.profile, section)
-  const cuts = developStepCutEdges(
+  const cuts = developStepRimEdges(
     { ...seated, section, frame, layout },
     { radius: options.radius, alongOffset: seated.alongOffset },
   )

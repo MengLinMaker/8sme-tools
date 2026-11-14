@@ -711,6 +711,26 @@ export function developStepCutEdges(
   input: StepSurfaceInput,
   options: DevelopStepOptions = {},
 ): NcexCut[] {
+  return developProjectedStepEdges(input, options, false)
+}
+
+/**
+ * STEP → IR variant: develop only the **real B-rep rim** edges. Unlike
+ * {@link developStepCutEdges}, it never projects a cut plane onto the nominal face plane, so the
+ * IR cannot show a line that is absent from the STEP.
+ */
+export function developStepRimEdges(
+  input: StepSurfaceInput,
+  options: DevelopStepOptions = {},
+): NcexCut[] {
+  return developProjectedStepEdges(input, options, true)
+}
+
+function developProjectedStepEdges(
+  input: StepSurfaceInput,
+  options: DevelopStepOptions,
+  preserveRim: boolean,
+): NcexCut[] {
   const projected = projectCutEdgesToFaces(
     input.faces,
     input.section,
@@ -718,7 +738,7 @@ export function developStepCutEdges(
     input.xAxis,
     input.yAxis,
     input.memberAxis,
-    { radius: options.radius ?? 0 },
+    { radius: options.radius ?? 0, preserveRim },
   )
   const cuts: NcexCut[] = []
   for (const face of ['v', 'o', 'u', 'h'] as NcFace[]) {
