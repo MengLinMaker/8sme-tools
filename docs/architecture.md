@@ -400,6 +400,9 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
   are a slot. Intersect the cylinder **axis with the entry face plane** for the centre; do not use
   the mid-wall centre. Unpaired open cylinders are rounded cuts, not holes. This is what stopped
   PFC holes from disappearing when rim chaining failed.
+- **One transform per face:** `faceStation(face, point, …)` is the inverse of `placeNcFace` and is
+  the only station formula. Holes, slots and cut segments all call it; never duplicate the
+  half-span/across-sign maths in a second path.
 - **Face-region mapping:** a projected point is mapped through the DSTV face whose station interval
   actually contains it. A cut-plane trace that runs past its target face belongs to the adjacent
   face; do not clamp it into the wrong region. The SVG renderer draws IR coordinates exactly; it

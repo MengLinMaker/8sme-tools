@@ -78,6 +78,24 @@ function insideFeature(point: UvPoint, feature: PartFeature, tolerance = 0.5): b
 }
 
 const dot3 = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+/** One per-face transform shared by holes and cut segments. */
+function faceStation(
+  face: NcFace,
+  point: Vec3,
+  spanVec: Vec3,
+  layout: UnrolledLayout,
+  frame: ReturnType<typeof frameForProfile>,
+  alongOffset: number,
+  memberAxis: Vec3,
+): UvPoint | null {
+  const spanAxis = faceSpanAxis(frame, face)
+  const station = centeredStationFor(
+    layout,
+    face,
+    faceHalf(frame, spanAxis) + ncAuthoredAcrossSign(frame, face) * dot3(point, spanVec),
+  )
+  return station == null ? null : [station, dot3(point, memberAxis) + alongOffset]
+}
 
 /** Holes/slots from the BREP cylinder faces themselves, not from chained rim loops. */
 function cylinderFeatures(
@@ -167,12 +185,15 @@ function cylinderFeatures(
     const denom = dot3(axis, plane.normal)
     const t = Math.abs(denom) > 0.2 ? (plane.q - dot3(center, plane.normal)) / denom : 0
     const point: Vec3 = [center[0] + t * axis[0], center[1] + t * axis[1], center[2] + t * axis[2]]
-    const station = centeredStationFor(
-      layout,
+    return faceStation(
       plane.face,
-      plane.halfSpan + plane.acrossSign * dot3(point, plane.spanVec),
+      point,
+      plane.spanVec,
+      layout,
+      frame,
+      alongOffset,
+      seated.memberAxis,
     )
-    return station == null ? null : [station, dot3(point, seated.memberAxis) + alongOffset]
   }
 
   const features: PartFeature[] = []
@@ -309,12 +330,17 @@ function brepProjectedRuns(
       // past its target face belongs to the adjacent face; do not clamp it into the wrong one.
       let best: { station: number; distance: number; preferred: boolean } | null = null
       for (const entry of planes) {
-        const station = centeredStationFor(
-          layout,
+        const mapped = faceStation(
           entry.face,
-          entry.halfSpan + entry.acrossSign * dot3(point, entry.spanVec),
+          point,
+          entry.spanVec,
+          layout,
+          frame,
+          alongOffset,
+          seated.memberAxis,
         )
-        if (station == null) continue
+        if (!mapped) continue
+        const station = mapped[0]
         const range = ranges.get(entry.face)
         if (!range) continue
         const inside = station >= range[0] - 0.5 && station <= range[1] + 0.5
