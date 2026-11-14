@@ -320,46 +320,49 @@ function brepProjectedRuns(
       }
     }
     if (!plane) continue
-    const map = (index: number): UvPoint | null => {
+    // One face per segment. Map both ends through that face, then clip at its boundaries; the
+    // adjoining face supplies the rest. Never re-guess a face per point or clamp inside it.
+    const mapPoint = (index: number): UvPoint | null => {
       const point: Vec3 = [
         segment.points[index] as number,
         segment.points[index + 1] as number,
         segment.points[index + 2] as number,
       ]
-      // Map through the face whose station range actually contains this point. A trace that runs
-      // past its target face belongs to the adjacent face; do not clamp it into the wrong one.
-      let best: { station: number; distance: number; preferred: boolean } | null = null
-      for (const entry of planes) {
-        const mapped = faceStation(
-          entry.face,
-          point,
-          entry.spanVec,
-          layout,
-          frame,
-          alongOffset,
-          seated.memberAxis,
-        )
-        if (!mapped) continue
-        const station = mapped[0]
-        const range = ranges.get(entry.face)
-        if (!range) continue
-        const inside = station >= range[0] - 0.5 && station <= range[1] + 0.5
-        const distance = Math.abs(dot3(point, entry.normal) - entry.q)
-        const preferred = entry.face === plane.face
-        if (!inside) continue
-        if (
-          !best ||
-          (preferred && !best.preferred) ||
-          (preferred === best.preferred && distance < best.distance)
-        ) {
-          best = { station, distance, preferred }
+      return faceStation(
+        plane.face,
+        point,
+        plane.spanVec,
+        layout,
+        frame,
+        alongOffset,
+        seated.memberAxis,
+      )
+    }
+    let a = mapPoint(0)
+    let b = mapPoint(3)
+    const range = ranges.get(plane.face)
+    if (range) {
+      const [low, high] = range
+      if (a && b) {
+        const aOutside = a[0] < low || a[0] > high
+        const bOutside = b[0] < low || b[0] > high
+        if (aOutside && bOutside) {
+          if ((a[0] < low && b[0] < low) || (a[0] > high && b[0] > high)) {
+            a = null
+            b = null
+          }
+        } else if (aOutside || bOutside) {
+          const outside = (aOutside ? a : b) as UvPoint
+          const inside = (aOutside ? b : a) as UvPoint
+          const boundary = outside[0] < low ? low : high
+          const span = outside[0] - inside[0]
+          const t = span === 0 ? 0 : (boundary - inside[0]) / span
+          const clipped: UvPoint = [boundary, inside[1] + (outside[1] - inside[1]) * t]
+          if (aOutside) a = clipped
+          else b = clipped
         }
       }
-      if (!best) return null
-      return [best.station, dot3(point, seated.memberAxis) + alongOffset]
     }
-    const a = map(0)
-    const b = map(3)
     if (a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.05) runs.push([a, b])
   }
   return runs

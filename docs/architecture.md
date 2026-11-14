@@ -403,10 +403,10 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
 - **One transform per face:** `faceStation(face, point, …)` is the inverse of `placeNcFace` and is
   the only station formula. Holes, slots and cut segments all call it; never duplicate the
   half-span/across-sign maths in a second path.
-- **Face-region mapping:** a projected point is mapped through the DSTV face whose station interval
-  actually contains it. A cut-plane trace that runs past its target face belongs to the adjacent
-  face; do not clamp it into the wrong region. The SVG renderer draws IR coordinates exactly; it
-  does not offset faces.
+- **Face-region mapping:** identify the target face once per segment, map every point through that
+  face's transform, then **clip the segment at that face's station interval**. The adjoining face
+  supplies the remainder. Do not clamp into a face, re-guess a face per point, or draw past the
+  interval. The SVG renderer draws IR coordinates exactly; it does not offset faces.
 - **End cuts must be continuous.** Per-face chaining leaves breaks at face boundaries. Merge cut
   runs whose endpoints meet (up to 5 mm) before emitting IR features. For open sections (`U`),
   include the channel-side faces in the projection (`includeInner`); the outer-outline-only test
