@@ -107,6 +107,7 @@ import {
   type StepMeasure,
   stepOnlySizeCheck,
 } from '@/lib/step/measure'
+import { detectStepSection } from '@/lib/step/readSection'
 import type { SabreFailure } from '@/lib/step/sabre'
 import {
   getStepWorkerPool,
@@ -912,53 +913,71 @@ export function PreflightPage() {
   useEffect(() => {
     setViewingStepIr(null)
     if (!viewing || !stepBytes) return
-    const profile = stepIrProfile
-    const section = stepIrSection?.points ?? null
-    if (!profile || !section || section.length < 3) return
-    const dims = stepIrDims
-    if (dims.length < 2) return
     let cancelled = false
-    const build = (meshed: import('@/lib/step/mesh').MeshedStep): void => {
-      try {
-        const ir = partIrFromStepMesh(meshed, {
-          mark: `${viewing.mark} · STEP`,
-          profile,
-          dimensions: dims,
-          length: stepLengths.get(viewing.mark) ?? 0,
-          section,
-          innerSection: stepIrSection?.holes?.[0],
-          radius: stepIrRadius,
-        })
-        if (!cancelled) setViewingStepIr(ir)
-      } catch {
-        if (!cancelled) setViewingStepIr(null)
+    const start = (
+      profile: string,
+      dims: number[],
+      section: [number, number][],
+      innerSection: [number, number][] | undefined,
+      radius: number,
+    ): void => {
+      const build = (meshed: import('@/lib/step/mesh').MeshedStep): void => {
+        try {
+          const ir = partIrFromStepMesh(meshed, {
+            mark: `${viewing.mark} · STEP`,
+            profile,
+            dimensions: dims,
+            length: stepLengths.get(viewing.mark) ?? 0,
+            section,
+            innerSection,
+            radius,
+          })
+          if (!cancelled) setViewingStepIr(ir)
+        } catch {
+          if (!cancelled) setViewingStepIr(null)
+        }
       }
+      const cached = peekMeshForViewer(stepBytes)
+      if (cached) {
+        build(cached)
+        return
+      }
+      void meshForViewer(viewing.step?.path ?? viewing.mark, stepBytes)
+        .then(build)
+        .catch(() => {
+          if (!cancelled) setViewingStepIr(null)
+        })
     }
-    const cached = peekMeshForViewer(stepBytes)
-    if (cached) {
-      build(cached)
+
+    const ready =
+      stepIrProfile && stepIrSection && stepIrDims.length >= 2 && stepIrSection.points.length >= 3
+    if (ready) {
+      start(stepIrProfile, stepIrDims, stepIrSection.points, stepIrSection.holes?.[0], stepIrRadius)
       return () => {
         cancelled = true
       }
     }
-    void meshForViewer(viewing.step?.path ?? viewing.mark, stepBytes)
-      .then(build)
+
+    // Independent fallback: read the section from the STEP itself if the analysis map has not
+    // populated yet. Never fall back to NC.
+    void detectStepSection(stepBytes)
+      .then((guess) => {
+        if (cancelled || !guess) return
+        const profile = stepIrProfile ?? guess.code
+        const dims = stepIrDims.length >= 2 ? stepIrDims : (guess.dims ?? [])
+        const part = partSectionForCode(guess.code, dims)
+        const section = part?.points ?? null
+        if (!profile || !section || section.length < 3 || dims.length < 2) return
+        start(profile, dims, section, part?.holes?.[0], stepIrRadius || guess.dims?.[4] || 0)
+      })
       .catch(() => {
         if (!cancelled) setViewingStepIr(null)
       })
+
     return () => {
       cancelled = true
     }
-  }, [
-    viewing,
-    stepBytes,
-    stepIrProfile,
-    stepIrDims,
-    stepIrSection,
-    stock,
-    stepLengths,
-    stepIrRadius,
-  ])
+  }, [viewing, stepBytes, stepIrProfile, stepIrDims, stepIrSection, stepLengths, stepIrRadius])
   const viewingStepIrGeom = useMemo(
     () => (viewingStepIr ? partIrToNcGeometry(viewingStepIr) : null),
     [viewingStepIr],

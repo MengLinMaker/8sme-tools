@@ -416,6 +416,10 @@ The STEP 3-D pane follows the same rule: `stepViewerStock`, `stepFaceFrame`, `st
 not receive NC marks or an NC-reconstructed alignment reference. The manufactured and diff panes
 still use NC geometry by definition.
 
+If the background detector map has not populated yet, the STEP IR effect reads the section
+directly from the STEP bytes (`detectStepSection`). It does **not** wait for NC or fall back to an
+NC section; that fallback is what made the STEP surface disappear ("No NC or STEP surface").
+
 ### Guarding tests
 
 | test | what it locks |
