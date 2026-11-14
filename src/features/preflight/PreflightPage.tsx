@@ -913,9 +913,23 @@ export function PreflightPage() {
    * the NC path uses, so the NCEP tab can show both conversions and their differences. Meshing is
    * the viewer's cached worker result; the development itself is the shared surface core.
    */
+  // Lock the first seat chosen for a mark. A late-arriving detector seat used to re-seat the
+  // 3-D pane and rebuild IR, which looked like a random rotate + reload.
+  const stepSeatByMark = useRef(new Map<string, import('@/lib/step/seat').SectionSeat | null>())
+  const stepIrMarkRef = useRef<string | null>(null)
+  const stepSeatForViewing = useMemo(() => {
+    if (!viewing) return null
+    if (!stepSeatByMark.current.has(viewing.mark))
+      stepSeatByMark.current.set(viewing.mark, stepIrGuess?.seat ?? null)
+    return stepSeatByMark.current.get(viewing.mark) ?? null
+  }, [viewing, stepIrGuess])
+
   const [viewingStepIr, setViewingStepIr] = useState<PartIr | null>(null)
   useEffect(() => {
-    setViewingStepIr(null)
+    if (stepIrMarkRef.current !== (viewing?.mark ?? null)) {
+      stepIrMarkRef.current = viewing?.mark ?? null
+      setViewingStepIr(null)
+    }
     if (!viewing || !stepBytes) return
     let cancelled = false
     const start = (
@@ -964,7 +978,7 @@ export function PreflightPage() {
         stepIrSection.points,
         stepIrSection.holes?.[0],
         stepIrRadius,
-        stepIrGuess?.seat ?? null,
+        stepSeatForViewing,
       )
       return () => {
         cancelled = true
@@ -990,7 +1004,7 @@ export function PreflightPage() {
           section,
           part?.holes?.[0],
           stepIrRadius || guess.dims?.[4] || 0,
-          guess.seat ?? null,
+          stepSeatForViewing,
         )
       })
       .catch(() => {
@@ -1000,7 +1014,16 @@ export function PreflightPage() {
     return () => {
       cancelled = true
     }
-  }, [viewing, stepBytes, stepIrProfile, stepIrDims, stepIrSection, stepLengths, stepIrRadius])
+  }, [
+    viewing,
+    stepBytes,
+    stepIrProfile,
+    stepIrDims,
+    stepIrSection,
+    stepLengths,
+    stepIrRadius,
+    stepSeatForViewing,
+  ])
 
   // Legend chips only for the mark channels the parsed NC actually carries (`SI` etch,
   // `PU`/`KO` scribe), so the key never promises lines the viewer cannot draw.
@@ -4292,7 +4315,7 @@ export function PreflightPage() {
                             smoothLines
                             alignReference={manufactured}
                             seatProfile={stepIrSection?.points ?? null}
-                            stepSeat={stepIrGuess?.seat ?? null}
+                            stepSeat={stepSeatForViewing}
                             focus={findingFocus}
                             // The STEP pane is STEP-only: no NC marks, section, frame or alignment
                             // reference. Its cut lines come from the STEP-derived IR options.
