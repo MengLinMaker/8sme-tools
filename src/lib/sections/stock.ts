@@ -1005,6 +1005,62 @@ export function sectionDimensions(code: string, dims: number[]): SectionDimensio
   return rows
 }
 
+/**
+ * Dimensions in the order `unrolledLayout` expects, filling from the catalogue/measured section
+ * when the STEP detector only returned a code (PFC/RHS/SHS candidates carry `dims: []`).
+ */
+export function layoutDimensions(
+  code: string,
+  dims: number[],
+  section?: [number, number][],
+  _holes?: [number, number][][],
+): number[] {
+  if (dims.length >= 2) return dims
+  const clean = code.trim().replace(/\s+/g, '').toUpperCase()
+  const family = detectFamily(clean)
+  const rows = sectionDimensions(clean, dims)
+  const get = (key: string): number | undefined => rows.find((row) => row.key === key)?.value
+  if (family === 'ub' || family === 'uc' || family === 'tfb' || family === 'channel') {
+    return [
+      get('depth') ?? 0,
+      get('flangeWidth') ?? 0,
+      get('flangeThickness') ?? 0,
+      get('webThickness') ?? 0,
+      get('rootRadius') ?? 0,
+    ]
+  }
+  if (family === 'rhs' || family === 'shs') {
+    const a = get('sideA') ?? 0
+    const b = get('sideB') ?? a
+    const wall = get('wall') ?? 0
+    return [a, b, wall, wall, get('cornerRadius') ?? 0]
+  }
+  if (family === 'angle-equal' || family === 'angle-unequal') {
+    const a = get('legA') ?? 0
+    return [a, get('legB') ?? a, get('legThickness') ?? 0, 0, get('rootRadius') ?? 0]
+  }
+  if (family === 'chs') {
+    const od = get('outsideDiameter') ?? 0
+    const wall = get('wall') ?? 0
+    return [od, od, wall, wall, od / 2]
+  }
+  // Last resort: the measured/catalogue outline extents. Enough for U/I/M first+second.
+  if (section && section.length >= 3) {
+    let minX = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let minY = Number.POSITIVE_INFINITY
+    let maxY = Number.NEGATIVE_INFINITY
+    for (const [x, y] of section) {
+      minX = Math.min(minX, x)
+      maxX = Math.max(maxX, x)
+      minY = Math.min(minY, y)
+      maxY = Math.max(maxY, y)
+    }
+    return [maxX - minX, maxY - minY, 0, 0, 0]
+  }
+  return dims
+}
+
 /** Nominal steel density (kg/m³), per AS/NZS 3679.1 / AS 4100. */
 const STEEL_DENSITY = 7850
 

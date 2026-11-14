@@ -89,6 +89,7 @@ import { CUT_FACES, FACE_DIRECTIONS, profileFamily } from '@/lib/sections/canoni
 import type { SectionGuess } from '@/lib/sections/detect'
 import { inferTee } from '@/lib/sections/infer'
 import {
+  layoutDimensions,
   partSectionForCode,
   resolveStockOutline,
   type StockOutline,
@@ -771,7 +772,18 @@ export function PreflightPage() {
     [stepIrGuess],
   )
   const stepIrProfile = stepIrGuess?.code ?? viewing?.expected?.profile ?? null
-  const stepIrDims = stepIrGuess?.dims ?? []
+  const stepIrDims = useMemo(
+    () =>
+      stepIrProfile
+        ? layoutDimensions(
+            stepIrProfile,
+            stepIrGuess?.dims ?? [],
+            stepIrSection?.points ?? undefined,
+            stepIrSection?.holes,
+          )
+        : [],
+    [stepIrProfile, stepIrGuess, stepIrSection],
+  )
   const stepIrRadius = useMemo(() => {
     const fromGuess = stepIrGuess?.dims?.[4]
     if (fromGuess != null && fromGuess > 0) return fromGuess
@@ -964,9 +976,12 @@ export function PreflightPage() {
       .then((guess) => {
         if (cancelled || !guess) return
         const profile = stepIrProfile ?? guess.code
-        const dims = stepIrDims.length >= 2 ? stepIrDims : (guess.dims ?? [])
-        const part = partSectionForCode(guess.code, dims)
+        const part = partSectionForCode(guess.code, guess.dims ?? [])
         const section = part?.points ?? null
+        const dims =
+          stepIrDims.length >= 2
+            ? stepIrDims
+            : layoutDimensions(guess.code, guess.dims ?? [], part?.points, part?.holes)
         if (!profile || !section || section.length < 3 || dims.length < 2) return
         start(profile, dims, section, part?.holes?.[0], stepIrRadius || guess.dims?.[4] || 0)
       })

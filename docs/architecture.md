@@ -420,6 +420,11 @@ If the background detector map has not populated yet, the STEP IR effect reads t
 directly from the STEP bytes (`detectStepSection`). It does **not** wait for NC or fall back to an
 NC section; that fallback is what made the STEP surface disappear ("No NC or STEP surface").
 
+The STEP detector returns `dims: []` for PFC/RHS/SHS because the code alone carries the size.
+`unrolledLayout` still needs dimension fields, so `layoutDimensions(code, dims, section)` fills them
+from the catalogue/measured section before building the IR. Do not pass `guess.dims` straight to
+`unrolledLayout`.
+
 ### Guarding tests
 
 | test | what it locks |

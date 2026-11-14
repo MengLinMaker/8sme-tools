@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { unrolledLayout } from '@/lib/wisecam/layout'
 import {
+  layoutDimensions,
   partSectionForCode,
   resolveStockOutline,
   sectionDimensions,
@@ -282,5 +284,20 @@ describe('sectionThicknesses', () => {
 
   it('reads the wall from the callout for a hollow section', () => {
     expect(sectionThicknesses('RHS150*100*9.0', [])).toEqual([{ role: 'wall', mm: 9 }])
+  })
+})
+
+describe('layoutDimensions', () => {
+  it('fills the dims unrolledLayout needs for a code-only STEP guess', () => {
+    for (const [code, type] of [
+      ['PFC100*50', 'U'],
+      ['RHS150*100*9.0', 'M'],
+      ['SHS100*100*6.0', 'M'],
+      ['200UB29.8', 'I'],
+    ] as const) {
+      const dims = layoutDimensions(code, [])
+      expect(dims.length).toBeGreaterThanOrEqual(2)
+      expect(unrolledLayout(type, dims)).not.toBeNull()
+    }
   })
 })
