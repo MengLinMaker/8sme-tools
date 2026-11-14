@@ -1,8 +1,8 @@
 import type { NcContour, NcFace, NcGeometry, NcMark, NcNotch } from '@/lib/parsers/ncGeometry'
 import {
-  acrossAtSurfaceStation,
+  acrossAtCenteredStation,
   centeredStationRange,
-  faceAtSurfaceStation,
+  faceAtCenteredStation,
 } from '@/lib/wisecam/layout'
 import type { PartChart, PartFeature, PartIr, UvPoint } from './ir'
 
@@ -25,7 +25,7 @@ function inverse(chart: PartChart, point: UvPoint): FacePoint | null {
     const range = centeredStationRange(chart.layout, face)
     if (!range) continue
     if (point[0] <= range[0] + 0.005 || point[0] >= range[1] - 0.005) continue
-    const y = acrossAtSurfaceStation(chart.layout, face, point[0])
+    const y = acrossAtCenteredStation(chart.layout, face, point[0])
     if (y != null) return { face, x: point[1], y }
   }
   const tolerance = Math.max(2, chart.layout.seam * 0.02)
@@ -38,10 +38,10 @@ function inverse(chart: PartChart, point: UvPoint): FacePoint | null {
     if (!best || distance < best.distance) best = { face, distance }
   }
   if (best && best.distance <= tolerance) {
-    const y = acrossAtSurfaceStation(chart.layout, best.face, point[0])
+    const y = acrossAtCenteredStation(chart.layout, best.face, point[0])
     if (y != null) return { face: best.face, x: point[1], y }
   }
-  const hit = faceAtSurfaceStation(chart.layout, point[0])
+  const hit = faceAtCenteredStation(chart.layout, point[0])
   return hit ? { face: hit.face, x: point[1], y: hit.y } : null
 }
 
@@ -79,7 +79,7 @@ function contoursFor(feature: PartFeature, chart: PartChart): NcContour[] {
   if (face) {
     const mapped: [number, number][] = []
     for (const [station, along] of points) {
-      const y = acrossAtSurfaceStation(chart.layout, face, station)
+      const y = acrossAtCenteredStation(chart.layout, face, station)
       if (y == null) return []
       mapped.push([along, y])
     }
