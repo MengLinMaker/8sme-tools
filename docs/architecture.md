@@ -411,6 +411,11 @@ every STEP part (`detectSection: true`); otherwise an NC-bearing part would have
 section and the STEP IR would silently fall back to NC. The cost is a STEP section read per part;
 that is the price of a genuinely independent STEP pipeline.
 
+The STEP 3-D pane follows the same rule: `stepViewerStock`, `stepFaceFrame`, `stepCutEdgeOptions`,
+`stepSeat` and the STEP IR all come from the STEP detector/catalogue section. The STEP pane does
+not receive NC marks or an NC-reconstructed alignment reference. The manufactured and diff panes
+still use NC geometry by definition.
+
 ### Guarding tests
 
 | test | what it locks |

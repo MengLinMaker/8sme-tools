@@ -545,6 +545,39 @@ function formatModelComparison(t: TFunction, comparison: ModelComparison): strin
   return note + t('preflight.model.volume', { delta })
 }
 
+/** Face thicknesses for a profile's section, shared by the NC and STEP panes. */
+function stockThicknessesFor(
+  profile: string | null,
+  section: [number, number][] | null,
+  holes: [number, number][][] | undefined,
+): number[] {
+  if (!section || section.length < 3) return []
+  const family = profile ? profileFamily(profile) : null
+  if (family && profile && family !== 'tee') {
+    const frame = frameForProfile(profile, section)
+    const faces = CUT_FACES[family] ?? ['o', 'u', 'h']
+    const values = faces
+      .map((face) => Math.round(faceThickness(frame, section, face) * 10) / 10)
+      .filter((value) => value > 0)
+    return [...new Set(values)].sort((a, b) => a - b)
+  }
+  // Unknown family (or `tee`, whose face letters are not reconciled yet): measure the stock
+  // directly. A tee's cut faces are both sides and the flange underside, not the web tip.
+  const normals: [number, number][] =
+    family === 'tee'
+      ? [
+          [1, 0],
+          [-1, 0],
+          [0, -1],
+        ]
+      : [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+        ]
+  return stockFaceThicknesses(section, holes ?? [], normals)
+}
+
 export function PreflightPage() {
   const { t, i18n } = useTranslation()
   const findingText = useCallback(
@@ -760,6 +793,32 @@ export function PreflightPage() {
     return wall > 0 ? 2.5 * wall : 0
   }, [stepIrGuess, stepIrSection])
 
+  const stepViewerStock = useMemo<StockOutline | null>(() => {
+    if (!stepIrSection || stepIrSection.points.length < 3) return null
+    return {
+      points: stepIrSection.points,
+      holes: stepIrSection.holes,
+      label: stepIrProfile ?? 'section',
+    }
+  }, [stepIrSection, stepIrProfile])
+  const stepFaceFrame = useMemo(
+    () =>
+      stepIrProfile && stepIrSection ? frameForProfile(stepIrProfile, stepIrSection.points) : null,
+    [stepIrProfile, stepIrSection],
+  )
+  const stepCutThicknesses = useMemo(
+    () => stockThicknessesFor(stepIrProfile, stepIrSection?.points ?? null, stepIrSection?.holes),
+    [stepIrProfile, stepIrSection],
+  )
+  const stepCutEdgeOptions = useMemo(
+    () => ({
+      thicknesses: stepCutThicknesses,
+      profile: stepIrProfile,
+      radius: stepIrRadius,
+    }),
+    [stepCutThicknesses, stepIrProfile, stepIrRadius],
+  )
+
   const viewerStock = useMemo(() => {
     if (!viewingStepSection || viewingStepSection.points.length < 3) return stock
     return {
@@ -769,12 +828,6 @@ export function PreflightPage() {
       mass: stock?.mass,
     }
   }, [viewingStepSection, stock])
-  const viewingSeatProfile = viewingStepSection?.points ?? null
-  /** STEP-only: the detector's seating frame (handles an oblique member). */
-  const viewingStepSeat = useMemo(
-    () => (viewing && !viewing.nc ? (sectionGuesses.get(viewing.mark)?.seat ?? null) : null),
-    [viewing, sectionGuesses],
-  )
   // The section face frame, resolved once here so cut markers project on every pane even without
   // the NC toolpath (only the manufactured pane projects the toolpath itself).
   const viewingNcFrame = useMemo(() => {
@@ -814,69 +867,17 @@ export function PreflightPage() {
   // No NC means no face frame, but the stock outline still tells us each cut face's wall. Key the
   // thickness off the section spec where the family is known (a UB's tf/tw), so the STEP colours
   // and legend read the real plate, not a measurement across the whole section.
-  const viewingStockThicknesses = useMemo(() => {
-    const section = viewingNcSection ?? viewingStepSection?.points ?? stock?.points ?? null
-    if (!section || section.length < 3) return []
-    const family = viewingProfileCode ? profileFamily(viewingProfileCode) : null
-    if (family && viewingProfileCode && family !== 'tee') {
-      const frame = frameForProfile(viewingProfileCode, section)
-      const faces = CUT_FACES[family] ?? ['o', 'u', 'h']
-      const values = faces
-        .map((face) => Math.round(faceThickness(frame, section, face) * 10) / 10)
-        .filter((value) => value > 0)
-      return [...new Set(values)].sort((a, b) => a - b)
-    }
-    // Unknown family (or `tee`, whose face letters are not reconciled yet): measure the stock
-    // directly. A tee's cut faces are both sides and the flange underside, not the web tip.
-    const holes = viewingStepSection?.holes ?? stock?.holes ?? []
-    const normals: [number, number][] =
-      family === 'tee'
-        ? [
-            [1, 0],
-            [-1, 0],
-            [0, -1],
-          ]
-        : [
-            [1, 0],
-            [-1, 0],
-            [0, 1],
-          ]
-    return stockFaceThicknesses(section, holes, normals)
-  }, [viewingProfileCode, viewingNcSection, viewingStepSection, stock])
+  const viewingStockThicknesses = useMemo(
+    () =>
+      stockThicknessesFor(
+        viewingProfileCode,
+        viewingNcSection ?? viewingStepSection?.points ?? stock?.points ?? null,
+        viewingStepSection?.holes ?? stock?.holes,
+      ),
+    [viewingProfileCode, viewingNcSection, viewingStepSection, stock],
+  )
   const viewingCutThicknesses =
     viewingNcProfiles.length > 0 ? viewingNcProfiles : viewingStockThicknesses
-  // Outer corner radius for a STEP-only hollow (no NC header carries dims[4]). Cold-formed
-  // RHS/SHS use ~2.5×wall; without it a rounded-corner cut has radius 0 and is dropped at the
-  // corners instead of reaching onto both adjacent faces.
-  const viewingCornerRadius = useMemo(() => {
-    const fromNc = viewing?.nc?.dimensions?.[4]
-    if (fromNc != null && fromNc > 0) return fromNc
-    const section = viewingStepSection
-    const hole = section?.holes?.[0]
-    if (!section || !hole) return 0
-    const span = (points: [number, number][], axis: 0 | 1): number => {
-      let min = Number.POSITIVE_INFINITY
-      let max = Number.NEGATIVE_INFINITY
-      for (const p of points) {
-        min = Math.min(min, p[axis])
-        max = Math.max(max, p[axis])
-      }
-      return max - min
-    }
-    const wall = Math.min(
-      (span(section.points, 0) - span(hole, 0)) / 2,
-      (span(section.points, 1) - span(hole, 1)) / 2,
-    )
-    return wall > 0 ? 2.5 * wall : 0
-  }, [viewing, viewingStepSection])
-  const viewingCutEdgeOptions = useMemo(
-    () => ({
-      thicknesses: viewingCutThicknesses,
-      profile: viewingProfileCode,
-      radius: viewingCornerRadius,
-    }),
-    [viewingCutThicknesses, viewingProfileCode, viewingCornerRadius],
-  )
   /** Face-thickness colours for the IR view, using the same palette as the 3D cut legend. */
   const viewingIrColorForFace = useMemo(() => {
     const section =
@@ -4246,21 +4247,20 @@ export function PreflightPage() {
                           <PartViewer
                             name={viewing.step?.path ?? t('preflight.viewer.stepPath')}
                             bytes={stepBytes}
-                            stock={viewerStock}
+                            stock={stepViewerStock}
                             bus={orbitBus}
                             highlightStray
                             smoothLines
-                            alignReference={manufactured}
-                            seatProfile={viewingSeatProfile}
-                            stepSeat={viewingStepSeat}
+                            seatProfile={stepIrSection?.points ?? null}
+                            stepSeat={stepIrGuess?.seat ?? null}
                             focus={findingFocus}
-                            // Marks project on every pane (via the shared face frame); only
-                            // the manufactured pane also projects the NC toolpath.
+                            // The STEP pane is STEP-only: no NC marks, section, frame or alignment
+                            // reference. Its cut lines come from the STEP-derived IR options.
                             sabreFailures={viewerSabreFailures}
-                            ncMarks={viewingNcGeom?.marks ?? null}
-                            ncSection={viewingNcSection}
-                            faceFrame={viewingNcFrame}
-                            cutEdges={viewingCutEdgeOptions}
+                            ncMarks={null}
+                            ncSection={stepIrSection?.points ?? null}
+                            faceFrame={stepFaceFrame}
+                            cutEdges={stepCutEdgeOptions}
                             irCutGeometry={viewingStepIrGeom}
                             visibleSpans={visibleSpans}
                             visibleRuns={visibleRuns}
