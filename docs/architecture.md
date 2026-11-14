@@ -452,6 +452,46 @@ The STEP detector returns `dims: []` for PFC/RHS/SHS because the code alone carr
 from the catalogue/measured section before building the IR. Do not pass `guess.dims` straight to
 `unrolledLayout`.
 
+### Transform spec (target, adopted)
+
+The STEP → IR conversion has exactly **two** surface transforms. Do not add a third or duplicate
+them per feature.
+
+1. **Flat → flat (isometry).** A planar stock face maps to its flat IR interval with **scale 1**:
+   distances are preserved. With a unit face-span direction and signed local coordinate
+   `u = dot(point - faceOrigin, spanDir)`,
+   `station = faceStart + (reversed ? width - u : u)`.
+   Do not normalise by face width, and do not apply a per-face tolerance or clamp.
+2. **Cylinder → flat (arc unroll).** A cylindrical stock face maps by **arc length**:
+   `station = faceStart + radius * (theta - theta0)`, signed by the face orientation. The angle is
+   measured around the stock cylinder's axis from the face's start tangent. Never use the chord
+   or a flat projection as a substitute.
+
+These intervals concatenate into **one global UV station** (millimetres of developed perimeter),
+which is the IR chart. Every feature is just coordinates on that surface:
+
+- Holes/slots: cylinder-axis ∩ entry plane gives the centre; radius is exact; the face transform
+  maps the centre and ends.
+- End cuts/notches: use the projected cut segments from the viewer extraction. Identify the
+  **manufacturing face once** per segment (normal + exact plane offset), then apply that face's
+  transform to every point. If a segment crosses a face boundary, split it at the boundary; never
+  re-guess a face per point and never clamp an out-of-range station.
+- Holes, slots, cuts and future marks all call the **same** `faceStation`/face-transform function.
+
+Invariants:
+
+- **One transform per face.** No second station formula may exist.
+- **Face intervals tile the seam** without gaps or overlap. Stations must lie in
+  `[-seam/2, +seam/2]`; a run crossing the seam is split, not clamped.
+- **Parallel faces are distinct.** Identify them by normal **and** exact plane offset; a shared
+  normal alone is ambiguous (outer vs inner flange/web).
+- **STEP is independent of NC.** Runtime inputs are STEP geometry + STEP-detected profile/dims/
+  section + STEP-read length. NC may appear only in tests as an oracle. STEP IR must remain able
+  to feed NCEP with no NC present.
+
+Current status: the flat transform is implemented. The cylinder/arc transform is the target and
+still needs to be wired for rounded stock faces.
+
 ### Guarding tests
 
 | test | what it locks |
