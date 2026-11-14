@@ -517,6 +517,7 @@ still needs to be wired for rounded stock faces.
 | `fromStep.test.ts` m71 cut-line round trip | STEP → IR → face projection returns the same lines |
 | `fromStep.test.ts` m71 holes/slots | 4 holes + 4 slots, same centres/radii as NC; no cut point on/inside a hole/slot |
 | `face-distance.test.ts` | Every face's mapped span equals its spec developed length (flat width, rounded arc length) |
+| `detected-section.test.ts` | STEP-detected flange/web extents and arc-inclusive area match the theoretical section spec |
 | `cutProjection.test.ts` / `ncStepAgreement.test.ts` | NC vs STEP face projection stays aligned |
 
 Run: `pnpm vitest run src/lib/part/fromStep.test.ts src/lib/step/cutProjection.test.ts`.
