@@ -105,6 +105,51 @@ function sampleRuns(runs: UvPoint[][]): UvPoint[] {
   return out
 }
 
+function sampledPart(part: PartIr): UvPoint[] {
+  const out = sampleRuns(
+    part.features.flatMap((feature) =>
+      feature.kind === 'cut' && feature.shape.form === 'polyline' ? [feature.shape.points] : [],
+    ),
+  )
+  for (const feature of part.features) {
+    if (feature.kind === 'hole' && feature.shape.form === 'circle') {
+      const { center, radius } = feature.shape
+      for (let index = 0; index < 64; index++) {
+        const angle = (index / 64) * Math.PI * 2
+        out.push([center[0] + radius * Math.cos(angle), center[1] + radius * Math.sin(angle)])
+      }
+    }
+    if (feature.kind === 'slot' && feature.shape.form === 'slot') {
+      const { center, far, radius } = feature.shape
+      const dx = far[0] - center[0]
+      const dy = far[1] - center[1]
+      const length = Math.hypot(dx, dy) || 1
+      const ux = dx / length
+      const uy = dy / length
+      const px = -uy
+      const py = ux
+      const cap = (origin: UvPoint, outward: number, steps: number): void => {
+        for (let index = 0; index <= steps; index++) {
+          const angle = -Math.PI / 2 + (index / steps) * Math.PI
+          const alongCap = Math.cos(angle) * radius * outward
+          const acrossCap = Math.sin(angle) * radius
+          out.push([
+            origin[0] + ux * alongCap + px * acrossCap,
+            origin[1] + uy * alongCap + py * acrossCap,
+          ])
+        }
+      }
+      out.push([center[0] + px * radius, center[1] + py * radius])
+      out.push([far[0] + px * radius, far[1] + py * radius])
+      cap(far, 1, 32)
+      out.push([far[0] - px * radius, far[1] - py * radius])
+      out.push([center[0] - px * radius, center[1] - py * radius])
+      cap(center, -1, 32)
+    }
+  }
+  return out
+}
+
 function deviation(from: UvPoint[], to: UvPoint[]): { mean: number; max: number } {
   let sum = 0
   let max = 0
@@ -212,11 +257,7 @@ describe('m71 STEP cut-line round trip', () => {
           }
         }
       }
-      const actual = sampleRuns(
-        stepIr.features.flatMap((feature) =>
-          feature.kind === 'cut' && feature.shape.form === 'polyline' ? [feature.shape.points] : [],
-        ),
-      )
+      const actual = sampledPart(stepIr)
       expect(expected.length).toBeGreaterThan(0)
       expect(actual.length).toBeGreaterThan(0)
       const expectedToActual = deviation(expected, actual)
@@ -226,6 +267,90 @@ describe('m71 STEP cut-line round trip', () => {
       expect(expectedToActual.max).toBeLessThan(0.5)
       expect(actualToExpected.mean).toBeLessThan(0.05)
       expect(actualToExpected.max).toBeLessThan(0.5)
+    },
+    120_000,
+  )
+})
+
+describe('m71 STEP holes and slots match NC', () => {
+  it.skipIf(!existsSync(m71.nc) || !existsSync(m71.stp))(
+    'collapses through rims and classifies holes/slots',
+    async () => {
+      const ncText = readFileSync(m71.nc, 'utf8')
+      const header = parseDstv(ncText).header
+      const section = partSectionForCode(header.profile, header.dimensions)
+      if (!section) throw new Error('no section')
+      const ncIr = partIrFromNc(ncText)
+      if (!ncIr) throw new Error('no NC IR')
+      const meshed = await meshStepFile('m71-features', new Uint8Array(readFileSync(m71.stp)))
+      const stepIr = partIrFromStepMesh(meshed, {
+        mark: 'm71-step',
+        profile: header.profile,
+        dimensions: header.dimensions,
+        length: header.length,
+        section: section.points,
+        innerSection: section.innerSection ?? section.holes?.[0],
+        radius: header.dimensions[4] ?? 0,
+      })
+      if (!stepIr) throw new Error('no STEP IR')
+
+      const holes = (part: PartIr) =>
+        part.features.flatMap((feature) =>
+          feature.kind === 'hole' && feature.shape.form === 'circle'
+            ? [{ center: feature.shape.center, radius: feature.shape.radius }]
+            : [],
+        )
+      const slots = (part: PartIr) =>
+        part.features.flatMap((feature) =>
+          feature.kind === 'slot' && feature.shape.form === 'slot'
+            ? [
+                {
+                  center: feature.shape.center,
+                  far: feature.shape.far,
+                  radius: feature.shape.radius,
+                },
+              ]
+            : [],
+        )
+      const ncHoles = holes(ncIr)
+      const stepHoles = holes(stepIr)
+      expect(stepHoles).toHaveLength(ncHoles.length)
+      for (const expected of ncHoles) {
+        let best = Number.POSITIVE_INFINITY
+        let bestRadius = Number.POSITIVE_INFINITY
+        for (const actual of stepHoles) {
+          const distance = Math.hypot(
+            actual.center[0] - expected.center[0],
+            actual.center[1] - expected.center[1],
+          )
+          if (distance < best) {
+            best = distance
+            bestRadius = Math.abs(actual.radius - expected.radius)
+          }
+        }
+        expect(best).toBeLessThan(1)
+        expect(bestRadius).toBeLessThan(0.5)
+      }
+
+      const ncSlots = slots(ncIr)
+      const stepSlots = slots(stepIr)
+      expect(stepSlots).toHaveLength(ncSlots.length)
+      for (const expected of ncSlots) {
+        let best = Number.POSITIVE_INFINITY
+        let bestRadius = Number.POSITIVE_INFINITY
+        for (const actual of stepSlots) {
+          const distance = Math.hypot(
+            actual.center[0] - expected.center[0],
+            actual.center[1] - expected.center[1],
+          )
+          if (distance < best) {
+            best = distance
+            bestRadius = Math.abs(actual.radius - expected.radius)
+          }
+        }
+        expect(best).toBeLessThan(1)
+        expect(bestRadius).toBeLessThan(0.5)
+      }
     },
     120_000,
   )

@@ -43,6 +43,54 @@ function dedupeRuns(runs: UvPoint[][], tolerance = 0.3): UvPoint[][] {
   return out
 }
 
+/** A closed, small rim loop is a hole or slot; end cuts are left as cut polylines. */
+function classifiedLoop(points: UvPoint[], length: number): PartFeature | null {
+  if (points.length < 6) return null
+  const first = points[0] as UvPoint
+  const last = points[points.length - 1] as UvPoint
+  if (Math.hypot(first[0] - last[0], first[1] - last[1]) > 1) return null
+  const stations = points.map((point) => point[0])
+  const alongs = points.map((point) => point[1])
+  const minS = Math.min(...stations)
+  const maxS = Math.max(...stations)
+  const minA = Math.min(...alongs)
+  const maxA = Math.max(...alongs)
+  const width = maxS - minS
+  const height = maxA - minA
+  if (width < 1 || height < 1 || width > 80 || height > 80) return null
+  if (minA < 20 || maxA > length - 20) return null
+  const cx = (minS + maxS) / 2
+  const cy = (minA + maxA) / 2
+  let rMin = Number.POSITIVE_INFINITY
+  let rMax = 0
+  let rSum = 0
+  for (const point of points) {
+    const radius = Math.hypot(point[0] - cx, point[1] - cy)
+    rMin = Math.min(rMin, radius)
+    rMax = Math.max(rMax, radius)
+    rSum += radius
+  }
+  const radius = rSum / points.length
+  if (rMax - rMin < 0.6 && width / height > 0.9 && width / height < 1.1) {
+    return {
+      kind: 'hole',
+      chart: 'front',
+      shape: { form: 'circle', center: [cx, cy], radius },
+    }
+  }
+  if (Math.max(width, height) < Math.min(width, height) * 1.15) return null
+  const slotRadius = Math.min(width, height) / 2
+  if (slotRadius < 0.5) return null
+  const half = (Math.max(width, height) - 2 * slotRadius) / 2
+  const center: UvPoint = width >= height ? [cx - half, cy] : [cx, cy - half]
+  const far: UvPoint = width >= height ? [cx + half, cy] : [cx, cy + half]
+  return {
+    kind: 'slot',
+    chart: 'front',
+    shape: { form: 'slot', center, far, radius: slotRadius },
+  }
+}
+
 /**
  * STEP → PartIR (cut boundaries).
  *
@@ -90,6 +138,11 @@ export function partIrFromStepGeometry(
   }
   const features: PartFeature[] = []
   for (const points of dedupeRuns(runs)) {
+    const loop = classifiedLoop(points, options.length)
+    if (loop) {
+      features.push(loop)
+      continue
+    }
     features.push({
       kind: 'cut',
       chart: 'front',

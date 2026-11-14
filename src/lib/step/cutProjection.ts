@@ -107,6 +107,22 @@ export function projectCutEdgesToFaces(
     }
     return Math.abs(dot(face.normal, memberAxis)) <= 0.3
   })
+  // Cross-section centroid in seated 3-D coords, used to pick the nearest outer face for a
+  // through-hole/slot rim (both rims are otherwise geometrically valid).
+  let cx = 0
+  let cy = 0
+  for (const point of section) {
+    cx += point[0]
+    cy += point[1]
+  }
+  cx /= section.length || 1
+  cy /= section.length || 1
+  const centroid3: Vec3 = [
+    cx * xAxis[0] + cy * yAxis[0],
+    cx * xAxis[1] + cy * yAxis[1],
+    cx * xAxis[2] + cy * yAxis[2],
+  ]
+
   const crossAxis = (axis: 0 | 1): Vec3 => (axis === 0 ? xAxis : yAxis)
 
   // Each DSTV face's nominal plane: outward normal axis + side, plane offset, and span axis.
@@ -146,6 +162,24 @@ export function projectCutEdgesToFaces(
           edge.points[midIndex + 2] as number,
         ]
         if (distanceToOutline(section, [dot(mid, xAxis), dot(mid, yAxis)]) > 2.5) continue
+        // A through hole/slot has two rims. Keep the one on the nearest outer face — the side
+        // where the cut cylinder actually sits — so STEP matches the single machined line the NC
+        // authors without reading NC.
+        if (cut.cylinder) {
+          const outward = face.cylinder
+            ? normalize([
+                mid[0] - face.cylinder.center[0],
+                mid[1] - face.cylinder.center[1],
+                mid[2] - face.cylinder.center[2],
+              ])
+            : face.normal
+          const fromCentroid: Vec3 = [
+            cut.cylinder.center[0] - centroid3[0],
+            cut.cylinder.center[1] - centroid3[1],
+            cut.cylinder.center[2] - centroid3[2],
+          ]
+          if (dot(outward, fromCentroid) <= 0) continue
+        }
         const planarCut = cut.planar
         const nCut = cut.normal
         const cCut = dot(nCut, cut.center)

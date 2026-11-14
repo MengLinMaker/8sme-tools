@@ -56,8 +56,11 @@ No provenance, confidence, source blobs or duplicate interpretations. Importers 
 - `src/lib/part/toNc.ts` — PartIR → canonical DSTV NC.
 - `src/lib/part/fromStep.ts` — seated STEP cut edges → PartIR. Cut edges use the same
   `projectCutEdgesToFaces` projection as the 3-D viewer, then develop onto the unrolled chart and
-  dedupe overlapping corner segments. Bevels are carried per vertex; NC tube root-line bevels are
-  shifted to the outer skin for display/diff only (round-trip data stays authored).
+  dedupe overlapping corner segments. Through holes/slots keep only the **nearest outer-face rim**
+  (the side the cut cylinder sits on), so STEP matches the single machined line the NC authors
+  without depending on the NC. Closed rims are classified as holes/slots. Bevels are carried per
+  vertex; NC tube root-line bevels are shifted to the outer skin for display/diff only
+  (round-trip data stays authored).
 - `src/lib/part/fromNcep.ts` — NCEP part SVG → PartIR (holes, truncates, marks, start/end).
 - `src/lib/part/toNcep.ts` — PartIR → NCEP part/package (shaped start/end derived from IR cuts).
 - `src/lib/part/toNcGeometry.ts` — PartIR → face-space NC geometry, the coordinate transform the 3D projector consumes.
