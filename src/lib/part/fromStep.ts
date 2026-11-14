@@ -99,29 +99,6 @@ function faceStation(
   return station == null ? null : [station, dot3(point, memberAxis) + alongOffset]
 }
 
-/**
- * Spec-constrained variant for cut segments: clamp the authored across coordinate to the face's
- * exact 0…width interval before mapping. This forces each face section to start/end on the
- * designated IR face boundary instead of spilling into a neighbour.
- */
-function faceStationClamped(
-  face: NcFace,
-  point: Vec3,
-  spanVec: Vec3,
-  layout: UnrolledLayout,
-  frame: ReturnType<typeof frameForProfile>,
-  alongOffset: number,
-  memberAxis: Vec3,
-): UvPoint | null {
-  const spanAxis = faceSpanAxis(frame, face)
-  const width = layout.faces[face]?.width ?? faceHalf(frame, spanAxis) * 2
-  const authored =
-    faceHalf(frame, spanAxis) + ncAuthoredAcrossSign(frame, face) * dot3(point, spanVec)
-  const y = Math.max(0, Math.min(width, authored))
-  const station = centeredStationFor(layout, face, y)
-  return station == null ? null : [station, dot3(point, memberAxis) + alongOffset]
-}
-
 /** Holes/slots from the BREP cylinder faces themselves, not from chained rim loops. */
 function cylinderFeatures(
   seated: SeatedStepGeometry,
@@ -353,7 +330,7 @@ function brepProjectedRuns(
         segment.points[index + 1] as number,
         segment.points[index + 2] as number,
       ]
-      return faceStationClamped(
+      return faceStation(
         plane.face,
         point,
         plane.spanVec,
@@ -365,7 +342,8 @@ function brepProjectedRuns(
     }
     const a = mapPoint(0)
     const b = mapPoint(3)
-    if (a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.05) runs.push([a, b])
+    if (a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.05)
+      runs.push(...splitAtSeam(a, b, layout.seam))
   }
   return runs
 }
@@ -417,6 +395,38 @@ function measuredFaceWidths(
     }
   }
   return widths
+}
+
+/** Wrap a segment at the chart seam; a crossing becomes two runs, not a clamp. */
+function splitAtSeam(a: UvPoint, b: UvPoint, seam: number): UvPoint[][] {
+  const half = seam / 2
+  const wrap = (station: number): number => ((((station + half) % seam) + seam) % seam) - half
+  const sa = wrap(a[0])
+  let sb = wrap(b[0])
+  while (sb - sa > half) sb -= seam
+  while (sb - sa < -half) sb += seam
+  const A: UvPoint = [sa, a[1]]
+  if (sb >= -half && sb <= half) return [[A, [sb, b[1]]]]
+  if (sb > half) {
+    const t = (half - sa) / (sb - sa)
+    const along = a[1] + (b[1] - a[1]) * t
+    return [
+      [A, [half, along]],
+      [
+        [-half, along],
+        [sb - seam, b[1]],
+      ],
+    ]
+  }
+  const t = (-half - sa) / (sb - sa)
+  const along = a[1] + (b[1] - a[1]) * t
+  return [
+    [A, [-half, along]],
+    [
+      [half, along],
+      [sb + seam, b[1]],
+    ],
+  ]
 }
 
 /** Joins runs whose endpoints meet at a face boundary, so an end cut is one continuous polyline. */
