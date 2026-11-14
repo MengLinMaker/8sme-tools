@@ -924,6 +924,7 @@ export function PreflightPage() {
       section: [number, number][],
       innerSection: [number, number][] | undefined,
       radius: number,
+      seat: import('@/lib/step/seat').SectionSeat | null,
     ): void => {
       const build = (meshed: import('@/lib/step/mesh').MeshedStep): void => {
         try {
@@ -935,6 +936,7 @@ export function PreflightPage() {
             section,
             innerSection,
             radius,
+            seat,
           })
           if (!cancelled) setViewingStepIr(ir)
         } catch {
@@ -956,7 +958,14 @@ export function PreflightPage() {
     const ready =
       stepIrProfile && stepIrSection && stepIrDims.length >= 2 && stepIrSection.points.length >= 3
     if (ready) {
-      start(stepIrProfile, stepIrDims, stepIrSection.points, stepIrSection.holes?.[0], stepIrRadius)
+      start(
+        stepIrProfile,
+        stepIrDims,
+        stepIrSection.points,
+        stepIrSection.holes?.[0],
+        stepIrRadius,
+        stepIrGuess?.seat ?? null,
+      )
       return () => {
         cancelled = true
       }
@@ -975,7 +984,14 @@ export function PreflightPage() {
             ? stepIrDims
             : layoutDimensions(guess.code, guess.dims ?? [], part?.points, part?.holes)
         if (!profile || !section || section.length < 3 || dims.length < 2) return
-        start(profile, dims, section, part?.holes?.[0], stepIrRadius || guess.dims?.[4] || 0)
+        start(
+          profile,
+          dims,
+          section,
+          part?.holes?.[0],
+          stepIrRadius || guess.dims?.[4] || 0,
+          guess.seat ?? null,
+        )
       })
       .catch(() => {
         if (!cancelled) setViewingStepIr(null)

@@ -3,7 +3,12 @@ import { frameForProfile } from '@/lib/parsers/ncFaces'
 import { profileFamily } from '@/lib/sections/canonical'
 import type { SeatedBrepFace, Vec3 } from '@/lib/step/cutEdges'
 import type { MeshedStep } from '@/lib/step/mesh'
-import { seatedStepProfile, transformVertices } from '@/lib/step/seat'
+import {
+  type SectionSeat,
+  seatedFromSeat,
+  seatedStepProfile,
+  transformVertices,
+} from '@/lib/step/seat'
 import { unrolledLayout } from './layout'
 import { buildNcex, type NcexCut, type NcexPart } from './ncex'
 import { developStepCutEdges, type StepSurfaceInput } from './surface'
@@ -96,8 +101,11 @@ export interface SeatedStepGeometry {
 export function seatedStepGeometry(
   meshed: MeshedStep,
   section: [number, number][],
+  seat?: SectionSeat | null,
 ): SeatedStepGeometry {
-  const seated = seatedStepProfile(meshed.vertices, section)
+  const seated = seat
+    ? seatedFromSeat(meshed.vertices, seat, section)
+    : seatedStepProfile(meshed.vertices, section)
   const quaternion = new Quaternion()
   const position = new Vector3()
   const scale = new Vector3()

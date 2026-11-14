@@ -8,6 +8,7 @@ import {
 import type { NcFace } from '@/lib/parsers/ncGeometry'
 import { brepCutSegments, type Vec3 } from '@/lib/step/cutEdges'
 import type { MeshedStep } from '@/lib/step/mesh'
+import type { SectionSeat } from '@/lib/step/seat'
 import { profileTypeFor, type SeatedStepGeometry, seatedStepGeometry } from '@/lib/wisecam/fromStep'
 import {
   centeredStationFor,
@@ -480,6 +481,8 @@ export interface FromStepIrOptions {
   quantity?: number
   /** Outer corner radius (mm). */
   radius?: number
+  /** STEP detector seating frame, when available. */
+  seat?: SectionSeat | null
 }
 
 export function partIrFromStepGeometry(
@@ -559,6 +562,6 @@ export function partIrFromStepGeometry(
 
 /** Convenience: seat a meshed STEP and convert it to PartIR. */
 export function partIrFromStepMesh(meshed: MeshedStep, options: FromStepIrOptions): PartIr | null {
-  const seated = seatedStepGeometry(meshed, options.section)
+  const seated = seatedStepGeometry(meshed, options.section, options.seat)
   return partIrFromStepGeometry({ ...seated, length: options.length || seated.length }, options)
 }
