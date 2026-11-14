@@ -149,6 +149,96 @@ export function seatedStepGeometry(
       }
     }),
   )
+  // Normalise every cylindrical cut centre to the point where its axis meets the entry stock
+  // face. The raw OCC centre is somewhere on the axis (mid-wall/arbitrary station); the NC and the
+  // IR both mean the face intersection.
+  const xAxis3: Vec3 = [seated.xAxis.x, seated.xAxis.y, seated.xAxis.z]
+  const yAxis3: Vec3 = [seated.yAxis.x, seated.yAxis.y, seated.yAxis.z]
+  let centroidX = 0
+  let centroidY = 0
+  for (const point of section) {
+    centroidX += point[0]
+    centroidY += point[1]
+  }
+  centroidX /= section.length || 1
+  centroidY /= section.length || 1
+  const centroid3: Vec3 = [
+    centroidX * xAxis3[0] + centroidY * yAxis3[0],
+    centroidX * xAxis3[1] + centroidY * yAxis3[1],
+    centroidX * xAxis3[2] + centroidY * yAxis3[2],
+  ]
+  const normals: Vec3[] = [
+    xAxis3,
+    [-xAxis3[0], -xAxis3[1], -xAxis3[2]],
+    yAxis3,
+    [-yAxis3[0], -yAxis3[1], -yAxis3[2]],
+  ]
+  const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+  const facePlanes = normals.map((normal) => {
+    let offset = Number.NEGATIVE_INFINITY
+    for (const point of section) {
+      const value = point[0] * dot(xAxis3, normal) + point[1] * dot(yAxis3, normal)
+      offset = Math.max(offset, value)
+    }
+    return { normal, offset }
+  })
+  faces.forEach((face) => {
+    if (!face.cylinder) return
+    const center = face.cylinder.center
+    // Prefer the actual adjacent planar stock face. Its plane is exact; the bbox plane is only a
+    // fallback when topology is unavailable.
+    const neighbours = new Set<number>()
+    for (const wire of face.wires)
+      for (const edge of wire.edges)
+        for (const neighbour of edge.neighbours ?? []) neighbours.add(neighbour)
+    let bestNormal: Vec3 | null = null
+    let bestOffset = 0
+    let bestScore = Number.NEGATIVE_INFINITY
+    for (const neighbourIndex of neighbours) {
+      const neighbour = faces[neighbourIndex]
+      if (!neighbour?.planar) continue
+      const normal = neighbour.normal as Vec3
+      const alignment = Math.abs(dot(normal, face.cylinder.axis))
+      if (alignment < 0.5) continue
+      const outward = dot(normal, [
+        center[0] - centroid3[0],
+        center[1] - centroid3[1],
+        center[2] - centroid3[2],
+      ])
+      const score = alignment + outward * 0.001
+      if (score > bestScore) {
+        bestScore = score
+        bestNormal = normal
+        bestOffset = dot(neighbour.center, normal)
+      }
+    }
+    if (!bestNormal) {
+      const fallback = facePlanes[0] as (typeof facePlanes)[number]
+      let fallbackScore = Number.NEGATIVE_INFINITY
+      for (const plane of facePlanes) {
+        const score = dot(plane.normal, [
+          center[0] - centroid3[0],
+          center[1] - centroid3[1],
+          center[2] - centroid3[2],
+        ])
+        if (score > fallbackScore) {
+          fallbackScore = score
+          bestNormal = plane.normal
+          bestOffset = plane.offset
+        }
+      }
+      void fallback
+    }
+    if (!bestNormal) return
+    const denom = dot(face.cylinder.axis, bestNormal)
+    if (Math.abs(denom) < 0.05) return
+    const t = (bestOffset - dot(center, bestNormal)) / denom
+    face.cylinder.center = [
+      center[0] + t * face.cylinder.axis[0],
+      center[1] + t * face.cylinder.axis[1],
+      center[2] + t * face.cylinder.axis[2],
+    ]
+  })
   return {
     faces,
     xAxis: [seated.xAxis.x, seated.xAxis.y, seated.xAxis.z],
