@@ -729,6 +729,37 @@ export function PreflightPage() {
     if (!guess) return null
     return partSectionForCode(guess.code, guess.dims ?? [])
   }, [viewing, sectionGuesses])
+  // STEP → IR must never read the NC. Use the STEP/drawing detector's profile, dims and catalogue
+  // section, plus the STEP-read length. NC-only fallbacks are deliberately excluded here.
+  const stepIrGuess = viewing ? sectionGuesses.get(viewing.mark) : undefined
+  const stepIrSection = useMemo(
+    () => (stepIrGuess ? partSectionForCode(stepIrGuess.code, stepIrGuess.dims ?? []) : null),
+    [stepIrGuess],
+  )
+  const stepIrProfile = stepIrGuess?.code ?? viewing?.expected?.profile ?? null
+  const stepIrDims = stepIrGuess?.dims ?? []
+  const stepIrRadius = useMemo(() => {
+    const fromGuess = stepIrGuess?.dims?.[4]
+    if (fromGuess != null && fromGuess > 0) return fromGuess
+    const section = stepIrSection
+    const hole = section?.holes?.[0]
+    if (!section || !hole) return 0
+    const span = (points: [number, number][], axis: 0 | 1): number => {
+      let min = Number.POSITIVE_INFINITY
+      let max = Number.NEGATIVE_INFINITY
+      for (const point of points) {
+        min = Math.min(min, point[axis])
+        max = Math.max(max, point[axis])
+      }
+      return max - min
+    }
+    const wall = Math.min(
+      (span(section.points, 0) - span(hole, 0)) / 2,
+      (span(section.points, 1) - span(hole, 1)) / 2,
+    )
+    return wall > 0 ? 2.5 * wall : 0
+  }, [stepIrGuess, stepIrSection])
+
   const viewerStock = useMemo(() => {
     if (!viewingStepSection || viewingStepSection.points.length < 3) return stock
     return {
@@ -880,14 +911,10 @@ export function PreflightPage() {
   useEffect(() => {
     setViewingStepIr(null)
     if (!viewing || !stepBytes) return
-    const profile = viewingProfileCode
-    const section =
-      viewingNcSection ??
-      viewingStepSection?.points ??
-      (Array.isArray(stock?.points) ? stock.points : null)
+    const profile = stepIrProfile
+    const section = stepIrSection?.points ?? null
     if (!profile || !section || section.length < 3) return
-    const dims =
-      viewingDims.length >= 2 ? viewingDims : (sectionGuesses.get(viewing.mark)?.dims ?? [])
+    const dims = stepIrDims
     if (dims.length < 2) return
     let cancelled = false
     const build = (meshed: import('@/lib/step/mesh').MeshedStep): void => {
@@ -896,10 +923,10 @@ export function PreflightPage() {
           mark: `${viewing.mark} · STEP`,
           profile,
           dimensions: dims,
-          length: viewing.nc?.length ?? stepLengths.get(viewing.mark) ?? 0,
+          length: stepLengths.get(viewing.mark) ?? 0,
           section,
-          innerSection: viewingStepSection?.holes?.[0],
-          radius: viewingCornerRadius,
+          innerSection: stepIrSection?.holes?.[0],
+          radius: stepIrRadius,
         })
         if (!cancelled) setViewingStepIr(ir)
       } catch {
@@ -924,14 +951,12 @@ export function PreflightPage() {
   }, [
     viewing,
     stepBytes,
-    viewingProfileCode,
-    viewingDims,
-    viewingNcSection,
-    viewingStepSection,
+    stepIrProfile,
+    stepIrDims,
+    stepIrSection,
     stock,
-    sectionGuesses,
     stepLengths,
-    viewingCornerRadius,
+    stepIrRadius,
   ])
   const viewingStepIrGeom = useMemo(
     () => (viewingStepIr ? partIrToNcGeometry(viewingStepIr) : null),
@@ -1498,8 +1523,8 @@ export function PreflightPage() {
           const length =
             materials.get(part.mark)?.length ?? part.expected?.length ?? part.nc?.length
           const cross = part.nc?.dimensions?.slice(0, 2) ?? []
-          // No NC and no part list? The section can only come from the geometry.
-          const needSection = !listedProfile(part)
+          // Always read the section from the STEP: the STEP → IR path must not fall back to NC.
+          const needSection = true
           try {
             const inspected = await pool.inspect(bytes, { detectSection: needSection })
             if (cancelled) return
@@ -1658,10 +1683,10 @@ export function PreflightPage() {
           const pool = getStepWorkerPool()
           let measure: StepMeasure | null = null
           if (stepBytes && (needsInspect || needsRebuild)) {
-            const needSection = !listedProfile(part)
+            // Always read the section from the STEP: the STEP → IR path must not fall back to NC.
             const inspected = await pool.inspect(stepBytes, {
               priority,
-              detectSection: needSection,
+              detectSection: true,
             })
             measure = inspected.measure
             if (inspected.section) {

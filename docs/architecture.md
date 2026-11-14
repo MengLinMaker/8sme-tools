@@ -397,6 +397,20 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
 - NC outer contours include stock edges; STEP IR only has cut rims. Compare **end cuts** and
   hole/slot geometry, not raw cut-feature counts.
 
+### App wiring (pipeline independence)
+
+`PreflightPage` builds STEP IR only from STEP/drawing data:
+
+- `sectionGuesses` (STEP section detector) → catalogue section,
+- `stepLengths` (STEP bounding-box length),
+- the detector/drawing profile and dims.
+
+It must **not** read `part.nc`, `viewing.nc`, `viewingNcSection`, `viewingDims`, or the NC-derived
+stock fallback. Because section detection used to run only for STEP-only parts, it now runs for
+every STEP part (`detectSection: true`); otherwise an NC-bearing part would have no independent
+section and the STEP IR would silently fall back to NC. The cost is a STEP section read per part;
+that is the price of a genuinely independent STEP pipeline.
+
 ### Guarding tests
 
 | test | what it locks |
