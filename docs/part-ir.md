@@ -42,15 +42,22 @@ No provenance, confidence, source blobs or duplicate interpretations. Importers 
 - **NCEP → IR → NCEP: ideal at part level.** Exact package reproduction is not expected
   (Adobe/Technology/section presentation); compare section, cuts, holes, marks and quantity.
   The importer/exporter round-trip is covered by `toNcep.test.ts`.
-- **STEP → IR → STEP: deliberately partial.** The 2-D IR carries cut boundaries well; full STEP
-  needs cut surfaces/booleans. 3-D export is deferred until the 2-D IR is stable.
+- **STEP → IR → STEP (cut lines): strict.** STEP cut edges use the same
+  `projectCutEdgesToFaces` pass as the 3-D viewer, then the same development as NC. An m71
+  round-trip test checks the IR projects back onto the identical face lines (0.0 mm reverse,
+  <0.05 mm mean forward).
+- **STEP → IR → STEP (full solid): not implemented.** The 2-D IR carries cut boundaries well; full
+  STEP needs cut surfaces/booleans. 3-D export is deferred until the 2-D IR is stable.
 
 ## Files
 
 - `src/lib/part/ir.ts` — types and chart/face lookups.
 - `src/lib/part/fromNc.ts` — DSTV NC → PartIR.
 - `src/lib/part/toNc.ts` — PartIR → canonical DSTV NC.
-- `src/lib/part/fromStep.ts` — seated STEP cut edges → PartIR. STEP cut edges are mapped point-by-point from the B-rep wire order, so rounded-corner cut lines stay curved and end cuts stay connected. Planar inner-cavity faces are excluded so flange cuts are not duplicated. Connected runs are merged and split at the seam. Corner points are mapped from the section's known corner circles (centre + radius) by arc angle. Signed bevels are carried per vertex, and NC tube root-line bevels are shifted to the outer skin for display/diff only (round-trip data stays authored).
+- `src/lib/part/fromStep.ts` — seated STEP cut edges → PartIR. Cut edges use the same
+  `projectCutEdgesToFaces` projection as the 3-D viewer, then develop onto the unrolled chart and
+  dedupe overlapping corner segments. Bevels are carried per vertex; NC tube root-line bevels are
+  shifted to the outer skin for display/diff only (round-trip data stays authored).
 - `src/lib/part/fromNcep.ts` — NCEP part SVG → PartIR (holes, truncates, marks, start/end).
 - `src/lib/part/toNcep.ts` — PartIR → NCEP part/package (shaped start/end derived from IR cuts).
 - `src/lib/part/toNcGeometry.ts` — PartIR → face-space NC geometry, the coordinate transform the 3D projector consumes.

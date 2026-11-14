@@ -65,11 +65,6 @@ function normalize(a: Vec3): Vec3 {
 export interface CutProjectionOptions {
   /** Outer corner radius (mm) — how far a corner point reaches onto the adjacent face. Default 0. */
   radius?: number
-  /**
-   * Keep each point's real B-rep along-coordinate instead of projecting the cut plane to the
-   * nominal face plane. Use this for the IR: it must show only edges that exist in the STEP.
-   */
-  preserveRim?: boolean
 }
 
 const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -169,9 +164,9 @@ export function projectCutEdgesToFaces(
               if (d > radius + 0.6 || d < -Math.max(radius, 1) - 0.6) continue
             }
             const cSpan = dot(p, plane.spanVec)
-            // Along: the real rim X for the IR; the cut-plane trace for NC/NCEP matching.
+            // Along: the cut plane's trace on this face plane (the rim X when not exploitable).
             const Xp =
-              !options.preserveRim && planarCut && Math.abs(nMember) >= 0.2
+              planarCut && Math.abs(nMember) >= 0.2
                 ? (cCut -
                     dot(nCut, plane.spanVec) * cSpan -
                     dot(nCut, crossAxis(plane.axis)) * plane.sign * plane.q) /

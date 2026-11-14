@@ -3,7 +3,7 @@ import type { NcFace } from '@/lib/parsers/ncGeometry'
 import type { MeshedStep } from '@/lib/step/mesh'
 import { profileTypeFor, type SeatedStepGeometry, seatedStepGeometry } from '@/lib/wisecam/fromStep'
 import { unrolledLayout } from '@/lib/wisecam/layout'
-import { developStepRimEdges } from '@/lib/wisecam/surface'
+import { developStepCutEdges } from '@/lib/wisecam/surface'
 import { centredStation, type PartChart, type PartFeature, type PartIr, type UvPoint } from './ir'
 
 function distanceToSegment(point: UvPoint, a: UvPoint, b: UvPoint): number {
@@ -46,8 +46,9 @@ function dedupeRuns(runs: UvPoint[][], tolerance = 0.3): UvPoint[][] {
 /**
  * STEP → PartIR (cut boundaries).
  *
- * The real part's cut edges are projected onto the stock faces and developed by the shared surface
- * core, then converted from WiseCAM's wrapped station to the IR's centred station. This is the STEP
+ * The real part's cut edges are projected onto the stock faces (the same
+ * `projectCutEdgesToFaces` pass the 3D viewer uses), then developed by the shared surface core
+ * and converted from WiseCAM's wrapped station to the IR's centred station. This is the STEP
  * half of the canonical model: no holes/marks yet (the cut-edge boundaries already include hole
  * rims as closed loops), but enough to render and compare against NC-derived IR.
  */
@@ -75,7 +76,7 @@ export function partIrFromStepGeometry(
   if (!layout) return null
   const section = options.section
   const frame = frameForProfile(options.profile, section)
-  const cuts = developStepRimEdges(
+  const cuts = developStepCutEdges(
     { ...seated, section, frame, layout },
     { radius: options.radius, alongOffset: seated.alongOffset },
   )

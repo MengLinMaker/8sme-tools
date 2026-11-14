@@ -3,9 +3,13 @@ import { createRequire } from 'node:module'
 import { nw30Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
+import { frameForProfile } from '@/lib/parsers/ncFaces'
 import { partSectionForCode } from '@/lib/sections/stock'
+import { projectCutEdgesToFaces } from '@/lib/step/cutProjection'
 import { meshStepFile } from '@/lib/step/mesh'
 import { setOcWasmUrl } from '@/lib/step/occInit'
+import { seatedStepGeometry } from '@/lib/wisecam/fromStep'
+import { centeredStationFor, unrolledLayout } from '@/lib/wisecam/layout'
 import { partIrFromNc } from './fromNc'
 import { partIrFromStepMesh } from './fromStep'
 import type { PartIr, UvPoint } from './ir'
@@ -155,6 +159,73 @@ describe('m71 strict STEP↔NC IR', () => {
       expect(ncToStep.max).toBeLessThan(4)
       expect(stepToNc.mean).toBeLessThan(1)
       expect(stepToNc.max).toBeLessThan(4)
+    },
+    120_000,
+  )
+})
+
+describe('m71 STEP cut-line round trip', () => {
+  it.skipIf(!existsSync(m71.nc) || !existsSync(m71.stp))(
+    'projects STEP cuts into IR and back onto the same face lines',
+    async () => {
+      const ncText = readFileSync(m71.nc, 'utf8')
+      const header = parseDstv(ncText).header
+      const section = partSectionForCode(header.profile, header.dimensions)
+      if (!section) throw new Error('no section')
+      const layout = unrolledLayout(header.profileType, header.dimensions)
+      if (!layout) throw new Error('no layout')
+      const meshed = await meshStepFile('m71-cut-round-trip', new Uint8Array(readFileSync(m71.stp)))
+      const seated = seatedStepGeometry(meshed, section.points)
+      const stepIr = partIrFromStepMesh(meshed, {
+        mark: 'm71-step',
+        profile: header.profile,
+        dimensions: header.dimensions,
+        length: header.length,
+        section: section.points,
+        innerSection: section.innerSection ?? section.holes?.[0],
+        radius: header.dimensions[4] ?? 0,
+      })
+      if (!stepIr) throw new Error('no STEP IR')
+
+      const frame = frameForProfile(header.profile, section.points)
+      const projected = projectCutEdgesToFaces(
+        seated.faces,
+        section.points,
+        frame,
+        seated.xAxis,
+        seated.yAxis,
+        seated.memberAxis,
+        { radius: header.dimensions[4] ?? 0 },
+      )
+      const expected: UvPoint[] = []
+      for (const face of ['v', 'o', 'u', 'h'] as const) {
+        for (const segment of projected[face]) {
+          const aStation = centeredStationFor(layout, face, segment.a.Y)
+          const bStation = centeredStationFor(layout, face, segment.b.Y)
+          if (aStation == null || bStation == null) continue
+          const a: UvPoint = [aStation, segment.a.X + seated.alongOffset]
+          const b: UvPoint = [bStation, segment.b.X + seated.alongOffset]
+          const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1])))
+          for (let step = 0; step < steps; step++) {
+            const t = step / steps
+            expected.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])
+          }
+        }
+      }
+      const actual = sampleRuns(
+        stepIr.features.flatMap((feature) =>
+          feature.kind === 'cut' && feature.shape.form === 'polyline' ? [feature.shape.points] : [],
+        ),
+      )
+      expect(expected.length).toBeGreaterThan(0)
+      expect(actual.length).toBeGreaterThan(0)
+      const expectedToActual = deviation(expected, actual)
+      const actualToExpected = deviation(actual, expected)
+      console.log('m71 cut-line round trip', { expectedToActual, actualToExpected })
+      expect(expectedToActual.mean).toBeLessThan(0.05)
+      expect(expectedToActual.max).toBeLessThan(0.5)
+      expect(actualToExpected.mean).toBeLessThan(0.05)
+      expect(actualToExpected.max).toBeLessThan(0.5)
     },
     120_000,
   )
