@@ -478,6 +478,16 @@ which is the IR chart. Every feature is just coordinates on that surface:
   re-guess a face per point and never clamp an out-of-range station.
 - Holes, slots, cuts and future marks all call the **same** `faceStation`/face-transform function.
 
+### Face junctions (corners)
+
+A cut line that crosses from one face to the next must meet at the **exact shared junction**:
+
+- The junction station is the cumulative section arc length where the two section edges meet.
+- A segment crossing a junction is split there; both adjacent face segments use that same station.
+- A corner must sit exactly on the IR line between the two face intervals; no tolerance snap, gap
+  or overlap.
+- Holes/slots and cuts use the same section-derived junction, so they cannot disagree.
+
 Invariants:
 
 - **One transform per face.** No second station formula may exist.
