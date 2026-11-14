@@ -95,7 +95,18 @@ export function projectCutEdgesToFaces(
   // A stock face runs lengthwise. Do **not** require its samples to fit the catalogue outline:
   // real PFC/web faces can miss it, and that silently dropped all their cut edges. The outer-skin
   // test is applied per edge below instead, which also excludes tube inner walls.
-  const stock = faces.map((face) => Math.abs(dot(face.normal, memberAxis)) <= 0.3)
+  //
+  // Cylinders need their **axis**, not a representative radial normal: a hole/slot wall is
+  // crosswise to the member (cut), while a rounded stock corner runs parallel to it (stock).
+  // Using the radial normal misclassified hole/slot walls and dropped their rim arcs.
+  const stock = faces.map((face) => {
+    if (face.cylinder) {
+      const axis = face.cylinder.axis
+      const length = Math.hypot(axis[0], axis[1], axis[2]) || 1
+      return Math.abs(dot(axis, memberAxis)) / length > 0.9
+    }
+    return Math.abs(dot(face.normal, memberAxis)) <= 0.3
+  })
   const crossAxis = (axis: 0 | 1): Vec3 => (axis === 0 ? xAxis : yAxis)
 
   // Each DSTV face's nominal plane: outward normal axis + side, plane offset, and span axis.
