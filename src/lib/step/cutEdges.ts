@@ -54,6 +54,8 @@ export interface CutEdgeSegment {
   faceNormal?: Vec3 | null
   /** A point on that same stock face, for exact face identification. */
   faceCenter?: Vec3 | null
+  /** Identity of the source B-rep edge (raw 3-D endpoints, quantised). */
+  edgeKey?: string
 }
 
 export interface ClassifyCutEdgesOptions {
@@ -72,6 +74,21 @@ const MIN_THICKNESS_MM = 0.05
 
 function dot(a: Vec3, b: Vec3): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+function brepEdgeKey(points: number[]): string {
+  const count = points.length / 3
+  const q = (value: number): number => Math.round(value * 100)
+  const first = [q(points[0] as number), q(points[1] as number), q(points[2] as number)]
+  const last = [
+    q(points[(count - 1) * 3] as number),
+    q(points[(count - 1) * 3 + 1] as number),
+    q(points[(count - 1) * 3 + 2] as number),
+  ]
+  const [a, b] =
+    `${first[0]},${first[1]},${first[2]}` < `${last[0]},${last[1]},${last[2]}`
+      ? [first, last]
+      : [last, first]
+  return `${a?.join(',')}|${b?.join(',')}`
 }
 
 function segmentDistance(
@@ -593,6 +610,7 @@ export function brepCutSegments(
     bevels: Bevel[],
     faceNormal: Vec3 | null,
     faceCenter: Vec3 | null,
+    edgeKey?: string,
   ): void => {
     const value = Math.round(thickness * 10) / 10
     for (let k = 0, s = 0; k + 5 < points.length; k += 3, s++) {
@@ -603,6 +621,7 @@ export function brepCutSegments(
         bevelDir: bevel.dir,
         faceNormal,
         faceCenter,
+        edgeKey,
         points: [
           points[k] as number,
           points[k + 1] as number,
@@ -660,6 +679,7 @@ export function brepCutSegments(
             edgeBevels(edge, face.normal),
             face.normal,
             face.center,
+            brepEdgeKey(edge.points),
           )
         } else {
           const cutIndex = edge.neighbours.find((n) => !stock[n])
@@ -671,6 +691,7 @@ export function brepCutSegments(
             edgeBevels(edge, projected.plane?.normal ?? face.normal),
             projected.plane?.normal ?? null,
             projected.plane?.center ?? null,
+            brepEdgeKey(edge.points),
           )
         }
       }

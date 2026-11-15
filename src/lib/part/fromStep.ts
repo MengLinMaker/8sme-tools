@@ -321,6 +321,9 @@ function brepProjectedRuns(
     targetNormals,
     { targetOffsets },
   )
+  const emittedEdges = new Set(
+    segments.map((segment) => segment.edgeKey).filter((key): key is string => Boolean(key)),
+  )
   const runs: UvPoint[][] = []
   for (const segment of segments) {
     if (!segment.faceNormal) continue
@@ -378,6 +381,25 @@ function brepProjectedRuns(
     for (const edge of wire.edges) {
       const count = edge.points.length / 3
       if (count < 2) continue
+      const edgeKey = (() => {
+        const q = (value: number): number => Math.round(value * 100)
+        const first = [
+          q(edge.points[0] as number),
+          q(edge.points[1] as number),
+          q(edge.points[2] as number),
+        ]
+        const last = [
+          q(edge.points[(count - 1) * 3] as number),
+          q(edge.points[(count - 1) * 3 + 1] as number),
+          q(edge.points[(count - 1) * 3 + 2] as number),
+        ]
+        const [a, b] =
+          `${first[0]},${first[1]},${first[2]}` < `${last[0]},${last[1]},${last[2]}`
+            ? [first, last]
+            : [last, first]
+        return `${a?.join(',')}|${b?.join(',')}`
+      })()
+      if (emittedEdges.has(edgeKey)) continue
       const first: Vec3 = [
         edge.points[0] as number,
         edge.points[1] as number,
