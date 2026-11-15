@@ -378,6 +378,25 @@ function brepProjectedRuns(
     for (const edge of wire.edges) {
       const count = edge.points.length / 3
       if (count < 2) continue
+      const first: Vec3 = [
+        edge.points[0] as number,
+        edge.points[1] as number,
+        edge.points[2] as number,
+      ]
+      const last: Vec3 = [
+        edge.points[(count - 1) * 3] as number,
+        edge.points[(count - 1) * 3 + 1] as number,
+        edge.points[(count - 1) * 3 + 2] as number,
+      ]
+      const dx = last[0] - first[0]
+      const dy = last[1] - first[1]
+      const dz = last[2] - first[2]
+      const total = Math.hypot(dx, dy, dz)
+      const along = Math.abs(
+        dx * seated.memberAxis[0] + dy * seated.memberAxis[1] + dz * seated.memberAxis[2],
+      )
+      // Only short cut-face edges collinear with the beam are the missing end closure edges.
+      if (!(total > 0.2 && total < 100 && along > total * 0.8)) continue
       const midIndex = Math.floor(count / 2) * 3
       const mid: Vec3 = [
         edge.points[midIndex] as number,
