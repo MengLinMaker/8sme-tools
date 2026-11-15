@@ -97,6 +97,182 @@ export interface SeatedStepGeometry {
   length: number
 }
 
+/** Fit the seated stock faces onto the spec section planes with a scale-1 rigid transform. */
+function fitStockFacesToSection(
+  faces: SeatedBrepFace[],
+  section: [number, number][],
+  xAxis: Vec3,
+  yAxis: Vec3,
+): void {
+  const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const [x, y] of section) {
+    minX = Math.min(minX, x)
+    maxX = Math.max(maxX, x)
+    minY = Math.min(minY, y)
+    maxY = Math.max(maxY, y)
+  }
+  const planes: { normal: Vec3; offset: number }[] = [
+    { normal: xAxis, offset: maxX },
+    { normal: [-xAxis[0], -xAxis[1], -xAxis[2]], offset: -minX },
+    { normal: yAxis, offset: maxY },
+    { normal: [-yAxis[0], -yAxis[1], -yAxis[2]], offset: -minY },
+  ]
+  const solve3 = (matrix: number[][], rhs: number[]): number[] | null => {
+    const a = matrix.map((row, index) => [...row, rhs[index] as number])
+    for (let column = 0; column < 3; column++) {
+      let pivot = column
+      for (let row = column + 1; row < 3; row++)
+        if (Math.abs(a[row]?.[column] as number) > Math.abs(a[pivot]?.[column] as number))
+          pivot = row
+      if (Math.abs(a[pivot]?.[column] as number) < 1e-10) return null
+      ;[a[column], a[pivot]] = [a[pivot] as number[], a[column] as number[]]
+      const divisor = a[column]?.[column] as number
+      for (let k = column; k <= 3; k++)
+        (a[column] as number[])[k] = (a[column] as number[])[k]! / divisor
+      for (let row = 0; row < 3; row++) {
+        if (row === column) continue
+        const factor = a[row]?.[column] as number
+        for (let k = column; k <= 3; k++)
+          (a[row] as number[])[k] = (a[row] as number[])[k]! - factor * (a[column] as number[])[k]!
+      }
+    }
+    return a.map((row) => row[3] as number)
+  }
+  const apply = (quaternion: Quaternion, translation: Vector3): void => {
+    const transform = (value: Vec3): Vec3 => {
+      const rotated = new Vector3(value[0], value[1], value[2]).applyQuaternion(quaternion)
+      return [rotated.x + translation.x, rotated.y + translation.y, rotated.z + translation.z]
+    }
+    for (const face of faces) {
+      face.center = transform(face.center)
+      face.normal = new Vector3(face.normal[0], face.normal[1], face.normal[2])
+        .applyQuaternion(quaternion)
+        .toArray() as Vec3
+      const samples: number[] = []
+      for (let index = 0; index + 2 < face.samples.length; index += 3) {
+        const point = transform([
+          face.samples[index] as number,
+          face.samples[index + 1] as number,
+          face.samples[index + 2] as number,
+        ])
+        samples.push(point[0], point[1], point[2])
+      }
+      face.samples = samples
+      if (face.cylinder)
+        face.cylinder = {
+          ...face.cylinder,
+          center: transform(face.cylinder.center),
+          axis: new Vector3(face.cylinder.axis[0], face.cylinder.axis[1], face.cylinder.axis[2])
+            .applyQuaternion(quaternion)
+            .toArray() as Vec3,
+        }
+      for (const wire of face.wires)
+        for (const edge of wire.edges) {
+          const points: number[] = []
+          for (let index = 0; index + 2 < edge.points.length; index += 3) {
+            const point = transform([
+              edge.points[index] as number,
+              edge.points[index + 1] as number,
+              edge.points[index + 2] as number,
+            ])
+            points.push(point[0], point[1], point[2])
+          }
+          edge.points = points
+        }
+    }
+  }
+
+  for (let iteration = 0; iteration < 3; iteration++) {
+    const pairs: { normal: Vec3; offset: number; center: Vec3 }[] = []
+    for (const face of faces) {
+      if (!face.planar) continue
+      if (Math.abs(dot(face.normal, xAxis)) < 0.98 && Math.abs(dot(face.normal, yAxis)) < 0.98)
+        continue
+      let plane: (typeof planes)[number] | null = null
+      let score = 0.98
+      for (const entry of planes) {
+        const alignment = dot(face.normal, entry.normal)
+        if (alignment > score) {
+          score = alignment
+          plane = entry
+        }
+      }
+      if (!plane) continue
+      if (Math.abs(dot(face.center, plane.normal) - plane.offset) > 3) continue
+      pairs.push({ normal: plane.normal, offset: plane.offset, center: face.center })
+    }
+    if (pairs.length < 3) return
+    const normalMatrix: number[][] = Array.from({ length: 3 }, () => [0, 0, 0])
+    const normalRhs = [0, 0, 0]
+    for (const face of faces) {
+      if (!face.planar) continue
+      let pair: (typeof pairs)[number] | null = null
+      for (const entry of pairs)
+        if (dot(face.normal, entry.normal) > 0.98) {
+          pair = entry
+          break
+        }
+      if (!pair) continue
+      const n = face.normal
+      const r: Vec3 = [pair.normal[0] - n[0], pair.normal[1] - n[1], pair.normal[2] - n[2]]
+      const rows = [
+        [0, -n[2], n[1]],
+        [n[2], 0, -n[0]],
+        [-n[1], n[0], 0],
+      ]
+      for (let row = 0; row < 3; row++) {
+        for (let column = 0; column < 3; column++) {
+          for (let other = 0; other < 3; other++)
+            normalMatrix[column]![other]! +=
+              (rows[row] as number[])[column]! * (rows[row] as number[])[other]!
+        }
+        for (let column = 0; column < 3; column++)
+          normalRhs[column]! += (rows[row] as number[])[column]! * r[row]!
+      }
+    }
+    const solved = solve3(normalMatrix, normalRhs)
+    if (!solved) return
+    const omega = solved.map((value) => -(value as number))
+    const angle = Math.hypot(omega[0] as number, omega[1] as number, omega[2] as number)
+    if (angle > 0.05) return
+    const axis =
+      angle > 1e-12
+        ? new Vector3(
+            (omega[0] as number) / angle,
+            (omega[1] as number) / angle,
+            (omega[2] as number) / angle,
+          )
+        : new Vector3(0, 1, 0)
+    const quaternion = new Quaternion().setFromAxisAngle(axis, angle)
+
+    const translationMatrix: number[][] = Array.from({ length: 3 }, () => [0, 0, 0])
+    const translationRhs = [0, 0, 0]
+    for (const pair of pairs) {
+      const rotated = new Vector3(pair.center[0], pair.center[1], pair.center[2]).applyQuaternion(
+        quaternion,
+      )
+      const b = pair.offset - dot(pair.normal, [rotated.x, rotated.y, rotated.z])
+      for (let row = 0; row < 3; row++) {
+        for (let column = 0; column < 3; column++)
+          translationMatrix[row]![column]! += pair.normal[row]! * pair.normal[column]!
+        translationRhs[row]! += pair.normal[row]! * b
+      }
+    }
+    // Planes do not constrain translation along the member; regularise that null direction.
+    for (let index = 0; index < 3; index++) (translationMatrix[index] as number[])[index]! += 1e-6
+    const translation = solve3(translationMatrix, translationRhs)
+    if (!translation) return
+    apply(
+      quaternion,
+      new Vector3(translation[0] as number, translation[1] as number, translation[2] as number),
+    )
+  }
+}
+
 /** Seat a meshed STEP to the stock section and flatten its B-rep into the model frame. */
 export function seatedStepGeometry(
   meshed: MeshedStep,
@@ -156,6 +332,12 @@ export function seatedStepGeometry(
         })),
       }
     }),
+  )
+  fitStockFacesToSection(
+    faces,
+    section,
+    [seated.xAxis.x, seated.xAxis.y, seated.xAxis.z],
+    [seated.yAxis.x, seated.yAxis.y, seated.yAxis.z],
   )
   // Normalise every cylindrical cut centre to the point where its axis meets the entry stock
   // face. The raw OCC centre is somewhere on the axis (mid-wall/arbitrary station); the NC and the

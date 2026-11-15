@@ -16,7 +16,7 @@ setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
 const dot = (a: number[], b: number[]): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
 describe('raw STEP hole centres', () => {
-  it.fails('m137: along matches the NC holes', async () => {
+  it('m137: along matches the NC holes', async () => {
     const ncText = readFileSync(fixture('part-ir', 'm137.nc1'), 'utf8')
     const header = parseDstv(ncText).header
     const section = partSectionForCode(header.profile, header.dimensions)

@@ -400,6 +400,11 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
   are a slot. Intersect the cylinder **axis with the entry face plane** for the centre; do not use
   the mid-wall centre. Unpaired open cylinders are rounded cuts, not holes. This is what stopped
   PFC holes from disappearing when rim chaining failed.
+- **Stock-face fit:** before mapping, fit a scale-1 rigid transform from the large planar stock
+  faces onto the spec section planes (signed normals + offsets, translation along the member
+  unconstrained/regularised). This removes the ~0.97° seating tilt without using hole centres.
+  Re-run until the residual is negligible; if it cannot converge, the STEP is not a straight
+  prismatic member.
 - **One transform per face:** `faceStation(face, point, …)` is the inverse of `placeNcFace` and is
   the only station formula. Holes, slots and cut segments all call it; never duplicate the
   half-span/across-sign maths in a second path.

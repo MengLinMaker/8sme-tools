@@ -32,13 +32,11 @@ describe('measured STEP face widths', () => {
       )
       const widths = ir?.charts[0]?.faceWidths
       expect(widths).toBeTruthy()
-      // Labels/debug are measured STEP face widths, not the catalogue spec. For these PFCs the
-      // flange face is ~3.8 mm wider than the nominal 50 mm; lock the measured value.
+      // The face fit removes the slanted-edge artifact; the measured flange is the spec 50 mm.
       for (const face of ['u', 'o'] as const) {
         const measured = widths?.[face]
         expect(measured).toBeDefined()
-        expect(Math.abs((measured as number) - 53.8)).toBeLessThan(0.5)
-        expect(measured as number).toBeGreaterThan(50)
+        expect(Math.abs((measured as number) - 50)).toBeLessThan(0.5)
       }
     }, 120_000)
   }
