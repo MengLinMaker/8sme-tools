@@ -378,26 +378,6 @@ function brepProjectedRuns(
     for (const edge of wire.edges) {
       const count = edge.points.length / 3
       if (count < 2) continue
-      const first: Vec3 = [
-        edge.points[0] as number,
-        edge.points[1] as number,
-        edge.points[2] as number,
-      ]
-      const last: Vec3 = [
-        edge.points[(count - 1) * 3] as number,
-        edge.points[(count - 1) * 3 + 1] as number,
-        edge.points[(count - 1) * 3 + 2] as number,
-      ]
-      const dx = last[0] - first[0]
-      const dy = last[1] - first[1]
-      const dz = last[2] - first[2]
-      const total = Math.hypot(dx, dy, dz)
-      const along = Math.abs(
-        dx * seated.memberAxis[0] + dy * seated.memberAxis[1] + dz * seated.memberAxis[2],
-      )
-      // Only the short cut edge collinear with the member closes these end contours. Other
-      // cut-face wire edges are already represented by the stock-face walk.
-      if (!(total > 0.2 && total < 100 && along > total * 0.8)) continue
       const midIndex = Math.floor(count / 2) * 3
       const mid: Vec3 = [
         edge.points[midIndex] as number,
@@ -438,6 +418,21 @@ function brepProjectedRuns(
         if (uv) mapped.push(uv)
       }
       if (mapped.length < 2) continue
+      // Include only edges not already represented by a stock-face run; this is the principled
+      // dedupe that avoids the extra cut-face lines.
+      const covered = runs.some((run) =>
+        mapped.every((point) =>
+          run.some(
+            (segment, index) =>
+              index + 1 < run.length &&
+              Math.min(
+                distanceToSegment(point, segment, run[index + 1] as UvPoint),
+                distanceToSegment(point, run[index + 1] as UvPoint, segment),
+              ) < 0.75,
+          ),
+        ),
+      )
+      if (covered) continue
       const key = mapped.map((point) => `${point[0].toFixed(1)},${point[1].toFixed(1)}`).join('|')
       const reverse = [...mapped]
         .reverse()
