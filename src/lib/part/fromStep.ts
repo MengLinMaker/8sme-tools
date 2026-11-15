@@ -7,6 +7,7 @@ import {
   resolveFaceSign,
 } from '@/lib/parsers/ncFaces'
 import type { NcFace } from '@/lib/parsers/ncGeometry'
+import { CUT_FACES, faceNormalSigns, faceRole, profileFamily } from '@/lib/sections/canonical'
 import { brepCutSegments, isStockFace, type Vec3 } from '@/lib/step/cutEdges'
 import type { MeshedStep } from '@/lib/step/mesh'
 import type { SectionSeat } from '@/lib/step/seat'
@@ -273,6 +274,7 @@ function brepProjectedRuns(
   innerSection: [number, number][] | undefined,
   alongOffset: number,
   wrapSeam: boolean,
+  profile: string,
 ): UvPoint[][] {
   const planes = (['v', 'o', 'u', 'h'] as NcFace[]).map((face) => {
     const spanAxis = faceSpanAxis(frame, face)
@@ -292,6 +294,20 @@ function brepProjectedRuns(
   })
   const ranges = new Map<NcFace, [number, number] | null>()
   for (const entry of planes) ranges.set(entry.face, centeredStationRange(layout, entry.face))
+  const family = profileFamily(profile)
+  const cutFaces = family ? (CUT_FACES[family] ?? ['o', 'u', 'h']) : (['o', 'u', 'h'] as NcFace[])
+  const targetNormals: Vec3[] = []
+  const targetOffsets: (number | undefined)[] = []
+  for (const face of cutFaces) {
+    const role = family ? faceRole(family, face) : 'side'
+    const base = role === 'side' ? seated.xAxis : seated.yAxis
+    for (const sign of family ? faceNormalSigns(family, face) : ([1] as const)) {
+      targetNormals.push([base[0] * sign, base[1] * sign, base[2] * sign])
+      targetOffsets.push(
+        family === 'i' && (face === 'v' || face === 'h') ? frame.webHalf : undefined,
+      )
+    }
+  }
   const segments = brepCutSegments(
     seated.faces,
     section,
@@ -299,7 +315,8 @@ function brepProjectedRuns(
     seated.xAxis,
     seated.yAxis,
     seated.memberAxis,
-    null,
+    targetNormals,
+    { targetOffsets },
   )
   const runs: UvPoint[][] = []
   for (const segment of segments) {
@@ -441,8 +458,18 @@ export function projectStepCutRuns(
   innerSection: [number, number][] | undefined,
   alongOffset: number,
   wrapSeam = false,
+  profile = '',
 ): UvPoint[][] {
-  return brepProjectedRuns(seated, layout, frame, section, innerSection, alongOffset, wrapSeam)
+  return brepProjectedRuns(
+    seated,
+    layout,
+    frame,
+    section,
+    innerSection,
+    alongOffset,
+    wrapSeam,
+    profile,
+  )
 }
 
 /** Joins runs whose endpoints meet at a face boundary, so an end cut is one continuous polyline. */
@@ -581,6 +608,7 @@ export function partIrFromStepGeometry(
           options.innerSection,
           seated.alongOffset,
           profileType === 'M',
+          options.profile,
         )
   const runs: UvPoint[][] =
     openRuns.length > 0

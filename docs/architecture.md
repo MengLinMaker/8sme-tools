@@ -422,6 +422,9 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
   runs whose endpoints meet (up to 5 mm) before emitting IR features. For open sections (`U`),
   include the channel-side faces in the projection (`includeInner`); the outer-outline-only test
   drops half the PFC end cut.
+- **Open-section STEP IR uses the same `brepCutSegments` targets as the 3-D viewer**
+  (`CUT_FACES`/`faceNormalSigns`), never `targetNormals = null`. Null targets include additional
+  stock faces and produce IR cut lines the projection does not draw.
 - **Open-section STEP IR is generated from `brepCutSegments`** — the same projected 3-D
   segments the viewer draws — not from a second `developStepCutEdges` detection. Carry each
   segment's projected stock-face **normal and centre**, identify that manufacturing face once

@@ -77,6 +77,7 @@ describe('STEP IR cut length preservation', () => {
         section.holes?.[0],
         seated.alongOffset,
         false,
+        header.profile,
       ).filter((run) => {
         const mid: UvPoint = [
           run.reduce((sum, p) => sum + p[0], 0) / run.length,
