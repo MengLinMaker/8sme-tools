@@ -997,6 +997,41 @@ function mountScene(
             })),
           }
         })
+        if (
+          typeof window !== 'undefined' &&
+          new URLSearchParams(window.location.search).has('debugBrepEdges')
+        ) {
+          const positions: number[] = []
+          for (const face of seated)
+            for (const wire of face.wires)
+              for (const edge of wire.edges)
+                for (let index = 0; index + 5 < edge.points.length; index += 3) {
+                  positions.push(
+                    edge.points[index] as number,
+                    edge.points[index + 1] as number,
+                    edge.points[index + 2] as number,
+                    edge.points[index + 3] as number,
+                    edge.points[index + 4] as number,
+                    edge.points[index + 5] as number,
+                  )
+                }
+          if (positions.length > 0) {
+            const geometry = new BufferGeometry()
+            geometry.setAttribute('position', new Float32BufferAttribute(positions, 3))
+            const debug = new LineSegments(
+              geometry,
+              new LineBasicMaterial({
+                color: 0xff00ff,
+                depthTest: false,
+                transparent: true,
+                opacity: 0.9,
+              }),
+            )
+            debug.renderOrder = 999
+            debug.frustumCulled = false
+            scene.add(debug)
+          }
+        }
         const cuts = brepCutSegments(
           seated,
           profile,
