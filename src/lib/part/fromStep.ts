@@ -605,7 +605,7 @@ export function partIrFromStepGeometry(
   if (openRuns.length > 0) {
     // Exact projection fidelity for open sections: one IR segment per projected segment. Do not
     // merge/chain, which invented horizontal connectors that were absent from the 3-D cut lines.
-    for (const points of openRuns) {
+    for (const points of mergeRuns(openRuns, 0.05)) {
       if (points.every((point) => features.some((feature) => insideFeature(point, feature)))) {
         continue
       }

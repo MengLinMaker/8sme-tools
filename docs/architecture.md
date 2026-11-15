@@ -413,6 +413,9 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
   the mapping. **Closed tubes (`M`) may split/wrap at the seam. Open sections (`U`/PFC) must not
   wrap** — the cut continues and may overrun the nominal chart edge. The SVG renderer draws IR
   coordinates exactly; it does not offset faces.
+- **Touching segments:** adjacent projected samples of the same cut are chained only when their
+  endpoints are within 0.05 mm. No bridging/connectors; this removes the tiny unenclosed fragments
+  without inventing lines.
 - **Length preservation:** the sum of IR cut lengths for an open section must equal the sum of the
   projected cut lengths (excluding hole/slot rims); `cut-lengths.test.ts` enforces this.
 - **End cuts must be continuous.** Per-face chaining leaves breaks at face boundaries. Merge cut
