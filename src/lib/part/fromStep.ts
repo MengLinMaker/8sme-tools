@@ -294,9 +294,6 @@ function brepProjectedRuns(
   })
   const ranges = new Map<NcFace, [number, number] | null>()
   for (const entry of planes) ranges.set(entry.face, centeredStationRange(layout, entry.face))
-  const stockFaces = seated.faces.map((face) =>
-    isStockFace(face, section, seated.xAxis, seated.yAxis, seated.memberAxis),
-  )
   const family = profileFamily(profile)
   const cutFaces = family ? (CUT_FACES[family] ?? ['o', 'u', 'h']) : (['o', 'u', 'h'] as NcFace[])
   const targetNormals: Vec3[] = []
@@ -320,9 +317,6 @@ function brepProjectedRuns(
     seated.memberAxis,
     targetNormals,
     { targetOffsets },
-  )
-  const emittedEdges = new Set(
-    segments.map((segment) => segment.edgeKey).filter((key): key is string => Boolean(key)),
   )
   const runs: UvPoint[][] = []
   for (const segment of segments) {
@@ -369,120 +363,6 @@ function brepProjectedRuns(
     if (a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.05) {
       if (wrapSeam) runs.push(...splitAtSeam(a, b, layout.seam))
       else runs.push([a, b])
-    }
-  }
-  // Edges on cut faces are not walked by the target-stock-face loop. Develop their outer wires
-  // too, projecting each to the nearest target plane, and dedupe against existing cuts.
-  const seen = new Set<string>()
-  for (const [faceIndex, face] of seated.faces.entries()) {
-    if (face.cylinder || stockFaces[faceIndex]) continue
-    const wire = face.wires.find((entry) => !entry.enclosed)
-    if (!wire) continue
-    for (const edge of wire.edges) {
-      const count = edge.points.length / 3
-      if (count < 2) continue
-      const edgeKey = (() => {
-        const q = (value: number): number => Math.round(value * 100)
-        const first = [
-          q(edge.points[0] as number),
-          q(edge.points[1] as number),
-          q(edge.points[2] as number),
-        ]
-        const last = [
-          q(edge.points[(count - 1) * 3] as number),
-          q(edge.points[(count - 1) * 3 + 1] as number),
-          q(edge.points[(count - 1) * 3 + 2] as number),
-        ]
-        const [a, b] =
-          `${first[0]},${first[1]},${first[2]}` < `${last[0]},${last[1]},${last[2]}`
-            ? [first, last]
-            : [last, first]
-        return `${a?.join(',')}|${b?.join(',')}`
-      })()
-      if (emittedEdges.has(edgeKey)) continue
-      const first: Vec3 = [
-        edge.points[0] as number,
-        edge.points[1] as number,
-        edge.points[2] as number,
-      ]
-      const last: Vec3 = [
-        edge.points[(count - 1) * 3] as number,
-        edge.points[(count - 1) * 3 + 1] as number,
-        edge.points[(count - 1) * 3 + 2] as number,
-      ]
-      const dx = last[0] - first[0]
-      const dy = last[1] - first[1]
-      const dz = last[2] - first[2]
-      const total = Math.hypot(dx, dy, dz)
-      const along = Math.abs(
-        dx * seated.memberAxis[0] + dy * seated.memberAxis[1] + dz * seated.memberAxis[2],
-      )
-      // Only short cut-face edges collinear with the beam are the missing end closure edges.
-      if (!(total > 0.2 && total < 100 && along > total * 0.8)) continue
-      const midIndex = Math.floor(count / 2) * 3
-      const mid: Vec3 = [
-        edge.points[midIndex] as number,
-        edge.points[midIndex + 1] as number,
-        edge.points[midIndex + 2] as number,
-      ]
-      let plane = planes[0] as (typeof planes)[number]
-      let best = Number.POSITIVE_INFINITY
-      for (const entry of planes) {
-        const distance = Math.abs(dot3(mid, entry.normal) - entry.q)
-        if (distance < best) {
-          best = distance
-          plane = entry
-        }
-      }
-      const mapped: UvPoint[] = []
-      for (let index = 0; index < count; index++) {
-        const point: Vec3 = [
-          edge.points[index * 3] as number,
-          edge.points[index * 3 + 1] as number,
-          edge.points[index * 3 + 2] as number,
-        ]
-        const d = dot3(point, plane.normal) - plane.q
-        const projected: Vec3 = [
-          point[0] - d * plane.normal[0],
-          point[1] - d * plane.normal[1],
-          point[2] - d * plane.normal[2],
-        ]
-        const uv = faceStation(
-          plane.face,
-          projected,
-          plane.spanVec,
-          layout,
-          frame,
-          alongOffset,
-          seated.memberAxis,
-        )
-        if (uv) mapped.push(uv)
-      }
-      if (mapped.length < 2) continue
-      // Include only edges not already represented by a stock-face run; this is the principled
-      // dedupe that avoids the extra cut-face lines.
-      const covered = runs.some((run) =>
-        mapped.every((point) =>
-          run.some(
-            (segment, index) =>
-              index + 1 < run.length &&
-              Math.min(
-                distanceToSegment(point, segment, run[index + 1] as UvPoint),
-                distanceToSegment(point, run[index + 1] as UvPoint, segment),
-              ) < 0.75,
-          ),
-        ),
-      )
-      if (covered) continue
-      const key = mapped.map((point) => `${point[0].toFixed(1)},${point[1].toFixed(1)}`).join('|')
-      const reverse = [...mapped]
-        .reverse()
-        .map((point) => `${point[0].toFixed(1)},${point[1].toFixed(1)}`)
-        .join('|')
-      const signature = key < reverse ? key : reverse
-      if (seen.has(signature)) continue
-      seen.add(signature)
-      runs.push(mapped)
     }
   }
   return runs
