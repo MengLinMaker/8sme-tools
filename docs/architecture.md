@@ -563,5 +563,12 @@ not classified by stock face, transverse neighbour, outline distance, or cut-fac
 
 Edge-register result (m137): the short beam edges are **8.52 mm**, on stock/cut faces at along
 **33.9 / 40.9**, distance 0 from the stock outline. The NC end-contour points are at along
-**28.1 / 30.3**. They are not the same edge — a 3–5 mm offset matching the bevel/root-line
-convention. Do not add another short-edge filter; resolve the NC/STEP bevel side instead.
+**28.1 / 30.3**. They are not the same edge — a 3–5 mm offset.
+
+Bevel check: those short closure segments report **bevel 0** (square) and thickness 6.7 mm, so this
+is **not** the NC root-line/bevel shift. NC `startCut` is a complex multi-station start contour
+(`along` up to ~42), not a single root line.
+
+Next candidate (not yet tried): project the short edge through its **cut face plane trace** onto
+the target face, as `projectToNearest` does for non-planar stock faces, instead of using the raw
+rim points. If the start cut is a shallow planar bevel, that trace reaches the NC outer line.
