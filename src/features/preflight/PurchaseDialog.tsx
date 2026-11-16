@@ -1099,9 +1099,8 @@ function BuyList({
           size="sm"
           onClick={onDownloadTracker}
           disabled={rows.length === 0 || trackerExporting}
-          className="h-8 gap-1.5 bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:bg-emerald-600/50"
         >
-          <Download className="size-3.5" />
+          <Download />
           {trackerExporting
             ? t('preflight.purchase.trackerExporting')
             : t('preflight.purchase.downloadTracker')}
