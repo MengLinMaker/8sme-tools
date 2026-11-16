@@ -63,7 +63,33 @@ at the far-end corner (`x ≈ 6054` / `x ≈ 5278`) where the `r = −11` fillet
 flange subcuts the operator described — and the failing span is **Tw = 8 mm** from the corner end.
 
 **Never nudge/move a cut line to make the probe hit.** A cut line is where the laser goes; shifting
-it 1 mm makes the result inaccurate.
+it 1 mm makes the result inaccurate. This is about *detection*: do not cheat the probe. A
+deliberate manufacturing fix that moves a non-manufacturable **longitudinal** cut off an I-section
+root fillet is a different thing — see §3a.
+
+### §3a Adopted: root-fillet longitudinal cuts + NC move fix
+
+A cut line that runs **along the member** on the rolled web/flange root of a UB/WB/UC/WC/TFB sits
+on the concave fillet. The fillet is thicker than the plate and curves away, so the beam cannot cut
+through cleanly; the remaining material can foul the head and damage the nozzle/lens. `cutReach`
+skips lengthwise edges (they are normally the stock silhouette), so this is its own check.
+
+- `src/lib/audit/rootFillet.ts` (`assessRootFillet`) computes the fillet band in the face's NC
+  across coordinate from the header dims `[d, b, tf, tw, r]`: web faces flat over
+  `[tf + r, d − tf − r]`, flange faces flat over the full width with the fillets around the central
+  web. A longitudinal edge (`|ΔX| ≥ |ΔY|`, `≥ 10 mm`) strictly **inside** a band is `CUT_ROOT_FILLET`
+  (error). The stock edge exactly on the flat/fillet tangent is excluded, so the normal web outline
+  is not a finding.
+- The finding carries the signed NC-Y shift that clears the fillet,
+  `target = flat boundary + (placement tolerance + 1 mm)`, and the contour vertex indices on the run.
+- **Fix → `moveCutInNc`** (`src/lib/parsers/ncEdit.ts`) shifts only those vertices' Y token, so the
+  line lands on the flat plate; every other byte is preserved. It is an undoable NC override like
+  the unify-bevel / remove-cut fixes, so the manufactured model and the export both use the moved
+  line. The fix button is `Move cut off fillet`; the row highlights and the viewer pans/zooms like
+  the other findings.
+- Validated on the real `3uc-110` (`UC250*73`): a 195 mm tab edge on each web root fillet needs a
+  14 mm inward move; applying both fixes clears the check. Synthetic regression tests live in
+  `src/lib/audit/rootFillet.test.ts` and `src/lib/parsers/ncEdit.test.ts`.
 
 **Gate (final):** follow the beam inward from the cut line for the intended cut depth (`T + r`)
 **plus 1 mm**, then test whether that **endpoint is inside the solid**. If it is, the beam did not
@@ -160,6 +186,8 @@ of M36/M39.
 ## 5. Related files
 
 - `src/lib/step/sabre.ts` — light-sabre probe (`sabreShape`, `SabreFailure.tri`).
+- `src/lib/audit/rootFillet.ts` — root-fillet longitudinal cut check (`assessRootFillet`).
+- `src/lib/parsers/ncEdit.ts` — surgical NC edits (`moveCutInNc` for the root-fillet fix).
 - `src/lib/parsers/ncProject.ts` — projected cut lines (`projectNc`, `NcLineSets`).
 - `src/lib/parsers/ncGeometry.ts` — parsed NC contours/notches; `arcSamples`.
 - `src/lib/audit/cutReach.ts` — stock cut-reach audit (section-based).

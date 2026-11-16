@@ -61,7 +61,9 @@ maps DSTV faces to machine roles + enforces the cut-side rules.
 - **CUT_DEPTH detection decision log: `docs/cut-depth-architecture.md`.** Read it before adding
   a probe — it lists the rejected sabre/face approaches (stock sabre, `allFaces`, red face
   patches, section `cutReach`) and why. Sample the **NC projection cut lines**, not faces.
-  **Never nudge/move a cut line** to make a probe hit — the line is where the laser goes.
+  **Never nudge/move a cut line** to make a probe hit — the line is where the laser goes. A
+  deliberate operator fix that moves a non-manufacturable longitudinal cut off an I-section root
+  fillet (`CUT_ROOT_FILLET` → `moveCutInNc`) is allowed; it is a real NC edit, not a probe cheat.
 
 ## The two halves are INDEPENDENT
 

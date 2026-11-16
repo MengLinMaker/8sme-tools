@@ -311,6 +311,57 @@ export function setBevelInNc(ncText: string, target: SetBevelTarget): string {
   return lines.join('\n')
 }
 
+export interface MoveCutTarget {
+  /** Index of the contour in `parseNcGeometry(...).contours`. */
+  contourIndex: number
+  /** Contour vertex indices (into `points`) whose across coordinate moves. */
+  vertices: number[]
+  /** Shift to add to each selected vertex's across (Y) coordinate, in NC face coords (mm). */
+  deltaY: number
+}
+
+/**
+ * Moves a cut line across its face by shifting the **Y** coordinate of the selected contour
+ * vertices. This is the deliberate fix for a lengthwise cut sitting on a rolled root fillet: the
+ * line moves onto the flat plate, and every other field / line / whitespace is preserved. A
+ * closed contour's repeated first point moves with vertex 0 so the block stays closed.
+ */
+export function moveCutInNc(ncText: string, target: MoveCutTarget): string {
+  if (!Number.isFinite(target.deltaY) || target.deltaY === 0) return ncText
+  const lines = ncText.split(/\r?\n/)
+  const block = readContourBlocks(ncText)[target.contourIndex]
+  if (!block) return ncText
+  const wanted = new Set(target.vertices)
+  const first = block.vertices[0]?.point
+  const last = block.vertices[block.vertices.length - 1]?.point
+  const closes =
+    first != null &&
+    last != null &&
+    Math.abs(first[0] - last[0]) < 1e-6 &&
+    Math.abs(first[1] - last[1]) < 1e-6
+  if (closes && wanted.has(0)) wanted.add(block.vertices.length - 1)
+  // The other direction: a run that names the closing duplicate also moves the opening point.
+  if (closes && wanted.has(block.vertices.length - 1)) wanted.add(0)
+
+  for (const index of wanted) {
+    const vertex = block.vertices[index]
+    const raw = vertex ? lines[vertex.line] : undefined
+    if (raw == null) continue
+    const tokens = [...raw.matchAll(/\S+/g)]
+    const head = tokens[0]?.[0]
+    const offset = head && FACE.test(head) ? 1 : 0
+    const yToken = tokens[offset + 1]?.[0]
+    if (yToken == null) continue
+    const match = yToken.match(/^(-?\d+(?:\.\d+)?)(.*)$/)
+    if (!match) continue
+    const value = Number(match[1]) + target.deltaY
+    const decimals = (match[1].split('.')[1] ?? '').length
+    const replacement = `${value.toFixed(decimals)}${match[2] ?? ''}`
+    lines[vertex.line] = replaceTokens(raw, new Map([[offset + 1, replacement]]))
+  }
+  return lines.join('\n')
+}
+
 /**
  * Changes only the out-of-range welding prep on one vertex: its angle is set to `angle` (in range), or
  * the couple is deleted when `angle` is 0. In-range couples on the same vertex are left untouched.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { removeCutFromNc, removeNcHole, setBevelInNc } from './ncEdit'
+import { moveCutInNc, removeCutFromNc, removeNcHole, setBevelInNc } from './ncEdit'
 import { parseNcGeometry } from './ncGeometry'
 
 function row(head: string, x: number, y: number): string {
@@ -138,5 +138,53 @@ describe('setBevelInNc', () => {
   it('ignores an out-of-range contour index', () => {
     const before = nc(TAPER)
     expect(setBevelInNc(before, { contourIndex: 9, vertices: [3], angle: 20 })).toBe(before)
+  })
+})
+
+describe('moveCutInNc', () => {
+  /** A closed rectangle tab with one long side at Y=15 (the other vertices are untouched). */
+  const RECT = [
+    row('  v', 0, 0),
+    row(' ', 100, 0),
+    row(' ', 100, 15),
+    row(' ', 300, 15),
+    row(' ', 300, 0),
+    row(' ', 400, 0),
+    row(' ', 400, 100),
+    row(' ', 0, 100),
+    row(' ', 0, 0),
+  ].join('\n')
+
+  it('shifts only the selected vertices across the face', () => {
+    const before = nc(RECT)
+    const after = moveCutInNc(before, { contourIndex: 0, vertices: [2, 3], deltaY: 8 })
+    const points = parseNcGeometry(after).contours[0]?.points
+    expect(points?.[2]).toEqual([100, 23])
+    expect(points?.[3]).toEqual([300, 23])
+    // The X and every other vertex are untouched.
+    expect(points?.[1]).toEqual([100, 0])
+    expect(points?.[4]).toEqual([300, 0])
+    expect(after).toContain('PFC100*50')
+  })
+
+  it('keeps a closed contour closed when vertex 0 moves', () => {
+    const before = nc(RECT)
+    const after = moveCutInNc(before, { contourIndex: 0, vertices: [0], deltaY: 5 })
+    const points = parseNcGeometry(after).contours[0]?.points
+    expect(points?.[0]).toEqual([0, 5])
+    expect(points?.[points.length - 1]).toEqual([0, 5])
+  })
+
+  it('preserves a coordinate suffix and leaves the file untouched for a bad contour index', () => {
+    const suffixed = RECT.replace('15.00', '15.00s')
+    const after = moveCutInNc(nc(suffixed), { contourIndex: 0, vertices: [2], deltaY: 5 })
+    expect(after).toContain('20.00s')
+    const before = nc(RECT)
+    expect(moveCutInNc(before, { contourIndex: 9, vertices: [2], deltaY: 5 })).toBe(before)
+  })
+
+  it('is a no-op for a zero delta', () => {
+    const before = nc(RECT)
+    expect(moveCutInNc(before, { contourIndex: 0, vertices: [2], deltaY: 0 })).toBe(before)
   })
 })

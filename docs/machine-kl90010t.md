@@ -168,6 +168,13 @@ therefore ignores:
 A second wall behind the cut (`reason: 'wall'` — the beam would cut the same material twice) is
 still reported for every family, since that is an unintended pass.
 
+**Root-fillet longitudinal cuts.** `assessRootFillet` in `src/lib/audit/rootFillet.ts` covers the
+case `cutReach` deliberately skips: a cut running **along the member** on an I-section's rolled
+root fillet. The fillet is thicker and curved, so the beam cannot cut through it and can foul the
+head/nozzle/lens. The finding (error) carries the NC-Y shift onto the flat; the
+`Move cut off fillet` fix applies it with `moveCutInNc` (undoable, like the other NC fixes). See
+`docs/cut-depth-architecture.md` §3a.
+
 On **any** section, a short `reach` stub at the junction of a member end and a raw-stock edge is a
 finishing corner, not a missing cut: the cut is at the face's X extreme and within
 `END_CORNER_SPAN_MM` (half the pierce cap) of one Y extreme. Those stubs are dropped (this is what

@@ -60,12 +60,18 @@ import {
 } from '@/lib/audit/partFilter'
 import { listedProfile } from '@/lib/audit/partProfile'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
+import { assessRootFillet, type RootFilletIssue } from '@/lib/audit/rootFillet'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
 import { assessUnclosedCuts, type UnclosedCutIssue } from '@/lib/audit/unclosedCuts'
 import { findWeldingEtchings, type WeldingEtchings } from '@/lib/audit/weldingEtchings'
 import { downloadBlob, downloadText, fileStem } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
-import { removeCutFromNc, setBevelInNc, setOutOfRangeBevelInNc } from '@/lib/parsers/ncEdit'
+import {
+  moveCutInNc,
+  removeCutFromNc,
+  setBevelInNc,
+  setOutOfRangeBevelInNc,
+} from '@/lib/parsers/ncEdit'
 import { frameForProfile, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import {
@@ -180,6 +186,7 @@ function findingLocationOf(finding: Finding): number | null {
 const VISUALISABLE_CODES = new Set([
   'CUT_DEPTH',
   'CUT_CORNER',
+  'CUT_ROOT_FILLET',
   'CUT_BEVEL_CHANGE',
   'CUT_UNCLOSED',
   'CUT_CUTOUT',
@@ -361,6 +368,7 @@ type NcOp =
   | { key: string; kind: 'unifyBevel'; contourIndex: number; vertices: number[]; angle: number }
   | { key: string; kind: 'outOfRangeBevel'; contourIndex: number; vertex: number; angle: number }
   | { key: string; kind: 'removeCut'; contourIndex: number; removeVertices: [number, number] }
+  | { key: string; kind: 'moveCut'; contourIndex: number; vertices: number[]; deltaY: number }
 interface NcOverride {
   /** The original NC with every op applied, in order. */
   bytes: Uint8Array
@@ -379,6 +387,12 @@ function applyNcOp(text: string, op: NcOp): string {
       contourIndex: op.contourIndex,
       vertex: op.vertex,
       angle: op.angle,
+    })
+  if (op.kind === 'moveCut')
+    return moveCutInNc(text, {
+      contourIndex: op.contourIndex,
+      vertices: op.vertices,
+      deltaY: op.deltaY,
     })
   return removeCutFromNc(text, { contourIndex: op.contourIndex, removeVertices: op.removeVertices })
 }
@@ -417,6 +431,7 @@ function ncKeyOf(
     reach: number
     bevel: ReturnType<typeof assessBevelChange>
     unclosed: ReturnType<typeof assessUnclosedCuts>
+    rootFillet: RootFilletIssue[]
   },
 ): string | null {
   const index = typeof finding.params?.index === 'number' ? finding.params.index : -1
@@ -434,6 +449,11 @@ function ncKeyOf(
   if (finding.code === 'CUT_UNCLOSED') {
     const issue = lists.unclosed[index - (lists.reach + lists.bevel.length)]
     return issue?.removal ? `cut:${issue.contourIndex}:${issue.removal.join(',')}` : null
+  }
+  if (finding.code === 'CUT_ROOT_FILLET') {
+    const base = lists.reach + lists.bevel.length + lists.unclosed.length
+    const issue = lists.rootFillet[index - base]
+    return issue ? `fillet:${issue.contourIndex}:${issue.vertices.join(',')}` : null
   }
   return null
 }
@@ -467,7 +487,7 @@ function resolvedFindings(kind: StepFixKind): string[] {
  * cut) and rebuilds the model from it; `setBevel` edits the NC (unifying the cut line's bevel) via
  * a mini menu that offers an angle (prefilled with the recommended one) or no bevel.
  */
-type FindingFix = 'clean' | 'regenerate' | 'simplify' | 'removeCut' | 'setBevel'
+type FindingFix = 'clean' | 'regenerate' | 'simplify' | 'removeCut' | 'setBevel' | 'moveCut'
 function fixForFinding(code: string): FindingFix | null {
   if (code === 'STRAY_BODY') return 'clean'
   if (code === 'MANUFACTURE_MISMATCH' || code === 'MANUFACTURE_BORDERLINE') return 'regenerate'
@@ -475,6 +495,7 @@ function fixForFinding(code: string): FindingFix | null {
   if (code === 'CUT_UNCLOSED' || code === 'CUT_CUTOUT') return 'removeCut'
   if (code === 'CUT_BEVEL_CHANGE') return 'setBevel'
   if (code === 'BEVEL_OUT_OF_RANGE') return 'setBevel'
+  if (code === 'CUT_ROOT_FILLET') return 'moveCut'
   return null
 }
 
@@ -617,6 +638,10 @@ export function PreflightPage() {
   const [bevelChanges, setBevelChanges] = useState<Map<string, BevelChangeIssue[]>>(new Map())
   /** Per-part unclosed / stray cuts (a cut that doesn't run edge to edge). */
   const [unclosedCuts, setUnclosedCuts] = useState<Map<string, UnclosedCutIssue[]>>(new Map())
+  /** Per-part longitudinal cuts running on a rolled root fillet (UB/WB/UC/WC/TFB). */
+  const [rootFilletChecks, setRootFilletChecks] = useState<Map<string, RootFilletIssue[]>>(
+    new Map(),
+  )
   const [checking, setChecking] = useState(false)
   /** True from when a job is dropped until the whole analysis (drawings + models) finishes. */
   const [analyzing, setAnalyzing] = useState(false)
@@ -1423,6 +1448,7 @@ export function PreflightPage() {
     setReachChecks(new Map())
     setBevelChanges(new Map())
     setUnclosedCuts(new Map())
+    setRootFilletChecks(new Map())
     let cancelled = false
 
     const pdfParts = result.parts.filter((part) => {
@@ -1441,6 +1467,7 @@ export function PreflightPage() {
       const reach = new Map<string, CutReachFailure[]>()
       const bevel = new Map<string, BevelChangeIssue[]>()
       const unclosed = new Map<string, UnclosedCutIssue[]>()
+      const rootFillet = new Map<string, RootFilletIssue[]>()
       const weld = new Map<string, WeldingEtchings>()
       /** Records that cut-depth couldn't be assessed for a model, so it never passes silently. */
       const markUnchecked = (mark: string, reason: string, params?: Record<string, string>) => {
@@ -1496,12 +1523,19 @@ export function PreflightPage() {
           profile: part.nc?.profile,
         })
         if (failures.length > 0) reach.set(part.mark, failures)
+        const filletIssues = assessRootFillet(ncText, {
+          section: section.points,
+          dimensions: part.nc?.dimensions ?? [],
+          profile: part.nc?.profile,
+        })
+        if (filletIssues.length > 0) rootFillet.set(part.mark, filletIssues)
       }
       if (cancelled) return
       if (issues.size > 0) setCutIssues(new Map(issues))
       if (reach.size > 0) setReachChecks(new Map(reach))
       if (bevel.size > 0) setBevelChanges(new Map(bevel))
       if (unclosed.size > 0) setUnclosedCuts(new Map(unclosed))
+      if (rootFillet.size > 0) setRootFilletChecks(new Map(rootFillet))
       if (weld.size > 0) setWeldEtchings(new Map(weld))
 
       // Phase 1: drawings, up to CONCURRENCY at a time.
@@ -2005,6 +2039,22 @@ export function PreflightPage() {
           })
         })
       }
+      const fillet = rootFilletChecks.get(part.mark)
+      if (fillet) {
+        // One error per long cut running on a root fillet. Its marker continues after reach,
+        // bevel and unclosed, matching `viewerSabreFailures`.
+        const base =
+          (reach?.length ?? 0) + (bevel?.length ?? 0) + (unclosedCuts.get(part.mark)?.length ?? 0)
+        fillet.forEach((issue, index) => {
+          extra.push({
+            severity: issue.severity,
+            code: issue.code,
+            mark: part.mark,
+            message: issue.message,
+            params: { ...issue.params, index: base + index },
+          })
+        })
+      }
     }
     return [...result.findings, ...extra]
       .filter((finding) => finding.severity !== 'info')
@@ -2035,6 +2085,7 @@ export function PreflightPage() {
     reachChecks,
     bevelChanges,
     unclosedCuts,
+    rootFilletChecks,
     t,
   ])
 
@@ -2323,13 +2374,14 @@ export function PreflightPage() {
       reach: reachChecks.get(viewing.mark)?.length ?? 0,
       bevel: bevelChanges.get(viewing.mark) ?? [],
       unclosed: unclosedCuts.get(viewing.mark) ?? [],
+      rootFillet: rootFilletChecks.get(viewing.mark) ?? [],
     }
     viewerFindings.forEach((finding, row) => {
       const key = ncKeyOf(finding, lists)
       if (key) keys.set(row, key)
     })
     return keys
-  }, [viewing, viewerFindings, reachChecks, bevelChanges, unclosedCuts])
+  }, [viewing, viewerFindings, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks])
   /** Show or hide one row's eye, leaving every other row's toggle as it is. */
   const setRowHidden = useCallback(
     (finding: Finding, hidden: boolean) => {
@@ -2494,12 +2546,22 @@ export function PreflightPage() {
         color: issue.color,
       })
     }
+    for (const issue of rootFilletChecks.get(viewing.mark) ?? []) {
+      markers.push({
+        face: issue.face,
+        from: issue.from,
+        to: issue.to,
+        lines: issue.lines,
+        color: issue.color,
+      })
+    }
     return markers.length > 0 ? markers : null
   }, [
     viewing,
     reachChecks,
     bevelChanges,
     unclosedCuts,
+    rootFilletChecks,
     viewingNcFrame,
     viewingNcSection,
     viewingNcGeom,
@@ -2880,6 +2942,7 @@ export function PreflightPage() {
         reach: reachChecks.get(part.mark)?.length ?? 0,
         bevel: bevelChanges.get(part.mark) ?? [],
         unclosed: unclosedCuts.get(part.mark) ?? [],
+        rootFillet: rootFilletChecks.get(part.mark) ?? [],
       })
       const original = part.nc ? bytesByPath.get(part.nc.path) : undefined
       if (!key || !original) return
@@ -2889,7 +2952,7 @@ export function PreflightPage() {
       })
       setRowHidden(finding, false)
     },
-    [bytesByPath, reachChecks, bevelChanges, unclosedCuts, setRowHidden],
+    [bytesByPath, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks, setRowHidden],
   )
 
   /** Cleans one part's stray STEP bodies, keeping the real geometry untouched. */
@@ -3246,6 +3309,52 @@ export function PreflightPage() {
       }
     },
     [bytesByPath, ncOverrides, setRowHidden],
+  )
+
+  /**
+   * Moves a longitudinal cut off a rolled root fillet by editing the part's NC: every vertex on the
+   * flagged run shifts across the face by the issue's delta, so the line lands on the flat plate.
+   * The manufactured model rebuilds from the edited NC and the export ships it; the row's Undo
+   * drops the op and restores the original line.
+   */
+  const moveRootFilletCut = useCallback(
+    async (part: PartRecord, finding: Finding) => {
+      const ncPath = part.nc?.path
+      const original = ncPath ? bytesByPath.get(ncPath) : undefined
+      if (!original) return
+      const index = typeof finding.params?.index === 'number' ? finding.params.index : -1
+      const base =
+        (reachChecks.get(part.mark)?.length ?? 0) +
+        (bevelChanges.get(part.mark)?.length ?? 0) +
+        (unclosedCuts.get(part.mark)?.length ?? 0)
+      const issue = (rootFilletChecks.get(part.mark) ?? [])[index - base]
+      if (!issue) return
+      setFixingMark(part.mark)
+      try {
+        const current = ncOverrides.get(part.mark)?.ops ?? []
+        const key = `fillet:${issue.contourIndex}:${issue.vertices.join(',')}`
+        const ops = upsertOp(current, {
+          key,
+          kind: 'moveCut',
+          contourIndex: issue.contourIndex,
+          vertices: issue.vertices,
+          deltaY: issue.delta,
+        })
+        setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
+        setRowHidden(finding, true)
+      } finally {
+        setFixingMark(null)
+      }
+    },
+    [
+      bytesByPath,
+      ncOverrides,
+      reachChecks,
+      bevelChanges,
+      unclosedCuts,
+      rootFilletChecks,
+      setRowHidden,
+    ],
   )
 
   /** Opens the "unify bevel" mini menu, prefilling the recommended angle for the cut line. */
@@ -4519,6 +4628,7 @@ export function PreflightPage() {
                         canRepair:
                           Boolean(viewing.step) && modelChecks.get(viewing.mark)?.stray === true,
                         canRemoveCut: Boolean(viewing.nc),
+                        canMoveCut: Boolean(viewing.nc),
                         canSetBevel: Boolean(viewing.nc),
                         ncEdit: ncOverrides.get(viewing.mark),
                         pending: fixingMark === viewing.mark,
@@ -4528,6 +4638,7 @@ export function PreflightPage() {
                         onSimplify: () => void simplifyPart(viewing),
                         onRepair: () => void cleanTeklaPart(viewing),
                         onRemoveCut: (finding) => void removeCut(viewing, finding),
+                        onMoveCut: (finding) => void moveRootFilletCut(viewing, finding),
                         onSetBevel: (finding) => openBevelEdit(viewing, finding),
                         onUndo: () => undoOverride(viewing.mark),
                         onUndoNc: (finding) => undoNcFinding(viewing, finding),
@@ -4663,6 +4774,8 @@ interface ViewerFix {
   canRepair: boolean
   /** A `CUT_UNCLOSED` finding can be resolved by editing the NC. */
   canRemoveCut: boolean
+  /** A `CUT_ROOT_FILLET` finding can be resolved by moving the cut line off the fillet in the NC. */
+  canMoveCut: boolean
   /** A `CUT_BEVEL_CHANGE` finding can be resolved by unifying the cut line's bevel via the NC. */
   canSetBevel: boolean
   /** A `BEVEL_OUT_OF_RANGE` finding can be resolved by removing that prep from the NC. */
@@ -4675,6 +4788,7 @@ interface ViewerFix {
   onSimplify: () => void
   onRepair: () => void
   onRemoveCut: (finding: Finding) => void
+  onMoveCut: (finding: Finding) => void
   onSetBevel: (finding: Finding) => void
   onUndo: () => void
   onUndoNc: (finding: Finding) => void
@@ -4711,6 +4825,12 @@ function viewerFixAction(
       pendingLabel: t('common.actions.working'),
       run: () => fix.onSetBevel(finding),
     }
+  if (kind === 'moveCut')
+    return {
+      label: t('common.actions.moveCut'),
+      pendingLabel: t('common.actions.working'),
+      run: () => fix.onMoveCut(finding),
+    }
   return {
     label: t('common.actions.simplify'),
     pendingLabel: t('common.actions.working'),
@@ -4723,6 +4843,7 @@ function viewerFixAvailable(fix: ViewerFix, kind: FindingFix): boolean {
   if (kind === 'clean') return fix.canClean
   if (kind === 'regenerate') return fix.canRegenerate
   if (kind === 'removeCut') return fix.canRemoveCut
+  if (kind === 'moveCut') return fix.canMoveCut
   if (kind === 'setBevel') return fix.canSetBevel
   return fix.canSimplify
 }
