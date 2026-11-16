@@ -561,7 +561,7 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
     setTrackerError(null)
     try {
       const { buildPurchaseTrackerWorkbook } = await import('@/lib/purchasing/trackerWorkbook')
-      const bytes = buildPurchaseTrackerWorkbook(groups, displayPlans, jobName ?? 'job')
+      const bytes = buildPurchaseTrackerWorkbook(displayPlans, jobName ?? 'job')
       downloadBlob(
         `${fileStem(jobName ?? 'job')}-cut-delivery-tracker.xlsx`,
         new Blob([bytes], { type: XLSX_MIME }),
