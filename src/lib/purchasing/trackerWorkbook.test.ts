@@ -87,8 +87,43 @@ describe('buildPurchaseTrackerWorkbook', () => {
     expect(formulas(nesting).some((formula) => formula.includes('"Cut"'))).toBe(true)
     expect(formulas(marks).some((formula) => formula.includes('Nesting!$E'))).toBe(true)
     expect(formulas(marks).some((formula) => formula.includes('Picked up'))).toBe(true)
-    expect(formulas(buy).some((formula) => formula.includes('COUNTIFS'))).toBe(true)
+    expect(formulas(buy).some((formula) => formula.includes('SUMIF'))).toBe(true)
+    expect(formulas(buy).some((formula) => formula.includes('Nesting!$A'))).toBe(true)
+    expect(formulas(buy).every((formula) => !formula.includes('Nesting!$B'))).toBe(true)
     expect(formulas(buy).every((formula) => !formula.includes('%'))).toBe(true)
+    expect(buy.A2?.v).toBe('RHS')
+    expect(buy.B2?.v).toBe('150×100×6')
+  })
+
+  it('merges repeated beam/stock labels into group cells', () => {
+    const groups: PurchaseGroupInput[] = [
+      { ...rhsGroup(), pieces: [{ mark: 'M-1', lengthMm: 2000, quantity: 5 }] },
+    ]
+    const plans = planPurchases(groups, {
+      ...DEFAULT_TRACKER_PURCHASE_OPTIONS,
+      stockLengthsMm: [6000],
+    })
+    const bytes = buildPurchaseTrackerWorkbook(plans, 'NW31')
+    const workbook = XLSX.read(bytes, { type: 'array', cellFormula: true, sheetStubs: true })
+    expect(workbook.Sheets.Nesting?.['!merges']?.length).toBeGreaterThan(0)
+    expect(workbook.Sheets.Marks?.['!merges']?.length).toBeGreaterThan(0)
+  })
+
+  it('merges repeated family/size labels in Parts to buy', () => {
+    const groups: PurchaseGroupInput[] = [
+      rhsGroup(),
+      {
+        ...rhsGroup(),
+        key: 'profile:200x100x6 RHS',
+        stock: '200x100x6 RHS',
+        sources: ['200x100x6 RHS'],
+        pieces: [{ mark: 'M-2', lengthMm: 2000, quantity: 1 }],
+      },
+    ]
+    const plans = planPurchases(groups, DEFAULT_TRACKER_PURCHASE_OPTIONS)
+    const bytes = buildPurchaseTrackerWorkbook(plans, 'NW31')
+    const workbook = XLSX.read(bytes, { type: 'array', cellFormula: true, sheetStubs: true })
+    expect(workbook.Sheets['Parts to buy']?.['!merges']?.length).toBeGreaterThan(0)
   })
 
   it('uses the plans currently shown instead of recalculating defaults', () => {

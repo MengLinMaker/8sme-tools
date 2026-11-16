@@ -26,7 +26,7 @@ const BUY_LIST_SHEET = 'Parts to buy'
 
 const NESTING_HEADER = ['Beam', 'Stock', 'Length mm', 'Marks', 'Cut (1)', 'Status'] as const
 const MARKS_HEADER = ['Beam', 'Mark', 'Length mm', 'Cut', 'Picked up (1)', 'Status'] as const
-const BUY_HEADER = ['Stock', 'Length mm', 'Qty', 'Cut'] as const
+const BUY_HEADER = ['Family', 'Size', 'Length (m)', 'Qty', 'Cut'] as const
 
 export interface TrackerPartRow {
   beam: string
@@ -104,7 +104,37 @@ export function buildPurchaseTrackerModel(
     }
   }
 
-  return { jobName, parts, beams }
+  // Group the sheets by stock/length so repeated labels can be merged into one cell.
+  const sortedBeams = [...beams].sort(
+    (a, b) =>
+      a.stock.localeCompare(b.stock) ||
+      a.stockLength - b.stockLength ||
+      a.beam.localeCompare(b.beam, undefined, { numeric: true }),
+  )
+  const beamRank = new Map(sortedBeams.map((beam, index) => [beam.beam, index]))
+  const sortedParts = [...parts].sort(
+    (a, b) =>
+      (beamRank.get(a.beam) ?? 0) - (beamRank.get(b.beam) ?? 0) ||
+      a.mark.localeCompare(b.mark, undefined, { numeric: true }) ||
+      a.length - b.length,
+  )
+  return { jobName, parts: sortedParts, beams: sortedBeams }
+}
+
+/** Merge runs of identical values so repeated stock/size labels read as one group. */
+function addRunMerges(sheet: XLSX.WorkSheet, values: string[], col: number): void {
+  const merges = sheet['!merges'] ?? []
+  let start = 0
+  for (let index = 1; index <= values.length; index++) {
+    if (index === values.length || values[index] !== values[start]) {
+      const end = index - 1
+      if (end > start) {
+        merges.push({ s: { r: start + 1, c: col }, e: { r: end + 1, c: col } })
+      }
+      start = index
+    }
+  }
+  sheet['!merges'] = merges
 }
 
 type FormulaKind = 'n' | 's'
@@ -132,6 +162,16 @@ function nestingSheet(model: PurchaseTrackerModel): XLSX.WorkSheet {
   })
   sheet['!cols'] = [{ wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 40 }, { wch: 9 }, { wch: 11 }]
   sheet['!autofilter'] = { ref: `A1:F${Math.max(1, rows.length)}` }
+  addRunMerges(
+    sheet,
+    model.beams.map((beam) => beam.stock),
+    1,
+  )
+  addRunMerges(
+    sheet,
+    model.beams.map((beam) => `${beam.stock}|${beam.stockLength}`),
+    2,
+  )
   return sheet
 }
 
@@ -155,35 +195,100 @@ function marksSheet(model: PurchaseTrackerModel): XLSX.WorkSheet {
   })
   sheet['!cols'] = [{ wch: 16 }, { wch: 13 }, { wch: 11 }, { wch: 8 }, { wch: 12 }, { wch: 11 }]
   sheet['!autofilter'] = { ref: `A1:F${Math.max(1, rows.length)}` }
+  addRunMerges(
+    sheet,
+    model.parts.map((part) => `${part.beam}|${part.mark}`),
+    1,
+  )
   return sheet
+}
+
+/** Split a stock label into the same family / size hierarchy the buy-list UI uses. */
+function splitStock(stock: string): { family: string; size: string } {
+  const clean = stock.trim().replace(/\s+/g, '')
+  if (!clean || clean === '—') return { family: '—', size: stock }
+  const numeric = clean.match(/^(\d+(?:\.\d+)?)(UB|WB|WC|UC|TFB)(.*)$/i)
+  if (numeric) {
+    const suffix = numeric[3].replace(/^\*/, '')
+    return {
+      family: numeric[2].toUpperCase(),
+      size: suffix ? `${numeric[1]} (${suffix})` : numeric[1],
+    }
+  }
+  const channel = clean.match(/^(\d+(?:\.\d+)?)(PFC|TFC)(.*)$/i)
+  if (channel) {
+    const suffix = channel[3].replace(/^\*/, '')
+    return {
+      family: channel[2].toUpperCase(),
+      size: suffix ? `${channel[1]}*${suffix}` : channel[1],
+    }
+  }
+  const tube = clean.match(/^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(RHS|SHS)$/i)
+  if (tube) {
+    return { family: tube[4].toUpperCase(), size: `${tube[1]}×${tube[2]}×${tube[3]}` }
+  }
+  const prefix = clean.match(
+    /^(RHS|SHS|CHS|PFC|TFC|BT|EA|UA|RA|TFB|UC|WB|WC|UB|FLT|PLT|ROD|PIPE)(.*)$/i,
+  )
+  if (prefix) {
+    const size = prefix[2].replace(/^\*/, '')
+    return { family: prefix[1].toUpperCase(), size: size || clean }
+  }
+  return { family: 'Other', size: stock }
 }
 
 /** Quantity to buy per stock/length, with the number of those beams already cut. */
 function buyListSheet(model: PurchaseTrackerModel): XLSX.WorkSheet {
-  const grouped = new Map<string, { stock: string; length: number; qty: number }>()
+  const grouped = new Map<
+    string,
+    { stock: string; family: string; size: string; length: number; qty: number }
+  >()
   for (const beam of model.beams) {
     const key = `${beam.stock}|${beam.stockLength}`
     const found = grouped.get(key)
     if (found) found.qty++
-    else grouped.set(key, { stock: beam.stock, length: beam.stockLength, qty: 1 })
+    else {
+      const { family, size } = splitStock(beam.stock)
+      grouped.set(key, { stock: beam.stock, family, size, length: beam.stockLength, qty: 1 })
+    }
   }
   const buys = [...grouped.values()].sort(
-    (a, b) => a.stock.localeCompare(b.stock) || a.length - b.length,
+    (a, b) =>
+      a.family.localeCompare(b.family) ||
+      a.size.localeCompare(b.size, undefined, { numeric: true }) ||
+      a.length - b.length,
   )
-  const rows = [[...BUY_HEADER], ...buys.map((buy) => [buy.stock, buy.length, buy.qty, ''])]
+  const rows = [
+    [...BUY_HEADER],
+    ...buys.map((buy) => [buy.family, buy.size, (buy.length / 1000).toFixed(1), buy.qty, '']),
+  ]
   const sheet = XLSX.utils.aoa_to_sheet(rows)
   const nestingLastRow = Math.max(2, model.beams.length + 1)
-  buys.forEach((_, index) => {
+  buys.forEach((buy, index) => {
     const row = index + 2
-    setFormula(
-      sheet,
-      row - 1,
-      3,
-      `COUNTIFS(Nesting!$B$2:$B$${nestingLastRow},$A${row},Nesting!$C$2:$C$${nestingLastRow},$B${row},Nesting!$E$2:$E$${nestingLastRow},1)`,
-    )
+    // Count by beam id, not the merged Stock/Length display cells.
+    const formula =
+      model.beams
+        .filter((beam) => beam.stock === buy.stock && beam.stockLength === buy.length)
+        .map((beam) => {
+          const id = beam.beam.replace(/"/g, '""')
+          return `SUMIF(Nesting!$A$2:$A$${nestingLastRow},"${id}",Nesting!$E$2:$E$${nestingLastRow})`
+        })
+        .join('+') || '0'
+    setFormula(sheet, row - 1, 4, formula)
   })
-  sheet['!cols'] = [{ wch: 20 }, { wch: 12 }, { wch: 8 }, { wch: 8 }]
-  sheet['!autofilter'] = { ref: `A1:D${Math.max(1, rows.length)}` }
+  sheet['!cols'] = [{ wch: 10 }, { wch: 16 }, { wch: 11 }, { wch: 8 }, { wch: 8 }]
+  sheet['!autofilter'] = { ref: `A1:E${Math.max(1, rows.length)}` }
+  addRunMerges(
+    sheet,
+    buys.map((buy) => buy.family),
+    0,
+  )
+  addRunMerges(
+    sheet,
+    buys.map((buy) => `${buy.family}|${buy.size}`),
+    1,
+  )
   return sheet
 }
 
