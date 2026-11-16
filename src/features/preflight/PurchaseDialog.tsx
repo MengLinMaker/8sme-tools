@@ -6,7 +6,7 @@
  * bars), and every bar keeps a margin for the chuck / end trim / cutting error.
  */
 
-import { HelpCircle } from 'lucide-react'
+import { Download, HelpCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -1095,11 +1095,13 @@ function BuyList({
           </button>
         </div>
         <Button
-          variant="outline"
+          variant="default"
           size="sm"
           onClick={onDownloadTracker}
           disabled={rows.length === 0 || trackerExporting}
+          className="h-8 gap-1.5 bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:bg-emerald-600/50"
         >
+          <Download className="size-3.5" />
           {trackerExporting
             ? t('preflight.purchase.trackerExporting')
             : t('preflight.purchase.downloadTracker')}
