@@ -1,3 +1,4 @@
+import { unzipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import * as XLSX from 'xlsx'
 import { type PurchaseGroupInput, planPurchases } from './purchase'
@@ -45,31 +46,23 @@ function formulas(sheet: XLSX.WorkSheet): string[] {
 }
 
 describe('buildPurchaseTrackerModel', () => {
-  it('maps every piece to a physical beam', () => {
+  it('rolls pieces up into layouts and marks with quantities', () => {
     const groups = [rhsGroup()]
     const plans = planPurchases(groups, DEFAULT_TRACKER_PURCHASE_OPTIONS)
     const model = buildPurchaseTrackerModel(plans, 'Job')
-    const purchased = plans.reduce(
-      (sum, plan) => sum + plan.purchases.reduce((count, item) => count + item.count, 0),
-      0,
-    )
-    expect(model.parts).toHaveLength(3)
-    expect(model.beams).toHaveLength(purchased)
-    expect(model.parts.every((part) => part.beam === model.beams[0]?.beam)).toBe(true)
-    expect(model.beams[0]?.marks).toContain('M-1')
+    expect(model.layouts).toHaveLength(1)
+    expect(model.layouts[0]?.qty).toBe(1)
+    expect(model.marks.find((mark) => mark.mark === 'M-1')?.qty).toBe(2)
+    expect(model.marks.find((mark) => mark.mark === 'M-2')?.qty).toBe(1)
   })
 
-  it('pairs T bars into one stock beam', () => {
+  it('pairs T bars into one stock layout', () => {
     const groups = [teeGroup()]
     const plans = planPurchases(groups, DEFAULT_TRACKER_PURCHASE_OPTIONS)
     const model = buildPurchaseTrackerModel(plans, 'Job')
-    const purchased = plans.reduce(
-      (sum, plan) => sum + plan.purchases.reduce((count, item) => count + item.count, 0),
-      0,
-    )
-    expect(model.parts).toHaveLength(3)
-    expect(model.beams).toHaveLength(purchased)
-    expect(model.beams[0]?.stock).toBe('200UB29.8')
+    expect(model.layouts).toHaveLength(1)
+    expect(model.layouts[0]?.stock).toBe('200UB29.8')
+    expect(model.marks.find((mark) => mark.mark === 'T-1')?.qty).toBe(2)
   })
 })
 
@@ -84,29 +77,22 @@ describe('buildPurchaseTrackerWorkbook', () => {
     const buy = workbook.Sheets['Parts to buy']
     if (!nesting || !marks || !buy) throw new Error('sheet missing')
 
-    expect(formulas(nesting).some((formula) => formula.includes('"Cut"'))).toBe(true)
-    expect(formulas(marks).some((formula) => formula.includes('Nesting!$E'))).toBe(true)
-    expect(formulas(marks).some((formula) => formula.includes('Picked up'))).toBe(true)
+    expect(nesting.A1?.v).toBe('Layout')
+    expect(nesting.E1?.v).toBe('Qty')
+    expect(nesting.F1?.v).toBe('Cut')
+    expect(marks.B1?.v).toBe('Qty')
+    expect(marks.C1?.v).toBe('Cut')
+    expect(formulas(marks).some((formula) => formula.includes('Nesting!$F'))).toBe(true)
+    expect(formulas(marks).some((formula) => formula.includes('*2'))).toBe(true)
     expect(formulas(buy).some((formula) => formula.includes('SUMIF'))).toBe(true)
     expect(formulas(buy).some((formula) => formula.includes('Nesting!$A'))).toBe(true)
     expect(formulas(buy).every((formula) => !formula.includes('Nesting!$B'))).toBe(true)
     expect(formulas(buy).every((formula) => !formula.includes('%'))).toBe(true)
+    expect(formulas(nesting).some((formula) => formula.startsWith('SUM(E2:E'))).toBe(true)
+    expect(formulas(marks).some((formula) => formula.startsWith('SUM(B2:B'))).toBe(true)
+    expect(formulas(buy).some((formula) => formula.startsWith('SUM(D2:D'))).toBe(true)
     expect(buy.A2?.v).toBe('RHS')
     expect(buy.B2?.v).toBe('150×100×6')
-  })
-
-  it('merges repeated beam/stock labels into group cells', () => {
-    const groups: PurchaseGroupInput[] = [
-      { ...rhsGroup(), pieces: [{ mark: 'M-1', lengthMm: 2000, quantity: 5 }] },
-    ]
-    const plans = planPurchases(groups, {
-      ...DEFAULT_TRACKER_PURCHASE_OPTIONS,
-      stockLengthsMm: [6000],
-    })
-    const bytes = buildPurchaseTrackerWorkbook(plans, 'NW31')
-    const workbook = XLSX.read(bytes, { type: 'array', cellFormula: true, sheetStubs: true })
-    expect(workbook.Sheets.Nesting?.['!merges']?.length).toBeGreaterThan(0)
-    expect(workbook.Sheets.Marks?.['!merges']?.length).toBeGreaterThan(0)
   })
 
   it('merges repeated family/size labels in Parts to buy', () => {
@@ -136,7 +122,22 @@ describe('buildPurchaseTrackerWorkbook', () => {
     const workbook = XLSX.read(bytes, { type: 'array', cellFormula: true, sheetStubs: true })
     const nesting = workbook.Sheets.Nesting
     if (!nesting) throw new Error('nesting missing')
-    expect(nesting.A2?.v).toContain('B01')
+    expect(nesting.A2?.v).toContain('L01')
     expect(nesting.C2?.v).toBe(6000)
+    expect(nesting['!merges']?.length).toBeGreaterThan(0)
+  })
+
+  it('writes live status and 0/partial/full colour rules', () => {
+    const bytes = buildPurchaseTrackerWorkbookForGroups([rhsGroup()], 'NW31')
+    const files = unzipSync(new Uint8Array(bytes))
+    const decoder = new TextDecoder()
+    const marks = decoder.decode(files['xl/worksheets/sheet2.xml'])
+    const buy = decoder.decode(files['xl/worksheets/sheet3.xml'])
+    const styles = decoder.decode(files['xl/styles.xml'])
+    expect(marks).toContain('conditionalFormatting')
+    expect(marks).toContain('Picked up')
+    expect(marks).toContain('In progress')
+    expect(buy).toContain('conditionalFormatting')
+    expect(styles).toContain('<dxfs count="4">')
   })
 })
