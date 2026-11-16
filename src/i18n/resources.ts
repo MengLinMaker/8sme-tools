@@ -421,6 +421,13 @@ export const en = {
       noBevel: 'No bevel',
       apply: 'Apply bevel',
     },
+    move: {
+      title: 'Move cut off fillet',
+      offset: 'Offset',
+      recommended: 'Suggested {{offset}} mm {{direction}}',
+      hint: 'Prefilled with the suggested offset. Larger magnitudes clear the fillet further; the opposite sign moves the cut the other way.',
+      apply: 'Apply offset',
+    },
     tabs: {
       title: 'Add tabs',
       hint: 'Keep every body in this already-nested STEP and join them with tabs. Width is capped to the local material so the tab stays flush; end-to-end pieces in each row are always joined once.',
@@ -976,6 +983,13 @@ export const zh = {
       recommended: '推荐 {{angle}}°',
       noBevel: '无坡口',
       apply: '应用坡口',
+    },
+    move: {
+      title: '将切缝移出根部圆角',
+      offset: '偏移量',
+      recommended: '建议 {{direction}} {{offset}} mm',
+      hint: '已填入建议偏移量。数值越大离圆角越远；符号相反则向另一侧移动。',
+      apply: '应用偏移',
     },
     tabs: {
       title: '添加连接片',

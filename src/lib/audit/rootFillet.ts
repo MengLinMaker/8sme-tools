@@ -67,6 +67,8 @@ export interface RootFilletIssue extends CutMarker {
     /** Distance the cut must move (mm). */
     move: number
     direction: 'inward' | 'outward'
+    /** Signed NC-Y offset that clears the fillet (the value the fix prefills). */
+    delta: number
   }
   /** Index of the owning contour in `NcGeometry.contours` (for the NC edit). */
   contourIndex: number
@@ -308,6 +310,7 @@ export function assessRootFilletGeometry(
           span,
           move: Number(moveText),
           direction: run.band.direction,
+          delta: Number(delta.toFixed(2)),
         },
         contourIndex,
         vertices: run.vertices,

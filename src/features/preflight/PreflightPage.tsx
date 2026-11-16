@@ -375,6 +375,14 @@ interface NcOverride {
   ops: NcOp[]
 }
 
+/** The NC checks re-run on an edited NC, so fixes resolve only the issues they actually clear. */
+interface NcRecheck {
+  reach: CutReachFailure[]
+  rootFillet: RootFilletIssue[]
+  bevel: BevelChangeIssue[]
+  unclosed: UnclosedCutIssue[]
+}
+
 function applyNcOp(text: string, op: NcOp): string {
   if (op.kind === 'unifyBevel')
     return setBevelInNc(text, {
@@ -458,6 +466,67 @@ function ncKeyOf(
   return null
 }
 
+/** Whether two face-space spans overlap along the member (2 mm tolerance). */
+function spansOverlap(a: [number, number], b: [number, number], margin = 2): boolean {
+  return (
+    Math.min(a[0], a[1]) <= Math.max(b[0], b[1]) + margin &&
+    Math.max(a[0], a[1]) >= Math.min(b[0], b[1]) - margin
+  )
+}
+
+/** Whether a recheck still reports an issue at the same face/span as the original. */
+function sameIssueSpan(
+  issues: { face: NcFace; from: [number, number]; to: [number, number] }[],
+  original: { face: NcFace; from: [number, number]; to: [number, number] },
+): boolean {
+  return issues.some(
+    (issue) =>
+      issue.face === original.face &&
+      spansOverlap([issue.from[0], issue.to[0]], [original.from[0], original.to[0]]),
+  )
+}
+
+/**
+ * Whether an issued finding is gone after re-running the NC checks on the edited file. Each check
+ * is matched by face + member span (not by index), so independent fixes cannot mask each other.
+ */
+function ncFindingResolved(
+  finding: Finding,
+  lists: {
+    reach: CutReachFailure[]
+    bevel: BevelChangeIssue[]
+    unclosed: UnclosedCutIssue[]
+    rootFillet: RootFilletIssue[]
+  },
+  recheck: NcRecheck,
+): boolean {
+  const index = typeof finding.params?.index === 'number' ? finding.params.index : -1
+  // The 3D sabre probe is not re-run here (it needs a solid rebuild), so leave it to its own check.
+  if (finding.code === 'CUT_DEPTH' && finding.params?.nc === 1) return false
+  if (finding.code === 'CUT_ROOT_FILLET') {
+    const base = lists.reach.length + lists.bevel.length + lists.unclosed.length
+    const issue = lists.rootFillet[index - base]
+    return issue ? !sameIssueSpan(recheck.rootFillet, issue) : false
+  }
+  if (finding.code === 'CUT_DEPTH' || finding.code === 'CUT_CORNER') {
+    const issue = lists.reach[index]
+    if (!issue) return false
+    return !recheck.reach.some(
+      (next) =>
+        next.face === issue.face && next.reason === issue.reason && sameIssueSpan([next], issue),
+    )
+  }
+  if (finding.code === 'CUT_BEVEL_CHANGE') {
+    const issue = lists.bevel[index - lists.reach.length]
+    return issue ? !sameIssueSpan(recheck.bevel, issue) : false
+  }
+  if (finding.code === 'CUT_UNCLOSED' || finding.code === 'CUT_CUTOUT') {
+    const issue = lists.unclosed[index - (lists.reach.length + lists.bevel.length)]
+    return issue ? !sameIssueSpan(recheck.unclosed, issue) : false
+  }
+  return false
+}
+
 /**
  * Where a part's exported STEP ships. Normally its own path. A part with no STEP but a generated
  * (NC-derived) STEP takes the NC's filename with a `.step` extension, so it drops into WiseCAM
@@ -488,7 +557,8 @@ function resolvedFindings(kind: StepFixKind): string[] {
  * a mini menu that offers an angle (prefilled with the recommended one) or no bevel.
  */
 type FindingFix = 'clean' | 'regenerate' | 'simplify' | 'removeCut' | 'setBevel' | 'moveCut'
-function fixForFinding(code: string): FindingFix | null {
+function fixForFinding(finding: Finding): FindingFix | null {
+  const code = finding.code
   if (code === 'STRAY_BODY') return 'clean'
   if (code === 'MANUFACTURE_MISMATCH' || code === 'MANUFACTURE_BORDERLINE') return 'regenerate'
   if (code === 'CUT_END_PIECE') return 'simplify'
@@ -730,6 +800,10 @@ export function PreflightPage() {
   const [bevelEdit, setBevelEdit] = useState<{ part: PartRecord; finding: Finding } | null>(null)
   /** The menu's angle field (deg); prefilled with the recommended angle. */
   const [bevelAngle, setBevelAngle] = useState('')
+  /** The `CUT_ROOT_FILLET` finding whose "move cut" menu is open, if any. */
+  const [moveEdit, setMoveEdit] = useState<{ part: PartRecord; finding: Finding } | null>(null)
+  /** The menu's offset field (signed NC-Y mm); prefilled with the suggested offset. */
+  const [moveOffset, setMoveOffset] = useState('')
   /** The part whose "add tabs" dialog is open, if any. */
   const [tabEdit, setTabEdit] = useState<PartRecord | null>(null)
   /** Tab settings, persisted across jobs (the nested-STEP handling aid, not a cut setting). */
@@ -1974,6 +2048,7 @@ export function PreflightPage() {
           })
         })
       }
+      const fillet = rootFilletChecks.get(part.mark)
       const reach = reachChecks.get(part.mark)
       if (reach) {
         // One finding per failing sub-cut, so each can be zoomed to individually.
@@ -1985,6 +2060,8 @@ export function PreflightPage() {
             x: Math.round((failure.from[0] + failure.to[0]) / 2),
             span: failure.spanMm.toFixed(0),
           }
+          // A cut-depth/corner failure at a root-fillet run is the same tab feature seen from the
+          // mating face. Link it to that run so one move fixes both (and both markers hide).
           if (failure.reason === 'corner') {
             const tol = MACHINE.placementToleranceMm
             extra.push({
@@ -2039,7 +2116,6 @@ export function PreflightPage() {
           })
         })
       }
-      const fillet = rootFilletChecks.get(part.mark)
       if (fillet) {
         // One error per long cut running on a root fillet. Its marker continues after reach,
         // bevel and unclosed, matching `viewerSabreFailures`.
@@ -2307,7 +2383,7 @@ export function PreflightPage() {
       if (!finding.mark) continue
       const override = stepOverrides.get(finding.mark)
       const resolved = Boolean(override && resolvedFindings(override.kind).includes(finding.code))
-      const fixable = fixForFinding(finding.code) != null
+      const fixable = fixForFinding(finding) != null
       const list = map.get(finding.mark) ?? []
       const existing = list.find((pill) => pill.code === finding.code)
       if (existing) {
@@ -2356,16 +2432,38 @@ export function PreflightPage() {
           : 'surface',
     )
   }, [viewing, allFindings, viewingPdfBytes])
-  /** Marker indices whose sub-cuts are shown in the 3D (row toggled on). */
-  const visibleSpans = useMemo(
-    () =>
-      viewerFindings
-        .map((finding, index) => ({ finding, index }))
-        .filter(({ index }) => !hiddenIssues.has(index))
-        .map(({ finding }) => markerIndexOf(finding))
-        .filter((value): value is number => value != null),
-    [viewerFindings, hiddenIssues],
-  )
+  /**
+   * Re-runs the NC cut checks on any part with an applied NC edit. Fixes are not coupled to
+   * findings: this is the source of truth for whether an issue is actually gone after a fix.
+   */
+  const ncRecheck = useMemo(() => {
+    const out = new Map<string, NcRecheck>()
+    if (!result) return out
+    for (const part of result.parts) {
+      const override = ncOverrides.get(part.mark)
+      if (!override) continue
+      const section = part.nc?.profile
+        ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
+        : null
+      if (!section) continue
+      const ncText = new TextDecoder().decode(override.bytes)
+      const options = { section: section.points, profile: part.nc?.profile }
+      out.set(part.mark, {
+        reach: assessCutReach(ncText, section.points, section.holes ?? [], {
+          toleranceMm: MACHINE.placementToleranceMm,
+          profile: part.nc?.profile,
+        }),
+        rootFillet: assessRootFillet(ncText, {
+          ...options,
+          dimensions: part.nc?.dimensions ?? [],
+        }),
+        bevel: assessBevelChange(ncText),
+        unclosed: assessUnclosedCuts(ncText, options),
+      })
+    }
+    return out
+  }, [result, ncOverrides])
+
   /** The stacked NC edit key of each row (null when the row has none). */
   const ncKeyByRow = useMemo(() => {
     const keys = new Map<number, string>()
@@ -2382,26 +2480,8 @@ export function PreflightPage() {
     })
     return keys
   }, [viewing, viewerFindings, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks])
-  /** Show or hide one row's eye, leaving every other row's toggle as it is. */
-  const setRowHidden = useCallback(
-    (finding: Finding, hidden: boolean) => {
-      // Match by code and marker index, not object identity: findings are regenerated on every fix.
-      const row = viewerFindings.findIndex(
-        (candidate) =>
-          candidate.code === finding.code && candidate.params?.index === finding.params?.index,
-      )
-      if (row < 0) return
-      setHiddenIssues((prev) => {
-        const next = new Set(prev)
-        if (hidden) next.add(row)
-        else next.delete(row)
-        return next
-      })
-    },
-    [viewerFindings],
-  )
-  /** Rows whose NC edit is applied: they stay in the list (struck through) and can be undone. */
-  const ncResolvedRows = useMemo(() => {
+  /** Rows whose NC edit is applied (their action is Undo, even if the recheck still fails). */
+  const ncAppliedRows = useMemo(() => {
     const applied = new Set(
       (viewing ? (ncOverrides.get(viewing.mark)?.ops ?? []) : []).map((op) => op.key),
     )
@@ -2411,15 +2491,53 @@ export function PreflightPage() {
     })
     return rows
   }, [viewing, ncOverrides, ncKeyByRow])
+  /** Rows whose issue is gone on the rechecked edited NC — these are struck through and hidden. */
+  const ncRecheckResolvedRows = useMemo(() => {
+    const rows = new Set<number>()
+    if (!viewing) return rows
+    const recheck = ncRecheck.get(viewing.mark)
+    if (!recheck) return rows
+    const lists = {
+      reach: reachChecks.get(viewing.mark) ?? [],
+      bevel: bevelChanges.get(viewing.mark) ?? [],
+      unclosed: unclosedCuts.get(viewing.mark) ?? [],
+      rootFillet: rootFilletChecks.get(viewing.mark) ?? [],
+    }
+    viewerFindings.forEach((finding, row) => {
+      if (ncFindingResolved(finding, lists, recheck)) rows.add(row)
+    })
+    return rows
+  }, [
+    viewing,
+    viewerFindings,
+    reachChecks,
+    bevelChanges,
+    unclosedCuts,
+    rootFilletChecks,
+    ncRecheck,
+  ])
+  /** Marker indices whose sub-cuts are shown in the 3D (manual eye on and not recheck-resolved). */
+  const visibleSpans = useMemo(
+    () =>
+      viewerFindings
+        .map((finding, index) => ({ finding, index }))
+        .filter(({ index }) => !hiddenIssues.has(index) && !ncRecheckResolvedRows.has(index))
+        .map(({ finding }) => markerIndexOf(finding))
+        .filter((value): value is number => value != null),
+    [viewerFindings, hiddenIssues, ncRecheckResolvedRows],
+  )
   /** NC probe runs (CUT_DEPTH_NC rows) that are checked on (their eye is on). */
   const visibleRuns = useMemo(
     () =>
       viewerFindings
         .map((finding, index) => ({ finding, index }))
-        .filter(({ finding, index }) => isNcRun(finding) && !hiddenIssues.has(index))
+        .filter(
+          ({ finding, index }) =>
+            isNcRun(finding) && !hiddenIssues.has(index) && !ncRecheckResolvedRows.has(index),
+        )
         .map(({ finding }) => finding.params?.index)
         .filter((value): value is number => typeof value === 'number'),
-    [viewerFindings, hiddenIssues],
+    [viewerFindings, hiddenIssues, ncRecheckResolvedRows],
   )
   /** The NC probe run to glow while its CUT_DEPTH_NC row is hovered. */
   const highlightRun = useMemo(() => {
@@ -2475,10 +2593,10 @@ export function PreflightPage() {
               .filter(({ finding }) => isVisualisable(finding))
               .map(({ index }) => index),
           )
-        : // Show all, but a fixed row stays hidden: its fix owns its visibility.
-          new Set(ncResolvedRows),
+        : // Show all; rows a recheck has cleared stay hidden independently.
+          new Set<number>(),
     )
-  }, [viewerFindings, ncResolvedRows])
+  }, [viewerFindings])
   /**
    * Row click: pan/zoom onto the issue. It never hides a visible marker — if the marker is
    * currently hidden it is turned back on first.
@@ -2488,10 +2606,11 @@ export function PreflightPage() {
       const finding = viewerFindings[index]
       // Only findings with a 3D marker are interactive; the rest have no eye.
       if (!finding || !isVisualisable(finding)) return
-      if (hiddenIssues.has(index)) toggleIssue(index)
+      // A fixed row stays visually off until Undo — clicking it only pans/zooms.
+      if (!ncRecheckResolvedRows.has(index) && hiddenIssues.has(index)) toggleIssue(index)
       if (findingLocationOf(finding) != null) focusFinding(finding)
     },
-    [viewerFindings, hiddenIssues, toggleIssue, focusFinding],
+    [viewerFindings, hiddenIssues, toggleIssue, focusFinding, ncRecheckResolvedRows],
   )
 
   /**
@@ -2950,9 +3069,8 @@ export function PreflightPage() {
         const ops = (prev.get(part.mark)?.ops ?? []).filter((op) => op.key !== key)
         return withNcOps(prev, part.mark, ops, original)
       })
-      setRowHidden(finding, false)
     },
-    [bytesByPath, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks, setRowHidden],
+    [bytesByPath, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks],
   )
 
   /** Cleans one part's stray STEP bodies, keeping the real geometry untouched. */
@@ -3236,12 +3354,11 @@ export function PreflightPage() {
           removeVertices: issue.removal as [number, number],
         })
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
-        setRowHidden(finding, true)
       } finally {
         setFixingMark(null)
       }
     },
-    [bytesByPath, ncOverrides, reachChecks, bevelChanges, setRowHidden],
+    [bytesByPath, ncOverrides, reachChecks, bevelChanges],
   )
 
   /**
@@ -3275,14 +3392,13 @@ export function PreflightPage() {
           angle,
         })
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
-        setRowHidden(finding, true)
       } catch {
         // leave the NC as it is if the edit fails
       } finally {
         setFixingMark(null)
       }
     },
-    [bytesByPath, ncOverrides, reachChecks, setRowHidden],
+    [bytesByPath, ncOverrides, reachChecks],
   )
 
   /**
@@ -3303,22 +3419,21 @@ export function PreflightPage() {
         const key = `oor:${contourIndex}:${vertex}`
         const ops = upsertOp(current, { key, kind: 'outOfRangeBevel', contourIndex, vertex, angle })
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
-        setRowHidden(finding, true)
       } finally {
         setFixingMark(null)
       }
     },
-    [bytesByPath, ncOverrides, setRowHidden],
+    [bytesByPath, ncOverrides],
   )
 
   /**
    * Moves a longitudinal cut off a rolled root fillet by editing the part's NC: every vertex on the
-   * flagged run shifts across the face by the issue's delta, so the line lands on the flat plate.
-   * The manufactured model rebuilds from the edited NC and the export ships it; the row's Undo
-   * drops the op and restores the original line.
+   * flagged run shifts across the face by `offset` (default: the issue's suggested delta), so the
+   * line lands on the flat plate. The manufactured model rebuilds from the edited NC and the export
+   * ships it; the row's Undo drops the op and restores the original line.
    */
   const moveRootFilletCut = useCallback(
-    async (part: PartRecord, finding: Finding) => {
+    async (part: PartRecord, finding: Finding, offset?: number) => {
       const ncPath = part.nc?.path
       const original = ncPath ? bytesByPath.get(ncPath) : undefined
       if (!original) return
@@ -3329,6 +3444,8 @@ export function PreflightPage() {
         (unclosedCuts.get(part.mark)?.length ?? 0)
       const issue = (rootFilletChecks.get(part.mark) ?? [])[index - base]
       if (!issue) return
+      const deltaY = offset ?? issue.delta
+      if (!Number.isFinite(deltaY) || deltaY === 0) return
       setFixingMark(part.mark)
       try {
         const current = ncOverrides.get(part.mark)?.ops ?? []
@@ -3338,23 +3455,32 @@ export function PreflightPage() {
           kind: 'moveCut',
           contourIndex: issue.contourIndex,
           vertices: issue.vertices,
-          deltaY: issue.delta,
+          deltaY,
         })
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
-        setRowHidden(finding, true)
       } finally {
         setFixingMark(null)
       }
     },
-    [
-      bytesByPath,
-      ncOverrides,
-      reachChecks,
-      bevelChanges,
-      unclosedCuts,
-      rootFilletChecks,
-      setRowHidden,
-    ],
+    [bytesByPath, ncOverrides, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks],
+  )
+
+  /** Opens the "move cut" mini menu, prefilling the suggested offset for the flagged line. */
+  const openMoveEdit = useCallback((part: PartRecord, finding: Finding) => {
+    const suggested = finding.params?.delta
+    setMoveOffset(typeof suggested === 'number' ? String(suggested) : '')
+    setMoveEdit({ part, finding })
+  }, [])
+  const closeMoveEdit = useCallback(() => setMoveEdit(null), [])
+  /** Applies the chosen offset to the open finding's flagged cut line. */
+  const applyMoveEdit = useCallback(
+    (offset: number) => {
+      const target = moveEdit
+      setMoveEdit(null)
+      if (!target) return
+      void moveRootFilletCut(target.part, target.finding, offset)
+    },
+    [moveEdit, moveRootFilletCut],
   )
 
   /** Opens the "unify bevel" mini menu, prefilling the recommended angle for the cut line. */
@@ -4607,7 +4733,8 @@ export function PreflightPage() {
                     <ViewerWarnings
                       findings={viewerFindings}
                       step={viewing.step}
-                      ncResolved={ncResolvedRows}
+                      ncApplied={ncAppliedRows}
+                      ncRechecked={ncRecheckResolvedRows}
                       // The bevel dialog sits over the rows, so the pointer leaving a row must not clear
                       // its highlight; keep the row highlighted through apply and the rebuild.
                       onHover={(index) => {
@@ -4638,7 +4765,7 @@ export function PreflightPage() {
                         onSimplify: () => void simplifyPart(viewing),
                         onRepair: () => void cleanTeklaPart(viewing),
                         onRemoveCut: (finding) => void removeCut(viewing, finding),
-                        onMoveCut: (finding) => void moveRootFilletCut(viewing, finding),
+                        onMoveCut: (finding) => openMoveEdit(viewing, finding),
                         onSetBevel: (finding) => openBevelEdit(viewing, finding),
                         onUndo: () => undoOverride(viewing.mark),
                         onUndoNc: (finding) => undoNcFinding(viewing, finding),
@@ -4694,6 +4821,20 @@ export function PreflightPage() {
         onAngle={setBevelAngle}
         onApply={applyBevel}
         onClose={closeBevelEdit}
+      />
+
+      <MoveMenu
+        open={moveEdit !== null}
+        suggested={
+          typeof moveEdit?.finding.params?.delta === 'number'
+            ? String(moveEdit.finding.params.delta)
+            : undefined
+        }
+        direction={moveEdit?.finding.params?.direction === 'outward' ? 'outward' : 'inward'}
+        offset={moveOffset}
+        onOffset={setMoveOffset}
+        onApply={applyMoveEdit}
+        onClose={closeMoveEdit}
       />
 
       <TabDialog
@@ -4853,7 +4994,8 @@ function ViewerWarnings({
   findings,
   step,
   fix,
-  ncResolved,
+  ncApplied,
+  ncRechecked,
   onHover,
   isChecked,
   onToggleCheck,
@@ -4864,8 +5006,10 @@ function ViewerWarnings({
   findings: Finding[]
   step?: StepFile
   fix?: ViewerFix
-  /** Row indices whose NC edit is applied (their fix shows as resolved, with Undo). */
-  ncResolved?: ReadonlySet<number>
+  /** Row indices whose NC edit is applied (their action is Undo). */
+  ncApplied?: ReadonlySet<number>
+  /** Row indices whose issue is gone after rechecking the edited NC (struck through, hidden). */
+  ncRechecked?: ReadonlySet<number>
   onHover?: (index: number | null) => void
   isChecked?: (index: number) => boolean
   onToggleCheck?: (index: number) => void
@@ -4892,7 +5036,7 @@ function ViewerWarnings({
     if (!fix) return false
     if (finding.code === 'STRAY_BODY') return fix.canClean || fix.canTab || fix.canRepair
     if (fix.override && resolvedFindings(fix.override).includes(finding.code)) return false
-    const kind = fixForFinding(finding.code)
+    const kind = fixForFinding(finding)
     return Boolean(kind && viewerFixAvailable(fix, kind))
   }
   const rows = findings
@@ -4920,10 +5064,6 @@ function ViewerWarnings({
       if (bySeverity !== 0) return bySeverity * sort.dir
       return a.finding.code.localeCompare(b.finding.code)
     })
-  const isResolved = (finding: Finding, index: number): boolean => {
-    if (fix?.override && resolvedFindings(fix.override).includes(finding.code)) return true
-    return ncResolved?.has(index) ?? false
-  }
   const findingText = (finding: Finding) =>
     t(
       finding.code === 'CUT_DEPTH' && finding.params?.nc === 1
@@ -5015,8 +5155,13 @@ function ViewerWarnings({
             </TableHeader>
             <TableBody>
               {rows.map(({ finding, index }) => {
-                const resolved = isResolved(finding, index)
-                const fixKind = fix && !resolved ? fixForFinding(finding.code) : null
+                const stepResolved = Boolean(
+                  fix?.override && resolvedFindings(fix.override).includes(finding.code),
+                )
+                const resolved = stepResolved || (ncRechecked?.has(index) ?? false)
+                const applied = ncApplied?.has(index) ?? false
+                // An applied-but-still-failing fix offers Undo (not the fix) so it can be reverted.
+                const fixKind = fix && !resolved && !applied ? fixForFinding(finding) : null
                 const fixable = Boolean(fixKind && fix && viewerFixAvailable(fix, fixKind))
                 const action = fixKind && fix ? viewerFixAction(t, fix, fixKind, finding) : null
                 // Only findings the viewer can point at in 3D get an eye toggle / are clickable.
@@ -5097,17 +5242,30 @@ function ViewerWarnings({
                       {findingText(finding)}
                     </TableCell>
                     <TableCell className="py-1 text-right">
-                      {resolved ? (
+                      {applied ? (
                         <Button
                           variant="ghost"
                           size="sm"
                           className="h-7"
                           disabled={fix?.pending}
                           onClick={(event) => {
-                            // Stop the row's own click: it would toggle this row's eye back off.
                             event.stopPropagation()
-                            if (ncResolved?.has(index)) fix?.onUndoNc(finding)
-                            else fix?.onUndo()
+                            fix?.onUndoNc(finding)
+                          }}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          <Undo2 />
+                          {t('common.actions.undo')}
+                        </Button>
+                      ) : stepResolved ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7"
+                          disabled={fix?.pending}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            fix?.onUndo()
                           }}
                           onKeyDown={(event) => event.stopPropagation()}
                         >
@@ -5217,6 +5375,68 @@ function ViewerWarnings({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * The "move cut" mini menu for a `CUT_ROOT_FILLET` cut line. The suggested offset (signed across
+ * the face) is prefilled so the operator can apply it unchanged or tune it — a larger magnitude
+ * clears the fillet further, the opposite sign moves the cut the other way.
+ */
+function MoveMenu({
+  open,
+  suggested,
+  direction,
+  offset,
+  onOffset,
+  onApply,
+  onClose,
+}: {
+  open: boolean
+  suggested?: string
+  direction: 'inward' | 'outward'
+  offset: string
+  onOffset: (value: string) => void
+  onApply: (offset: number) => void
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+  const parsed = Number.parseFloat(offset)
+  const valid = Number.isFinite(parsed) && Math.abs(parsed) > 1e-6
+  return (
+    <Dialog open={open} onClose={onClose} title={t('preflight.move.title')}>
+      <div className="flex flex-col gap-4 p-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="move-offset" className="text-sm font-medium">
+            {t('preflight.move.offset')}
+          </label>
+          <input
+            id="move-offset"
+            type="number"
+            inputMode="decimal"
+            step="0.5"
+            value={offset}
+            onChange={(event) => onOffset(event.target.value)}
+            className="h-8 w-24 rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <span className="text-sm text-muted-foreground">mm</span>
+          {suggested && (
+            <span className="text-xs text-muted-foreground">
+              {t('preflight.move.recommended', { offset: suggested, direction })}
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">{t('preflight.move.hint')}</p>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onClose}>
+            {t('common.actions.cancel')}
+          </Button>
+          <Button size="sm" disabled={!valid} onClick={() => onApply(parsed)}>
+            {t('preflight.move.apply')}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   )
 }
 
