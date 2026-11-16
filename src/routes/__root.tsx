@@ -1,6 +1,7 @@
 import { createRootRoute, Link, Outlet } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { LanguageToggle } from '@/components/LanguageToggle'
+import { PwaUpdater } from '@/components/PwaUpdater'
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -50,6 +51,7 @@ function RootLayout() {
       <footer className="border-t border-border py-5 text-xs text-muted-foreground">
         {t('common.footer')}
       </footer>
+      <PwaUpdater />
     </div>
   )
 }

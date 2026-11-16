@@ -11,6 +11,16 @@ export const en = {
       en: 'English',
       zh: '中文',
     },
+    pwa: {
+      offlineTitle: 'Ready to work offline',
+      offlineBody:
+        'The app is now cached on this device. It will keep working without a connection.',
+      dismiss: 'Dismiss',
+      updateTitle: 'A new version is available',
+      updateBody: 'Reload to pick up the latest build. Your files stay on this device.',
+      updateAction: 'Reload now',
+      later: 'Later',
+    },
     actions: {
       view: 'View',
       undo: 'Undo',
@@ -565,6 +575,15 @@ export const zh = {
       label: '语言',
       en: 'English',
       zh: '中文',
+    },
+    pwa: {
+      offlineTitle: '已可离线使用',
+      offlineBody: '应用已缓存到本设备，无网络时也能继续使用。',
+      dismiss: '知道了',
+      updateTitle: '有新版本可用',
+      updateBody: '重新加载即可使用最新版本，你的文件仍保留在本设备上。',
+      updateAction: '立即重新加载',
+      later: '稍后',
     },
     actions: {
       view: '查看',
