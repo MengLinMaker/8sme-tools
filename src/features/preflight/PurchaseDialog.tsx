@@ -19,7 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { downloadText, fileStem } from '@/lib/download'
+import { downloadBlob, fileStem } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
 import {
   AU_STOCK_LENGTHS_MM,
@@ -45,6 +45,7 @@ const maxSubstituteScrapMm = (stockLengthMm: number) =>
   Math.min(MAX_SUBSTITUTE_SCRAP_MM, stockLengthMm * 0.5)
 
 const MARGIN_PRESETS = [100, 150, 200]
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 function metres(mm: number, digits = 1): string {
   return `${(mm / 1000).toFixed(digits)} m`
@@ -52,10 +53,6 @@ function metres(mm: number, digits = 1): string {
 
 function kilograms(kg: number | null, digits = 1): string {
   return kg == null ? '—' : `${kg.toFixed(digits)} kg`
-}
-
-function csvCell(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
 }
 
 function splitStock(stock: string): { family: string; size: string } {
@@ -430,6 +427,8 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
   const [appliedStockSuggestions, setAppliedStockSuggestions] = useState<AppliedStockSuggestion[]>(
     [],
   )
+  const [trackerExporting, setTrackerExporting] = useState(false)
+  const [trackerError, setTrackerError] = useState<string | null>(null)
 
   const plans = useMemo(
     () =>
@@ -552,6 +551,31 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
       (a, b) => a.stock.localeCompare(b.stock) || a.lengthMm - b.lengthMm,
     )
   }, [displayPlans])
+
+  /**
+   * Excel version of the buy list. It carries the stock layouts as well as the buy list, so the
+   * shop can mark Cut / Welded / Picked up per piece and let the formulas count parts and beams.
+   */
+  const downloadTracker = async () => {
+    setTrackerExporting(true)
+    setTrackerError(null)
+    try {
+      const { buildPurchaseTrackerWorkbook } = await import('@/lib/purchasing/trackerWorkbook')
+      const bytes = buildPurchaseTrackerWorkbook(groups, displayPlans, jobName ?? 'job')
+      downloadBlob(
+        `${fileStem(jobName ?? 'job')}-cut-delivery-tracker.xlsx`,
+        new Blob([bytes], { type: XLSX_MIME }),
+      )
+    } catch (error) {
+      setTrackerError(
+        t('preflight.purchase.trackerFailed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+    } finally {
+      setTrackerExporting(false)
+    }
+  }
 
   const largerStockSuggestions = useMemo(() => {
     const map = new Map<string, number>()
@@ -896,7 +920,12 @@ export function PurchaseDialog({ open, onClose, groups, jobName }: PurchaseDialo
               onUndoScrap={undoScrapSuggestion}
             />
 
-            <BuyList rows={buyRows} jobName={jobName} />
+            <BuyList
+              rows={buyRows}
+              onDownloadTracker={() => void downloadTracker()}
+              trackerExporting={trackerExporting}
+              trackerError={trackerError}
+            />
 
             <div className="text-sm font-medium">{t('preflight.purchase.nestingTitle')}</div>
 
@@ -1009,7 +1038,17 @@ function SuggestionsTable({
   )
 }
 
-function BuyList({ rows, jobName }: { rows: BuyRow[]; jobName?: string }) {
+function BuyList({
+  rows,
+  onDownloadTracker,
+  trackerExporting,
+  trackerError,
+}: {
+  rows: BuyRow[]
+  onDownloadTracker: () => void
+  trackerExporting: boolean
+  trackerError: string | null
+}) {
   const { t } = useTranslation()
   const [showOptimiserHelp, setShowOptimiserHelp] = useState(false)
   const groups = useMemo(() => groupBuyRows(rows), [rows])
@@ -1039,20 +1078,6 @@ function BuyList({ rows, jobName }: { rows: BuyRow[]; jobName?: string }) {
       }),
     [groups],
   )
-  const download = () => {
-    const header = [
-      t('preflight.purchase.section'),
-      t('preflight.purchase.size'),
-      t('preflight.purchase.lengthM'),
-      t('preflight.purchase.qtyShort'),
-    ]
-    const body = rows.map((row) => {
-      const { family, size } = splitStock(row.stock)
-      return [family, size, (row.lengthMm / 1000).toFixed(1), String(row.count)]
-    })
-    const csv = [header, ...body].map((line) => line.map(csvCell).join(',')).join('\r\n')
-    downloadText(`${fileStem(jobName ?? 'job')}-purchase-list.csv`, `${csv}\r\n`, 'text/csv')
-  }
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1069,10 +1094,22 @@ function BuyList({ rows, jobName }: { rows: BuyRow[]; jobName?: string }) {
             <HelpCircle className="size-3.5" />
           </button>
         </div>
-        <Button variant="outline" size="sm" onClick={download} disabled={rows.length === 0}>
-          {t('preflight.purchase.downloadCsv')}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onDownloadTracker}
+          disabled={rows.length === 0 || trackerExporting}
+        >
+          {trackerExporting
+            ? t('preflight.purchase.trackerExporting')
+            : t('preflight.purchase.downloadTracker')}
         </Button>
       </div>
+      {trackerError && (
+        <p className="text-xs text-destructive" role="alert">
+          {trackerError}
+        </p>
+      )}
       {showOptimiserHelp && (
         <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs">
           <div className="font-medium text-foreground">

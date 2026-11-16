@@ -17,12 +17,6 @@ const TOOLS: Tool[] = [
     descriptionKey: 'hub.tools.preflight.description',
     status: 'ready',
   },
-  {
-    to: '/nesting',
-    titleKey: 'hub.tools.nesting.title',
-    descriptionKey: 'hub.tools.nesting.description',
-    status: 'ready',
-  },
 ]
 
 export function HubPage() {

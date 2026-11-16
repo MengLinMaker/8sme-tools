@@ -10,17 +10,11 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as NestingRouteImport } from './routes/nesting'
 import { Route as PreflightRouteImport } from './routes/preflight'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const NestingRoute = NestingRouteImport.update({
-  id: '/nesting',
-  path: '/nesting',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PreflightRoute = PreflightRouteImport.update({
@@ -31,31 +25,27 @@ const PreflightRoute = PreflightRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/nesting': typeof NestingRoute
   '/preflight': typeof PreflightRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/nesting': typeof NestingRoute
   '/preflight': typeof PreflightRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/nesting': typeof NestingRoute
   '/preflight': typeof PreflightRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/nesting' | '/preflight'
+  fullPaths: '/' | '/preflight'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/nesting' | '/preflight'
-  id: '__root__' | '/' | '/nesting' | '/preflight'
+  to: '/' | '/preflight'
+  id: '__root__' | '/' | '/preflight'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  NestingRoute: typeof NestingRoute
   PreflightRoute: typeof PreflightRoute
 }
 
@@ -66,13 +56,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/nesting': {
-      id: '/nesting'
-      path: '/nesting'
-      fullPath: '/nesting'
-      preLoaderRoute: typeof NestingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/preflight': {
@@ -87,7 +70,6 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  NestingRoute: NestingRoute,
   PreflightRoute: PreflightRoute,
 }
 export const routeTree = rootRouteImport
