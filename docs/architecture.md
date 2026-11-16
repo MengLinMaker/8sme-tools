@@ -558,6 +558,22 @@ Run: `pnpm vitest run src/lib/part/fromStep.test.ts src/lib/step/cutProjection.t
 | Measured face-width labels from wire bbox | removed | 53.8 mm was the slanted-edge artifact, not flange width |
 | Separate per-pane SVG viewBox | rejected | rescaled panes differently; use one union viewBox |
 
+### Layer debugging (work top-down, do not skip)
+
+Debug STEP cuts as explicit layers, and record which layer a known edge reaches:
+
+| layer | question | m137 closure edge status |
+|---|---|---|
+| 0 raw BREP | is the edge in `seated.faces[].wires[].edges`? | **yes** — 8.52 mm, along 33.9 / 40.9, outline distance 0 |
+| 1 stock/cut candidate | does a stock face border a non-stock face? | **yes** — stock face, neighbour non-stock |
+| 2 transverse/beam filter | is it transverse, or an admitted beam-collinear closure? | fails transverse; passes short beam rule (8.52 mm) |
+| 3 target face set | is the owning face in `targetIndices`? | **not yet verified** — next layer to instrument |
+| 4 projection | does the edge map to a valid station/along? | not yet traced |
+| 5 emission | is the edge key present before merge/final IR? | not yet traced |
+
+A layer is “passed” only when the edge key is still present; visual presence alone is not proof.
+Next: tag edges with a stable raw key and log layers 0–5 for the known closure edge.
+
 Open issue: the remaining PFC end-closure edge lives on/near the stock outline (within 2 mm) and is
 not classified by stock face, transverse neighbour, outline distance, or cut-face wire rules.
 
