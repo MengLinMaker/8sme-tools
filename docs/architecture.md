@@ -538,3 +538,26 @@ still needs to be wired for rounded stock faces.
 | `cutProjection.test.ts` / `ncStepAgreement.test.ts` | NC vs STEP face projection stays aligned |
 
 Run: `pnpm vitest run src/lib/part/fromStep.test.ts src/lib/step/cutProjection.test.ts`.
+
+### STEP IR closure attempts — rejected (do not repeat)
+
+| attempt | outcome | reason |
+|---|---|---|
+| Clamp station to `±seam/2` | rejected | hides mapping errors; clipping |
+| UV clipping to face interval | rejected | same; architecture forbids clipping |
+| Seam-wrap/split for PFC | rejected | PFC is open; wrapping is clipping (valid only for closed tubes) |
+| Merge all projected runs (5 mm) | rejected | invented horizontal connectors absent from projection |
+| All cut-face outer-wire edges | rejected | duplicated lines + quadratic lag |
+| Short beam-collinear cut-face edge | exposed the closure edge but added duplicates | filter incomplete |
+| Cut-face edge + 0.75 mm coverage dedupe | rejected | still left duplicate/closure issue |
+| Beam-collinear edge + inset >2 mm from outline | rejected | excluded the target edge (it is within 2 mm of the outline) |
+| Simple straight-line endpoint connector | rejected | fills rather than detects |
+| Global ICP point fit | rejected | 2.74 mm residual; non-rigid correspondence |
+| Stock-face plane rigid fit | **adopted** | fixed the 0.97° seating tilt; flange back to 50 mm |
+| Cut-face edge dedupe by raw edge key | insufficient | duplicate/closure persisted |
+| Measured face-width labels from wire bbox | removed | 53.8 mm was the slanted-edge artifact, not flange width |
+| Separate per-pane SVG viewBox | rejected | rescaled panes differently; use one union viewBox |
+
+Open issue: the remaining PFC end-closure edge lives on/near the stock outline (within 2 mm) and is
+not classified by stock face, transverse neighbour, outline distance, or cut-face wire rules. The
+next required diagnostic is the edge-feature register described in the surrounding section.
