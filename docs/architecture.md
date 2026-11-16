@@ -559,5 +559,9 @@ Run: `pnpm vitest run src/lib/part/fromStep.test.ts src/lib/step/cutProjection.t
 | Separate per-pane SVG viewBox | rejected | rescaled panes differently; use one union viewBox |
 
 Open issue: the remaining PFC end-closure edge lives on/near the stock outline (within 2 mm) and is
-not classified by stock face, transverse neighbour, outline distance, or cut-face wire rules. The
-next required diagnostic is the edge-feature register described in the surrounding section.
+not classified by stock face, transverse neighbour, outline distance, or cut-face wire rules.
+
+Edge-register result (m137): the short beam edges are **8.52 mm**, on stock/cut faces at along
+**33.9 / 40.9**, distance 0 from the stock outline. The NC end-contour points are at along
+**28.1 / 30.3**. They are not the same edge — a 3–5 mm offset matching the bevel/root-line
+convention. Do not add another short-edge filter; resolve the NC/STEP bevel side instead.
