@@ -5273,6 +5273,7 @@ function IrSurfaceDrawing({
         diff: entry.diff,
         stroke: 1 / zoom,
         colorForFace,
+        section: false,
         orientation: base.profileType.trim().toUpperCase() === 'U' ? 'flipY' : 'wisecam',
       }),
     }
@@ -5284,6 +5285,17 @@ function IrSurfaceDrawing({
       </div>
     )
   }
+  // One common chart-only viewBox for every pane: 1 mm must be 1 mm in both axes, so NC and
+  // STEP cannot be rescaled differently by their section layers.
+  let sharedSeam = 1
+  let sharedLength = 1
+  for (const entry of views) {
+    const base = entry.nc ?? entry.step
+    if (!base) continue
+    sharedLength = Math.max(sharedLength, base.length)
+    for (const chart of base.charts) sharedSeam = Math.max(sharedSeam, chart.layout.seam)
+  }
+  const sharedViewBox = `${-sharedSeam / 2} 0 ${sharedSeam} ${sharedLength}`
   const columns = layout === 'rows' || rendered.length === 1 ? 1 : rendered.length
   return (
     <div className="flex h-full flex-col">
@@ -5316,7 +5328,7 @@ function IrSurfaceDrawing({
             </span>
             {parts ? (
               <PanZoomSvg
-                viewBox={parts.viewBox}
+                viewBox={sharedViewBox}
                 label={entry.label}
                 view={view}
                 onViewChange={setView}
