@@ -574,8 +574,12 @@ Debug STEP cuts as explicit layers, and record which layer a known edge reaches:
 A layer is “passed” only when the edge key is still present; visual presence alone is not proof.
 
 Layer 3 result (m137): including `v` raises cut count 2→6 but does **not** close the gap. The missing
-NC points remain ~3 mm from a short **diagonal** edge on `v`. Next blocker is layer 4: that edge’s
-projection/mapping, not target-face membership.
+NC points remain ~3 mm from a short **diagonal** edge on `v`.
+
+Layer 4 result: the nearest BREP edge is a **7.94 mm diagonal** on `v`, mapping
+`[35.3, 30.9] → [27.5, 32.4]`. The NC points `[32.3, 30.3] → [32.3, 28.1]` are a **2.2 mm vertical
+jog** with no corresponding BREP edge. The STEP edge bridges diagonally. This is an NC-vs-STEP
+contour difference, not a detection filter.
 
 Open issue: the remaining PFC end-closure edge lives on/near the stock outline (within 2 mm) and is
 not classified by stock face, transverse neighbour, outline distance, or cut-face wire rules.
