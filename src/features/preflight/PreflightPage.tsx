@@ -5285,17 +5285,24 @@ function IrSurfaceDrawing({
       </div>
     )
   }
-  // One common chart-only viewBox for every pane: 1 mm must be 1 mm in both axes, so NC and
-  // STEP cannot be rescaled differently by their section layers.
-  let sharedSeam = 1
-  let sharedLength = 1
-  for (const entry of views) {
-    const base = entry.nc ?? entry.step
-    if (!base) continue
-    sharedLength = Math.max(sharedLength, base.length)
-    for (const chart of base.charts) sharedSeam = Math.max(sharedSeam, chart.layout.seam)
+  // One union viewBox across panes, in common chart coordinates. Every pane then draws 1 mm as
+  // 1 mm in both axes and starts from the same top-left origin.
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const entry of rendered) {
+    if (!entry.parts) continue
+    const [x, y, width, height] = entry.parts.viewBox.split(' ').map(Number)
+    if (x == null || y == null || width == null || height == null) continue
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x + width)
+    maxY = Math.max(maxY, y + height)
   }
-  const sharedViewBox = `${-sharedSeam / 2} 0 ${sharedSeam} ${sharedLength}`
+  const sharedViewBox = Number.isFinite(minX)
+    ? `${minX} ${minY} ${maxX - minX} ${maxY - minY}`
+    : '0 0 1 1'
   const columns = layout === 'rows' || rendered.length === 1 ? 1 : rendered.length
   return (
     <div className="flex h-full flex-col">
@@ -5421,7 +5428,7 @@ function PanZoomSvg({
     >
       <svg
         viewBox={viewBox}
-        preserveAspectRatio="xMinYMid meet"
+        preserveAspectRatio="xMinYMin meet"
         className="absolute inset-0 h-full w-full select-none"
         style={{
           transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`,

@@ -359,27 +359,6 @@ function chartLayer(
       }
     }
   }
-  // Debug: label every face interval at the top with its measured STEP width (spec fallback).
-  const labelSize = Math.max(2, stroke * 6)
-  const orientation = options.orientation ?? 'wisecam'
-  const labelTop = labelSize * 1.4
-  const labelY = orientation === 'raw' ? labelTop : part.length - labelTop
-  for (const face of chart.faces) {
-    const region = chart.layout.faces[face]
-    if (!region) continue
-    const width = chart.faceWidths?.[face] ?? region.width ?? region.length
-    const station = centeredStationFor(chart.layout, face, (region.width ?? region.length) / 2)
-    if (station == null) continue
-    const transform =
-      orientation === 'wisecam'
-        ? `rotate(180 ${fmt(station)} ${fmt(labelY)})`
-        : orientation === 'flipY'
-          ? `translate(0 ${fmt(2 * labelY)}) scale(1 -1)`
-          : ''
-    elements.push(
-      `<text data-layer="face-width" data-face="${face}" x="${fmt(station)}" y="${fmt(labelY)}" fill="#94a3b8" font-size="${fmt(labelSize)}" text-anchor="middle"${transform ? ` transform="${transform}"` : ''}>${Math.round(width * 10) / 10}</text>`,
-    )
-  }
   const body = `${elements.join('\n')}`
   const cutBoundary =
     chart.id === 'front' && part.startCut && part.endCut
