@@ -5265,16 +5265,19 @@ function IrSurfaceDrawing({
   const zoom = Math.max(0.2, Math.min(200, Math.round(view.k * 100) / 100))
   const rendered = views.map((entry) => {
     const base = entry.nc ?? entry.step
-    if (!base) return { entry, parts: null }
+    if (!base) return { entry, baseLength: 0, orientation: 'wisecam' as const, parts: null }
+    const orientation = base.profileType.trim().toUpperCase() === 'U' ? 'flipY' : 'wisecam'
     return {
       entry,
+      baseLength: base.length,
+      orientation,
       parts: partIrSvgParts(base, {
         overlay: entry.nc && entry.step ? entry.step : undefined,
         diff: entry.diff,
         stroke: 1 / zoom,
         colorForFace,
         section: false,
-        orientation: base.profileType.trim().toUpperCase() === 'U' ? 'flipY' : 'wisecam',
+        orientation,
       }),
     }
   })
@@ -5285,21 +5288,32 @@ function IrSurfaceDrawing({
       </div>
     )
   }
-  // One union viewBox across panes, in common chart coordinates. Every pane then draws 1 mm as
-  // 1 mm in both axes and starts from the same top-left origin.
+  // Anchor every pane on the part zero (station 0, along 0). A chart's local y=0 maps to `length`
+  // in wisecam/flipY, so shift each body by (maxLength − length); zero then lands at the same
+  // shared coordinate. Union the shifted bounds for the common viewBox.
+  const sharedLength = Math.max(
+    1,
+    ...rendered.map((entry) => (entry.parts ? (entry.baseLength ?? 0) : 0)),
+  )
+  const laidOut = rendered.map((entry) => ({
+    ...entry,
+    dy: entry.parts ? sharedLength - (entry.baseLength ?? 0) : 0,
+  }))
   let minX = Number.POSITIVE_INFINITY
   let minY = Number.POSITIVE_INFINITY
   let maxX = Number.NEGATIVE_INFINITY
   let maxY = Number.NEGATIVE_INFINITY
-  for (const entry of rendered) {
+  for (const entry of laidOut) {
     if (!entry.parts) continue
     const [x, y, width, height] = entry.parts.viewBox.split(' ').map(Number)
     if (x == null || y == null || width == null || height == null) continue
     minX = Math.min(minX, x)
-    minY = Math.min(minY, y)
+    minY = Math.min(minY, y + entry.dy)
     maxX = Math.max(maxX, x + width)
-    maxY = Math.max(maxY, y + height)
+    maxY = Math.max(maxY, y + entry.dy + height)
   }
+  minY = Math.min(minY, 0)
+  maxY = Math.max(maxY, sharedLength)
   const sharedViewBox = Number.isFinite(minX)
     ? `${minX} ${minY} ${maxX - minX} ${maxY - minY}`
     : '0 0 1 1'
@@ -5328,7 +5342,7 @@ function IrSurfaceDrawing({
           columns === 1 ? 'grid-cols-1' : columns === 2 ? 'grid-cols-2' : 'grid-cols-3',
         )}
       >
-        {rendered.map(({ entry, parts }) => (
+        {laidOut.map(({ entry, parts, dy }) => (
           <div key={entry.id} className="relative min-h-0 bg-[#0b0f14]">
             <span className="pointer-events-none absolute left-0 top-0 z-10 whitespace-nowrap rounded-br-sm bg-card/85 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground backdrop-blur">
               {entry.label}
@@ -5341,7 +5355,10 @@ function IrSurfaceDrawing({
                 onViewChange={setView}
               >
                 {/* biome-ignore lint/security/noDangerouslySetInnerHtml: local generated SVG */}
-                <g dangerouslySetInnerHTML={{ __html: parts.body }} />
+                <g
+                  transform={`translate(0 ${dy})`}
+                  dangerouslySetInnerHTML={{ __html: parts.body }}
+                />
               </PanZoomSvg>
             ) : (
               <div className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
