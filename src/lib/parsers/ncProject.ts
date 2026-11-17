@@ -80,7 +80,7 @@ export interface NcLineSets {
    * Points sampled along the projected cut lines (1 mm apart) with the face's outward normal, for
    * the light-sabre CUT_DEPTH probe. Sparse compared with the solid mesh, and only on real cuts.
    */
-  cutSamples: { point: Vec3; normal: Vec3; face: NcFace }[]
+  cutSamples: { point: Vec3; normal: Vec3; face: NcFace; tangent: Vec3 }[]
   /** Stemmed welding-bevel arrows (flat XYZ pair list), coloured like their cut thickness. */
   bevelArrows: { thickness: number; points: number[] }[]
   /**
@@ -406,7 +406,7 @@ export function faceThickness(
 export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets {
   const { frame, section, toScene, normal } = projection
   const byFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
-  const cutSamples: { point: Vec3; normal: Vec3; face: NcFace }[] = []
+  const cutSamples: { point: Vec3; normal: Vec3; face: NcFace; tangent: Vec3 }[] = []
   const outOfRange: { face: NcFace; index: number; points: number[] }[] = []
   const CUT_SAMPLE_STEP_MM = 1
   const arrowsByFace: Record<NcFace, number[]> = { v: [], o: [], u: [], h: [] }
@@ -435,12 +435,20 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
       const p1 = samples[j + 1] as [number, number]
       const length = Math.hypot(p1[0] - p0[0], p1[1] - p0[1])
       const steps = Math.max(1, Math.ceil(length / CUT_SAMPLE_STEP_MM))
+      // The sampled chunk's own direction in scene coordinates, so the probe can tell which side of
+      // the line is this face and which is the cut's removed side.
+      const a = place(face, p0[0], p0[1]).world
+      const b = place(face, p1[0], p1[1]).world
+      const dl = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2])
+      const tangent: Vec3 =
+        dl > 1e-6 ? [(b[0] - a[0]) / dl, (b[1] - a[1]) / dl, (b[2] - a[2]) / dl] : [1, 0, 0]
       for (let k = 0; k <= steps; k++) {
         const t = k / steps
         cutSamples.push({
           point: place(face, p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t).world,
           normal: outward,
           face,
+          tangent,
         })
       }
     }

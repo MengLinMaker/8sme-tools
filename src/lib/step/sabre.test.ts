@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { nw31Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { ensureOc, setOcWasmUrl } from './occInit'
-import { sabreTest } from './sabre'
+import { type MeshableShape, sabreSamples, sabreTest } from './sabre'
 
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
@@ -29,4 +29,31 @@ describe.skipIf(!HAVE)('light sabre test', () => {
     expect(bad.ok).toBe(false)
     expect(bad.failures.length).toBeGreaterThan(0)
   }, 600000)
+})
+
+describe('sabreSamples — cut-line probe', () => {
+  /** A 200 × 10 × 200 plate centred on the origin: its +Y face is at y = 5. */
+  const plate = async (): Promise<MeshableShape> => {
+    await ensureOc()
+    const { makeBox } = await import('replicad')
+    return makeBox([-100, -5, -100], [100, 5, 100]) as unknown as MeshableShape
+  }
+  const FACE = { normal: [0, 1, 0] as [number, number, number], depth: 5 }
+
+  it('ignores a line in the middle of a face — another plane’s cut projected onto it', async () => {
+    // The beam would end 1.6 mm inside the plate, but the line is not an edge of this face: the
+    // material is continuous either side of it, so the normal beam runs along the plate instead of
+    // crossing a wall (the Truss 9 shaft's web-tenon end drawn in the flange view).
+    const result = sabreSamples(await plate(), [
+      { point: [20, 5.4, 0], tangent: [1, 0, 0], ...FACE },
+    ])
+    expect(result.failures).toHaveLength(0)
+  })
+
+  it('still flags a line that is a real edge of the face', async () => {
+    const result = sabreSamples(await plate(), [
+      { point: [-99.5, 5.4, 0], tangent: [0, 0, 1], ...FACE },
+    ])
+    expect(result.failures).toHaveLength(1)
+  })
 })

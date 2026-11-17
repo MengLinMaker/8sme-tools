@@ -110,6 +110,35 @@ which is exactly why the earlier `entry < 1 mm` gate wrongly dropped M36's −Y 
 Result with the endpoint-inside gate: **M36 = 18 (9 per flange), M39 = 17 (8 + 9)** — both flange
 subcuts on both parts, spanning **Tw = 8 mm** from the corner end.
 
+### §3b Adopted: a cut line must be a real edge of its face
+
+`projectNc` projects NC contours onto a face, and a projected segment does not have to belong to
+that plane. Truss 9's `UC310*118` shafts (`TR9-1` – `TR9-5`) draw the **web tenon's end** in the
+flange view: fired from the flange face, the normal beam enters the flange and then runs *along*
+the web plate (260 mm of material ahead, no exit), so the endpoint-inside gate flagged every part
+at **1.4–4.2 mm from an end** (11 samples ≈ `tw`, one end cut per flange).
+
+- `sabreSamples` now asks `isCutEdge` first: step **0.6 mm** either side of the line, in the face
+  plane perpendicular to the cut (`projectNc` carries each sample's `tangent`), and fire the same
+  beam. If both sides hit a surface within `CUT_DEPTH_FLUSH_MM`, the line is not an edge of this
+  face → skip it. Material missing on one side is what a real cut edge looks like.
+- Keeps every validated over-cut: `M_32` 7, `M_36` 14, `M_39` 14 samples, and the NW30/NW31 parts
+  (m105–m108, m122, m147/148, m166, m119 …) unchanged. On the Truss 9 job it clears
+  `TR9-1/2/3/5` plus the end-trim findings on `3uc-52/54/55/68/78/79/80/82/83/88/91/92`, and trims
+  the near-end samples of the parts that keep a real run.
+- `TR9-4` still flags: its flange **ends at the cut line** with the web tenon running past it — the
+  same pattern as the operator-confirmed M36/M39 scrap — so it is reported.
+- Regression: `src/lib/step/sabre.test.ts` pins both outcomes on a synthetic plate (a line in the
+  middle of a face is ignored; the same line on the face's edge fails).
+
+Rejected on the way (measured on the same 190-part sample: Truss 9, Luenard, NW30 bottom, NW31
+bottom/top):
+
+| Approach | Where | Verdict / why |
+|---|---|---|
+| Raise the endpoint clearance to “at least 1 mm from surface” | `sabreSamples` `STRICT_EPS` | **Rejected.** Real findings stop **under 1 mm** under the far surface: `nw31-top/m135`, `m144-146`, `m170`, `m198-200`, `m217` each drop to **0 findings**, `m105` 408 → 70 samples. Measured: TR9-4 0.44–0.50 mm, M36 1–4 mm — it cannot separate them, and it suppresses real parts. |
+| Skip cut lines near the member ends (1 mm → 10 mm) | `reconstructFromNc` cut-sample filter | **Rejected.** `maxX` is the *contour* extent, not the part end, so a 10 mm margin also deletes real findings (`m128`, `m135`, `m144-146`, `m170`, `m198-200`, `m217`). It also hides an over-cut legitimately close to an end. |
+
 **Findings severity: `CUT_DEPTH` is an `error`.** A cut that stays inside the material past
 `T + r` has removed metal that cannot be put back — it is scrap, not a warning.
 

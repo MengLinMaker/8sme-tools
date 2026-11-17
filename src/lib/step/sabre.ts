@@ -203,6 +203,8 @@ const SABRE_LENGTH = MAX_CUT_THICKNESS_MM
  * over-cut. Genuine over-cuts are deeper than this.
  */
 export const CUT_DEPTH_FLUSH_MM = 2
+/** Lateral step (mm) either side of a cut line when asking whether it is a real edge. */
+const CUT_EDGE_STEP_MM = 0.6
 /** Cap on the number of triangle samples probed (largest first). */
 const MAX_SAMPLES = 400
 /**
@@ -289,6 +291,8 @@ export interface SabreMeshOptions {
 export interface SabreSample {
   point: [number, number, number]
   normal: [number, number, number]
+  /** Unit direction of the cut line at this point (in the face plane), when known. */
+  tangent?: [number, number, number]
   /** actual cut depth (face thickness + corner radius), when known */
   depth?: number
   /** intended subcut length (the web thickness, Tw), when known */
@@ -359,12 +363,38 @@ export function sabreSamples(
       if (!isInside(new Vector3(point.x + dx, point.y + dy, point.z + dz))) return false
     return true
   }
+  /**
+   * Only probe a cut line where it is a **real edge of this face** — material missing within a
+   * millimetre of the line, on one side of it. A line with material on both sides is another
+   * plane's cut drawn in this view (a web tenon's end projected onto a flange face, say); the
+   * normal beam there runs *along* the web plate, so it never exits and reads as a permanent
+   * over-cut. Truss 9's `UC310*118` shafts flagged every part that way.
+   */
+  const isCutEdge = (point: Vector3, normal: Vector3, tangent: Vector3): boolean => {
+    const across = new Vector3().crossVectors(tangent, normal)
+    if (across.lengthSq() < 1e-6) return true
+    across.normalize()
+    const beam = normal.clone().negate()
+    const entryAt = (offset: number): number => {
+      probe.set(point.clone().addScaledVector(across, offset), beam)
+      probe.near = 0
+      probe.far = 100
+      const hit = probe.intersectObject(target, false)[0]
+      return hit ? hit.distance : Number.POSITIVE_INFINITY
+    }
+    // Air (or a surface far below the cut line) on either side is what an edge looks like.
+    return (
+      entryAt(CUT_EDGE_STEP_MM) > CUT_DEPTH_FLUSH_MM ||
+      entryAt(-CUT_EDGE_STEP_MM) > CUT_DEPTH_FLUSH_MM
+    )
+  }
   const failures: SabreFailure[] = []
 
   for (const sample of samples) {
     const point = new Vector3(...sample.point)
     const normal = new Vector3(...sample.normal).normalize()
     // `projectNc` already gives each face's outward normal; no per-sample orientation probe.
+    if (sample.tangent && !isCutEdge(point, normal, new Vector3(...sample.tangent))) continue
 
     // Gate: follow the beam inward for the intended cut depth (`T + r`) plus the flush tolerance,
     // then ask whether that endpoint is *inside* the solid. If it is, the beam has not exited at
