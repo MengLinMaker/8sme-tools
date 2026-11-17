@@ -2506,12 +2506,6 @@ export function PreflightPage() {
     const index = finding.params?.index
     return typeof index === 'number' ? index : null
   }, [viewerFindings, hoverIssueIndex])
-  /** Sub-cut index to glow in the 3D while its issue row is hovered (only cut checks map to one). */
-  const highlightSpan = useMemo(() => {
-    if (hoverIssueIndex == null) return null
-    const finding = viewerFindings[hoverIssueIndex]
-    return finding ? markerIndexOf(finding) : null
-  }, [viewerFindings, hoverIssueIndex])
   /** Warning line to glow while its bevel row is hovered (the finding's own index). */
   const highlightWarning = useMemo(() => {
     if (hoverIssueIndex == null) return null
@@ -2557,28 +2551,21 @@ export function PreflightPage() {
     )
   }, [viewerFindings])
   /**
-   * Row click: pan/zoom onto the issue. It never hides a visible marker — if the marker is
-   * currently hidden it is turned back on first.
-   */
-  const activateIssue = useCallback(
-    (index: number) => {
-      const finding = viewerFindings[index]
-      // Only findings with a 3D marker are interactive; the rest have no eye.
-      if (!finding || !isVisualisable(finding)) return
-      // A fixed row stays visually off until Undo — clicking it only pans/zooms.
-      if (!resolvedViewerRows.has(index) && hiddenIssues.has(index)) toggleIssue(index)
-      if (findingLocationOf(finding) != null) focusFinding(finding)
-    },
-    [viewerFindings, hiddenIssues, toggleIssue, focusFinding, resolvedViewerRows],
-  )
-
-  /**
    * Cut markers of the viewed part — the manufactured view draws the guilty cuts. Cut-reach
    * failures come first, then the bevel-change lines, so a finding's `params.index` (assigned in
    * the same order in `allFindings`) picks the right marker.
+   *
+   * Fixed findings keep their marker at the end of the list. The eye stays off (their issue is
+   * resolved), but hovering the row can still highlight it, so the operator sees what Undo restores.
+   * `resolvedIndexByKey` maps each fixed row's op key to that kept marker.
    */
-  const viewerSabreFailures = useMemo<CutMarker[] | null>(() => {
-    if (!viewing) return null
+  const viewerMarkers = useMemo<{
+    failures: CutMarker[] | null
+    resolvedIndexByKey: Map<string, number>
+  }>(() => {
+    const resolvedIndexByKey = new Map<string, number>()
+    const none = { failures: null, resolvedIndexByKey }
+    if (!viewing) return none
     // Markers follow the same current-NC check results as the findings.
     const rechecked = ncRecheck.get(viewing.mark)
     const reach = rechecked?.reach ?? reachChecks.get(viewing.mark) ?? []
@@ -2597,7 +2584,7 @@ export function PreflightPage() {
           }
         : null
     const markers: CutMarker[] = [...reach]
-    for (const issue of bevel) {
+    const pushBevel = (issue: BevelChangeIssue): void => {
       // A changing bevel is an NC-specific error: it only reads on the manufactured model, so the
       // viewer draws it there alone (see `CutMarker.ncOnly`).
       let from = issue.from
@@ -2621,25 +2608,48 @@ export function PreflightPage() {
       }
       markers.push({ face: issue.face, from, to, lines, ncOnly: true })
     }
-    for (const issue of unclosed) {
+    const pushIssue = (issue: CutMarker): void => {
       markers.push({
         face: issue.face,
         from: issue.from,
         to: issue.to,
         lines: issue.lines,
-        color: issue.color,
       })
     }
-    for (const issue of rootFillet) {
-      markers.push({
-        face: issue.face,
-        from: issue.from,
-        to: issue.to,
-        lines: issue.lines,
-        color: issue.color,
-      })
+    for (const issue of bevel) pushBevel(issue)
+    for (const issue of unclosed) pushIssue(issue)
+    for (const issue of rootFillet) pushIssue(issue)
+    // Keep a marker for each fixed finding, after the active ones so their indices do not shift.
+    // The geometry comes from the original check on the bundled NC (the fix no longer reports it).
+    for (const record of resolvedFixes.get(viewing.mark) ?? []) {
+      const key = findingOpKey(record)
+      if (!key) continue
+      if (record.code === 'CUT_BEVEL_CHANGE') {
+        const issue = (bevelChanges.get(viewing.mark) ?? []).find(
+          (candidate) => `bevel:${candidate.contourIndex}:${candidate.vertices.join(',')}` === key,
+        )
+        if (!issue) continue
+        pushBevel(issue)
+      } else if (record.code === 'CUT_UNCLOSED' || record.code === 'CUT_CUTOUT') {
+        const issue = (unclosedCuts.get(viewing.mark) ?? []).find(
+          (candidate) =>
+            candidate.removal &&
+            `cut:${candidate.contourIndex}:${candidate.removal.join(',')}` === key,
+        )
+        if (!issue) continue
+        pushIssue(issue)
+      } else if (record.code === 'CUT_ROOT_FILLET') {
+        const issue = (rootFilletChecks.get(viewing.mark) ?? []).find(
+          (candidate) => `fillet:${candidate.contourIndex}:${candidate.vertices.join(',')}` === key,
+        )
+        if (!issue) continue
+        pushIssue(issue)
+      } else {
+        continue
+      }
+      resolvedIndexByKey.set(key, markers.length - 1)
     }
-    return markers.length > 0 ? markers : null
+    return { failures: markers.length > 0 ? markers : null, resolvedIndexByKey }
   }, [
     viewing,
     ncRecheck,
@@ -2647,12 +2657,59 @@ export function PreflightPage() {
     bevelChanges,
     unclosedCuts,
     rootFilletChecks,
+    resolvedFixes,
     viewingNcFrame,
     viewingNcSection,
     viewingNcGeom,
     viewingProfileCode,
     stock,
   ])
+
+  /** The live marker index of a finding; a fixed row uses the marker kept for its own op key. */
+  const viewerMarkerIndexFor = useCallback(
+    (finding: Finding): number | null => {
+      if (finding.params?.resolved === 1) {
+        const key = findingOpKey(finding)
+        return key ? (viewerMarkers.resolvedIndexByKey.get(key) ?? null) : null
+      }
+      return markerIndexOf(finding)
+    },
+    [viewerMarkers],
+  )
+  /** Sub-cut index to glow in the 3D while its issue row is hovered (only cut checks map to one). */
+  const highlightSpan = useMemo(() => {
+    if (hoverIssueIndex == null) return null
+    const finding = viewerFindings[hoverIssueIndex]
+    return finding ? viewerMarkerIndexFor(finding) : null
+  }, [viewerFindings, hoverIssueIndex, viewerMarkerIndexFor])
+  /**
+   * Row click: pan/zoom onto the issue. It never hides a visible marker — if the marker is
+   * currently hidden it is turned back on first. A fixed row stays visually off (visibility is
+   * disabled; hover still highlights it), but the kept marker is framed so Undo has a target.
+   */
+  const activateIssue = useCallback(
+    (index: number) => {
+      const finding = viewerFindings[index]
+      // Only findings with a 3D marker are interactive; the rest have no eye.
+      if (!finding || !isVisualisable(finding)) return
+      if (!resolvedViewerRows.has(index) && hiddenIssues.has(index)) toggleIssue(index)
+      if (findingLocationOf(finding) == null) return
+      const markerIndex = viewerMarkerIndexFor(finding)
+      focusFinding(
+        markerIndex != null && finding.params?.resolved === 1
+          ? { ...finding, params: { ...finding.params, index: markerIndex } }
+          : finding,
+      )
+    },
+    [
+      viewerFindings,
+      hiddenIssues,
+      toggleIssue,
+      focusFinding,
+      resolvedViewerRows,
+      viewerMarkerIndexFor,
+    ],
+  )
 
   // Collapsible sections — long jobs push the tables far down, so profiles
   // and parts collapse like an accordion.
@@ -3064,7 +3121,7 @@ export function PreflightPage() {
       const next = list.filter((item) => findingOpKey(item) !== key)
       next.push({
         ...finding,
-        params: { ...finding.params, resolved: 1, index: 1_000_000 + next.length },
+        params: { ...finding.params, resolved: 1 },
       })
       return new Map(prev).set(part.mark, next)
     })
@@ -4578,7 +4635,7 @@ export function PreflightPage() {
                             focus={findingFocus}
                             // The STEP pane is STEP-only: no NC marks, section, frame or alignment
                             // reference. Its cut lines come from the STEP-derived IR options.
-                            sabreFailures={viewerSabreFailures}
+                            sabreFailures={viewerMarkers.failures}
                             ncMarks={null}
                             ncSection={stepIrSection?.points ?? null}
                             faceFrame={stepFaceFrame}
@@ -4616,7 +4673,7 @@ export function PreflightPage() {
                             ncPrimary
                             // The rebuild is oriented to the STEP frame, so the guilty-cut
                             // marks land on what the laser will actually cut — not the ideal.
-                            sabreFailures={viewerSabreFailures}
+                            sabreFailures={viewerMarkers.failures}
                             sabrePoints={manufacturedSabrePoints}
                             nc={viewingNcGeom}
                             ncSection={viewingNcSection}
@@ -4660,7 +4717,7 @@ export function PreflightPage() {
                             bus={orbitBus}
                             ncPrimary
                             focus={findingFocus}
-                            sabreFailures={viewerSabreFailures}
+                            sabreFailures={viewerMarkers.failures}
                             ncMarks={viewingNcGeom?.marks ?? null}
                             ncSection={viewingNcSection}
                             faceFrame={viewingNcFrame}
@@ -5188,7 +5245,7 @@ function ViewerWarnings({
                 const showable = isVisualisable(finding)
                 return (
                   <TableRow
-                    key={`${finding.code}-${finding.params?.index ?? finding.message}`}
+                    key={`${finding.code}-${findingOpKey(finding) ?? finding.params?.index ?? finding.message}`}
                     tabIndex={showable ? 0 : undefined}
                     onClick={showable && onActivate ? () => onActivate(index) : undefined}
                     onKeyDown={
