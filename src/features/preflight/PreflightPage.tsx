@@ -3130,23 +3130,6 @@ export function PreflightPage() {
     [bytesByPath, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks],
   )
 
-  /** Clears every NC edit on one part (row Undo for a finding resolved by a neighbouring fix). */
-  const undoPartNc = useCallback((part: PartRecord) => {
-    setNcOverrides((prev) => {
-      if (!prev.has(part.mark)) return prev
-      const next = new Map(prev)
-      next.delete(part.mark)
-      return next
-    })
-    setSabreRecheck((prev) => {
-      if (!prev.has(part.mark)) return prev
-      const next = new Map(prev)
-      next.delete(part.mark)
-      return next
-    })
-    sabreRecheckToken.current.delete(part.mark)
-  }, [])
-
   /** Cleans one part's stray STEP bodies, keeping the real geometry untouched. */
   const cleanPart = useCallback(
     async (part: PartRecord) => {
@@ -4861,7 +4844,6 @@ export function PreflightPage() {
                         onSetBevel: (finding) => openBevelEdit(viewing, finding),
                         onUndo: () => undoOverride(viewing.mark),
                         onUndoNc: (finding) => undoNcFinding(viewing, finding),
-                        onUndoNcPart: () => undoPartNc(viewing),
                       }}
                     />
                   ) : viewingPdfBytes ? (
@@ -5026,8 +5008,6 @@ interface ViewerFix {
   onSetBevel: (finding: Finding) => void
   onUndo: () => void
   onUndoNc: (finding: Finding) => void
-  /** Clear every NC edit on the part (used when a neighbouring fix resolved this row). */
-  onUndoNcPart: () => void
 }
 
 /** Which fix action a viewer Fix button runs, with its labels. */
@@ -5136,6 +5116,16 @@ function ViewerWarnings({
   }
   const rows = findings
     .map((finding, index) => ({ finding, index }))
+    .filter(({ finding, index }) => {
+      // A recheck-cleared issue with no fix of its own simply disappears: there is no Undo to
+      // offer because that issue was never edited. Issues with their own op/STEP fix stay.
+      const stepDone = Boolean(
+        fix?.override && resolvedFindings(fix.override).includes(finding.code),
+      )
+      const ownFix = (ncApplied?.has(index) ?? false) || stepDone
+      const recheckDone = ncRechecked?.has(index) ?? false
+      return !(recheckDone && !ownFix)
+    })
     .sort((a, b) => {
       if (sort.key === 'fix') {
         const fa = fixableFinding(a.finding) ? 1 : 0
@@ -5189,15 +5179,15 @@ function ViewerWarnings({
   )
   const invalid = step && !step.valid ? step.problems.join('; ') : null
   const hasFixRow = Boolean(fix?.override || fix?.canRegenerate || fix?.canSimplify || fix?.ncEdit)
-  if (findings.length === 0 && !invalid && !hasFixRow) return null
-  const errors = findings.filter((finding) => finding.severity === 'error').length
-  const warnings = findings.filter((finding) => finding.severity === 'warning').length
+  if (rows.length === 0 && !invalid && !hasFixRow) return null
+  const errors = rows.filter(({ finding }) => finding.severity === 'error').length
+  const warnings = rows.filter(({ finding }) => finding.severity === 'warning').length
   return (
     <div className="flex h-full min-h-0 flex-col gap-1.5 overflow-auto bg-card px-4 py-2">
-      {findings.length > 0 && (
+      {rows.length > 0 && (
         <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
           <span className="font-semibold">
-            {t('preflight.warnings.issues', { count: findings.length })}
+            {t('preflight.warnings.issues', { count: rows.length })}
           </span>
           <span className="font-normal normal-case tracking-normal">
             {errors > 0 && (
@@ -5210,7 +5200,7 @@ function ViewerWarnings({
           </span>
         </div>
       )}
-      {findings.length > 0 && (
+      {rows.length > 0 && (
         <div className="min-h-0 flex-1 overflow-auto">
           <Table>
             <TableHeader className="sticky top-0 z-10 bg-card">
@@ -5361,22 +5351,6 @@ function ViewerWarnings({
                           onClick={(event) => {
                             event.stopPropagation()
                             fix?.onUndo()
-                          }}
-                          onKeyDown={(event) => event.stopPropagation()}
-                        >
-                          <Undo2 />
-                          {t('common.actions.undo')}
-                        </Button>
-                      ) : resolved && fix?.ncEdit ? (
-                        // Cleared by a neighbouring NC fix: undo that part's NC edits.
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7"
-                          disabled={fix?.pending}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            fix?.onUndoNcPart()
                           }}
                           onKeyDown={(event) => event.stopPropagation()}
                         >
