@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { syncGeometries } from 'replicad-threejs-helper'
 import {
-  AdditiveBlending,
   AmbientLight,
   Box3,
   BufferGeometry,
@@ -41,8 +40,6 @@ import type { CutMarker } from '@/lib/audit/cutReach'
 
 /** How far the red mitre projection travels into the material (the sabre reach). */
 const SABRE_PROJECTION_MM = 25
-/** Thickness of the mitre-projection slab (mm) so it reads from the thin side. */
-const SABRE_PROJECTION_THICKNESS_MM = 1
 
 import {
   faceNormal,
@@ -99,8 +96,17 @@ const STOCK_COLOR = 0x9ca3af
 /** Compare (STEP) shell: neutral cool grey, so it reads as reference without tinting the base. */
 const COMPARE_COLOR = 0x8a94a6
 const STRAY_COLOR = 0xf97316
-/** Light-sabre cut lines: perimeter of the patch the beam cannot cut. */
-const SABRE_CUT_COLOR = 0xff2b2b
+/**
+ * One design system for every 3D issue marker: a thin red cut line, plus a red ghost halo while its
+ * row is highlighted. There is no fade or width change to reason about — the marker is either shown
+ * or hidden (its eye / a fixed issue), and highlighting only adds the halo.
+ */
+const ISSUE_COLOR = 0xff2b2b
+/** Marker line width in screen pixels. Thin, so it reads as the cut line rather than a ribbon. */
+const ISSUE_LINE_WIDTH = 2
+/** The red ghost glow behind a highlighted marker (normal-blended, so it never washes out white). */
+const ISSUE_HALO_WIDTH = 16
+const ISSUE_HALO_OPACITY = 0.45
 /** Overcut vs the STEP ideal (NC took too much — scrap, cannot fix). */
 const OVERCUT_COLOR = 0xef4444
 /** Undercut vs the STEP ideal (leftover — can still be cut). */
@@ -125,8 +131,6 @@ const FALLBACK_COLOR = 0x9ca3af
 
 /** Projected NC toolpath / STEP cut-edge line width in screen pixels. */
 const PROJECTION_LINE_WIDTH = 2
-/** Base width for sabre failure markers, which stay a little heavier than the projection lines. */
-const NC_LINE_WIDTH = 3
 /**
  * Opacity of the translucent bevel-area fins. Low enough that overlapping bevels near one another
  * stay readable through each other, high enough that a lone fin still reads. (A fin is drawn
@@ -135,32 +139,18 @@ const NC_LINE_WIDTH = 3
 const BEVEL_AREA_OPACITY = 0.34
 /** How far (mm) a STEP bevel's translucent area fin sweeps out from its cut line. */
 const STEP_BEVEL_LENGTH = 30
-/** Glow used when an issue row is hovered: a wide additive halo behind the marker + a fatter core. */
-const SABRE_HALO_WIDTH = 16
-const SABRE_HALO_OPACITY = 0.32
-const SABRE_HIGHLIGHT_WIDTH = 6
-/** The other markers dim to this while one is hovered, so the hovered one reads at a glance. */
-const SABRE_DIM_OPACITY = 0.2
-/** Resting opacity of an issue line (the hover style below is shared by every issue type). */
-const BASE_LINE_OPACITY = 0.98
 
 /**
- * The hover treatment every issue type uses: the hovered line is wider, fully opaque and glows
- * (halo); while any line is hovered the others dim. Hidden lines stay hidden unless hovered.
+ * The one treatment every issue marker uses: show its line when it is on, and add the red halo while
+ * its row is highlighted. Nothing else changes — no widths, colours or fades to keep in sync.
  */
-function applyHoverStyle(
+function applyIssueStyle(
   line: LineSegments2 | null | undefined,
   halo: LineSegments2 | null | undefined,
   shown: boolean,
   highlighted: boolean,
-  anyHovered: boolean,
 ): void {
-  if (line) {
-    line.visible = shown
-    const material = line.material as LineMaterial
-    material.linewidth = highlighted ? SABRE_HIGHLIGHT_WIDTH : NC_LINE_WIDTH
-    material.opacity = highlighted ? 1 : anyHovered ? SABRE_DIM_OPACITY : BASE_LINE_OPACITY
-  }
+  if (line) line.visible = shown
   if (halo) halo.visible = highlighted && shown
 }
 /**
@@ -206,7 +196,7 @@ function ncLineObject(
   return line
 }
 
-/** A wide, additive, translucent copy of a marker's line — the glow behind a hovered finding. */
+/** A wide, translucent copy of a marker's line — the glow behind a hovered finding. */
 function ncHaloObject(
   points: number[],
   color: number,
@@ -219,10 +209,11 @@ function ncHaloObject(
   const material = new LineMaterial({
     color,
     transparent: true,
-    opacity: SABRE_HALO_OPACITY,
-    linewidth: SABRE_HALO_WIDTH,
+    opacity: ISSUE_HALO_OPACITY,
+    linewidth: ISSUE_HALO_WIDTH,
     worldUnits: false,
-    blending: AdditiveBlending,
+    // Normal blending keeps the glow the marker's own colour. Additive over the bright steel
+    // surface pushed every error toward white, so the same hover read differently per issue.
     depthTest: false,
     depthWrite: false,
   })
@@ -394,9 +385,6 @@ function markTextObject(
 }
 
 /** Builds the NC line sets as coloured fat lines (cut lines + holes + bevels + layout marks). */
-/** Warning colour for welding preps the head cannot cut (outside its range). */
-const OUT_OF_RANGE_COLOR = 0xff3b30
-
 function addNcLines(
   nc: NcGeometry,
   projection: NcProjection,
@@ -432,12 +420,12 @@ function addNcLines(
   for (const segment of outOfRangeSegments(nc)) {
     const line = sets.outOfRange.find((o) => o.face === segment.face && o.index === segment.index)
     const warning = line
-      ? ncLineObject(line.points, OUT_OF_RANGE_COLOR, resolution, materials, true)
+      ? ncLineObject(line.points, ISSUE_COLOR, resolution, materials, true)
       : null
     if (warning && line) {
       outOfRange.push({
         line: warning,
-        halo: ncHaloObject(line.points, OUT_OF_RANGE_COLOR, resolution, materials),
+        halo: ncHaloObject(line.points, ISSUE_COLOR, resolution, materials),
         normal: projection.normal(segment.face),
       })
     } else {
@@ -819,12 +807,11 @@ function mountScene(
   const applyOutOfRange = (): void => {
     ncOutOfRangeObjects.forEach((object, index) => {
       const hovered = outOfRangeHover === index
-      applyHoverStyle(
+      applyIssueStyle(
         object,
         ncOutOfRangeHalos[index],
         outOfRangeVisible && (hovered || !outOfRangeHidden.has(index)),
         hovered,
-        outOfRangeHover != null,
       )
     })
   }
@@ -837,7 +824,6 @@ function mountScene(
   const ncResolution = new Vector2(container.clientWidth || 1, container.clientHeight || 1)
   // Red bevel arrows at uncuttable cuts (light-sabre failures) — toggled as one object.
   const sabreObjects: LineSegments2[] = []
-  const sabreRunObjects: Mesh[] = []
   const sabreRunLines: LineSegments2[] = []
   const sabreRunHalos: (LineSegments2 | null)[] = []
   const sabreRunDirections: Vec3[] = []
@@ -1371,7 +1357,7 @@ function mountScene(
               positions.push(pA[0], pA[1], pA[2], pB[0], pB[1], pB[2])
             }
           }
-          const color = failure.color ?? SABRE_CUT_COLOR
+          const color = ISSUE_COLOR
           const mark = ncLineObject(positions, color, ncResolution, ncMaterials, true)
           if (mark) {
             scene.add(mark)
@@ -1443,18 +1429,10 @@ function mountScene(
     }
   }
 
-  // Sweep the guilty cut line into the material along the face normal (`T + r`) to make the mitre
-  // projection: one closed slab and one red cut line per failing run, on the layer-1 pass (depth
-  // cleared) so they read through the solid and keep constant translucency.
+  // The guilty cut line (red) per failing run, on the layer-1 pass (depth cleared) so it reads
+  // through the solid. The red ghost halo is the only highlight: a filled projection volume washed
+  // out to a white haze over the bright steel, so the run is just its cut line.
   if (sabrePoints && sabrePoints.length > 1) {
-    const inner = (sample: (typeof sabrePoints)[number]): Vec3 => {
-      const depth = sample.depth ?? SABRE_PROJECTION_MM
-      return [
-        sample.point[0] - sample.normal[0] * depth,
-        sample.point[1] - sample.normal[1] * depth,
-        sample.point[2] - sample.normal[2] * depth,
-      ]
-    }
     // Split into runs of consecutive samples (different subcuts stay separate findings).
     const runs: (typeof sabrePoints)[] = []
     let run: typeof sabrePoints = []
@@ -1477,7 +1455,6 @@ function mountScene(
     }
     if (run.length > 1) runs.push(run)
 
-    const half = SABRE_PROJECTION_THICKNESS_MM / 2
     for (const strip of runs) {
       sabreRunShown.push(true)
       const n = strip.length
@@ -1503,80 +1480,22 @@ function mountScene(
       }
       sabreRunCentres.push([cx, cy, cz])
       sabreRunRadii.push(halfExtent + (strip[0]?.depth ?? SABRE_PROJECTION_MM))
-      const positions: number[] = []
       const cutLine: number[] = []
-      const quad = (a: Vec3, b: Vec3, c: Vec3, d: Vec3) => {
-        positions.push(...a, ...b, ...c, ...a, ...c, ...d)
-      }
-      const oPlus: Vec3[] = []
-      const oMinus: Vec3[] = []
-      const iPlus: Vec3[] = []
-      const iMinus: Vec3[] = []
-      for (let j = 0; j < n; j++) {
-        const sample = strip[j]!
-        const prev = strip[Math.max(0, j - 1)]!
-        const next = strip[Math.min(n - 1, j + 1)]!
-        const tx = next.point[0] - prev.point[0]
-        const ty = next.point[1] - prev.point[1]
-        const tz = next.point[2] - prev.point[2]
-        const tl = Math.hypot(tx, ty, tz) || 1
-        const nx = sample.normal[0]
-        const ny = sample.normal[1]
-        const nz = sample.normal[2]
-        let bx = (ty / tl) * nz - (tz / tl) * ny
-        let by = (tz / tl) * nx - (tx / tl) * nz
-        let bz = (tx / tl) * ny - (ty / tl) * nx
-        const bl = Math.hypot(bx, by, bz) || 1
-        bx = (bx / bl) * half
-        by = (by / bl) * half
-        bz = (bz / bl) * half
-        const p = sample.point
-        const q = inner(sample)
-        oPlus.push([p[0] + bx, p[1] + by, p[2] + bz])
-        oMinus.push([p[0] - bx, p[1] - by, p[2] - bz])
-        iPlus.push([q[0] + bx, q[1] + by, q[2] + bz])
-        iMinus.push([q[0] - bx, q[1] - by, q[2] - bz])
-      }
       for (let j = 0; j < n - 1; j++) {
         cutLine.push(...strip[j]!.point, ...strip[j + 1]!.point)
-        quad(oPlus[j]!, oPlus[j + 1]!, iPlus[j + 1]!, iPlus[j]!)
-        quad(oMinus[j]!, iMinus[j]!, iMinus[j + 1]!, oMinus[j + 1]!)
-        quad(oPlus[j]!, oMinus[j]!, oMinus[j + 1]!, oPlus[j + 1]!)
-        quad(iPlus[j]!, iPlus[j + 1]!, iMinus[j + 1]!, iMinus[j]!)
       }
-      quad(oPlus[0]!, iPlus[0]!, iMinus[0]!, oMinus[0]!)
-      quad(oPlus[n - 1]!, oMinus[n - 1]!, iMinus[n - 1]!, iPlus[n - 1]!)
-
-      if (positions.length > 0) {
-        const geometry = new BufferGeometry()
-        geometry.setAttribute('position', new Float32BufferAttribute(positions, 3))
-        geometry.computeVertexNormals()
-        const material = new MeshBasicMaterial({
-          color: 0xff2d2d,
-          side: DoubleSide,
-          transparent: true,
-          opacity: 0.35,
-          depthTest: true,
-          depthWrite: true,
-        })
-        const mesh = new Mesh(geometry, material)
-        mesh.renderOrder = 20
-        mesh.layers.set(1)
-        primary.group.add(mesh)
-        sabreRunObjects.push(mesh)
-        const mid = strip[Math.floor(n / 2)]!
-        sabreRunDirections.push([mid.normal[0], mid.normal[1], mid.normal[2]])
-      }
+      const mid = strip[Math.floor(n / 2)]!
+      sabreRunDirections.push([mid.normal[0], mid.normal[1], mid.normal[2]])
       if (cutLine.length > 0) {
         const cutGeometry = new LineSegmentsGeometry()
         cutGeometry.setPositions(cutLine)
         const cutMaterial = new LineMaterial({
-          color: 0xff2d2d,
-          linewidth: 2.5,
+          color: ISSUE_COLOR,
+          linewidth: ISSUE_LINE_WIDTH,
           depthTest: false,
           depthWrite: false,
           transparent: true,
-          opacity: 0.95,
+          opacity: 0.98,
         })
         cutMaterial.resolution.copy(ncResolution)
         ncMaterials.push(cutMaterial)
@@ -1584,7 +1503,7 @@ function mountScene(
         line.renderOrder = 21
         primary.group.add(line)
         sabreRunLines.push(line)
-        const runHalo = ncHaloObject(cutLine, 0xff2d2d, ncResolution, ncMaterials)
+        const runHalo = ncHaloObject(cutLine, ISSUE_COLOR, ncResolution, ncMaterials)
         if (runHalo) primary.group.add(runHalo)
         sabreRunHalos.push(runHalo)
       }
@@ -2087,21 +2006,16 @@ function mountScene(
       if (!mark) continue
       const highlighted = hoverSpan != null && i === hoverSpan
       const visible = sabreVisible && (highlighted || spanShown[i] === true)
-      applyHoverStyle(mark, sabreHaloObjects[i], visible, highlighted, hoverSpan != null)
+      applyIssueStyle(mark, sabreHaloObjects[i], visible, highlighted)
     }
   }
 
-  /** Same visibility/hover treatment for the NC CUT_DEPTH_NC runs (area slab + cut line). */
+  /** Same eye-toggle + highlight treatment for the NC CUT_DEPTH_NC runs (cut line + ghost). */
   const refreshSabreAppearance = (): void => {
-    for (let i = 0; i < sabreRunObjects.length; i++) {
-      const mesh = sabreRunObjects[i]
-      if (!mesh) continue
+    for (let i = 0; i < sabreRunLines.length; i++) {
       const highlighted = sabreHover != null && i === sabreHover
       const visible = sabreVisible && (highlighted || sabreRunShown[i] === true)
-      mesh.visible = visible
-      const material = mesh.material as MeshBasicMaterial
-      material.opacity = highlighted ? 0.6 : sabreHover != null ? 0.12 : 0.35
-      applyHoverStyle(sabreRunLines[i], sabreRunHalos[i], visible, highlighted, sabreHover != null)
+      applyIssueStyle(sabreRunLines[i], sabreRunHalos[i], visible, highlighted)
     }
   }
 
@@ -2224,8 +2138,8 @@ function mountScene(
       } else if (source === 'nc') {
         // Only the pane that carries the NC projection draws these; the STEP/overlay panes skip so
         // they don't frame the whole model instead.
-        if (sabreRunObjects.length === 0) return
-        if (index != null && sabreRunObjects[index]) {
+        if (sabreRunLines.length === 0) return
+        if (index != null && sabreRunLines[index]) {
           // Frame the clicked cut together with nearby cuts (e.g. the two flange subcuts at one
           // end), so all local errors are visible in the same view.
           primary.group.updateMatrixWorld(true)
@@ -2257,7 +2171,7 @@ function mountScene(
           const normal = sabreRunDirections[index]
           if (normal) direction = isoViewFor(normal)
         } else {
-          for (const object of sabreRunObjects) box.expandByObject(object)
+          for (const line of sabreRunLines) box.expandByObject(line)
         }
       } else if (cut) {
         // A specific sub-cut (clicked from the issues list) rotates onto and frames just that one;
@@ -2335,11 +2249,6 @@ function mountScene(
       for (const area of ncAreaObjects) {
         area.geometry.dispose()
         ;(area.material as MeshBasicMaterial).dispose()
-      }
-      for (const mesh of sabreRunObjects) {
-        primary.group.remove(mesh)
-        mesh.geometry.dispose()
-        ;(mesh.material as Material).dispose()
       }
       for (const line of sabreRunLines) {
         primary.group.remove(line)

@@ -101,11 +101,6 @@ export interface CutMarker {
    */
   lines?: [number, number][][]
   /**
-   * Optional marker colour (0xRRGGBB). Defaults to the viewer's red "guilty cut"; warnings set an
-   * amber tone so a merely suspicious cut reads differently from a hard failure.
-   */
-  color?: number
-  /**
    * Whether the marker is an NC-specific issue (e.g. a cut line whose bevel changes along its
    * length). Only meaningful on the manufactured NC model, so the viewer draws it on that pane
    * alone — on the STEP ideal / overlay it would read as a defect in a model this NC won't cut.

@@ -44,9 +44,6 @@ export const SMALL_CUTOUT_MM2 = 1000
 /** How close (mm) a vertex must sit to the face edge to count as "on the boundary". */
 const EDGE_TOL_MM = 0.5
 
-/** Amber warning tone (matches the warnings table). */
-const UNCLOSED_COLOR = 0xf59e0b
-
 /** Why a cut was flagged. */
 export type UnclosedReason = 'open' | 'floating' | 'tiny' | 'cutout'
 
@@ -348,7 +345,6 @@ function issue(
     from: [start[0], start[1]],
     to: [end[0], end[1]],
     lines: [feature.polyline.map((p) => [p[0], p[1]] as [number, number])],
-    color: UNCLOSED_COLOR,
     message,
     params: {
       face: contour.face,

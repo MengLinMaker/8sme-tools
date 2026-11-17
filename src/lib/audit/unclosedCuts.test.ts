@@ -94,7 +94,6 @@ describe('unclosedCuts', () => {
     expect(issues[0]?.params.reason).toBe('open')
     // The marker is carried in NC face coords for the viewer.
     expect(issues[0]?.face).toBe('v')
-    expect(issues[0]?.color).toBe(0xf59e0b)
     // Whole-contour feature: removed by dropping the block.
     expect(issues[0]?.removal).toBeNull()
   })
