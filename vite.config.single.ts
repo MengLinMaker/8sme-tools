@@ -6,7 +6,7 @@ import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type Plugin } from 'vite'
 import { viteSingleFile } from 'vite-plugin-singlefile'
-import { buildVersion } from './version'
+import { buildVersion } from './version.ts'
 
 const srcDir = fileURLToPath(new URL('./src', import.meta.url))
 const root = fileURLToPath(new URL('.', import.meta.url))

@@ -5,7 +5,6 @@ export const en = {
       preflight: 'Preflight',
     },
     footer: 'Built for 8 Star Metal Engineering · runs entirely in your browser',
-    versionHint: 'Build version — commit hash and commit date',
     language: {
       label: 'Language',
       en: 'English',
@@ -20,6 +19,9 @@ export const en = {
       updateBody: 'Reload to pick up the latest build. Your files stay on this device.',
       updateAction: 'Reload now',
       later: 'Later',
+      upToDate: 'Up to date — {{version}}',
+      updateAvailable: 'A newer version is ready — click to reload',
+      reload: 'reload',
     },
     actions: {
       view: 'View',
@@ -573,7 +575,6 @@ export const zh = {
       preflight: '预检',
     },
     footer: '为 8 Star Metal Engineering 打造 · 完全在浏览器中运行',
-    versionHint: '构建版本——提交哈希与提交日期',
     language: {
       label: '语言',
       en: 'English',
@@ -587,6 +588,9 @@ export const zh = {
       updateBody: '重新加载即可使用最新版本，你的文件仍保留在本设备上。',
       updateAction: '立即重新加载',
       later: '稍后',
+      upToDate: '已是最新版本——{{version}}',
+      updateAvailable: '有新版本可用——点击重新加载',
+      reload: '重新加载',
     },
     actions: {
       view: '查看',

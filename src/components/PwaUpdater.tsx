@@ -2,6 +2,7 @@ import { useRegisterSW } from 'virtual:pwa-register/react'
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
+import { markUpdateReady, setUpdateAction } from '@/lib/pwa/updateReady'
 
 /** How often an open tab asks the server whether a newer deployment exists. */
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
@@ -36,6 +37,15 @@ export function PwaUpdater() {
     const timer = window.setTimeout(() => setOfflineReady(false), OFFLINE_READY_DISMISS_MS)
     return () => window.clearTimeout(timer)
   }, [offlineReady, setOfflineReady])
+
+  // Keep the header's version label honest, and give it the same reload action as the toast.
+  useEffect(() => {
+    if (needRefresh) markUpdateReady()
+  }, [needRefresh])
+
+  useEffect(() => {
+    setUpdateAction(() => void updateServiceWorker(true))
+  }, [updateServiceWorker])
 
   if (!needRefresh && !offlineReady) return null
 
