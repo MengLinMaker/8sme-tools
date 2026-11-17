@@ -473,14 +473,10 @@ export const en = {
         'Straight-through cut would detach a bevel-cut end piece — simplifying leaves that surface uncut.',
       cutRemoved:
         'Stray cut removed from the NC — the model is rebuilt from the edited NC and the export ships it.',
-      cutRemovedBadge: 'cut removed',
       bevelSet:
         'Bevel unified to {{angle}}° on that cut — the model is rebuilt from the edited NC and the export ships it.',
       bevelRemoved:
         'Bevel removed from that cut — the model is rebuilt from the edited NC and the export ships it.',
-      bevelSetBadge: 'bevel set',
-      filletMovedBadge: 'fillet cut moved',
-      ncEditedBadge: 'NC edited',
     },
   },
   viewer: {
@@ -1016,12 +1012,8 @@ export const zh = {
       ncMismatch: 'NC 构建与 STEP 不一致——重建将根据 NC 重新生成 STEP。',
       cutEndPiece: '直线切透会切掉坡口切割的端部小件——简化将保留该面不切。',
       cutRemoved: '已从 NC 中移除多余切缝——模型已根据修改后的 NC 重建，导出时将以此为准。',
-      cutRemovedBadge: '已移除切缝',
       bevelSet: '该切缝的坡口已统一为 {{angle}}°——模型已根据修改后的 NC 重建，导出时将以此为准。',
       bevelRemoved: '该切缝已取消坡口——模型已根据修改后的 NC 重建，导出时将以此为准。',
-      bevelSetBadge: '已设置坡口',
-      filletMovedBadge: '已移动圆角切缝',
-      ncEditedBadge: 'NC 已修改',
     },
   },
   viewer: {

@@ -533,17 +533,6 @@ function exportStepPath(part: PartRecord): string {
   return `${part.mark.replace(/[^\w.-]+/g, '-')}.step`
 }
 
-/** Parts-table badge for a part's NC edit(s), chosen from the actual op kind(s). */
-function ncEditBadgeKey(ops: NcOp[]): string {
-  const kinds = new Set(ops.map((op) => op.kind))
-  if (kinds.size === 1) {
-    if (kinds.has('removeCut')) return 'preflight.warnings.cutRemovedBadge'
-    if (kinds.has('moveCut')) return 'preflight.warnings.filletMovedBadge'
-    return 'preflight.warnings.bevelSetBadge'
-  }
-  return 'preflight.warnings.ncEditedBadge'
-}
-
 /** A finding an override resolves — greyed out in the list, with an undo. */
 function resolvedFindings(kind: StepFixKind): string[] {
   if (kind === 'regenerated' || kind === 'repaired')
@@ -578,8 +567,6 @@ interface StatusPill {
   count: number
   /** A one-click STEP fix exists for this code (shown with a wrench). */
   fixable: boolean
-  /** An applied override already resolves this code. */
-  resolved: boolean
   finding: Finding
 }
 
@@ -2471,7 +2458,6 @@ export function PreflightPage() {
           severity: finding.severity,
           count: 1,
           fixable,
-          resolved: false,
           finding,
         })
       }
@@ -4399,16 +4385,7 @@ export function PreflightPage() {
                             />
                           </label>
                         </TableCell>
-                        <TableCell className="font-mono text-xs">
-                          <span className="flex items-center gap-1.5">
-                            {part.mark}
-                            {ncOverrides.get(part.mark) && (
-                              <Badge variant="success" className="font-sans font-normal">
-                                {t(ncEditBadgeKey(ncOverrides.get(part.mark)?.ops ?? []))}
-                              </Badge>
-                            )}
-                          </span>
-                        </TableCell>
+                        <TableCell className="font-mono text-xs">{part.mark}</TableCell>
                         <TableCell>
                           {pills.length === 0 && !weld ? (
                             <FilterPill
@@ -4446,7 +4423,7 @@ export function PreflightPage() {
                                 >
                                   <Badge
                                     variant={SEVERITY_VARIANT[pill.severity]}
-                                    className={cn('gap-1 font-mono', pill.resolved && 'opacity-50')}
+                                    className="gap-1 font-mono"
                                   >
                                     {pill.fixable && (
                                       <Wrench className="size-3 shrink-0" aria-hidden />
