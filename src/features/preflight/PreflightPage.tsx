@@ -40,7 +40,6 @@ import {
 import { Toggle } from '@/components/ui/toggle'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { assessBevelChange, type BevelChangeIssue } from '@/lib/audit/bevelChange'
-import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
 import { assessCutReach, type CutMarker, type CutReachFailure } from '@/lib/audit/cutReach'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { MASS_BAND_CLASS, MASS_RED_KG, MASS_YELLOW_KG, massBand } from '@/lib/audit/mass'
@@ -59,7 +58,7 @@ import { assessRootFillet, type RootFilletIssue } from '@/lib/audit/rootFillet'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
 import { assessUnclosedCuts, type UnclosedCutIssue } from '@/lib/audit/unclosedCuts'
 import { findWeldingEtchings, type WeldingEtchings } from '@/lib/audit/weldingEtchings'
-import { downloadBlob, downloadText, fileStem } from '@/lib/download'
+import { downloadBlob, fileStem } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
 import {
   moveCutInNc,
@@ -463,6 +462,63 @@ function findingOpKey(finding: Finding): string | null {
 }
 
 /**
+ * The NC edit a finding's one-click fix records, with the recommended value already filled in
+ * (the same value the mini menus prefill). Returns null when the finding carries no NC edit.
+ */
+function ncOpForFinding(finding: Finding): NcOp | null {
+  const key = findingOpKey(finding)
+  if (!key) return null
+  const params = finding.params ?? {}
+  const contourIndex = params.contourIndex
+  if (typeof contourIndex !== 'number') return null
+  if (finding.code === 'CUT_UNCLOSED' || finding.code === 'CUT_CUTOUT') {
+    const removalText = params.removal
+    if (typeof removalText !== 'string' || !removalText) return null
+    const removal = removalText.split(',').map(Number)
+    if (removal.length < 2) return null
+    return {
+      key,
+      kind: 'removeCut',
+      contourIndex,
+      removeVertices: [removal[0] as number, removal[1] as number],
+    }
+  }
+  if (finding.code === 'CUT_ROOT_FILLET') {
+    const verticesText = params.vertices
+    const deltaY = params.delta
+    if (typeof verticesText !== 'string') return null
+    if (typeof deltaY !== 'number' || !Number.isFinite(deltaY) || deltaY === 0) return null
+    const vertices = verticesText
+      .split(',')
+      .map(Number)
+      .filter((value) => Number.isInteger(value) && value >= 0)
+    if (vertices.length === 0) return null
+    return { key, kind: 'moveCut', contourIndex, vertices, deltaY }
+  }
+  const verticesText = params.vertices
+  if (finding.code === 'BEVEL_OUT_OF_RANGE') {
+    const vertex = params.vertex
+    const suggested = params.suggested
+    const angle = typeof suggested === 'string' ? Number(suggested) : Number.NaN
+    if (typeof vertex !== 'number' || !Number.isFinite(angle)) return null
+    return { key, kind: 'outOfRangeBevel', contourIndex, vertex, angle }
+  }
+  if (typeof verticesText !== 'string') return null
+  const vertices = verticesText
+    .split(',')
+    .map(Number)
+    .filter((value) => Number.isInteger(value) && value >= 0)
+  if (vertices.length === 0) return null
+  if (finding.code === 'CUT_BEVEL_CHANGE') {
+    const suggested = params.suggested
+    const angle = typeof suggested === 'string' ? Number(suggested) : Number.NaN
+    if (!Number.isFinite(angle)) return null
+    return { key, kind: 'unifyBevel', contourIndex, vertices, angle }
+  }
+  return null
+}
+
+/**
  * Where a part's exported STEP ships. Normally its own path. A part with no STEP but a generated
  * (NC-derived) STEP takes the NC's filename with a `.step` extension, so it drops into WiseCAM
  * beside the NC it replaces.
@@ -632,6 +688,8 @@ export function PreflightPage() {
   const [selectedMarks, setSelectedMarks] = useState<Set<string>>(new Set())
   /** True while an export is re-seating STEPs / re-emitting NCs in the OCC workers. */
   const [exporting, setExporting] = useState(false)
+  /** Auto-fix progress over the ticked marks, or null when it isn't running. */
+  const [autoFixing, setAutoFixing] = useState<{ done: number; total: number } | null>(null)
   const selectAnchor = useRef<string | null>(null)
   const [modelChecks, setModelChecks] = useState<Map<string, SizeCheck>>(new Map())
   const [manufactureChecks, setManufactureChecks] = useState<Map<string, ModelComparison>>(
@@ -3592,6 +3650,182 @@ export function PreflightPage() {
     [bevelEdit, changeBevel, changeOutOfRangeBevel],
   )
 
+  /**
+   * Whether one finding can be auto-fixed on this part with the checks currently available. A
+   * simplified override deliberately differs from the NC (the bevel-cut end stays attached), so its
+   * volume mismatch is a consequence of that fix, not a new problem to fix again.
+   */
+  const isAutoFixable = useCallback(
+    (part: PartRecord, finding: Finding): boolean => {
+      const kind = fixForFinding(finding)
+      if (!kind) return false
+      if (finding.params?.resolved === 1) return false
+      const stepKind = stepOverrides.get(part.mark)?.kind
+      if (stepKind && resolvedFindings(stepKind).includes(finding.code)) return false
+      if (
+        stepKind === 'simplified' &&
+        (finding.code === 'STRAY_BODY' ||
+          finding.code === 'MANUFACTURE_MISMATCH' ||
+          finding.code === 'MANUFACTURE_BORDERLINE')
+      )
+        return false
+      if (kind === 'clean') return isCleanable(part)
+      if (kind === 'regenerate') return isRegeneratable(part)
+      if (kind === 'simplify') return isSimplifiable(part)
+      return Boolean(part.nc) && ncOpForFinding(finding) != null
+    },
+    [isCleanable, isRegeneratable, isSimplifiable, stepOverrides],
+  )
+
+  /** A part's still-active findings that auto-fix can resolve, worst/location order preserved. */
+  const autoFixableFindings = useCallback(
+    (part: PartRecord): Finding[] =>
+      allFindings.filter((finding) => finding.mark === part.mark && isAutoFixable(part, finding)),
+    [allFindings, isAutoFixable],
+  )
+
+  /** Ticked marks that currently have at least one finding auto-fix can resolve. */
+  const autoFixableMarks = useMemo(() => {
+    const marks = new Set<string>()
+    if (!result) return marks
+    for (const part of result.parts) {
+      if (!selectedMarks.has(part.mark)) continue
+      if (autoFixableFindings(part).length > 0) marks.add(part.mark)
+    }
+    return marks
+  }, [result, selectedMarks, autoFixableFindings])
+
+  /**
+   * Applies every available fix to one part: the NC edits stack into a single override (using each
+   * finding's recommended value, the same one its mini menu prefills), then one STEP rebuild is
+   * chosen — simplify (keeps a bevelled end attached), regenerate from the NC, or a stray-body
+   * clean, in that priority. Findings resolved by a STEP rebuild drop out of the check on their own.
+   */
+  const autoFixPart = useCallback(
+    async (part: PartRecord) => {
+      const findings = autoFixableFindings(part)
+      if (findings.length === 0) return
+      const ncPath = part.nc?.path
+      const original = ncPath ? bytesByPath.get(ncPath) : undefined
+
+      // --- NC edits: apply to one running copy of the NC, then record them as ordered ops.
+      const existing = ncOverrides.get(part.mark)
+      let ncText = existing
+        ? new TextDecoder().decode(existing.bytes)
+        : original
+          ? new TextDecoder().decode(original)
+          : null
+      const newOps: NcOp[] = []
+      const appliedNc: Finding[] = []
+      if (ncText && original) {
+        const candidates = findings
+          .map((finding) => ({ finding, op: ncOpForFinding(finding) }))
+          .filter((entry): entry is { finding: Finding; op: NcOp } => entry.op != null)
+        // Line-preserving edits first, then removals in descending vertex order within a contour, so
+        // a removal never shifts the indices of an edit still to come.
+        const preserving = candidates.filter(({ op }) => op.kind !== 'removeCut')
+        const removing = candidates
+          .filter(({ op }) => op.kind === 'removeCut')
+          .sort((a, b) => {
+            if (a.op.kind !== 'removeCut' || b.op.kind !== 'removeCut') return 0
+            return (
+              b.op.contourIndex - a.op.contourIndex ||
+              b.op.removeVertices[0] - a.op.removeVertices[0]
+            )
+          })
+        for (const { finding, op } of [...preserving, ...removing]) {
+          try {
+            const next = applyNcOp(ncText, op)
+            // A no-op means the edit can't be made against this NC; leave the finding for a human.
+            if (next === ncText) continue
+            ncText = next
+            newOps.push(op)
+            appliedNc.push(finding)
+          } catch {
+            // leave this finding alone
+          }
+        }
+      }
+      if (newOps.length > 0 && original) {
+        // `existing.ops` is from this render, and the loop never touches the same mark twice.
+        const ops = [...(existing?.ops ?? []), ...newOps]
+        setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
+        if (newOps.some((op) => op.kind === 'moveCut')) {
+          // The override effect re-probes the edited NC; drop the old CUT_DEPTH rows meanwhile.
+          setSabreRecheck((prev) => new Map(prev).set(part.mark, []))
+        }
+        for (const finding of appliedNc) rememberResolvedFix(part, finding)
+      }
+
+      // --- One STEP rebuild per part.
+      const nc = ncText
+      if (!nc) {
+        if (findings.some((finding) => finding.code === 'STRAY_BODY')) {
+          const path = part.step?.path
+          const bytes = path ? bytesByPath.get(path) : undefined
+          if (!bytes) return
+          try {
+            const cleaned = await cleanStep(bytes)
+            if (cleaned && cleaned.removed > 0) setOverride(part.mark, cleaned.bytes, 'cleaned')
+          } catch {
+            // leave the original in place if cleaning fails
+          }
+        }
+        return
+      }
+      const rebuild = findings.some((finding) => finding.code === 'CUT_END_PIECE')
+        ? 'simplified'
+        : findings.some(
+              (finding) =>
+                finding.code === 'STRAY_BODY' ||
+                finding.code === 'MANUFACTURE_MISMATCH' ||
+                finding.code === 'MANUFACTURE_BORDERLINE',
+            )
+          ? 'regenerated'
+          : null
+      if (rebuild === 'simplified') {
+        try {
+          const step = await reconstructForViewer(nc, { simplify: true })
+          if (step) setOverride(part.mark, step, 'simplified')
+        } catch {
+          // leave the original in place if the rebuild fails
+        }
+      } else if (rebuild === 'regenerated') {
+        try {
+          const step = await reconstructForViewer(nc)
+          if (step) setOverride(part.mark, step, 'regenerated')
+        } catch {
+          // leave the original in place if the rebuild fails
+        }
+      }
+    },
+    [autoFixableFindings, bytesByPath, ncOverrides, rememberResolvedFix, setOverride],
+  )
+
+  /** Auto-fixes every ticked mark that has a fixable finding, one part at a time. */
+  const autoFixSelected = useCallback(async () => {
+    if (!result || autoFixing) return
+    const parts = result.parts.filter((part) => autoFixableMarks.has(part.mark))
+    if (parts.length === 0) return
+    setAutoFixing({ done: 0, total: parts.length })
+    try {
+      let done = 0
+      for (const part of parts) {
+        setFixingMark(part.mark)
+        try {
+          await autoFixPart(part)
+        } catch {
+          // one part's failure must not stop the rest
+        }
+        done += 1
+        setAutoFixing({ done, total: parts.length })
+      }
+    } finally {
+      setFixingMark(null)
+      setAutoFixing(null)
+    }
+  }, [result, autoFixing, autoFixableMarks, autoFixPart])
+
   /** The canonical cross-section to seat / rewrite a part's export against, or null when unknown. */
   const exportProfile = useCallback(
     (part: PartRecord): [number, number][] | null => {
@@ -3679,42 +3913,6 @@ export function PreflightPage() {
       new Blob([new Uint8Array(bytes)], { type: 'application/zip' }),
     )
   }, [viewing, ncBytes, viewingNcIr])
-
-  /**
-   * Exports the job with every fix substituted in, each STEP re-seated into the canonical
-   * manufacturing orientation and each NC re-emitted by our writer.
-   * The archive is flattened to basenames so the operator gets a folderless drop into WiseCAM.
-   */
-  const exportFixed = useCallback(async () => {
-    if (!result || !bundle || (stepOverrides.size === 0 && ncOverrides.size === 0)) return
-    setExporting(true)
-    try {
-      const files = new Map<string, Uint8Array>()
-      for (const entry of bundle.entries) files.set(entry.path, entry.bytes)
-      const resolved = await Promise.all(
-        result.parts.map(async (part) => ({
-          part,
-          step:
-            part.step?.path || stepOverrides.has(part.mark)
-              ? await exportStepBytes(part)
-              : undefined,
-          nc: part.nc?.path ? exportNcBytes(part) : undefined,
-          ncep: part.nc?.path ? exportNcepBytes(part) : undefined,
-        })),
-      )
-      for (const { part, step, nc, ncep } of resolved) {
-        if (step) files.set(exportStepPath(part), step)
-        if (nc && part.nc?.path) files.set(part.nc.path, nc)
-        if (ncep) files.set(`${part.mark}.ncep`, ncep)
-      }
-      downloadBlob(
-        `${fileStem(result.sourceName)}-fixed.zip`,
-        new Blob([zipSync(flattenZipEntries(files))], { type: 'application/zip' }),
-      )
-    } finally {
-      setExporting(false)
-    }
-  }, [result, bundle, stepOverrides, ncOverrides, exportStepBytes, exportNcBytes, exportNcepBytes])
 
   /**
    * Rebuilds each ticked part's STEP from its NC (the manufactured part) and records it as the
@@ -4036,31 +4234,20 @@ export function PreflightPage() {
                 )}
               </div>
               <Button
-                variant="outline"
                 size="sm"
-                onClick={() =>
-                  downloadText(
-                    `${fileStem(result.sourceName)}-findings.csv`,
-                    findingsToCsv({ ...result, findings: allFindings }),
-                  )
-                }
+                onClick={() => void autoFixSelected()}
+                disabled={autoFixableMarks.size === 0 || exporting || autoFixing !== null}
+                title={t('preflight.findings.autoFixHint')}
               >
-                {t('preflight.findings.exportFindings')}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  downloadText(`${fileStem(result.sourceName)}-parts.csv`, partsToCsv(result))
-                }
-              >
-                {t('preflight.findings.exportParts')}
+                {autoFixing
+                  ? t('preflight.findings.autoFixing', autoFixing)
+                  : t('preflight.findings.autoFix', { count: autoFixableMarks.size })}
               </Button>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => void ncToStepSelected()}
-                disabled={selectedMarks.size === 0 || exporting}
+                disabled={selectedMarks.size === 0 || exporting || autoFixing !== null}
                 title={t('preflight.findings.ncToStepHint')}
               >
                 {t('preflight.findings.ncToStep', { count: selectedMarks.size })}
@@ -4068,22 +4255,10 @@ export function PreflightPage() {
               <Button
                 size="sm"
                 onClick={() => void exportSelected()}
-                disabled={selectedMarks.size === 0 || exporting}
+                disabled={selectedMarks.size === 0 || exporting || autoFixing !== null}
               >
                 {t('preflight.findings.exportSelected', { count: selectedMarks.size })}
               </Button>
-              {stepOverrides.size + ncOverrides.size > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void exportFixed()}
-                  disabled={exporting}
-                >
-                  {t('preflight.findings.exportFixed', {
-                    count: stepOverrides.size + ncOverrides.size,
-                  })}
-                </Button>
-              )}
             </div>
           </CardHeader>
           {partsOpen && (
