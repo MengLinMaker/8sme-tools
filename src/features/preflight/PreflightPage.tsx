@@ -723,6 +723,8 @@ export function PreflightPage() {
   const [sabreChecks, setSabreChecks] = useState<Map<string, SabreFailure[]>>(new Map())
   /** Sabre re-run on the edited NC for a part with an NC override (the current solid's probe). */
   const [sabreRecheck, setSabreRecheck] = useState<Map<string, SabreFailure[]>>(new Map())
+  /** Per-part token: only the latest in-flight recheck may write `sabreRecheck`. */
+  const sabreRecheckToken = useRef(new Map<string, number>())
   /** Per-part cut-reach failures (a bevel whose bore exceeds the head's pierce cap). */
   const [reachChecks, setReachChecks] = useState<Map<string, CutReachFailure[]>>(new Map())
   /** Per-part bevel-change lines (one cut line whose bevel is not a single angle). */
@@ -1544,6 +1546,7 @@ export function PreflightPage() {
       return next
     })
     setSabreRecheck(new Map())
+    sabreRecheckToken.current.clear()
     setReachChecks(new Map())
     setBevelChanges(new Map())
     setUnclosedCuts(new Map())
@@ -3122,6 +3125,7 @@ export function PreflightPage() {
         next.delete(part.mark)
         return next
       })
+      sabreRecheckToken.current.delete(part.mark)
     },
     [bytesByPath, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks],
   )
@@ -3140,6 +3144,7 @@ export function PreflightPage() {
       next.delete(part.mark)
       return next
     })
+    sabreRecheckToken.current.delete(part.mark)
   }, [])
 
   /** Cleans one part's stray STEP bodies, keeping the real geometry untouched. */
@@ -3529,6 +3534,10 @@ export function PreflightPage() {
         // The new NC is ready: rebuild the manufactured solid and re-run the CUT_DEPTH probe on
         // it, so any CUT_DEPTH near this fillet is re-evaluated against the edited geometry.
         const edited = replayNcOps(original, ops)
+        // Only this fix's recheck may write the result — an earlier fix's slower rebuild must not
+        // overwrite a later one, so each individual fix's effect stays visible.
+        const token = (sabreRecheckToken.current.get(part.mark) ?? 0) + 1
+        sabreRecheckToken.current.set(part.mark, token)
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
         setSabreRecheck((prev) => {
           if (!prev.has(part.mark)) return prev
@@ -3540,6 +3549,7 @@ export function PreflightPage() {
           priority: PRIORITY_FOREGROUND,
         })
           .then(({ sabre }) => {
+            if (sabreRecheckToken.current.get(part.mark) !== token) return
             if (import.meta.env.DEV) {
               console.info('[fillet recheck]', part.mark, 'sabre samples', sabre.length)
             }
