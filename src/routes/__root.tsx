@@ -7,23 +7,25 @@ export const Route = createRootRoute({
   component: RootLayout,
 })
 
-const NAV = [
-  { to: '/', key: 'common.nav.hub' },
-  { to: '/preflight', key: 'common.nav.preflight' },
-] as const
+// The hub lives behind the app title, so it doesn't need its own tab.
+const NAV = [{ to: '/preflight', key: 'common.nav.preflight' }] as const
 
 function RootLayout() {
   const { t } = useTranslation()
   return (
     <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-5">
       <header className="flex flex-wrap items-center gap-4 border-b border-border py-5">
-        <Link to="/" className="inline-flex flex-col leading-tight font-bold tracking-tight">
+        <Link
+          to="/"
+          className="inline-flex flex-col leading-tight font-bold tracking-tight transition-opacity hover:opacity-70"
+          title={t('hub.title')}
+        >
           <span className="text-lg">{t('common.appName')}</span>
           <span
-            title={__COMMIT_ID__}
+            title={t('common.versionHint')}
             className="font-mono text-[10px] leading-none font-normal text-muted-foreground/60"
           >
-            {__COMMIT_ID__}
+            {__BUILD_VERSION__}
           </span>
         </Link>
         <div className="ml-auto flex items-center gap-3">
@@ -36,7 +38,6 @@ function RootLayout() {
                 activeProps={{
                   className: 'bg-accent text-accent-foreground',
                 }}
-                activeOptions={{ exact: item.to === '/' }}
               >
                 {t(item.key)}
               </Link>

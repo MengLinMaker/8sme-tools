@@ -2,10 +2,10 @@ export const en = {
   common: {
     appName: '8SME Tools',
     nav: {
-      hub: 'Hub',
       preflight: 'Preflight',
     },
     footer: 'Built for 8 Star Metal Engineering · runs entirely in your browser',
+    versionHint: 'Build version — commit hash and commit date',
     language: {
       label: 'Language',
       en: 'English',
@@ -91,9 +91,6 @@ export const en = {
       "Couldn't read the dropped item. If it is still inside a .zip, extract it first — or drop the .zip itself. You can also use Choose folder.",
   },
   preflight: {
-    title: 'WiseCAM Preflight',
-    subtitle:
-      'Drop a job .zip / .rar (NC + STEP + PDF, optionally a part list .xlsx/.xlsm/.xls). Everything is checked locally in your browser — nothing is uploaded.',
     analyzing: 'Analyzing…',
     source: 'Job',
     stats: {
@@ -573,10 +570,10 @@ export const zh = {
   common: {
     appName: '8SME 工具',
     nav: {
-      hub: '主页',
       preflight: '预检',
     },
     footer: '为 8 Star Metal Engineering 打造 · 完全在浏览器中运行',
+    versionHint: '构建版本——提交哈希与提交日期',
     language: {
       label: '语言',
       en: 'English',
@@ -660,9 +657,6 @@ export const zh = {
       '无法读取拖入的项目。若它仍在 .zip 压缩包内，请先解压，或直接拖入 .zip 文件。也可以点击“选择文件夹”。',
   },
   preflight: {
-    title: 'WiseCAM 预检',
-    subtitle:
-      '拖入作业 .zip / .rar（NC + STEP + PDF，可选零件清单 .xlsx/.xlsm/.xls）。全部在浏览器本地检查——不会上传任何数据。',
     analyzing: '正在分析…',
     source: '作业',
     stats: {

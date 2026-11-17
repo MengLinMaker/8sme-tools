@@ -1,4 +1,3 @@
-import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { gzipSync } from 'node:zlib'
@@ -7,20 +6,10 @@ import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type Plugin } from 'vite'
 import { viteSingleFile } from 'vite-plugin-singlefile'
+import { buildVersion } from './version'
 
 const srcDir = fileURLToPath(new URL('./src', import.meta.url))
 const root = fileURLToPath(new URL('.', import.meta.url))
-
-/** Short git hash of the built revision, `-dirty` when the tree has uncommitted changes. */
-function commitId(): string {
-  try {
-    const hash = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim()
-    const dirty = execSync('git status --porcelain', { encoding: 'utf8' }).trim().length > 0
-    return dirty ? `${hash}-dirty` : hash
-  } catch {
-    return 'dev'
-  }
-}
 
 function gzipBase64(path: string): string {
   return gzipSync(readFileSync(path), { level: 9 }).toString('base64')
@@ -125,7 +114,7 @@ function stubEmbeddedUrls(): Plugin {
 export default defineConfig({
   publicDir: false,
   define: {
-    __COMMIT_ID__: JSON.stringify(commitId()),
+    __BUILD_VERSION__: JSON.stringify(buildVersion()),
   },
   resolve: {
     alias: [

@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 /// <reference types="vite-plugin-pwa/react" />
 
-declare const __COMMIT_ID__: string
+declare const __BUILD_VERSION__: string
 
 declare module 'virtual:8sme-assets' {
   export const ocWasmGzip: string

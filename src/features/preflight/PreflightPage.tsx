@@ -3695,10 +3695,6 @@ export function PreflightPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <section className="max-w-2xl">
-        <h1 className="mb-1.5 text-2xl font-bold tracking-tight">{t('preflight.title')}</h1>
-      </section>
-
       <DropZone onBundle={handleBundle} onError={setError} />
 
       {result && (
