@@ -428,103 +428,38 @@ function withNcOps(
 }
 
 /** The key the NC edit for a finding is stored under, or null when the finding has no NC edit. */
-function ncKeyOf(
-  finding: Finding,
-  lists: {
-    reach: number
-    bevel: ReturnType<typeof assessBevelChange>
-    unclosed: ReturnType<typeof assessUnclosedCuts>
-    rootFillet: RootFilletIssue[]
-  },
-): string | null {
-  const index = typeof finding.params?.index === 'number' ? finding.params.index : -1
+/** The NC op key a finding's own fix created, or null when the finding has no own edit. */
+function findingOpKey(finding: Finding): string | null {
+  const params = finding.params
+  if (finding.code === 'CUT_ROOT_FILLET') {
+    const contourIndex = params?.contourIndex
+    const vertices = params?.vertices
+    return typeof contourIndex === 'number' && typeof vertices === 'string'
+      ? `fillet:${contourIndex}:${vertices}`
+      : null
+  }
   if (finding.code === 'CUT_BEVEL_CHANGE') {
-    const issue = lists.bevel[index - lists.reach]
-    return issue ? `bevel:${issue.contourIndex}:${issue.vertices.join(',')}` : null
+    const contourIndex = params?.contourIndex
+    const vertices = params?.vertices
+    return typeof contourIndex === 'number' && typeof vertices === 'string'
+      ? `bevel:${contourIndex}:${vertices}`
+      : null
   }
   if (finding.code === 'BEVEL_OUT_OF_RANGE') {
-    const contourIndex = finding.params?.contourIndex
-    const vertex = finding.params?.vertex
+    const contourIndex = params?.contourIndex
+    const vertex = params?.vertex
     return typeof contourIndex === 'number' && typeof vertex === 'number'
       ? `oor:${contourIndex}:${vertex}`
       : null
   }
-  if (finding.code === 'CUT_UNCLOSED') {
-    const issue = lists.unclosed[index - (lists.reach + lists.bevel.length)]
-    return issue?.removal ? `cut:${issue.contourIndex}:${issue.removal.join(',')}` : null
-  }
-  if (finding.code === 'CUT_ROOT_FILLET') {
-    const base = lists.reach + lists.bevel.length + lists.unclosed.length
-    const issue = lists.rootFillet[index - base]
-    return issue ? `fillet:${issue.contourIndex}:${issue.vertices.join(',')}` : null
+  if (finding.code === 'CUT_UNCLOSED' || finding.code === 'CUT_CUTOUT') {
+    const contourIndex = params?.contourIndex
+    const removal = params?.removal
+    return typeof contourIndex === 'number' && typeof removal === 'string' && removal
+      ? `cut:${contourIndex}:${removal}`
+      : null
   }
   return null
-}
-
-/** Whether two face-space spans overlap along the member (2 mm tolerance). */
-function spansOverlap(a: [number, number], b: [number, number], margin = 2): boolean {
-  return (
-    Math.min(a[0], a[1]) <= Math.max(b[0], b[1]) + margin &&
-    Math.max(a[0], a[1]) >= Math.min(b[0], b[1]) - margin
-  )
-}
-
-/** Whether a recheck still reports an issue at the same face/span as the original. */
-function sameIssueSpan(
-  issues: { face: NcFace; from: [number, number]; to: [number, number] }[],
-  original: { face: NcFace; from: [number, number]; to: [number, number] },
-): boolean {
-  return issues.some(
-    (issue) =>
-      issue.face === original.face &&
-      spansOverlap([issue.from[0], issue.to[0]], [original.from[0], original.to[0]]),
-  )
-}
-
-/**
- * Whether an issued finding is gone after re-running the NC checks on the edited file. Each check
- * is matched by face + member span (not by index), so independent fixes cannot mask each other.
- */
-function ncFindingResolved(
-  finding: Finding,
-  lists: {
-    reach: CutReachFailure[]
-    bevel: BevelChangeIssue[]
-    unclosed: UnclosedCutIssue[]
-    rootFillet: RootFilletIssue[]
-  },
-  recheck: NcRecheck | undefined,
-): boolean {
-  const index = typeof finding.params?.index === 'number' ? finding.params.index : -1
-  if (!recheck) return false
-  if (finding.code === 'CUT_ROOT_FILLET') {
-    const base = lists.reach.length + lists.bevel.length + lists.unclosed.length
-    const issue = lists.rootFillet[index - base]
-    if (!issue) return false
-    return !recheck.rootFillet.some(
-      (next) =>
-        next.face === issue.face &&
-        next.side === issue.side &&
-        spansOverlap([next.from[0], next.to[0]], [issue.from[0], issue.to[0]]),
-    )
-  }
-  if (finding.code === 'CUT_DEPTH' || finding.code === 'CUT_CORNER') {
-    const issue = lists.reach[index]
-    if (!issue) return false
-    return !recheck.reach.some(
-      (next) =>
-        next.face === issue.face && next.reason === issue.reason && sameIssueSpan([next], issue),
-    )
-  }
-  if (finding.code === 'CUT_BEVEL_CHANGE') {
-    const issue = lists.bevel[index - lists.reach.length]
-    return issue ? !sameIssueSpan(recheck.bevel, issue) : false
-  }
-  if (finding.code === 'CUT_UNCLOSED' || finding.code === 'CUT_CUTOUT') {
-    const issue = lists.unclosed[index - (lists.reach.length + lists.bevel.length)]
-    return issue ? !sameIssueSpan(recheck.unclosed, issue) : false
-  }
-  return false
 }
 
 /**
@@ -1961,10 +1896,50 @@ export function PreflightPage() {
     )
   }, [result, viewing, fastTrackPart])
 
+  /**
+   * Re-runs the NC cut checks on any part with an applied NC edit. The issue list is the check on
+   * the **current NC**, so fixed issues simply disappear and remaining issues are re-reported.
+   */
+  const ncRecheck = useMemo(() => {
+    const out = new Map<string, NcRecheck>()
+    if (!result) return out
+    for (const part of result.parts) {
+      const override = ncOverrides.get(part.mark)
+      if (!override) continue
+      const section = part.nc?.profile
+        ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
+        : null
+      if (!section) continue
+      const ncText = new TextDecoder().decode(override.bytes)
+      const options = { section: section.points, profile: part.nc?.profile }
+      out.set(part.mark, {
+        reach: assessCutReach(ncText, section.points, section.holes ?? [], {
+          toleranceMm: MACHINE.placementToleranceMm,
+          profile: part.nc?.profile,
+        }).filter((failure) => failure.reason === 'corner'),
+        rootFillet: assessRootFillet(ncText, {
+          ...options,
+          dimensions: part.nc?.dimensions ?? [],
+        }),
+        bevel: assessBevelChange(ncText),
+        unclosed: assessUnclosedCuts(ncText, options),
+      })
+    }
+    return out
+  }, [result, ncOverrides])
+
   const allFindings = useMemo(() => {
     if (!result) return []
     const extra: Finding[] = []
     for (const part of result.parts) {
+      // Issue checks are a pure function of the current NC (and its manufactured model). For an
+      // edited part, use the rechecked results; otherwise the original analysis.
+      const rechecked = ncRecheck.get(part.mark)
+      const reach = rechecked?.reach ?? reachChecks.get(part.mark)
+      const bevel = rechecked?.bevel ?? bevelChanges.get(part.mark)
+      const unclosed = rechecked?.unclosed ?? unclosedCuts.get(part.mark)
+      const fillet = rechecked?.rootFillet ?? rootFilletChecks.get(part.mark)
+      const sabre = sabreRecheck.get(part.mark) ?? sabreChecks.get(part.mark)
       const material = drawingMaterials.get(part.mark)
       const qtyKnown = material != null || part.expected?.qty != null || part.nc?.quantity != null
       const qtyPending = !qtyKnown && part.pdf != null && drawingChecking
@@ -2032,7 +2007,6 @@ export function PreflightPage() {
       if (cut) extra.push(...cut)
       // For an edited NC, detect CUT_DEPTH from the **new manufactured NC** only — never compare
       // old rows to new probe results.
-      const sabre = sabreRecheck.get(part.mark) ?? sabreChecks.get(part.mark)
       if (sabre && sabre.length > 0) {
         // One finding per failing run (a separate cut), so each can be navigated to in 3D. A cut
         // that stays inside the material past T + r has removed metal that cannot be put back —
@@ -2074,8 +2048,6 @@ export function PreflightPage() {
           })
         })
       }
-      const fillet = rootFilletChecks.get(part.mark)
-      const reach = reachChecks.get(part.mark)
       if (reach) {
         // Phase 0 keeps only corner-placement risks; the 2D reach-depth finding is retired.
         reach.forEach((failure, index) => {
@@ -2095,7 +2067,6 @@ export function PreflightPage() {
           })
         })
       }
-      const bevel = bevelChanges.get(part.mark)
       if (bevel) {
         // One finding per changing cut line. Their 3D marker indices continue after the reach
         // failures, matching the combined marker list the viewer draws (`viewerSabreFailures`).
@@ -2106,11 +2077,15 @@ export function PreflightPage() {
             code: issue.code,
             mark: part.mark,
             message: issue.message,
-            params: { ...issue.params, index: base + index },
+            params: {
+              ...issue.params,
+              index: base + index,
+              contourIndex: issue.contourIndex,
+              vertices: issue.vertices.join(','),
+            },
           })
         })
       }
-      const unclosed = unclosedCuts.get(part.mark)
       if (unclosed) {
         // One warning per stray cut. Their marker indices continue after reach + bevel, matching
         // the combined list `viewerSabreFailures` builds.
@@ -2121,22 +2096,31 @@ export function PreflightPage() {
             code: issue.code,
             mark: part.mark,
             message: issue.message,
-            params: { ...issue.params, index: base + index },
+            params: {
+              ...issue.params,
+              index: base + index,
+              contourIndex: issue.contourIndex,
+              removal: issue.removal?.join(',') ?? '',
+            },
           })
         })
       }
       if (fillet) {
         // One error per long cut running on a root fillet. Its marker continues after reach,
         // bevel and unclosed, matching `viewerSabreFailures`.
-        const base =
-          (reach?.length ?? 0) + (bevel?.length ?? 0) + (unclosedCuts.get(part.mark)?.length ?? 0)
+        const base = (reach?.length ?? 0) + (bevel?.length ?? 0) + (unclosed?.length ?? 0)
         fillet.forEach((issue, index) => {
           extra.push({
             severity: issue.severity,
             code: issue.code,
             mark: part.mark,
             message: issue.message,
-            params: { ...issue.params, index: base + index },
+            params: {
+              ...issue.params,
+              index: base + index,
+              contourIndex: issue.contourIndex,
+              vertices: issue.vertices.join(','),
+            },
           })
         })
       }
@@ -2168,6 +2152,7 @@ export function PreflightPage() {
     cutIssues,
     sabreChecks,
     sabreRecheck,
+    ncRecheck,
     reachChecks,
     bevelChanges,
     unclosedCuts,
@@ -2386,38 +2371,6 @@ export function PreflightPage() {
     return [...map.values()].sort((a, b) => totalLength(b) - totalLength(a))
   }, [result, partLength, partQty, sectionLabel, sectionGuesses])
 
-  /**
-   * Re-runs the NC cut checks on any part with an applied NC edit. Fixes are not coupled to
-   * findings: this is the source of truth for whether an issue is actually gone after a fix.
-   */
-  const ncRecheck = useMemo(() => {
-    const out = new Map<string, NcRecheck>()
-    if (!result) return out
-    for (const part of result.parts) {
-      const override = ncOverrides.get(part.mark)
-      if (!override) continue
-      const section = part.nc?.profile
-        ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
-        : null
-      if (!section) continue
-      const ncText = new TextDecoder().decode(override.bytes)
-      const options = { section: section.points, profile: part.nc?.profile }
-      out.set(part.mark, {
-        reach: assessCutReach(ncText, section.points, section.holes ?? [], {
-          toleranceMm: MACHINE.placementToleranceMm,
-          profile: part.nc?.profile,
-        }).filter((failure) => failure.reason === 'corner'),
-        rootFillet: assessRootFillet(ncText, {
-          ...options,
-          dimensions: part.nc?.dimensions ?? [],
-        }),
-        bevel: assessBevelChange(ncText),
-        unclosed: assessUnclosedCuts(ncText, options),
-      })
-    }
-    return out
-  }, [result, ncOverrides])
-
   /** One status pill per distinct *active* finding code, so the parts table carries its own triage. */
   const issuesByMark = useMemo(() => {
     const map = new Map<string, StatusPill[]>()
@@ -2428,20 +2381,7 @@ export function PreflightPage() {
       const stepResolved = Boolean(
         stepOverride && resolvedFindings(stepOverride.kind).includes(finding.code),
       )
-      // A fixed NC issue disappears from the parts table once the recheck no longer reports it.
-      const ncResolved =
-        ncOverrides.has(mark) &&
-        ncFindingResolved(
-          finding,
-          {
-            reach: reachChecks.get(mark) ?? [],
-            bevel: bevelChanges.get(mark) ?? [],
-            unclosed: unclosedCuts.get(mark) ?? [],
-            rootFillet: rootFilletChecks.get(mark) ?? [],
-          },
-          ncRecheck.get(mark),
-        )
-      if (stepResolved || ncResolved) continue
+      if (stepResolved) continue
       const fixable = fixForFinding(finding) != null
       const list = map.get(mark) ?? []
       const existing = list.find((pill) => pill.code === finding.code)
@@ -2460,17 +2400,7 @@ export function PreflightPage() {
       map.set(mark, list)
     }
     return map
-  }, [
-    allFindings,
-    stepOverrides,
-    ncOverrides,
-    ncRecheck,
-    sabreRecheck,
-    reachChecks,
-    bevelChanges,
-    unclosedCuts,
-    rootFilletChecks,
-  ])
+  }, [allFindings, stepOverrides])
 
   /** Findings for the part currently open in the viewer, shown above the 3D to debug fast. */
   const viewerFindings = useMemo(
@@ -2501,80 +2431,37 @@ export function PreflightPage() {
     )
   }, [viewing, allFindings, viewingPdfBytes])
 
-  /** The stacked NC edit key of each row (null when the row has none). */
-  const ncKeyByRow = useMemo(() => {
-    const keys = new Map<number, string>()
-    if (!viewing) return keys
-    const lists = {
-      reach: reachChecks.get(viewing.mark)?.length ?? 0,
-      bevel: bevelChanges.get(viewing.mark) ?? [],
-      unclosed: unclosedCuts.get(viewing.mark) ?? [],
-      rootFillet: rootFilletChecks.get(viewing.mark) ?? [],
-    }
-    viewerFindings.forEach((finding, row) => {
-      const key = ncKeyOf(finding, lists)
-      if (key) keys.set(row, key)
-    })
-    return keys
-  }, [viewing, viewerFindings, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks])
-  /** Rows whose NC edit is applied (their action is Undo, even if the recheck still fails). */
+  /** Rows whose own NC edit is applied (their action is Undo). */
   const ncAppliedRows = useMemo(() => {
     const applied = new Set(
       (viewing ? (ncOverrides.get(viewing.mark)?.ops ?? []) : []).map((op) => op.key),
     )
     const rows = new Set<number>()
-    ncKeyByRow.forEach((key, row) => {
-      if (applied.has(key)) rows.add(row)
-    })
-    return rows
-  }, [viewing, ncOverrides, ncKeyByRow])
-  /** Rows whose issue is gone on the rechecked edited NC — these are struck through and hidden. */
-  const ncRecheckResolvedRows = useMemo(() => {
-    const rows = new Set<number>()
-    if (!viewing) return rows
-    const recheck = ncRecheck.get(viewing.mark)
-    if (!recheck) return rows
-    const lists = {
-      reach: reachChecks.get(viewing.mark) ?? [],
-      bevel: bevelChanges.get(viewing.mark) ?? [],
-      unclosed: unclosedCuts.get(viewing.mark) ?? [],
-      rootFillet: rootFilletChecks.get(viewing.mark) ?? [],
-    }
     viewerFindings.forEach((finding, row) => {
-      if (ncFindingResolved(finding, lists, recheck)) rows.add(row)
+      const key = findingOpKey(finding)
+      if (key && applied.has(key)) rows.add(row)
     })
     return rows
-  }, [
-    viewing,
-    viewerFindings,
-    reachChecks,
-    bevelChanges,
-    unclosedCuts,
-    rootFilletChecks,
-    ncRecheck,
-  ])
-  /** Marker indices whose sub-cuts are shown in the 3D (manual eye on and not recheck-resolved). */
+  }, [viewing, viewerFindings, ncOverrides])
+  /** Marker indices whose sub-cuts are shown in the 3D (manual eye on). */
   const visibleSpans = useMemo(
     () =>
       viewerFindings
         .map((finding, index) => ({ finding, index }))
-        .filter(({ index }) => !hiddenIssues.has(index) && !ncRecheckResolvedRows.has(index))
+        .filter(({ index }) => !hiddenIssues.has(index))
         .map(({ finding }) => markerIndexOf(finding))
         .filter((value): value is number => value != null),
-    [viewerFindings, hiddenIssues, ncRecheckResolvedRows],
+    [viewerFindings, hiddenIssues],
   )
   /** NC probe runs (CUT_DEPTH_NC rows) that are checked on (their eye is on). */
   const visibleRuns = useMemo(
     () =>
       viewerFindings
         .map((finding, index) => ({ finding, index }))
-        .filter(
-          ({ finding, index }) =>
-            isNcRun(finding) && !hiddenIssues.has(index) && !ncRecheckResolvedRows.has(index),
-        )
+        .filter(({ finding, index }) => isNcRun(finding) && !hiddenIssues.has(index))
         .map(({ finding }) => finding.params?.index)
         .filter((value): value is number => typeof value === 'number'),
-    [viewerFindings, hiddenIssues, ncRecheckResolvedRows],
+    [viewerFindings, hiddenIssues],
   )
   /** The NC probe run to glow while its CUT_DEPTH_NC row is hovered. */
   const highlightRun = useMemo(() => {
@@ -2643,11 +2530,10 @@ export function PreflightPage() {
       const finding = viewerFindings[index]
       // Only findings with a 3D marker are interactive; the rest have no eye.
       if (!finding || !isVisualisable(finding)) return
-      // A fixed row stays visually off until Undo — clicking it only pans/zooms.
-      if (!ncRecheckResolvedRows.has(index) && hiddenIssues.has(index)) toggleIssue(index)
+      if (hiddenIssues.has(index)) toggleIssue(index)
       if (findingLocationOf(finding) != null) focusFinding(finding)
     },
-    [viewerFindings, hiddenIssues, toggleIssue, focusFinding, ncRecheckResolvedRows],
+    [viewerFindings, hiddenIssues, toggleIssue, focusFinding],
   )
 
   /**
@@ -2657,6 +2543,12 @@ export function PreflightPage() {
    */
   const viewerSabreFailures = useMemo<CutMarker[] | null>(() => {
     if (!viewing) return null
+    // Markers follow the same current-NC check results as the findings.
+    const rechecked = ncRecheck.get(viewing.mark)
+    const reach = rechecked?.reach ?? reachChecks.get(viewing.mark) ?? []
+    const bevel = rechecked?.bevel ?? bevelChanges.get(viewing.mark) ?? []
+    const unclosed = rechecked?.unclosed ?? unclosedCuts.get(viewing.mark) ?? []
+    const rootFillet = rechecked?.rootFillet ?? rootFilletChecks.get(viewing.mark) ?? []
     // A channel's NC `v` line is drawn on the web's outer (`h`) plane after a `web·tan(bevel)` shift;
     // findings built from the raw v contour need the same shift or the marker floats off the line.
     const family = viewingProfileCode ? profileFamily(viewingProfileCode) : null
@@ -2668,8 +2560,8 @@ export function PreflightPage() {
             mid: ncAlongMid(viewingNcGeom),
           }
         : null
-    const markers: CutMarker[] = [...(reachChecks.get(viewing.mark) ?? [])]
-    for (const issue of bevelChanges.get(viewing.mark) ?? []) {
+    const markers: CutMarker[] = [...reach]
+    for (const issue of bevel) {
       // A changing bevel is an NC-specific error: it only reads on the manufactured model, so the
       // viewer draws it there alone (see `CutMarker.ncOnly`).
       let from = issue.from
@@ -2693,7 +2585,7 @@ export function PreflightPage() {
       }
       markers.push({ face: issue.face, from, to, lines, ncOnly: true })
     }
-    for (const issue of unclosedCuts.get(viewing.mark) ?? []) {
+    for (const issue of unclosed) {
       markers.push({
         face: issue.face,
         from: issue.from,
@@ -2702,7 +2594,7 @@ export function PreflightPage() {
         color: issue.color,
       })
     }
-    for (const issue of rootFilletChecks.get(viewing.mark) ?? []) {
+    for (const issue of rootFillet) {
       markers.push({
         face: issue.face,
         from: issue.from,
@@ -2714,6 +2606,7 @@ export function PreflightPage() {
     return markers.length > 0 ? markers : null
   }, [
     viewing,
+    ncRecheck,
     reachChecks,
     bevelChanges,
     unclosedCuts,
@@ -3125,12 +3018,7 @@ export function PreflightPage() {
   /** Drops a part's NC edit, so it reverts to the bundled `.nc1`, and re-runs the NC checks. */
   const undoNcFinding = useCallback(
     (part: PartRecord, finding: Finding) => {
-      const key = ncKeyOf(finding, {
-        reach: reachChecks.get(part.mark)?.length ?? 0,
-        bevel: bevelChanges.get(part.mark) ?? [],
-        unclosed: unclosedCuts.get(part.mark) ?? [],
-        rootFillet: rootFilletChecks.get(part.mark) ?? [],
-      })
+      const key = findingOpKey(finding)
       const original = part.nc ? bytesByPath.get(part.nc.path) : undefined
       if (!key || !original) return
       setNcOverrides((prev) => {
@@ -3144,7 +3032,7 @@ export function PreflightPage() {
         return next
       })
     },
-    [bytesByPath, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks],
+    [bytesByPath],
   )
 
   /** Cleans one part's stray STEP bodies, keeping the real geometry untouched. */
@@ -4803,7 +4691,6 @@ export function PreflightPage() {
                       findings={viewerFindings}
                       step={viewing.step}
                       ncApplied={ncAppliedRows}
-                      ncRechecked={ncRecheckResolvedRows}
                       // The bevel dialog sits over the rows, so the pointer leaving a row must not clear
                       // its highlight; keep the row highlighted through apply and the rebuild.
                       onHover={(index) => {
@@ -5064,7 +4951,6 @@ function ViewerWarnings({
   step,
   fix,
   ncApplied,
-  ncRechecked,
   onHover,
   isChecked,
   onToggleCheck,
@@ -5075,10 +4961,8 @@ function ViewerWarnings({
   findings: Finding[]
   step?: StepFile
   fix?: ViewerFix
-  /** Row indices whose NC edit is applied (their action is Undo). */
+  /** Row indices whose own NC edit is applied (their action is Undo). */
   ncApplied?: ReadonlySet<number>
-  /** Row indices whose issue is gone after rechecking the edited NC (struck through, hidden). */
-  ncRechecked?: ReadonlySet<number>
   onHover?: (index: number | null) => void
   isChecked?: (index: number) => boolean
   onToggleCheck?: (index: number) => void
@@ -5110,16 +4994,6 @@ function ViewerWarnings({
   }
   const rows = findings
     .map((finding, index) => ({ finding, index }))
-    .filter(({ finding, index }) => {
-      // A recheck-cleared issue with no fix of its own simply disappears: there is no Undo to
-      // offer because that issue was never edited. Issues with their own op/STEP fix stay.
-      const stepDone = Boolean(
-        fix?.override && resolvedFindings(fix.override).includes(finding.code),
-      )
-      const ownFix = (ncApplied?.has(index) ?? false) || stepDone
-      const recheckDone = ncRechecked?.has(index) ?? false
-      return !(recheckDone && !ownFix)
-    })
     .sort((a, b) => {
       if (sort.key === 'fix') {
         const fa = fixableFinding(a.finding) ? 1 : 0
@@ -5237,7 +5111,7 @@ function ViewerWarnings({
                 const stepResolved = Boolean(
                   fix?.override && resolvedFindings(fix.override).includes(finding.code),
                 )
-                const resolved = stepResolved || (ncRechecked?.has(index) ?? false)
+                const resolved = stepResolved
                 const applied = ncApplied?.has(index) ?? false
                 // An applied-but-still-failing fix offers Undo (not the fix) so it can be reverted.
                 const fixKind = fix && !resolved && !applied ? fixForFinding(finding) : null
