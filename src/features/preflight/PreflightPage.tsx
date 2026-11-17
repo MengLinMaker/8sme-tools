@@ -550,6 +550,17 @@ function exportStepPath(part: PartRecord): string {
   return `${part.mark.replace(/[^\w.-]+/g, '-')}.step`
 }
 
+/** Parts-table badge for a part's NC edit(s), chosen from the actual op kind(s). */
+function ncEditBadgeKey(ops: NcOp[]): string {
+  const kinds = new Set(ops.map((op) => op.kind))
+  if (kinds.size === 1) {
+    if (kinds.has('removeCut')) return 'preflight.warnings.cutRemovedBadge'
+    if (kinds.has('moveCut')) return 'preflight.warnings.filletMovedBadge'
+    return 'preflight.warnings.bevelSetBadge'
+  }
+  return 'preflight.warnings.ncEditedBadge'
+}
+
 /** A finding an override resolves — greyed out in the list, with an undo. */
 function resolvedFindings(kind: StepFixKind): string[] {
   if (kind === 'regenerated' || kind === 'repaired')
@@ -2026,6 +2037,7 @@ export function PreflightPage() {
       const cut = cutIssues.get(part.mark)
       if (cut) extra.push(...cut)
       const sabre = sabreChecks.get(part.mark)
+      const sabreAfter = sabreRecheck.get(part.mark)
       if (sabre && sabre.length > 0) {
         // One finding per failing run (a separate cut), so each can be navigated to in 3D. A cut
         // that stays inside the material past T + r has removed metal that cannot be put back —
@@ -2055,7 +2067,9 @@ export function PreflightPage() {
             severity: 'error',
             code: 'CUT_DEPTH',
             mark: part.mark,
-            message: `${cut.length}mm cut of ${Math.round(depth)}mm depth removes additional material`,
+            message: `${cut.length}mm cut of ${Math.round(depth)}mm depth removes additional material${
+              import.meta.env.DEV && sabreAfter ? ` (rechecked: ${sabreAfter.length} samples)` : ''
+            }`,
             params: {
               index,
               samples: cut.length,
@@ -2160,6 +2174,7 @@ export function PreflightPage() {
     geometryChecks,
     cutIssues,
     sabreChecks,
+    sabreRecheck,
     reachChecks,
     bevelChanges,
     unclosedCuts,
@@ -2378,62 +2393,6 @@ export function PreflightPage() {
     return [...map.values()].sort((a, b) => totalLength(b) - totalLength(a))
   }, [result, partLength, partQty, sectionLabel, sectionGuesses])
 
-  /** One status pill per distinct finding code, so the parts table carries its own triage. */
-  const issuesByMark = useMemo(() => {
-    const map = new Map<string, StatusPill[]>()
-    for (const finding of allFindings) {
-      if (!finding.mark) continue
-      const override = stepOverrides.get(finding.mark)
-      const resolved = Boolean(override && resolvedFindings(override.kind).includes(finding.code))
-      const fixable = fixForFinding(finding) != null
-      const list = map.get(finding.mark) ?? []
-      const existing = list.find((pill) => pill.code === finding.code)
-      if (existing) {
-        existing.count++
-        existing.resolved = existing.resolved && resolved
-      } else {
-        list.push({
-          code: finding.code,
-          severity: finding.severity,
-          count: 1,
-          fixable,
-          resolved,
-          finding,
-        })
-      }
-      map.set(finding.mark, list)
-    }
-    return map
-  }, [allFindings, stepOverrides])
-
-  /** Findings for the part currently open in the viewer, shown above the 3D to debug fast. */
-  const viewerFindings = useMemo(
-    () => (viewing ? allFindings.filter((finding) => finding.mark === viewing.mark) : []),
-    [viewing, allFindings],
-  )
-
-  // The right pane swaps between the drawing, the issues list and the canonical surface view;
-  // default to issues when there are any, since that's what needs attention.
-  const [rightTab, setRightTab] = useState<'info' | 'drawing' | 'issues' | 'surface'>('drawing')
-  /**
-   * The part mark whose tab the operator chose manually. The default-tab effect keeps running as
-   * analysis findings arrive; without this guard it yanks the pane back to Drawing/Issues.
-   */
-  const rightTabMark = useRef<string | null>(null)
-  useEffect(() => {
-    if (!viewing) {
-      rightTabMark.current = null
-      return
-    }
-    if (rightTabMark.current === viewing.mark) return
-    setRightTab(
-      allFindings.some((finding) => finding.mark === viewing.mark)
-        ? 'issues'
-        : viewingPdfBytes
-          ? 'drawing'
-          : 'surface',
-    )
-  }, [viewing, allFindings, viewingPdfBytes])
   /**
    * Re-runs the NC cut checks on any part with an applied NC edit. Fixes are not coupled to
    * findings: this is the source of truth for whether an issue is actually gone after a fix.
@@ -2465,6 +2424,90 @@ export function PreflightPage() {
     }
     return out
   }, [result, ncOverrides])
+
+  /** One status pill per distinct *active* finding code, so the parts table carries its own triage. */
+  const issuesByMark = useMemo(() => {
+    const map = new Map<string, StatusPill[]>()
+    for (const finding of allFindings) {
+      if (!finding.mark) continue
+      const mark = finding.mark
+      const stepOverride = stepOverrides.get(mark)
+      const stepResolved = Boolean(
+        stepOverride && resolvedFindings(stepOverride.kind).includes(finding.code),
+      )
+      // A fixed NC issue disappears from the parts table once the recheck no longer reports it.
+      const ncResolved =
+        ncOverrides.has(mark) &&
+        ncFindingResolved(
+          finding,
+          {
+            reach: reachChecks.get(mark) ?? [],
+            bevel: bevelChanges.get(mark) ?? [],
+            unclosed: unclosedCuts.get(mark) ?? [],
+            rootFillet: rootFilletChecks.get(mark) ?? [],
+          },
+          ncRecheck.get(mark),
+          sabreRecheck.get(mark),
+        )
+      if (stepResolved || ncResolved) continue
+      const fixable = fixForFinding(finding) != null
+      const list = map.get(mark) ?? []
+      const existing = list.find((pill) => pill.code === finding.code)
+      if (existing) {
+        existing.count++
+      } else {
+        list.push({
+          code: finding.code,
+          severity: finding.severity,
+          count: 1,
+          fixable,
+          resolved: false,
+          finding,
+        })
+      }
+      map.set(mark, list)
+    }
+    return map
+  }, [
+    allFindings,
+    stepOverrides,
+    ncOverrides,
+    ncRecheck,
+    sabreRecheck,
+    reachChecks,
+    bevelChanges,
+    unclosedCuts,
+    rootFilletChecks,
+  ])
+
+  /** Findings for the part currently open in the viewer, shown above the 3D to debug fast. */
+  const viewerFindings = useMemo(
+    () => (viewing ? allFindings.filter((finding) => finding.mark === viewing.mark) : []),
+    [viewing, allFindings],
+  )
+
+  // The right pane swaps between the drawing, the issues list and the canonical surface view;
+  // default to issues when there are any, since that's what needs attention.
+  const [rightTab, setRightTab] = useState<'info' | 'drawing' | 'issues' | 'surface'>('drawing')
+  /**
+   * The part mark whose tab the operator chose manually. The default-tab effect keeps running as
+   * analysis findings arrive; without this guard it yanks the pane back to Drawing/Issues.
+   */
+  const rightTabMark = useRef<string | null>(null)
+  useEffect(() => {
+    if (!viewing) {
+      rightTabMark.current = null
+      return
+    }
+    if (rightTabMark.current === viewing.mark) return
+    setRightTab(
+      allFindings.some((finding) => finding.mark === viewing.mark)
+        ? 'issues'
+        : viewingPdfBytes
+          ? 'drawing'
+          : 'surface',
+    )
+  }, [viewing, allFindings, viewingPdfBytes])
 
   /** The stacked NC edit key of each row (null when the row has none). */
   const ncKeyByRow = useMemo(() => {
@@ -3497,6 +3540,9 @@ export function PreflightPage() {
           priority: PRIORITY_FOREGROUND,
         })
           .then(({ sabre }) => {
+            if (import.meta.env.DEV) {
+              console.info('[fillet recheck]', part.mark, 'sabre samples', sabre.length)
+            }
             setSabreRecheck((prev) => new Map(prev).set(part.mark, sabre))
           })
           .catch(() => {
@@ -4184,11 +4230,7 @@ export function PreflightPage() {
                             {part.mark}
                             {ncOverrides.get(part.mark) && (
                               <Badge variant="success" className="font-sans font-normal">
-                                {ncOverrides
-                                  .get(part.mark)
-                                  ?.ops.some((op) => op.kind === 'removeCut')
-                                  ? t('preflight.warnings.cutRemovedBadge')
-                                  : t('preflight.warnings.bevelSetBadge')}
+                                {t(ncEditBadgeKey(ncOverrides.get(part.mark)?.ops ?? []))}
                               </Badge>
                             )}
                           </span>

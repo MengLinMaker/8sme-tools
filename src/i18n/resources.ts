@@ -478,6 +478,8 @@ export const en = {
       bevelRemoved:
         'Bevel removed from that cut — the model is rebuilt from the edited NC and the export ships it.',
       bevelSetBadge: 'bevel set',
+      filletMovedBadge: 'fillet cut moved',
+      ncEditedBadge: 'NC edited',
     },
   },
   viewer: {
@@ -1017,6 +1019,8 @@ export const zh = {
       bevelSet: '该切缝的坡口已统一为 {{angle}}°——模型已根据修改后的 NC 重建，导出时将以此为准。',
       bevelRemoved: '该切缝已取消坡口——模型已根据修改后的 NC 重建，导出时将以此为准。',
       bevelSetBadge: '已设置坡口',
+      filletMovedBadge: '已移动圆角切缝',
+      ncEditedBadge: 'NC 已修改',
     },
   },
   viewer: {
