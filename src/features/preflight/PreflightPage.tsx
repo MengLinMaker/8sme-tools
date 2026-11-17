@@ -493,15 +493,28 @@ function ncFindingResolved(
     unclosed: UnclosedCutIssue[]
     rootFillet: RootFilletIssue[]
   },
-  recheck: NcRecheck,
+  recheck: NcRecheck | undefined,
+  sabreAfter?: SabreFailure[],
 ): boolean {
   const index = typeof finding.params?.index === 'number' ? finding.params.index : -1
-  // The 3D sabre probe is not re-run here (it needs a solid rebuild), so leave it to its own check.
-  if (finding.code === 'CUT_DEPTH' && finding.params?.nc === 1) return false
+  // The 3D sabre is re-run when the edited NC is rebuilt (see the viewer recheck).
+  if (finding.code === 'CUT_DEPTH' && finding.params?.nc === 1) {
+    if (!sabreAfter) return false
+    const x = finding.params?.x
+    if (typeof x !== 'number') return false
+    return !sabreAfter.some((failure) => Math.abs(failure.point[0] - x) <= 5)
+  }
+  if (!recheck) return false
   if (finding.code === 'CUT_ROOT_FILLET') {
     const base = lists.reach.length + lists.bevel.length + lists.unclosed.length
     const issue = lists.rootFillet[index - base]
-    return issue ? !sameIssueSpan(recheck.rootFillet, issue) : false
+    if (!issue) return false
+    return !recheck.rootFillet.some(
+      (next) =>
+        next.face === issue.face &&
+        next.side === issue.side &&
+        spansOverlap([next.from[0], next.to[0]], [issue.from[0], issue.to[0]]),
+    )
   }
   if (finding.code === 'CUT_DEPTH' || finding.code === 'CUT_CORNER') {
     const issue = lists.reach[index]
@@ -697,6 +710,8 @@ export function PreflightPage() {
   /** Per-part welding-location etchings (`SI` member labels / `PU`-`KO` scribe bars). */
   const [weldEtchings, setWeldEtchings] = useState<Map<string, WeldingEtchings>>(new Map())
   const [sabreChecks, setSabreChecks] = useState<Map<string, SabreFailure[]>>(new Map())
+  /** Sabre re-run on the edited NC for a part with an NC override (the current solid's probe). */
+  const [sabreRecheck, setSabreRecheck] = useState<Map<string, SabreFailure[]>>(new Map())
   /** Per-part cut-reach failures (a bevel whose bore exceeds the head's pierce cap). */
   const [reachChecks, setReachChecks] = useState<Map<string, CutReachFailure[]>>(new Map())
   /** Per-part bevel-change lines (one cut line whose bevel is not a single angle). */
@@ -1165,13 +1180,16 @@ export function PreflightPage() {
     let cancelled = false
     // A STEP part's sabre is already produced by its foreground analysis rebuild, and its viewer
     // rebuild is cheap/separate. A no-STEP part needs both the probe and the STEP, so build it
-    // once and share the result (the background pass primes the same cache key).
-    if (!viewingHasStep) {
+    // once and share the result (the background pass primes the same cache key). An NC edit makes
+    // the stored sabre stale, so re-probe the edited NC too.
+    const hasNcOverride = Boolean(viewingMark && ncOverrides.has(viewingMark))
+    if (!viewingHasStep || hasNcOverride) {
       void reconstructViewerWithSabre(ncText).then(
         ({ bytes, sabre }) => {
           if (cancelled) return
           if (viewingMark) {
-            setSabreChecks((prev) => new Map(prev).set(viewingMark, sabre))
+            if (hasNcOverride) setSabreRecheck((prev) => new Map(prev).set(viewingMark, sabre))
+            else setSabreChecks((prev) => new Map(prev).set(viewingMark, sabre))
           }
           if (bytes) setManufactured(bytes)
           // reconstruction is best-effort; a null/failed build falls back to the STEP view
@@ -1196,7 +1214,7 @@ export function PreflightPage() {
     return () => {
       cancelled = true
     }
-  }, [ncBytes, viewingMark, viewingHasStep])
+  }, [ncBytes, viewingMark, viewingHasStep, ncOverrides])
 
   // Kick off the overlay diff as soon as the manufactured model lands, so it is already computed
   // (in the OCC worker) by the time the overlay pane mounts — the viewer then reads it from cache
@@ -1514,6 +1532,7 @@ export function PreflightPage() {
       for (const [mark, failures] of prev) if (marks.has(mark)) next.set(mark, failures)
       return next
     })
+    setSabreRecheck(new Map())
     setReachChecks(new Map())
     setBevelChanges(new Map())
     setUnclosedCuts(new Map())
@@ -2479,7 +2498,8 @@ export function PreflightPage() {
     const rows = new Set<number>()
     if (!viewing) return rows
     const recheck = ncRecheck.get(viewing.mark)
-    if (!recheck) return rows
+    const sabreAfter = sabreRecheck.get(viewing.mark)
+    if (!recheck && !sabreAfter) return rows
     const lists = {
       reach: reachChecks.get(viewing.mark) ?? [],
       bevel: bevelChanges.get(viewing.mark) ?? [],
@@ -2487,7 +2507,7 @@ export function PreflightPage() {
       rootFillet: rootFilletChecks.get(viewing.mark) ?? [],
     }
     viewerFindings.forEach((finding, row) => {
-      if (ncFindingResolved(finding, lists, recheck)) rows.add(row)
+      if (ncFindingResolved(finding, lists, recheck, sabreAfter)) rows.add(row)
     })
     return rows
   }, [
@@ -2498,6 +2518,7 @@ export function PreflightPage() {
     unclosedCuts,
     rootFilletChecks,
     ncRecheck,
+    sabreRecheck,
   ])
   /** Marker indices whose sub-cuts are shown in the 3D (manual eye on and not recheck-resolved). */
   const visibleSpans = useMemo(
@@ -3052,9 +3073,31 @@ export function PreflightPage() {
         const ops = (prev.get(part.mark)?.ops ?? []).filter((op) => op.key !== key)
         return withNcOps(prev, part.mark, ops, original)
       })
+      setSabreRecheck((prev) => {
+        if (!prev.has(part.mark)) return prev
+        const next = new Map(prev)
+        next.delete(part.mark)
+        return next
+      })
     },
     [bytesByPath, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks],
   )
+
+  /** Clears every NC edit on one part (row Undo for a finding resolved by a neighbouring fix). */
+  const undoPartNc = useCallback((part: PartRecord) => {
+    setNcOverrides((prev) => {
+      if (!prev.has(part.mark)) return prev
+      const next = new Map(prev)
+      next.delete(part.mark)
+      return next
+    })
+    setSabreRecheck((prev) => {
+      if (!prev.has(part.mark)) return prev
+      const next = new Map(prev)
+      next.delete(part.mark)
+      return next
+    })
+  }, [])
 
   /** Cleans one part's stray STEP bodies, keeping the real geometry untouched. */
   const cleanPart = useCallback(
@@ -3441,6 +3484,12 @@ export function PreflightPage() {
           deltaY,
         })
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
+        setSabreRecheck((prev) => {
+          if (!prev.has(part.mark)) return prev
+          const next = new Map(prev)
+          next.delete(part.mark)
+          return next
+        })
       } finally {
         setFixingMark(null)
       }
@@ -4748,6 +4797,7 @@ export function PreflightPage() {
                         onSetBevel: (finding) => openBevelEdit(viewing, finding),
                         onUndo: () => undoOverride(viewing.mark),
                         onUndoNc: (finding) => undoNcFinding(viewing, finding),
+                        onUndoNcPart: () => undoPartNc(viewing),
                       }}
                     />
                   ) : viewingPdfBytes ? (
@@ -4912,6 +4962,8 @@ interface ViewerFix {
   onSetBevel: (finding: Finding) => void
   onUndo: () => void
   onUndoNc: (finding: Finding) => void
+  /** Clear every NC edit on the part (used when a neighbouring fix resolved this row). */
+  onUndoNcPart: () => void
 }
 
 /** Which fix action a viewer Fix button runs, with its labels. */
@@ -5245,6 +5297,22 @@ function ViewerWarnings({
                           onClick={(event) => {
                             event.stopPropagation()
                             fix?.onUndo()
+                          }}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          <Undo2 />
+                          {t('common.actions.undo')}
+                        </Button>
+                      ) : resolved && fix?.ncEdit ? (
+                        // Cleared by a neighbouring NC fix: undo that part's NC edits.
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7"
+                          disabled={fix?.pending}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            fix?.onUndoNcPart()
                           }}
                           onKeyDown={(event) => event.stopPropagation()}
                         >

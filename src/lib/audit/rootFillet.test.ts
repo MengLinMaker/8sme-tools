@@ -72,6 +72,7 @@ describe('assessRootFillet', () => {
     expect(issue?.params.move).toBeCloseTo(8, 1)
     expect(issue?.params.direction).toBe('inward')
     expect(issue?.params.span).toBe(200)
+    expect(issue?.side).toBe(-1)
     expect(issue?.vertices).toEqual([2, 3])
   })
 

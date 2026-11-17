@@ -39,9 +39,6 @@ const FILLET_EDGE_EPS_MM = 0.5
 /** Accepted as "along the member": the across coordinate changes by at most this much (mm). */
 const LONGITUDINAL_Y_TOL_MM = 1
 
-/** Amber is for warnings; this is a machine-damage risk, so the marker stays the error red. */
-export const ROOT_FILLET_COLOR = 0xef4444
-
 /** One curved root-fillet band, in the face's NC across coordinate. */
 export interface RootFilletBand {
   /** Lower bound of the curved band (NC Y, mm). */
@@ -76,6 +73,11 @@ export interface RootFilletIssue extends CutMarker {
   vertices: number[]
   /** Signed NC-face Y shift (mm) that clears the fillet. */
   delta: number
+  /**
+   * Which side of the face centre the band sits on (−1 below, +1 above). Distinguishes the two
+   * fillets on one face so fixing one does not resolve the other during a recheck.
+   */
+  side: -1 | 1
 }
 
 export interface RootFilletOptions {
@@ -295,6 +297,9 @@ export function assessRootFilletGeometry(
       const to = run.polyline[run.polyline.length - 1] as [number, number]
       const span = Math.round(run.span)
       const moveText = move.toFixed(1)
+      const centerY =
+        contour.face === 'v' || contour.face === 'h' ? (dims[0] ?? 0) / 2 : (dims[1] ?? 0) / 2
+      const side: -1 | 1 = run.avgY < centerY ? -1 : 1
       issues.push({
         code: 'CUT_ROOT_FILLET',
         severity: 'error',
@@ -302,7 +307,6 @@ export function assessRootFilletGeometry(
         from: [from[0], from[1]],
         to: [to[0], to[1]],
         lines: [run.polyline.map((point) => [point[0], point[1]] as [number, number])],
-        color: ROOT_FILLET_COLOR,
         message: `${span}mm root fillet cut may not drain slag which damages nozzle`,
         params: {
           face: contour.face,
@@ -315,6 +319,7 @@ export function assessRootFilletGeometry(
         contourIndex,
         vertices: run.vertices,
         delta: Number(delta.toFixed(2)),
+        side,
       })
     }
   })
