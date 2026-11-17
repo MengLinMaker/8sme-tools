@@ -494,32 +494,8 @@ function ncFindingResolved(
     rootFillet: RootFilletIssue[]
   },
   recheck: NcRecheck | undefined,
-  sabreAfter?: SabreFailure[],
 ): boolean {
   const index = typeof finding.params?.index === 'number' ? finding.params.index : -1
-  // The 3D sabre is re-run when the edited NC is rebuilt (see the viewer recheck).
-  if (finding.code === 'CUT_DEPTH' && finding.params?.nc === 1) {
-    if (!sabreAfter) return false
-    // Match this run's 3D bounding box, not just X: the two flange runs share X, so an X-only
-    // match would keep both alive until both edges are fixed.
-    const box = ['bx0', 'bx1', 'by0', 'by1', 'bz0', 'bz1'].map((key) => finding.params?.[key])
-    if (box.every((value): value is number => typeof value === 'number')) {
-      const [bx0, bx1, by0, by1, bz0, bz1] = box
-      const margin = 5
-      return !sabreAfter.some(
-        (failure) =>
-          failure.point[0] >= bx0 - margin &&
-          failure.point[0] <= bx1 + margin &&
-          failure.point[1] >= by0 - margin &&
-          failure.point[1] <= by1 + margin &&
-          failure.point[2] >= bz0 - margin &&
-          failure.point[2] <= bz1 + margin,
-      )
-    }
-    const x = finding.params?.x
-    if (typeof x !== 'number') return false
-    return !sabreAfter.some((failure) => Math.abs(failure.point[0] - x) <= 5)
-  }
   if (!recheck) return false
   if (finding.code === 'CUT_ROOT_FILLET') {
     const base = lists.reach.length + lists.bevel.length + lists.unclosed.length
@@ -1179,7 +1155,9 @@ export function PreflightPage() {
   const viewingHasStep = Boolean(viewing?.step)
   // The viewed part's sabre comes from `sabreChecks` (analysis for STEP parts, the probe below for
   // no-STEP parts), so there is no duplicate sabre state.
-  const manufacturedSabre = viewingMark ? (sabreChecks.get(viewingMark) ?? null) : null
+  const manufacturedSabre = viewingMark
+    ? (sabreRecheck.get(viewingMark) ?? sabreChecks.get(viewingMark) ?? null)
+    : null
   // Stable identity: a fresh `.map` each render re-runs the viewer's scene effect (rebuilding the
   // whole three.js scene) and makes orbiting lag.
   const manufacturedSabrePoints = useMemo(
@@ -2052,8 +2030,9 @@ export function PreflightPage() {
       }
       const cut = cutIssues.get(part.mark)
       if (cut) extra.push(...cut)
-      const sabre = sabreChecks.get(part.mark)
-      const sabreAfter = sabreRecheck.get(part.mark)
+      // For an edited NC, detect CUT_DEPTH from the **new manufactured NC** only — never compare
+      // old rows to new probe results.
+      const sabre = sabreRecheck.get(part.mark) ?? sabreChecks.get(part.mark)
       if (sabre && sabre.length > 0) {
         // One finding per failing run (a separate cut), so each can be navigated to in 3D. A cut
         // that stays inside the material past T + r has removed metal that cannot be put back —
@@ -2079,20 +2058,11 @@ export function PreflightPage() {
         runs.forEach((cut, index) => {
           const x = Math.round(cut.reduce((sum, f) => sum + f.point[0], 0) / cut.length)
           const depth = Math.max(...cut.map((f) => f.depth ?? 0))
-          const box = (axis: 0 | 1 | 2): [number, number] => {
-            const values = cut.map((f) => f.point[axis])
-            return [Math.min(...values), Math.max(...values)]
-          }
-          const [bx0, bx1] = box(0)
-          const [by0, by1] = box(1)
-          const [bz0, bz1] = box(2)
           extra.push({
             severity: 'error',
             code: 'CUT_DEPTH',
             mark: part.mark,
-            message: `${cut.length}mm cut of ${Math.round(depth)}mm depth removes additional material${
-              import.meta.env.DEV && sabreAfter ? ` (rechecked: ${sabreAfter.length} samples)` : ''
-            }`,
+            message: `${cut.length}mm cut of ${Math.round(depth)}mm depth removes additional material`,
             params: {
               index,
               samples: cut.length,
@@ -2100,12 +2070,6 @@ export function PreflightPage() {
               nc: 1,
               span: String(cut.length),
               depth: String(Math.round(depth)),
-              bx0,
-              bx1,
-              by0,
-              by1,
-              bz0,
-              bz1,
             },
           })
         })
@@ -2476,7 +2440,6 @@ export function PreflightPage() {
             rootFillet: rootFilletChecks.get(mark) ?? [],
           },
           ncRecheck.get(mark),
-          sabreRecheck.get(mark),
         )
       if (stepResolved || ncResolved) continue
       const fixable = fixForFinding(finding) != null
@@ -2570,8 +2533,7 @@ export function PreflightPage() {
     const rows = new Set<number>()
     if (!viewing) return rows
     const recheck = ncRecheck.get(viewing.mark)
-    const sabreAfter = sabreRecheck.get(viewing.mark)
-    if (!recheck && !sabreAfter) return rows
+    if (!recheck) return rows
     const lists = {
       reach: reachChecks.get(viewing.mark) ?? [],
       bevel: bevelChanges.get(viewing.mark) ?? [],
@@ -2579,7 +2541,7 @@ export function PreflightPage() {
       rootFillet: rootFilletChecks.get(viewing.mark) ?? [],
     }
     viewerFindings.forEach((finding, row) => {
-      if (ncFindingResolved(finding, lists, recheck, sabreAfter)) rows.add(row)
+      if (ncFindingResolved(finding, lists, recheck)) rows.add(row)
     })
     return rows
   }, [
@@ -2590,7 +2552,6 @@ export function PreflightPage() {
     unclosedCuts,
     rootFilletChecks,
     ncRecheck,
-    sabreRecheck,
   ])
   /** Marker indices whose sub-cuts are shown in the 3D (manual eye on and not recheck-resolved). */
   const visibleSpans = useMemo(
@@ -3570,15 +3531,10 @@ export function PreflightPage() {
           vertices: issue.vertices,
           deltaY,
         })
-        // The override effect re-probes this edited NC's manufactured model; drop the stale result
-        // in the meantime so the CUT_DEPTH row reflects the new build, not the old one.
+        // The override effect re-probes this edited NC's manufactured model; clear the old
+        // CUT_DEPTH rows in the meantime so they reflect the new build, not the old one.
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
-        setSabreRecheck((prev) => {
-          if (!prev.has(part.mark)) return prev
-          const next = new Map(prev)
-          next.delete(part.mark)
-          return next
-        })
+        setSabreRecheck((prev) => new Map(prev).set(part.mark, []))
       } finally {
         setFixingMark(null)
       }
