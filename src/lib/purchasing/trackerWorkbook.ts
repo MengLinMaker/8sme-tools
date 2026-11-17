@@ -27,7 +27,7 @@ const MARKS_SHEET = 'Marks'
 const BUY_LIST_SHEET = 'Parts to buy'
 
 const NESTING_HEADER = ['Layout', 'Stock', 'Length mm', 'Marks', 'Qty', 'Cut'] as const
-const MARKS_HEADER = ['Mark', 'Qty', 'Cut', 'Picked up', 'Status'] as const
+const MARKS_HEADER = ['Mark', 'Profile', 'Qty', 'Cut', 'Picked up', 'Status'] as const
 const BUY_HEADER = ['Family', 'Size', 'Length (m)', 'Qty', 'Cut'] as const
 
 export interface TrackerMarkCount {
@@ -46,6 +46,7 @@ export interface TrackerLayoutRow {
 
 export interface TrackerMarkRow {
   mark: string
+  profile: string
   qty: number
   contributions: { layout: string; perBeam: number }[]
 }
@@ -89,9 +90,18 @@ function beamBars(plan: PurchasePlan): PurchaseBar[][] {
 
 /** Group identical beams into layouts, then roll every layout into mark totals. */
 export function buildPurchaseTrackerModel(
+  groups: PurchaseGroupInput[],
   plans: PurchasePlan[],
   jobName = '',
 ): PurchaseTrackerModel {
+  const profileByMark = new Map<string, string>()
+  for (const group of groups) {
+    const profile = group.sources.length > 0 ? group.sources.join(', ') : group.stock
+    for (const piece of group.pieces) {
+      if (!profileByMark.has(piece.mark)) profileByMark.set(piece.mark, profile)
+    }
+  }
+
   const byLayout = new Map<string, TrackerLayoutRow>()
   let layoutNo = 0
 
@@ -132,7 +142,12 @@ export function buildPurchaseTrackerModel(
   const byMark = new Map<string, TrackerMarkRow>()
   for (const layout of layouts) {
     for (const { mark, count } of layout.perMark) {
-      const found = byMark.get(mark) ?? { mark, qty: 0, contributions: [] }
+      const found = byMark.get(mark) ?? {
+        mark,
+        profile: profileByMark.get(mark) ?? '',
+        qty: 0,
+        contributions: [],
+      }
       found.qty += count * layout.qty
       found.contributions.push({ layout: layout.layout, perBeam: count })
       byMark.set(mark, found)
@@ -265,8 +280,8 @@ function marksSheet(model: PurchaseTrackerModel): XLSX.WorkSheet {
   const totalRow = dataLast + 1
   const rows: (string | number)[][] = [
     [...MARKS_HEADER],
-    ...model.marks.map((mark) => [mark.mark, mark.qty, '', 0, '']),
-    ['TOTAL', '', '', '', ''],
+    ...model.marks.map((mark) => [mark.mark, mark.profile, mark.qty, '', 0, '']),
+    ['TOTAL', '', '', '', '', ''],
   ]
   const sheet = XLSX.utils.aoa_to_sheet(rows)
   const nestingLastRow = Math.max(2, model.layouts.length + 1)
@@ -279,30 +294,31 @@ function marksSheet(model: PurchaseTrackerModel): XLSX.WorkSheet {
             `SUMIF(Nesting!$A$2:$A$${nestingLastRow},"${layout}",Nesting!$F$2:$F$${nestingLastRow})*${perBeam}`,
         )
         .join('+') || '0'
-    setFormula(sheet, row - 1, 2, cut)
+    setFormula(sheet, row - 1, 3, cut)
     setFormula(
       sheet,
       row - 1,
-      4,
-      `IF(D${row}>=B${row},"Picked up",IF(C${row}>=B${row},"Cut",IF(C${row}>0,"In progress","Pending")))`,
+      5,
+      `IF(E${row}>=C${row},"Picked up",IF(D${row}>=C${row},"Cut",IF(D${row}>0,"In progress","Pending")))`,
       's',
     )
   })
-  setFormula(sheet, totalRow - 1, 1, `SUM(B2:B${dataLast})`)
   setFormula(sheet, totalRow - 1, 2, `SUM(C2:C${dataLast})`)
   setFormula(sheet, totalRow - 1, 3, `SUM(D2:D${dataLast})`)
-  sheet['!cols'] = [{ wch: 16 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 11 }]
-  sheet['!autofilter'] = { ref: `A1:E${Math.max(1, dataLast)}` }
+  setFormula(sheet, totalRow - 1, 4, `SUM(E2:E${dataLast})`)
+  sheet['!cols'] = [{ wch: 16 }, { wch: 18 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 11 }]
+  sheet['!autofilter'] = { ref: `A1:F${Math.max(1, dataLast)}` }
 
-  styleRow(sheet, 0, 5, HEADER_STYLE)
+  styleRow(sheet, 0, 6, HEADER_STYLE)
   model.marks.forEach((_, index) => {
     const row = index + 1
-    styleCell(sheet, row, 1, CALC_STYLE)
+    styleCell(sheet, row, 1, GROUP_STYLE)
     styleCell(sheet, row, 2, CALC_STYLE)
-    styleCell(sheet, row, 3, INPUT_STYLE)
-    styleCell(sheet, row, 4, STATUS_STYLE)
+    styleCell(sheet, row, 3, CALC_STYLE)
+    styleCell(sheet, row, 4, INPUT_STYLE)
+    styleCell(sheet, row, 5, STATUS_STYLE)
   })
-  styleRow(sheet, totalRow - 1, 5, TOTAL_STYLE)
+  styleRow(sheet, totalRow - 1, 6, TOTAL_STYLE)
   return sheet
 }
 
@@ -498,8 +514,12 @@ function addConditionalFormatting(
 }
 
 /** Builds the .xlsx workbook from the plans currently shown in the purchase dialog. */
-export function buildPurchaseTrackerWorkbook(plans: PurchasePlan[], jobName = 'job'): ArrayBuffer {
-  const model = buildPurchaseTrackerModel(plans, jobName)
+export function buildPurchaseTrackerWorkbook(
+  groups: PurchaseGroupInput[],
+  plans: PurchasePlan[],
+  jobName = 'job',
+): ArrayBuffer {
+  const model = buildPurchaseTrackerModel(groups, plans, jobName)
   const nestingLast = Math.max(2, model.layouts.length + 1)
   const marksLast = Math.max(2, model.marks.length + 1)
   const buyLast = Math.max(
@@ -530,28 +550,28 @@ export function buildPurchaseTrackerWorkbook(plans: PurchasePlan[], jobName = 'j
       file: 'xl/worksheets/sheet2.xml',
       ranges: [
         {
-          sqref: `C2:C${marksLast}`,
-          rules: [
-            { dxf: 0, formula: 'C2=0' },
-            { dxf: 1, formula: 'AND(C2&gt;0,C2&lt;B2)' },
-            { dxf: 2, formula: 'C2&gt;=B2' },
-          ],
-        },
-        {
           sqref: `D2:D${marksLast}`,
           rules: [
             { dxf: 0, formula: 'D2=0' },
-            { dxf: 1, formula: 'AND(D2&gt;0,D2&lt;B2)' },
-            { dxf: 2, formula: 'D2&gt;=B2' },
+            { dxf: 1, formula: 'AND(D2&gt;0,D2&lt;C2)' },
+            { dxf: 2, formula: 'D2&gt;=C2' },
           ],
         },
         {
           sqref: `E2:E${marksLast}`,
           rules: [
-            { dxf: 0, formula: '$E2=&quot;Pending&quot;' },
-            { dxf: 1, formula: '$E2=&quot;In progress&quot;' },
-            { dxf: 3, formula: '$E2=&quot;Cut&quot;' },
-            { dxf: 2, formula: '$E2=&quot;Picked up&quot;' },
+            { dxf: 0, formula: 'E2=0' },
+            { dxf: 1, formula: 'AND(E2&gt;0,E2&lt;C2)' },
+            { dxf: 2, formula: 'E2&gt;=C2' },
+          ],
+        },
+        {
+          sqref: `F2:F${marksLast}`,
+          rules: [
+            { dxf: 0, formula: '$F2=&quot;Pending&quot;' },
+            { dxf: 1, formula: '$F2=&quot;In progress&quot;' },
+            { dxf: 3, formula: '$F2=&quot;Cut&quot;' },
+            { dxf: 2, formula: '$F2=&quot;Picked up&quot;' },
           ],
         },
       ],
@@ -581,5 +601,5 @@ export function buildPurchaseTrackerWorkbookForGroups(
     DEFAULT_TRACKER_PURCHASE_OPTIONS.stockLengthsMm.length > 0
       ? planPurchases(groups, DEFAULT_TRACKER_PURCHASE_OPTIONS)
       : []
-  return buildPurchaseTrackerWorkbook(plans, jobName)
+  return buildPurchaseTrackerWorkbook(groups, plans, jobName)
 }

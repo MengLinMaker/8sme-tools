@@ -49,7 +49,7 @@ describe('buildPurchaseTrackerModel', () => {
   it('rolls pieces up into layouts and marks with quantities', () => {
     const groups = [rhsGroup()]
     const plans = planPurchases(groups, DEFAULT_TRACKER_PURCHASE_OPTIONS)
-    const model = buildPurchaseTrackerModel(plans, 'Job')
+    const model = buildPurchaseTrackerModel(groups, plans, 'Job')
     expect(model.layouts).toHaveLength(1)
     expect(model.layouts[0]?.qty).toBe(1)
     expect(model.marks.find((mark) => mark.mark === 'M-1')?.qty).toBe(2)
@@ -59,7 +59,7 @@ describe('buildPurchaseTrackerModel', () => {
   it('pairs T bars into one stock layout', () => {
     const groups = [teeGroup()]
     const plans = planPurchases(groups, DEFAULT_TRACKER_PURCHASE_OPTIONS)
-    const model = buildPurchaseTrackerModel(plans, 'Job')
+    const model = buildPurchaseTrackerModel(groups, plans, 'Job')
     expect(model.layouts).toHaveLength(1)
     expect(model.layouts[0]?.stock).toBe('200UB29.8')
     expect(model.marks.find((mark) => mark.mark === 'T-1')?.qty).toBe(2)
@@ -80,8 +80,9 @@ describe('buildPurchaseTrackerWorkbook', () => {
     expect(nesting.A1?.v).toBe('Layout')
     expect(nesting.E1?.v).toBe('Qty')
     expect(nesting.F1?.v).toBe('Cut')
-    expect(marks.B1?.v).toBe('Qty')
-    expect(marks.C1?.v).toBe('Cut')
+    expect(marks.B1?.v).toBe('Profile')
+    expect(marks.C1?.v).toBe('Qty')
+    expect(marks.D1?.v).toBe('Cut')
     expect(formulas(marks).some((formula) => formula.includes('Nesting!$F'))).toBe(true)
     expect(formulas(marks).some((formula) => formula.includes('*2'))).toBe(true)
     expect(formulas(buy).some((formula) => formula.includes('SUMIF'))).toBe(true)
@@ -89,7 +90,7 @@ describe('buildPurchaseTrackerWorkbook', () => {
     expect(formulas(buy).every((formula) => !formula.includes('Nesting!$B'))).toBe(true)
     expect(formulas(buy).every((formula) => !formula.includes('%'))).toBe(true)
     expect(formulas(nesting).some((formula) => formula.startsWith('SUM(E2:E'))).toBe(true)
-    expect(formulas(marks).some((formula) => formula.startsWith('SUM(B2:B'))).toBe(true)
+    expect(formulas(marks).some((formula) => formula.startsWith('SUM(C2:C'))).toBe(true)
     expect(formulas(buy).some((formula) => formula.startsWith('SUM(D2:D'))).toBe(true)
     expect(buy.A2?.v).toBe('RHS')
     expect(buy.B2?.v).toBe('150×100×6')
@@ -107,7 +108,7 @@ describe('buildPurchaseTrackerWorkbook', () => {
       },
     ]
     const plans = planPurchases(groups, DEFAULT_TRACKER_PURCHASE_OPTIONS)
-    const bytes = buildPurchaseTrackerWorkbook(plans, 'NW31')
+    const bytes = buildPurchaseTrackerWorkbook(groups, plans, 'NW31')
     const workbook = XLSX.read(bytes, { type: 'array', cellFormula: true, sheetStubs: true })
     expect(workbook.Sheets['Parts to buy']?.['!merges']?.length).toBeGreaterThan(0)
   })
@@ -118,7 +119,7 @@ describe('buildPurchaseTrackerWorkbook', () => {
       ...DEFAULT_TRACKER_PURCHASE_OPTIONS,
       stockLengthsMm: [6000],
     })
-    const bytes = buildPurchaseTrackerWorkbook(plans, 'NW31')
+    const bytes = buildPurchaseTrackerWorkbook(groups, plans, 'NW31')
     const workbook = XLSX.read(bytes, { type: 'array', cellFormula: true, sheetStubs: true })
     const nesting = workbook.Sheets.Nesting
     if (!nesting) throw new Error('nesting missing')
