@@ -2225,11 +2225,26 @@ export function PreflightPage() {
     t,
   ])
 
+  /**
+   * Findings still open after the applied fixes. A fixed finding stays in `allFindings` as a
+   * resolved row so the issues list can offer Undo, but it must not colour the part's status,
+   * sort order, status counts or search tokens until that fix is undone.
+   */
+  const activeFindings = useMemo(
+    () =>
+      allFindings.filter((finding) => {
+        if (finding.params?.resolved === 1) return false
+        const override = finding.mark ? stepOverrides.get(finding.mark) : undefined
+        return !(override && resolvedFindings(override.kind).includes(finding.code))
+      }),
+    [allFindings, stepOverrides],
+  )
+
   const counts = useMemo(() => {
     const result = { error: 0, warning: 0, info: 0 }
-    for (const finding of allFindings) result[finding.severity]++
+    for (const finding of activeFindings) result[finding.severity]++
     return result
-  }, [allFindings])
+  }, [activeFindings])
 
   /**
    * Pieces for a mark: drawing qty is ground truth, then the part list, then the NC batch qty.
@@ -2439,14 +2454,9 @@ export function PreflightPage() {
   /** One status pill per distinct *active* finding code, so the parts table carries its own triage. */
   const issuesByMark = useMemo(() => {
     const map = new Map<string, StatusPill[]>()
-    for (const finding of allFindings) {
+    for (const finding of activeFindings) {
       if (!finding.mark) continue
       const mark = finding.mark
-      const stepOverride = stepOverrides.get(mark)
-      const stepResolved = Boolean(
-        stepOverride && resolvedFindings(stepOverride.kind).includes(finding.code),
-      )
-      if (stepResolved || finding.params?.resolved === 1) continue
       const fixable = fixForFinding(finding) != null
       const list = map.get(mark) ?? []
       const existing = list.find((pill) => pill.code === finding.code)
@@ -2464,7 +2474,7 @@ export function PreflightPage() {
       map.set(mark, list)
     }
     return map
-  }, [allFindings, stepOverrides])
+  }, [activeFindings])
 
   /** Findings for the part currently open in the viewer, shown above the 3D to debug fast. */
   const viewerFindings = useMemo(
@@ -2790,19 +2800,19 @@ export function PreflightPage() {
     () =>
       result
         ? sortParts(result.parts, sort.key, sort.dir, {
-            findings: allFindings,
+            findings: activeFindings,
             materials: drawingMaterials,
             modelChecks,
             weldingMarks: new Set(weldEtchings.keys()),
             mass: pieceMass,
           })
         : [],
-    [result, sort, allFindings, drawingMaterials, modelChecks, weldEtchings, pieceMass],
+    [result, sort, activeFindings, drawingMaterials, modelChecks, weldEtchings, pieceMass],
   )
   /** Everything the parts search can match: mark, profile/grade, findings and weld etchings. */
   const partFilterContext = useMemo<PartFilterContext>(
     () => ({
-      findings: allFindings,
+      findings: activeFindings,
       materials: drawingMaterials,
       modelChecks,
       weldingMarks: new Set(weldEtchings.keys()),
@@ -2812,7 +2822,7 @@ export function PreflightPage() {
         return etchings ? weldEtchingsTitle(t, etchings) : ''
       },
     }),
-    [allFindings, drawingMaterials, modelChecks, weldEtchings, findingText, t],
+    [activeFindings, drawingMaterials, modelChecks, weldEtchings, findingText, t],
   )
   /** Distinct assemblies in the job, for the filter and the assembly column. */
   const assemblyOptions = useMemo(() => {
