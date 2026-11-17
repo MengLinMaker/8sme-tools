@@ -465,6 +465,23 @@ export async function reconstructSolidFromNc(
   // caller explicitly opts in.
   const buildBevels = options.bevels ?? family !== 'tee'
   const isI = family === 'i'
+  // An I-section is built in its authored (web-vertical) stance, where `v`/`h` always span the
+  // depth — the authored section's **Y** axis (axis 1). The extent match in `resolveNcFaceFrame`
+  // cannot tell the axes apart when the section is square (`b == d`, e.g. a 254UC), and its
+  // tie-break puts the web on the width axis instead. The per-axis trim then treats the flange
+  // outlines as the web silhouette and cuts the web tenon off past the flanges (UC250-clean lost
+  // its 195 mm tenon). Force the authored mapping so a square I keeps its tenon.
+  if (isI) {
+    frame.axisVH = 1
+    frame.axisOU = 0
+    // `webHalf` was measured on the guessed width axis; re-measure it on the real one.
+    let min = Number.POSITIVE_INFINITY
+    for (const p of section.points) {
+      const value = Math.abs(p[0] ?? 0)
+      if (value > 1e-6 && value < min) min = value
+    }
+    if (Number.isFinite(min)) frame.webHalf = min
+  }
   const acrossSign = (face: NcFace): 1 | -1 => {
     if (family === 'tube') return ncAuthoredAcrossSign(frame, face)
     if (family === 'channel' && (face === 'v' || face === 'h')) return -1
