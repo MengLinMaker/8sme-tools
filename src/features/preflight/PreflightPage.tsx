@@ -3483,6 +3483,9 @@ export function PreflightPage() {
           vertices: issue.vertices,
           deltaY,
         })
+        // The new NC is ready: rebuild the manufactured solid and re-run the CUT_DEPTH probe on
+        // it, so any CUT_DEPTH near this fillet is re-evaluated against the edited geometry.
+        const edited = replayNcOps(original, ops)
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
         setSabreRecheck((prev) => {
           if (!prev.has(part.mark)) return prev
@@ -3490,6 +3493,15 @@ export function PreflightPage() {
           next.delete(part.mark)
           return next
         })
+        void reconstructViewerWithSabre(new TextDecoder().decode(edited), {
+          priority: PRIORITY_FOREGROUND,
+        })
+          .then(({ sabre }) => {
+            setSabreRecheck((prev) => new Map(prev).set(part.mark, sabre))
+          })
+          .catch(() => {
+            // best-effort: the viewer rebuild effect retries the same NC
+          })
       } finally {
         setFixingMark(null)
       }
