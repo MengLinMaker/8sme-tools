@@ -102,7 +102,7 @@ skips lengthwise edges (they are normally the stock silhouette), so this is its 
   `src/lib/audit/rootFillet.test.ts` and `src/lib/parsers/ncEdit.test.ts`.
 
 **Gate (final):** follow the beam inward from the cut line for the intended cut depth (`T + r`)
-**plus 1 mm**, then test whether that **endpoint is inside the solid**. If it is, the beam did not
+**plus the flush tolerance (2 mm)**, then test whether that **endpoint is inside the solid**. If it is, the beam did not
 exit at the cut depth — it stays inside the material. The entry distance is irrelevant: the beam
 may cross air first (e.g. a cut line on a flange end edge, 15.6 mm of air before the web tenon),
 which is exactly why the earlier `entry < 1 mm` gate wrongly dropped M36's −Y flange.

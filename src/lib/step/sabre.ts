@@ -197,6 +197,12 @@ export interface MeshableShape {
 
 /** The beam's usable length equals the head's max pierce depth (`MAX_CUT_THICKNESS_MM`). */
 const SABRE_LENGTH = MAX_CUT_THICKNESS_MM
+/**
+ * Residual material tolerated past the intended cut depth (mm). A rebuilt cut can leave a thin
+ * sliver where the new surface meets the old cut / tessellation; that is flushness noise, not an
+ * over-cut. Genuine over-cuts are deeper than this.
+ */
+export const CUT_DEPTH_FLUSH_MM = 2
 /** Cap on the number of triangle samples probed (largest first). */
 const MAX_SAMPLES = 400
 /**
@@ -360,12 +366,13 @@ export function sabreSamples(
     const normal = new Vector3(...sample.normal).normalize()
     // `projectNc` already gives each face's outward normal; no per-sample orientation probe.
 
-    // Gate: follow the beam inward for the intended cut depth (`T + r`) plus 1 mm, then ask
-    // whether that endpoint is *inside* the solid. If it is, the beam has not exited at the cut
-    // depth — it stays inside the material (the failure). The entry distance is irrelevant: the
-    // beam may cross air (e.g. a cut line on a flange end edge) before entering the solid.
+    // Gate: follow the beam inward for the intended cut depth (`T + r`) plus the flush tolerance,
+    // then ask whether that endpoint is *inside* the solid. If it is, the beam has not exited at
+    // the cut depth — it stays inside the material (the failure). The entry distance is
+    // irrelevant: the beam may cross air (e.g. a cut line on a flange end edge) before entering
+    // the solid. The tolerance is what keeps a slightly non-flush new cut from reading as scrap.
     const cutDepth = sample.depth ?? length
-    const endpoint = point.clone().addScaledVector(normal, -(cutDepth + 1))
+    const endpoint = point.clone().addScaledVector(normal, -(cutDepth + CUT_DEPTH_FLUSH_MM))
     if (isStrictlyInside(endpoint)) {
       failures.push({
         point: sample.point,
