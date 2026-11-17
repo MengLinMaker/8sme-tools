@@ -723,8 +723,6 @@ export function PreflightPage() {
   const [sabreChecks, setSabreChecks] = useState<Map<string, SabreFailure[]>>(new Map())
   /** Sabre re-run on the edited NC for a part with an NC override (the current solid's probe). */
   const [sabreRecheck, setSabreRecheck] = useState<Map<string, SabreFailure[]>>(new Map())
-  /** Per-part token: only the latest in-flight recheck may write `sabreRecheck`. */
-  const sabreRecheckToken = useRef(new Map<string, number>())
   /** Per-part cut-reach failures (a bevel whose bore exceeds the head's pierce cap). */
   const [reachChecks, setReachChecks] = useState<Map<string, CutReachFailure[]>>(new Map())
   /** Per-part bevel-change lines (one cut line whose bevel is not a single angle). */
@@ -1546,7 +1544,6 @@ export function PreflightPage() {
       return next
     })
     setSabreRecheck(new Map())
-    sabreRecheckToken.current.clear()
     setReachChecks(new Map())
     setBevelChanges(new Map())
     setUnclosedCuts(new Map())
@@ -3031,6 +3028,31 @@ export function PreflightPage() {
     }
   }, [result, bytesByPath])
 
+  // Re-run the CUT_DEPTH probe on every edited NC after a fix. The **new manufactured model**
+  // decides it: if the edit actually removed the over-cut, the issue clears; otherwise it stays.
+  // This is independent of the viewed part, so the parts table updates too.
+  useEffect(() => {
+    if (!result) return
+    let cancelled = false
+    for (const part of result.parts) {
+      const override = ncOverrides.get(part.mark)
+      if (!override) continue
+      void reconstructViewerWithSabre(new TextDecoder().decode(override.bytes), {
+        priority: PRIORITY_BACKGROUND,
+      })
+        .then(({ sabre }) => {
+          if (cancelled) return
+          setSabreRecheck((prev) => new Map(prev).set(part.mark, sabre))
+        })
+        .catch(() => {
+          // best-effort; the viewer rebuild retries the same NC
+        })
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [result, ncOverrides])
+
   /** The override a part carries, if any (cleaned or regenerated). */
   const overrideFor = useCallback(
     (part: PartRecord | undefined) => (part ? stepOverrides.get(part.mark) : undefined),
@@ -3125,7 +3147,6 @@ export function PreflightPage() {
         next.delete(part.mark)
         return next
       })
-      sabreRecheckToken.current.delete(part.mark)
     },
     [bytesByPath, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks],
   )
@@ -3514,13 +3535,8 @@ export function PreflightPage() {
           vertices: issue.vertices,
           deltaY,
         })
-        // The new NC is ready: rebuild the manufactured solid and re-run the CUT_DEPTH probe on
-        // it, so any CUT_DEPTH near this fillet is re-evaluated against the edited geometry.
-        const edited = replayNcOps(original, ops)
-        // Only this fix's recheck may write the result — an earlier fix's slower rebuild must not
-        // overwrite a later one, so each individual fix's effect stays visible.
-        const token = (sabreRecheckToken.current.get(part.mark) ?? 0) + 1
-        sabreRecheckToken.current.set(part.mark, token)
+        // The override effect re-probes this edited NC's manufactured model; drop the stale result
+        // in the meantime so the CUT_DEPTH row reflects the new build, not the old one.
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
         setSabreRecheck((prev) => {
           if (!prev.has(part.mark)) return prev
@@ -3528,19 +3544,6 @@ export function PreflightPage() {
           next.delete(part.mark)
           return next
         })
-        void reconstructViewerWithSabre(new TextDecoder().decode(edited), {
-          priority: PRIORITY_FOREGROUND,
-        })
-          .then(({ sabre }) => {
-            if (sabreRecheckToken.current.get(part.mark) !== token) return
-            if (import.meta.env.DEV) {
-              console.info('[fillet recheck]', part.mark, 'sabre samples', sabre.length)
-            }
-            setSabreRecheck((prev) => new Map(prev).set(part.mark, sabre))
-          })
-          .catch(() => {
-            // best-effort: the viewer rebuild effect retries the same NC
-          })
       } finally {
         setFixingMark(null)
       }
