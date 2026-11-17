@@ -3037,11 +3037,17 @@ export function PreflightPage() {
     for (const part of result.parts) {
       const override = ncOverrides.get(part.mark)
       if (!override) continue
+      // The viewed part's recheck must jump the queue: background work is held while a part is
+      // open, which otherwise leaves its CUT_DEPTH untested until the viewer closes.
+      const priority = part.mark === viewing?.mark ? PRIORITY_FOREGROUND : PRIORITY_BACKGROUND
       void reconstructViewerWithSabre(new TextDecoder().decode(override.bytes), {
-        priority: PRIORITY_BACKGROUND,
+        priority,
       })
         .then(({ sabre }) => {
           if (cancelled) return
+          if (import.meta.env.DEV) {
+            console.info('[cut-depth recheck]', part.mark, 'sabre samples', sabre.length)
+          }
           setSabreRecheck((prev) => new Map(prev).set(part.mark, sabre))
         })
         .catch(() => {
@@ -3051,7 +3057,7 @@ export function PreflightPage() {
     return () => {
       cancelled = true
     }
-  }, [result, ncOverrides])
+  }, [result, ncOverrides, viewing?.mark])
 
   /** The override a part carries, if any (cleaned or regenerated). */
   const overrideFor = useCallback(
