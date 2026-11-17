@@ -650,6 +650,8 @@ export function PreflightPage() {
   const [sabreChecks, setSabreChecks] = useState<Map<string, SabreFailure[]>>(new Map())
   /** Sabre re-run on the edited NC for a part with an NC override (the current solid's probe). */
   const [sabreRecheck, setSabreRecheck] = useState<Map<string, SabreFailure[]>>(new Map())
+  /** Findings fixed by an NC edit, kept as resolved rows so the existing per-row Undo survives. */
+  const [resolvedFixes, setResolvedFixes] = useState<Map<string, Finding[]>>(new Map())
   /** Per-part cut-reach failures (a bevel whose bore exceeds the head's pierce cap). */
   const [reachChecks, setReachChecks] = useState<Map<string, CutReachFailure[]>>(new Map())
   /** Per-part bevel-change lines (one cut line whose bevel is not a single angle). */
@@ -1473,6 +1475,7 @@ export function PreflightPage() {
       return next
     })
     setSabreRecheck(new Map())
+    setResolvedFixes(new Map())
     setReachChecks(new Map())
     setBevelChanges(new Map())
     setUnclosedCuts(new Map())
@@ -2124,6 +2127,22 @@ export function PreflightPage() {
           })
         })
       }
+      // Keep fixes that are no longer reported by the new-NC check as resolved rows (Undo), but
+      // don't duplicate an issue that the check still reports — that active row already has Undo.
+      const fixedRecords = resolvedFixes.get(part.mark)
+      if (fixedRecords && fixedRecords.length > 0) {
+        const activeKeys = new Set(
+          extra
+            .filter((finding) => finding.mark === part.mark)
+            .map((finding) => findingOpKey(finding))
+            .filter((key): key is string => key != null),
+        )
+        for (const record of fixedRecords) {
+          const key = findingOpKey(record)
+          if (key && activeKeys.has(key)) continue
+          extra.push(record)
+        }
+      }
     }
     return [...result.findings, ...extra]
       .filter((finding) => finding.severity !== 'info')
@@ -2157,6 +2176,7 @@ export function PreflightPage() {
     bevelChanges,
     unclosedCuts,
     rootFilletChecks,
+    resolvedFixes,
     t,
   ])
 
@@ -2381,7 +2401,7 @@ export function PreflightPage() {
       const stepResolved = Boolean(
         stepOverride && resolvedFindings(stepOverride.kind).includes(finding.code),
       )
-      if (stepResolved) continue
+      if (stepResolved || finding.params?.resolved === 1) continue
       const fixable = fixForFinding(finding) != null
       const list = map.get(mark) ?? []
       const existing = list.find((pill) => pill.code === finding.code)
@@ -2443,25 +2463,40 @@ export function PreflightPage() {
     })
     return rows
   }, [viewing, viewerFindings, ncOverrides])
-  /** Marker indices whose sub-cuts are shown in the 3D (manual eye on). */
+  /** Rows that are resolved (fixed) and therefore have no active 3D marker. */
+  const resolvedViewerRows = useMemo(() => {
+    const rows = new Set<number>()
+    const stepOverride = viewing ? stepOverrides.get(viewing.mark) : undefined
+    viewerFindings.forEach((finding, index) => {
+      const stepResolved = Boolean(
+        stepOverride && resolvedFindings(stepOverride.kind).includes(finding.code),
+      )
+      if (stepResolved || finding.params?.resolved === 1) rows.add(index)
+    })
+    return rows
+  }, [viewerFindings, stepOverrides, viewing])
+  /** Marker indices whose sub-cuts are shown in the 3D (manual eye on, not resolved). */
   const visibleSpans = useMemo(
     () =>
       viewerFindings
         .map((finding, index) => ({ finding, index }))
-        .filter(({ index }) => !hiddenIssues.has(index))
+        .filter(({ index }) => !hiddenIssues.has(index) && !resolvedViewerRows.has(index))
         .map(({ finding }) => markerIndexOf(finding))
         .filter((value): value is number => value != null),
-    [viewerFindings, hiddenIssues],
+    [viewerFindings, hiddenIssues, resolvedViewerRows],
   )
-  /** NC probe runs (CUT_DEPTH_NC rows) that are checked on (their eye is on). */
+  /** NC probe runs (CUT_DEPTH_NC rows) that are checked on (their eye is on, not resolved). */
   const visibleRuns = useMemo(
     () =>
       viewerFindings
         .map((finding, index) => ({ finding, index }))
-        .filter(({ finding, index }) => isNcRun(finding) && !hiddenIssues.has(index))
+        .filter(
+          ({ finding, index }) =>
+            isNcRun(finding) && !hiddenIssues.has(index) && !resolvedViewerRows.has(index),
+        )
         .map(({ finding }) => finding.params?.index)
         .filter((value): value is number => typeof value === 'number'),
-    [viewerFindings, hiddenIssues],
+    [viewerFindings, hiddenIssues, resolvedViewerRows],
   )
   /** The NC probe run to glow while its CUT_DEPTH_NC row is hovered. */
   const highlightRun = useMemo(() => {
@@ -2530,10 +2565,11 @@ export function PreflightPage() {
       const finding = viewerFindings[index]
       // Only findings with a 3D marker are interactive; the rest have no eye.
       if (!finding || !isVisualisable(finding)) return
-      if (hiddenIssues.has(index)) toggleIssue(index)
+      // A fixed row stays visually off until Undo — clicking it only pans/zooms.
+      if (!resolvedViewerRows.has(index) && hiddenIssues.has(index)) toggleIssue(index)
       if (findingLocationOf(finding) != null) focusFinding(finding)
     },
-    [viewerFindings, hiddenIssues, toggleIssue, focusFinding],
+    [viewerFindings, hiddenIssues, toggleIssue, focusFinding, resolvedViewerRows],
   )
 
   /**
@@ -3015,6 +3051,25 @@ export function PreflightPage() {
     })
   }, [])
 
+  /**
+   * Keep the fixed finding as a resolved record so the existing row (with Undo) survives while the
+   * active rows come from the re-run check. Records stack by op key; a repeated fix of the same
+   * issue replaces its record rather than adding another.
+   */
+  const rememberResolvedFix = useCallback((part: PartRecord, finding: Finding) => {
+    const key = findingOpKey(finding)
+    if (!key) return
+    setResolvedFixes((prev) => {
+      const list = prev.get(part.mark) ?? []
+      const next = list.filter((item) => findingOpKey(item) !== key)
+      next.push({
+        ...finding,
+        params: { ...finding.params, resolved: 1, index: 1_000_000 + next.length },
+      })
+      return new Map(prev).set(part.mark, next)
+    })
+  }, [])
+
   /** Drops a part's NC edit, so it reverts to the bundled `.nc1`, and re-runs the NC checks. */
   const undoNcFinding = useCallback(
     (part: PartRecord, finding: Finding) => {
@@ -3030,6 +3085,15 @@ export function PreflightPage() {
         const next = new Map(prev)
         next.delete(part.mark)
         return next
+      })
+      setResolvedFixes((prev) => {
+        const current = prev.get(part.mark) ?? []
+        const next = current.filter((item) => findingOpKey(item) !== key)
+        if (next.length === current.length) return prev
+        const map = new Map(prev)
+        if (next.length === 0) map.delete(part.mark)
+        else map.set(part.mark, next)
+        return map
       })
     },
     [bytesByPath],
@@ -3293,34 +3357,30 @@ export function PreflightPage() {
       const ncPath = part.nc?.path
       const original = ncPath ? bytesByPath.get(ncPath) : undefined
       if (!original) return
-      const section = part.nc?.profile
-        ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
-        : null
-      const options = { section: section?.points, profile: part.nc?.profile }
-      const issueIndex =
-        typeof finding.params?.index === 'number'
-          ? finding.params.index -
-            ((reachChecks.get(part.mark)?.length ?? 0) + (bevelChanges.get(part.mark)?.length ?? 0))
-          : -1
-      const issue = assessUnclosedCuts(new TextDecoder().decode(original), options)[issueIndex]
-      if (!issue) return
+      const contourIndex = finding.params?.contourIndex
+      const removalText = finding.params?.removal
+      if (typeof contourIndex !== 'number' || typeof removalText !== 'string' || !removalText) {
+        return
+      }
+      const removal = removalText.split(',').map(Number)
+      if (removal.length < 2) return
       setFixingMark(part.mark)
       try {
         const current = ncOverrides.get(part.mark)?.ops ?? []
-        if (!issue.removal) return
-        const key = `cut:${issue.contourIndex}:${issue.removal.join(',')}`
+        const key = `cut:${contourIndex}:${removalText}`
         const ops = upsertOp(current, {
           key,
           kind: 'removeCut',
-          contourIndex: issue.contourIndex,
-          removeVertices: issue.removal as [number, number],
+          contourIndex,
+          removeVertices: [removal[0] as number, removal[1] as number],
         })
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
+        rememberResolvedFix(part, finding)
       } finally {
         setFixingMark(null)
       }
     },
-    [bytesByPath, ncOverrides, reachChecks, bevelChanges],
+    [bytesByPath, ncOverrides, rememberResolvedFix],
   )
 
   /**
@@ -3334,33 +3394,35 @@ export function PreflightPage() {
       const ncPath = part.nc?.path
       const original = ncPath ? bytesByPath.get(ncPath) : undefined
       if (!original) return
-      // Bevel findings come after the cut-reach failures in the combined marker order; map back to the
-      // issue on the original NC so the index stays stable as other fixes are applied.
-      const issueIndex =
-        typeof finding.params?.index === 'number'
-          ? finding.params.index - (reachChecks.get(part.mark)?.length ?? 0)
-          : -1
-      const issue = assessBevelChange(new TextDecoder().decode(original))[issueIndex]
-      if (!issue) return
+      // Use the finding's own contour/vertices, so stacked fixes stay aligned with the current NC.
+      const contourIndex = finding.params?.contourIndex
+      const verticesText = finding.params?.vertices
+      if (typeof contourIndex !== 'number' || typeof verticesText !== 'string') return
+      const vertices = verticesText
+        .split(',')
+        .map(Number)
+        .filter((value) => Number.isInteger(value) && value >= 0)
+      if (vertices.length === 0) return
       setFixingMark(part.mark)
       try {
         const current = ncOverrides.get(part.mark)?.ops ?? []
-        const key = `bevel:${issue.contourIndex}:${issue.vertices.join(',')}`
+        const key = `bevel:${contourIndex}:${verticesText}`
         const ops = upsertOp(current, {
           key,
           kind: 'unifyBevel',
-          contourIndex: issue.contourIndex,
-          vertices: issue.vertices,
+          contourIndex,
+          vertices,
           angle,
         })
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
+        rememberResolvedFix(part, finding)
       } catch {
         // leave the NC as it is if the edit fails
       } finally {
         setFixingMark(null)
       }
     },
-    [bytesByPath, ncOverrides, reachChecks],
+    [bytesByPath, ncOverrides, rememberResolvedFix],
   )
 
   /**
@@ -3381,11 +3443,12 @@ export function PreflightPage() {
         const key = `oor:${contourIndex}:${vertex}`
         const ops = upsertOp(current, { key, kind: 'outOfRangeBevel', contourIndex, vertex, angle })
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
+        rememberResolvedFix(part, finding)
       } finally {
         setFixingMark(null)
       }
     },
-    [bytesByPath, ncOverrides],
+    [bytesByPath, ncOverrides, rememberResolvedFix],
   )
 
   /**
@@ -3399,35 +3462,39 @@ export function PreflightPage() {
       const ncPath = part.nc?.path
       const original = ncPath ? bytesByPath.get(ncPath) : undefined
       if (!original) return
-      const index = typeof finding.params?.index === 'number' ? finding.params.index : -1
-      const base =
-        (reachChecks.get(part.mark)?.length ?? 0) +
-        (bevelChanges.get(part.mark)?.length ?? 0) +
-        (unclosedCuts.get(part.mark)?.length ?? 0)
-      const issue = (rootFilletChecks.get(part.mark) ?? [])[index - base]
-      if (!issue) return
-      const deltaY = offset ?? issue.delta
-      if (!Number.isFinite(deltaY) || deltaY === 0) return
+      // Use the finding's own run, not an index into the original list: after the first fix the
+      // active list shrinks, and an index lookup would stack the second fix onto the wrong edge.
+      const contourIndex = finding.params?.contourIndex
+      const verticesText = finding.params?.vertices
+      const suggested = finding.params?.delta
+      const deltaY = offset ?? (typeof suggested === 'number' ? suggested : 0)
+      if (typeof contourIndex !== 'number' || typeof verticesText !== 'string') return
+      const vertices = verticesText
+        .split(',')
+        .map(Number)
+        .filter((value) => Number.isInteger(value) && value >= 0)
+      if (!Number.isFinite(deltaY) || deltaY === 0 || vertices.length === 0) return
       setFixingMark(part.mark)
       try {
         const current = ncOverrides.get(part.mark)?.ops ?? []
-        const key = `fillet:${issue.contourIndex}:${issue.vertices.join(',')}`
+        const key = `fillet:${contourIndex}:${verticesText}`
         const ops = upsertOp(current, {
           key,
           kind: 'moveCut',
-          contourIndex: issue.contourIndex,
-          vertices: issue.vertices,
+          contourIndex,
+          vertices,
           deltaY,
         })
         // The override effect re-probes this edited NC's manufactured model; clear the old
         // CUT_DEPTH rows in the meantime so they reflect the new build, not the old one.
         setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
         setSabreRecheck((prev) => new Map(prev).set(part.mark, []))
+        rememberResolvedFix(part, finding)
       } finally {
         setFixingMark(null)
       }
     },
-    [bytesByPath, ncOverrides, reachChecks, bevelChanges, unclosedCuts, rootFilletChecks],
+    [bytesByPath, ncOverrides, rememberResolvedFix],
   )
 
   /** Opens the "move cut" mini menu, prefilling the suggested offset for the flagged line. */
@@ -5111,7 +5178,7 @@ function ViewerWarnings({
                 const stepResolved = Boolean(
                   fix?.override && resolvedFindings(fix.override).includes(finding.code),
                 )
-                const resolved = stepResolved
+                const resolved = stepResolved || finding.params?.resolved === 1
                 const applied = ncApplied?.has(index) ?? false
                 // An applied-but-still-failing fix offers Undo (not the fix) so it can be reverted.
                 const fixKind = fix && !resolved && !applied ? fixForFinding(finding) : null
