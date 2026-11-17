@@ -36,7 +36,7 @@ export const en = {
       removeCut: 'Remove cut',
       removeBevel: 'Remove bevel',
       setBevel: 'Unify bevel',
-      moveCut: 'Move cut off fillet',
+      moveCut: 'Move fillet cut',
       working: 'Working…',
       cleaning: 'Cleaning…',
       removing: 'Removing…',
@@ -422,7 +422,7 @@ export const en = {
       apply: 'Apply bevel',
     },
     move: {
-      title: 'Move cut off fillet',
+      title: 'Move fillet cut',
       offset: 'Offset',
       recommended: 'Suggested {{offset}} mm {{direction}}',
       hint: 'Prefilled with the suggested offset. Larger magnitudes clear the fillet further; the opposite sign moves the cut the other way.',
@@ -555,8 +555,7 @@ export const en = {
     CUT_DEPTH_NC: '{{span}}mm cut of {{depth}}mm depth removes additional material',
     CUT_CORNER:
       "Cut lands on a corner: with the head's ±{{tol}} mm placement error, {{span}} mm of the cut on face {{face}} can fall on the section's corner radius — the beam meets the curve at a bevel with no flat escape for the slag — not manufacturable",
-    CUT_ROOT_FILLET:
-      'Long cut on face {{face}} ({{span}} mm) runs along the root fillet — it cannot cut through the curved, thicker junction and can damage the nozzle/lens. Move it {{move}} mm {{direction}} onto the flat.',
+    CUT_ROOT_FILLET: '{{span}}mm root fillet cut may not drain slag which damages nozzle',
     CUT_BEVEL_CHANGE:
       'Bevel changes along one cut on face {{face}}: {{angles}} — the head must rotate the nozzle mid-cut and grinds it down. Keep one bevel ({{suggested}}°) or remove it',
     CUT_UNCLOSED:
@@ -607,7 +606,7 @@ export const zh = {
       removeCut: '移除切缝',
       removeBevel: '移除坡口',
       setBevel: '统一坡口',
-      moveCut: '将切缝移出根部圆角',
+      moveCut: '移动圆角切缝',
       working: '处理中…',
       cleaning: '清理中…',
       removing: '移除中…',
@@ -985,7 +984,7 @@ export const zh = {
       apply: '应用坡口',
     },
     move: {
-      title: '将切缝移出根部圆角',
+      title: '移动圆角切缝',
       offset: '偏移量',
       recommended: '建议 {{direction}} {{offset}} mm',
       hint: '已填入建议偏移量。数值越大离圆角越远；符号相反则向另一侧移动。',
@@ -1093,8 +1092,7 @@ export const zh = {
     CUT_DEPTH_NC: '{{span}}mm 长、{{depth}}mm 深的切割会多切除材料',
     CUT_CORNER:
       '切缝落在圆角上：受机头 ±{{tol}} mm 定位误差影响，{{face}} 面上 {{span}} mm 的切缝可能落到型材圆角上——激光束斜切曲面且无平面排渣通道——无法制造',
-    CUT_ROOT_FILLET:
-      '{{face}} 面上 {{span}} mm 的长切缝沿根部圆角走向——无法切透较厚的圆弧过渡，可能损坏喷嘴/镜片。请将其移动 {{move}} mm 至平面。',
+    CUT_ROOT_FILLET: '{{span}}mm 的根部圆角切缝可能无法排渣，会损坏喷嘴',
     CUT_BEVEL_CHANGE:
       '{{face}} 面上同一条切缝的坡口发生变化：{{angles}}——机头需在切割过程中旋转喷嘴，会磨损喷嘴。请统一为一个坡口（{{suggested}}°）或去除坡口',
     CUT_UNCLOSED:

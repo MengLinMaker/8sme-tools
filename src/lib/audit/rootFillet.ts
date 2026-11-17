@@ -303,7 +303,7 @@ export function assessRootFilletGeometry(
         to: [to[0], to[1]],
         lines: [run.polyline.map((point) => [point[0], point[1]] as [number, number])],
         color: ROOT_FILLET_COLOR,
-        message: `Long cut on face ${contour.face} (${span} mm) runs along the root fillet — it cannot cut through the curved, thicker junction and can damage the nozzle/lens. Move it ${moveText} mm ${run.band.direction} onto the flat.`,
+        message: `${span}mm root fillet cut may not drain slag which damages nozzle`,
         params: {
           face: contour.face,
           x: Math.round(run.x),

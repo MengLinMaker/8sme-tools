@@ -172,9 +172,10 @@ still reported for every family, since that is an unintended pass.
 case `cutReach` deliberately skips: a cut running **along the member** on an I-section's rolled
 root fillet. The fillet is thicker and curved, so the beam cannot cut through it and can foul the
 head/nozzle/lens. The finding (error) carries the NC-Y shift onto the flat; the
-`Move cut off fillet` fix applies it with `moveCutInNc` (undoable, like the other NC fixes). After
-any NC edit the checks are re-run on the edited file, so each finding (including a CUT_DEPTH at
-the same tab) is disabled only if it is actually gone. See `docs/cut-depth-architecture.md` §3a.
+`Move fillet cut` fix applies it with `moveCutInNc` (undoable, like the other NC fixes). After
+any NC edit the checks are re-run on the edited file, so each rechecked finding is disabled only
+if it is actually gone. The 2D `cutReach` depth message is retired; only `CUT_CORNER` remains from
+that check (the sabre `CUT_DEPTH` is separate). See `docs/cut-depth-architecture.md` §3a.
 
 On **any** section, a short `reach` stub at the junction of a member end and a raw-stock edge is a
 finishing corner, not a missing cut: the cut is at the face's X extreme and within

@@ -41,12 +41,7 @@ import { Toggle } from '@/components/ui/toggle'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { assessBevelChange, type BevelChangeIssue } from '@/lib/audit/bevelChange'
 import { findingsToCsv, partsToCsv } from '@/lib/audit/csv'
-import {
-  assessCutReach,
-  type CutMarker,
-  type CutReachFailure,
-  MAX_CUT_THICKNESS_MM,
-} from '@/lib/audit/cutReach'
+import { assessCutReach, type CutMarker, type CutReachFailure } from '@/lib/audit/cutReach'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { MASS_BAND_CLASS, MASS_RED_KG, MASS_YELLOW_KG, massBand } from '@/lib/audit/mass'
 import {
@@ -1595,7 +1590,12 @@ export function PreflightPage() {
         const failures = assessCutReach(ncText, section.points, section.holes ?? [], {
           toleranceMm: MACHINE.placementToleranceMm,
           profile: part.nc?.profile,
-        })
+        }).filter(
+          // Retired the 2D reach-depth finding: it reads a lengthwise pass (e.g. a tab edge
+          // across the web) as a deep bore. Keep only the corner-placement risk; the 3D sabre
+          // remains the real cut-depth check.
+          (failure) => failure.reason === 'corner',
+        )
         if (failures.length > 0) reach.set(part.mark, failures)
         const filletIssues = assessRootFillet(ncText, {
           section: section.points,
@@ -2051,39 +2051,22 @@ export function PreflightPage() {
       const fillet = rootFilletChecks.get(part.mark)
       const reach = reachChecks.get(part.mark)
       if (reach) {
-        // One finding per failing sub-cut, so each can be zoomed to individually.
+        // Phase 0 keeps only corner-placement risks; the 2D reach-depth finding is retired.
         reach.forEach((failure, index) => {
-          const location = {
-            index,
-            face: failure.face,
-            // Location along the member (mid of the sub-cut) — used to group issues by location.
-            x: Math.round((failure.from[0] + failure.to[0]) / 2),
-            span: failure.spanMm.toFixed(0),
-          }
-          // A cut-depth/corner failure at a root-fillet run is the same tab feature seen from the
-          // mating face. Link it to that run so one move fixes both (and both markers hide).
-          if (failure.reason === 'corner') {
-            const tol = MACHINE.placementToleranceMm
-            extra.push({
-              severity: 'error',
-              code: 'CUT_CORNER',
-              mark: part.mark,
-              message: `Cut lands on a corner: with the head's ±${tol} mm placement error, ${failure.spanMm.toFixed(0)} mm of the cut on face ${failure.face} can fall on the section's corner radius — the beam meets the curve at a bevel with no flat escape for the slag — not manufacturable`,
-              params: { ...location, tol: String(tol) },
-            })
-          } else {
-            extra.push({
-              severity: 'error',
-              code: 'CUT_DEPTH',
-              mark: part.mark,
-              message: `Cut can't pass through: ${failure.spanMm.toFixed(0)} mm of the cut on face ${failure.face} needs a ${failure.path.toFixed(0)} mm bore (${failure.bevel.toFixed(0)}° bevel), past the head's ${MAX_CUT_THICKNESS_MM} mm pierce — not manufacturable`,
-              params: {
-                ...location,
-                path: failure.path.toFixed(0),
-                bevel: failure.bevel.toFixed(0),
-              },
-            })
-          }
+          const tol = MACHINE.placementToleranceMm
+          extra.push({
+            severity: 'error',
+            code: 'CUT_CORNER',
+            mark: part.mark,
+            message: `Cut lands on a corner: with the head's ±${tol} mm placement error, ${failure.spanMm.toFixed(0)} mm of the cut on face ${failure.face} can fall on the section's corner radius — the beam meets the curve at a bevel with no flat escape for the slag — not manufacturable`,
+            params: {
+              index,
+              face: failure.face,
+              x: Math.round((failure.from[0] + failure.to[0]) / 2),
+              span: failure.spanMm.toFixed(0),
+              tol: String(tol),
+            },
+          })
         })
       }
       const bevel = bevelChanges.get(part.mark)
@@ -2452,7 +2435,7 @@ export function PreflightPage() {
         reach: assessCutReach(ncText, section.points, section.holes ?? [], {
           toleranceMm: MACHINE.placementToleranceMm,
           profile: part.nc?.profile,
-        }),
+        }).filter((failure) => failure.reason === 'corner'),
         rootFillet: assessRootFillet(ncText, {
           ...options,
           dimensions: part.nc?.dimensions ?? [],

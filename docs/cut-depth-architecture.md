@@ -85,14 +85,18 @@ skips lengthwise edges (they are normally the stock silhouette), so this is its 
 - **Fix → `moveCutInNc`** (`src/lib/parsers/ncEdit.ts`) shifts only those vertices' Y token, so the
   line lands on the flat plate; every other byte is preserved. It is an undoable NC override like
   the unify-bevel / remove-cut fixes, so the manufactured model and the export both use the moved
-  line. The fix button opens a **Move cut off fillet** mini menu prefilled with the suggested
+  line. The fix button opens a **Move fillet cut** mini menu prefilled with the suggested
   offset (the operator can tune the magnitude/sign), and the row highlights and the viewer
   pans/zooms like the other findings.
 - **Fixes are independent — the NC is rechecked, not coupled.** After any NC edit the preflight
   re-runs the cut checks on the edited file (`ncRecheck` in `PreflightPage`). A row is struck
   through / its marker hidden only when the recheck no longer reports that issue, matched by face
-  + member span. So a `CUT_DEPTH` / `CUT_CORNER` at the same tab becomes visually disabled **only
+  + member span. So any rechecked finding at the same tab becomes visually disabled **only
   if the move actually clears it**; otherwise it stays active. Each finding has its own op/Undo.
+- **The 2D `cutReach` depth finding is retired in preflight.** Its "Cut can't pass through" message
+  misreads a lengthwise pass (e.g. a tab edge across the web) as a deep bore. `cutReach` now only
+  surfaces the corner-placement check (`CUT_CORNER`); the 3D sabre `CUT_DEPTH` below remains the
+  real over-cut check.
 - Validated on the real `3uc-110` (`UC250*73`): a 195 mm tab edge on each web root fillet needs a
   14 mm inward move; applying both fixes clears the check. Synthetic regression tests live in
   `src/lib/audit/rootFillet.test.ts` and `src/lib/parsers/ncEdit.test.ts`.
