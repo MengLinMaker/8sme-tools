@@ -500,6 +500,22 @@ function ncFindingResolved(
   // The 3D sabre is re-run when the edited NC is rebuilt (see the viewer recheck).
   if (finding.code === 'CUT_DEPTH' && finding.params?.nc === 1) {
     if (!sabreAfter) return false
+    // Match this run's 3D bounding box, not just X: the two flange runs share X, so an X-only
+    // match would keep both alive until both edges are fixed.
+    const box = ['bx0', 'bx1', 'by0', 'by1', 'bz0', 'bz1'].map((key) => finding.params?.[key])
+    if (box.every((value): value is number => typeof value === 'number')) {
+      const [bx0, bx1, by0, by1, bz0, bz1] = box
+      const margin = 5
+      return !sabreAfter.some(
+        (failure) =>
+          failure.point[0] >= bx0 - margin &&
+          failure.point[0] <= bx1 + margin &&
+          failure.point[1] >= by0 - margin &&
+          failure.point[1] <= by1 + margin &&
+          failure.point[2] >= bz0 - margin &&
+          failure.point[2] <= bz1 + margin,
+      )
+    }
     const x = finding.params?.x
     if (typeof x !== 'number') return false
     return !sabreAfter.some((failure) => Math.abs(failure.point[0] - x) <= 5)
@@ -2063,6 +2079,13 @@ export function PreflightPage() {
         runs.forEach((cut, index) => {
           const x = Math.round(cut.reduce((sum, f) => sum + f.point[0], 0) / cut.length)
           const depth = Math.max(...cut.map((f) => f.depth ?? 0))
+          const box = (axis: 0 | 1 | 2): [number, number] => {
+            const values = cut.map((f) => f.point[axis])
+            return [Math.min(...values), Math.max(...values)]
+          }
+          const [bx0, bx1] = box(0)
+          const [by0, by1] = box(1)
+          const [bz0, bz1] = box(2)
           extra.push({
             severity: 'error',
             code: 'CUT_DEPTH',
@@ -2077,6 +2100,12 @@ export function PreflightPage() {
               nc: 1,
               span: String(cut.length),
               depth: String(Math.round(depth)),
+              bx0,
+              bx1,
+              by0,
+              by1,
+              bz0,
+              bz1,
             },
           })
         })
