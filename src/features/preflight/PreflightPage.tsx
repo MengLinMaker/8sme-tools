@@ -227,14 +227,24 @@ const MAX_BEVEL_DEG = Math.max(Math.abs(MACHINE.bevel.minDeg), Math.abs(MACHINE.
  */
 const SECTION_TRUST_SCORE = 0.9
 
-const PART_COLUMNS: { labelKey: string; key: PartSortKey }[] = [
+/**
+ * The parts table's columns. The value columns are right-aligned and shrink to their content:
+ * numbers line up on the decimal and the table never reflows as a value arrives (a size or mass
+ * that lands after the model check), which leaves the flexible width to Mark and Status.
+ */
+const PART_COLUMNS: {
+  labelKey: string
+  key: PartSortKey
+  align?: 'right'
+  compact?: boolean
+}[] = [
   { labelKey: 'preflight.columns.mark', key: 'mark' },
   { labelKey: 'preflight.columns.status', key: 'severity' },
-  { labelKey: 'preflight.columns.assembly', key: 'assembly' },
-  { labelKey: 'preflight.columns.qty', key: 'qty' },
-  { labelKey: 'preflight.columns.mass', key: 'mass' },
-  { labelKey: 'preflight.columns.profile', key: 'profile' },
-  { labelKey: 'preflight.columns.model', key: 'model' },
+  { labelKey: 'preflight.columns.assembly', key: 'assembly', align: 'right', compact: true },
+  { labelKey: 'preflight.columns.qty', key: 'qty', align: 'right', compact: true },
+  { labelKey: 'preflight.columns.mass', key: 'mass', align: 'right', compact: true },
+  { labelKey: 'preflight.columns.profile', key: 'profile', align: 'right', compact: true },
+  { labelKey: 'preflight.columns.model', key: 'model', align: 'right', compact: true },
 ]
 
 /** How the 2–3 viewer panes are arranged: `auto` picks rows/cols to maximise zoom. */
@@ -4526,6 +4536,8 @@ export function PreflightPage() {
                         sortKey={column.key}
                         sort={sort}
                         onSort={toggleSort}
+                        align={column.align}
+                        compact={column.compact}
                       />
                     ))}
                   </TableRow>
@@ -4661,9 +4673,9 @@ export function PreflightPage() {
                             </div>
                           )}
                         </TableCell>
-                        <TableCell className="text-xs">
+                        <TableCell className="text-right text-xs">
                           {part.assemblies && part.assemblies.length > 0 ? (
-                            <div className="flex flex-wrap gap-1">
+                            <div className="flex flex-wrap justify-end gap-1">
                               {part.assemblies.map((usage) => (
                                 <button
                                   key={usage.assembly}
@@ -4699,6 +4711,7 @@ export function PreflightPage() {
                         </TableCell>
                         <TableCell
                           className={cn(
+                            'whitespace-nowrap text-right tabular-nums',
                             !assemblyUsage &&
                               qtyMismatch &&
                               'font-semibold text-destructive-foreground',
@@ -4729,7 +4742,10 @@ export function PreflightPage() {
                           )}
                         </TableCell>
                         <TableCell
-                          className={cn('font-mono text-xs', band && MASS_BAND_CLASS[band])}
+                          className={cn(
+                            'whitespace-nowrap text-right font-mono text-xs tabular-nums',
+                            band && MASS_BAND_CLASS[band],
+                          )}
                           title={
                             band === 'red'
                               ? t('preflight.mass.heavy', { kg: MASS_RED_KG })
@@ -4740,7 +4756,7 @@ export function PreflightPage() {
                         >
                           {mass != null ? mass.toFixed(1) : '—'}
                         </TableCell>
-                        <TableCell className="font-mono text-xs">
+                        <TableCell className="whitespace-nowrap text-right font-mono text-xs">
                           <FilterPill
                             token={section}
                             active={isFilterTokenActive(section)}
@@ -4752,7 +4768,7 @@ export function PreflightPage() {
                             </Badge>
                           </FilterPill>
                         </TableCell>
-                        <TableCell className="text-xs">
+                        <TableCell className="whitespace-nowrap text-right text-xs">
                           {overrideFor(part) ? (
                             <Badge variant="success">
                               {overrideFor(part)?.kind
@@ -6299,15 +6315,23 @@ function SortHead({
   sortKey,
   sort,
   onSort,
+  align,
+  compact,
 }: {
   label: string
   sortKey: PartSortKey
   sort: { key: PartSortKey; dir: 1 | -1 }
   onSort: (key: PartSortKey) => void
+  /** Value columns sit at the right edge, over their numbers. */
+  align?: 'right'
+  /** Shrink the column to its content (`w-px` + no wrapping) instead of sharing the table width. */
+  compact?: boolean
 }) {
   const active = sort.key === sortKey
   return (
-    <TableHead>
+    <TableHead
+      className={cn(align === 'right' && 'text-right', compact && 'w-px whitespace-nowrap')}
+    >
       <button
         type="button"
         onClick={() => onSort(sortKey)}
