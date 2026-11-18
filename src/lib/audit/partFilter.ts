@@ -97,11 +97,12 @@ export function toggleQueryToken(query: string, token: string): string {
 
 /** Worst status affecting a part: error < warning < info < ok. */
 export function statusForPart(part: PartRecord, context: PartFilterContext): PartStatus {
+  // Weld etchings are informational markers, not a status: a part whose only marker is an
+  // etching is still OK, so the OK filter keeps finding it (the WELD pill filters it separately).
   const sortContext: PartSortContext = {
     findings: context.findings,
     materials: context.materials ?? new Map(),
     modelChecks: context.modelChecks ?? new Map(),
-    weldingMarks: context.weldingMarks,
   }
   const rank = severityRank(part, sortContext)
   if (rank === 0) return 'error'

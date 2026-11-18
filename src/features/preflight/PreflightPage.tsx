@@ -4678,65 +4678,66 @@ export function PreflightPage() {
                           {part.mark}
                         </TableCell>
                         <TableCell className="text-left">
-                          {pills.length === 0 && !weld ? (
-                            <FilterPill
-                              token="ok"
-                              active={isFilterTokenActive('ok')}
-                              title={t('preflight.status.ok')}
-                              onToggle={toggleFilterToken}
-                            >
-                              <Badge variant="success">{t('preflight.status.ok')}</Badge>
-                            </FilterPill>
-                          ) : (
-                            <div className="flex flex-wrap gap-1">
-                              {pills.map((pill) => {
-                                const tier = fixTier(part, pill.finding)
-                                return (
-                                  <FilterPill
-                                    key={pill.code}
-                                    token={pill.code}
-                                    active={isFilterTokenActive(pill.code)}
-                                    title={
-                                      findingText(pill.finding) +
-                                      (tier === 'auto'
-                                        ? ` · ${t('preflight.status.autoFix')}`
-                                        : tier === 'manual'
-                                          ? ` · ${t('preflight.status.fixIndividually')}`
-                                          : '')
-                                    }
-                                    onToggle={toggleFilterToken}
-                                  >
-                                    <Badge
-                                      variant={SEVERITY_VARIANT[pill.severity]}
-                                      className="gap-1 font-mono"
-                                    >
-                                      {tier === 'auto' && (
-                                        <Wand className="size-3 shrink-0" aria-hidden />
-                                      )}
-                                      {tier === 'manual' && (
-                                        <Wrench className="size-3 shrink-0" aria-hidden />
-                                      )}
-                                      {pill.code}
-                                      {pill.count > 1 && ` ×${pill.count}`}
-                                    </Badge>
-                                  </FilterPill>
-                                )
-                              })}
-                              {/* Weld etchings are info, not a problem: last, after the findings. */}
-                              {weld && (
+                          <div className="flex flex-wrap gap-1">
+                            {/* A weld etching is a marker, not a problem: an otherwise clean part
+                                is still OK, and the OK filter must keep finding it. */}
+                            {pills.length === 0 && (
+                              <FilterPill
+                                token="ok"
+                                active={isFilterTokenActive('ok')}
+                                title={t('preflight.status.ok')}
+                                onToggle={toggleFilterToken}
+                              >
+                                <Badge variant="success">{t('preflight.status.ok')}</Badge>
+                              </FilterPill>
+                            )}
+                            {pills.map((pill) => {
+                              const tier = fixTier(part, pill.finding)
+                              return (
                                 <FilterPill
-                                  token="weld"
-                                  active={isFilterTokenActive('weld')}
-                                  title={weldEtchingsTitle(t, weld)}
+                                  key={pill.code}
+                                  token={pill.code}
+                                  active={isFilterTokenActive(pill.code)}
+                                  title={
+                                    findingText(pill.finding) +
+                                    (tier === 'auto'
+                                      ? ` · ${t('preflight.status.autoFix')}`
+                                      : tier === 'manual'
+                                        ? ` · ${t('preflight.status.fixIndividually')}`
+                                        : '')
+                                  }
                                   onToggle={toggleFilterToken}
                                 >
-                                  <Badge variant="info" className="gap-1 font-mono">
-                                    {t('preflight.status.weld')}
+                                  <Badge
+                                    variant={SEVERITY_VARIANT[pill.severity]}
+                                    className="gap-1 font-mono"
+                                  >
+                                    {tier === 'auto' && (
+                                      <Wand className="size-3 shrink-0" aria-hidden />
+                                    )}
+                                    {tier === 'manual' && (
+                                      <Wrench className="size-3 shrink-0" aria-hidden />
+                                    )}
+                                    {pill.code}
+                                    {pill.count > 1 && ` ×${pill.count}`}
                                   </Badge>
                                 </FilterPill>
-                              )}
-                            </div>
-                          )}
+                              )
+                            })}
+                            {/* Weld etchings are info, not a problem: last, after the findings. */}
+                            {weld && (
+                              <FilterPill
+                                token="weld"
+                                active={isFilterTokenActive('weld')}
+                                title={weldEtchingsTitle(t, weld)}
+                                onToggle={toggleFilterToken}
+                              >
+                                <Badge variant="info" className="gap-1 font-mono">
+                                  {t('preflight.status.weld')}
+                                </Badge>
+                              </FilterPill>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="text-right text-xs">
                           {part.assemblies && part.assemblies.length > 0 ? (

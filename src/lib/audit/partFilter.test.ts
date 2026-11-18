@@ -80,6 +80,8 @@ describe('filterParts', () => {
     }
     expect(marks(filterParts(parts, 'weld', context))).toEqual(['BT100-1'])
     expect(marks(filterParts(parts, 'etch', context))).toEqual(['BT100-1'])
+    // A weld etching alone does not make a part non-OK: the OK filter must include it.
+    expect(marks(filterParts(parts, 'ok', context))).toEqual(['BT100-1'])
   })
 
   it('ANDs free-text terms and the status filter', () => {
@@ -133,8 +135,8 @@ describe('statusForPart', () => {
     expect(statusForPart(part('A'), context)).toBe('warning')
   })
 
-  it('treats weld etchings as info, not ok', () => {
-    expect(statusForPart(part('A'), { findings: [], weldingMarks: new Set(['A']) })).toBe('info')
+  it('keeps a weld-etched part OK, so the OK filter still finds it', () => {
+    expect(statusForPart(part('A'), { findings: [], weldingMarks: new Set(['A']) })).toBe('ok')
   })
 })
 
