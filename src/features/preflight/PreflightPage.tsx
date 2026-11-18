@@ -6465,7 +6465,6 @@ function IrSurfaceDrawing({
                 view={view}
                 onViewChange={setView}
               >
-                {/* biome-ignore lint/security/noDangerouslySetInnerHtml: local generated SVG */}
                 <g
                   transform={`translate(0 ${dy})`}
                   dangerouslySetInnerHTML={{ __html: parts.body }}

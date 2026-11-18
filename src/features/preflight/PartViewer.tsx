@@ -2758,6 +2758,7 @@ export default function PartViewer({
     seatProfile,
     stepSeat,
     cutEdges,
+    irCutGeometry,
     t,
   ])
 
