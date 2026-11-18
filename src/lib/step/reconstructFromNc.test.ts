@@ -169,6 +169,9 @@ function cleanUbNc(
   opts: {
     /** Override the `v` (side/web) silhouette, e.g. a web tenon at the far end. */
     v?: [number, number][]
+    /** Override the `o`/`u` (flange) silhouettes, e.g. a mitred end. */
+    o?: [number, number][]
+    u?: [number, number][]
     /** Per-vertex DSTV arc radii for `v` (0 = straight). */
     vRadii?: number[]
     holes?: { face: string; x: number; y: number; d: number }[]
@@ -225,19 +228,25 @@ function cleanUbNc(
     '      0.000',
     '      0.000',
     contour('v', vPoints, opts.vRadii),
-    contour('o', [
-      [0, 0],
-      [0, width],
-      [length, width],
-      [length, 0],
-      [0, 0],
-    ]),
-    contour('u', [
-      [length, 0],
-      [length, width],
-      [0, width],
-      [0, 0],
-    ]),
+    contour(
+      'o',
+      opts.o ?? [
+        [0, 0],
+        [0, width],
+        [length, width],
+        [length, 0],
+        [0, 0],
+      ],
+    ),
+    contour(
+      'u',
+      opts.u ?? [
+        [length, 0],
+        [length, width],
+        [0, width],
+        [0, 0],
+      ],
+    ),
     ...(bo ? [bo] : []),
     'EN',
     '',
@@ -315,6 +324,55 @@ describe('reconstructFromNc — I-section web tenon + web hole (synthetic)', () 
     const b = await measure(holed)
     // Ø14 × tw 8 ≈ 1231 mm³; allow the mesh estimate ~20% slack.
     expect(a.vol - b.vol).toBeGreaterThan(Math.PI * 49 * tw * 0.8)
+  }, 120000)
+})
+
+describe('reconstructFromNc — I-section mitred flange end (synthetic)', () => {
+  // The opposite of a web tenon: the flanges run to the part end (x = 0) while the web is cut
+  // back (x = 32) by a mitre across the flange width — the TR9 `3uc-101`/`3uc-104` end. The web
+  // silhouette must not be applied across the full section, or it amputates the flange tips; the
+  // manufactured model then starts at x = 32 while the NC (and so every projected toolpath line)
+  // starts at x = 0, shifting the whole toolpath 32 mm along the member in the viewer.
+  const L = 1000
+  const D = 359
+  const W = 172
+  const webStart = 32
+  const flangeStart = 66
+  const v: [number, number][] = [
+    [webStart, 0],
+    [L, 0],
+    [L, D],
+    [webStart, D],
+    [webStart, 0],
+  ]
+  const o: [number, number][] = [
+    [0, W],
+    [L, W],
+    [L, 0],
+    [flangeStart, 0],
+    [0, W],
+  ]
+  const u: [number, number][] = [
+    [0, W],
+    [flangeStart, 0],
+    [L, 0],
+    [L, W],
+    [0, W],
+  ]
+
+  it('keeps the flange tips past the mitred web and full NC length', async () => {
+    const step = await reconstructStepFromNc(cleanUbNc(L, D, W, 13, 8, 11.4, { v, o, u }))
+    expect(step).toBeTruthy()
+    if (!step) return
+    const built = await measure(step)
+    // The member spans the NC's own 0…L extent, not L−webStart.
+    expect(Math.abs((built.size[0] as number) - L)).toBeLessThan(2)
+    // A flange corner survives at x≈0 (the mitre's long tip).
+    const meshed = await meshStepFile('mitre', new TextEncoder().encode(step))
+    let minX = Number.POSITIVE_INFINITY
+    for (let i = 0; i + 2 < meshed.vertices.length; i += 3)
+      minX = Math.min(minX, meshed.vertices[i] as number)
+    expect(minX).toBeLessThan(1)
   }, 120000)
 })
 

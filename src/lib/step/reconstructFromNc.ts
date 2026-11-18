@@ -1047,16 +1047,30 @@ export async function reconstructSolidFromNc(
       // An I-section's `v`/`h` faces are the **web** (interior), so its skin sits at the web
       // surface (`webHalf`), not the width edge — otherwise the web cuts land on the flange edges.
       if (isI) {
-        // The side (v/h) silhouette is the part's true profile across the whole width: intersect
-        // it full-width so the web (interior) is shaped too — a limited skin from the width edge
-        // never reaches the web. This is what carves a web tenon at the end without clipping it.
-        const widthHalf = halfOf(0 as Axis) + 2
-        solid = solid.cut(
-          (notch as ReturnType<typeof poly>)
-            .sketchOnPlane('XZ')
-            .extrude(2 * widthHalf + 4)
-            .translate(0, widthHalf + 2, 0) as unknown as SolidOps,
-        )
+        // The side (v/h) silhouette is the **web** only, so cut it through the web plate and
+        // nowhere else. A full-width cut would delete a flange that extends past a mitred web
+        // (TR9 `3uc-101`/`3uc-104`), leaving the manufactured model short of the NC extent and
+        // shifting every projected toolpath line on the viewer's manufactured pane. The slab runs
+        // just past each web face so the boolean clears it without reaching the flange edges.
+        const webHalf = frame.webHalf
+        if (webHalf === undefined) {
+          // No measured web: fall back to the old full-width trim rather than skip the cut.
+          const widthHalf = halfOf(0 as Axis) + 2
+          solid = solid.cut(
+            (notch as ReturnType<typeof poly>)
+              .sketchOnPlane('XZ')
+              .extrude(2 * widthHalf + 4)
+              .translate(0, widthHalf + 2, 0) as unknown as SolidOps,
+          )
+        } else {
+          const slab = webHalf + CUT_MARGIN
+          solid = solid.cut(
+            (notch as ReturnType<typeof poly>)
+              .sketchOnPlane('XZ')
+              .extrude(2 * slab)
+              .translate(0, slab, 0) as unknown as SolidOps,
+          )
+        }
       } else {
         const faceOut = halfOf(0 as Axis)
         const reach = reachFor(0, bevelFactorByAxis[1])
