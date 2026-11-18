@@ -62,6 +62,7 @@ import { assessUnclosedCutsGeometry, type UnclosedCutIssue } from '@/lib/audit/u
 import { findWeldingEtchings, type WeldingEtchings } from '@/lib/audit/weldingEtchings'
 import { downloadBlob, fileStem } from '@/lib/download'
 import { onGlobalDrop } from '@/lib/dropTarget'
+import { createFileStamp } from '@/lib/fileStamp'
 import { formatMass, formatNumber } from '@/lib/format'
 import { MACHINE } from '@/lib/machine/profile'
 import {
@@ -125,6 +126,7 @@ import {
   prebootStepWorkers,
   STEP_WORKER_COUNT,
 } from '@/lib/step/stepPool'
+import type { InspectResult, ReconstructResult } from '@/lib/step/stepWorkerProtocol'
 import {
   TAB_DENSITY_DEFAULT,
   TAB_DENSITY_MAX,
@@ -1676,6 +1678,23 @@ export function PreflightPage() {
     void import('./PartViewer')
   }, [result])
 
+  /**
+   * Expensive per-part results, keyed by the **identity of the input bytes**. The analysis below
+   * re-runs whenever the audit result changes — dropping a file, adding one, removing one — and
+   * re-inspecting every STEP and re-rebuilding every NC on each of those is what made a single
+   * delete take minutes. Unchanged files hit these caches, so only the cheap checks re-run.
+   *
+   * Identity rather than a content hash: `readInput` keeps the same `Uint8Array` for an entry that
+   * didn't change, and a replaced file is a new one, so this is exact and costs nothing to compute.
+   */
+  const fileStamp = useRef(createFileStamp())
+  const stampOf = fileStamp.current
+  const inspectCache = useRef(new Map<string, { step: string; result: InspectResult }>())
+  const rebuildCache = useRef(
+    new Map<string, { nc: string; step: string; result: ReconstructResult }>(),
+  )
+  const materialCache = useRef(new Map<string, { pdf: string; material: DrawingMaterial | null }>())
+
   // Read the drawings (ground-truth qty/length) first — parsed concurrently, since pdf.js does the
   // work off-thread. Then the CPU-bound STEP work (measure, light-sabre, NC rebuild) runs across a
   // small pool of OCC workers, off the main thread and in parallel across parts.
@@ -1683,6 +1702,11 @@ export function PreflightPage() {
     if (!result) {
       setAnalyzing(false)
       return
+    }
+    // Drop cached work for parts that are gone, so a long session doesn't accumulate them.
+    const liveMarks = new Set(result.parts.map((part) => part.mark))
+    for (const cache of [inspectCache.current, rebuildCache.current, materialCache.current]) {
+      for (const mark of [...cache.keys()]) if (!liveMarks.has(mark)) cache.delete(mark)
     }
     setDrawingMaterials(new Map())
     setDrawingDone(0)
@@ -1816,11 +1840,18 @@ export function PreflightPage() {
           const path = part.pdf?.path
           const bytes = path ? bytesByPath.get(path) : undefined
           if (bytes) {
-            try {
-              const material = await resolveDrawingMaterial(bytes, part.mark)
-              if (material) materials.set(part.mark, material)
-            } catch {
-              // ignore an unreadable drawing
+            const pdfStamp = stampOf(bytes)
+            const cachedMaterial = materialCache.current.get(part.mark)
+            if (cachedMaterial && cachedMaterial.pdf === pdfStamp) {
+              if (cachedMaterial.material) materials.set(part.mark, cachedMaterial.material)
+            } else {
+              try {
+                const material = await resolveDrawingMaterial(bytes, part.mark)
+                materialCache.current.set(part.mark, { pdf: pdfStamp, material: material ?? null })
+                if (material) materials.set(part.mark, material)
+              } catch {
+                // ignore an unreadable drawing
+              }
             }
           }
           done++
@@ -1891,7 +1922,17 @@ export function PreflightPage() {
           // Always read the section from the STEP: the STEP → IR path must not fall back to NC.
           const needSection = true
           try {
-            const inspected = await pool.inspect(bytes, { detectSection: needSection })
+            // Reuse the OCC inspect for an unchanged STEP: measuring every part again is the bulk
+            // of the work, and a re-audit usually leaves most STEPS untouched.
+            const stepStamp = stampOf(bytes)
+            const cachedInspect = inspectCache.current.get(part.mark)
+            const inspected =
+              cachedInspect && cachedInspect.step === stepStamp
+                ? cachedInspect.result
+                : await pool.inspect(bytes, { detectSection: needSection })
+            if (!cachedInspect || cachedInspect.step !== stepStamp) {
+              inspectCache.current.set(part.mark, { step: stepStamp, result: inspected })
+            }
             if (cancelled) return
             if (inspected.section) {
               sections.set(part.mark, inspected.section)
@@ -1986,9 +2027,30 @@ export function PreflightPage() {
           if (!ncBytes || !stepMeasure) return
           try {
             const ncText = new TextDecoder().decode(ncBytes)
-            const made = await pool.reconstruct(ncText, {
-              measure: true,
-            })
+            // Rebuilding from the NC is the most expensive step; reuse it while the NC and the
+            // STEP it is compared against are the same bytes.
+            const ncStamp = stampOf(ncBytes)
+            const stepStamp = stampOf(part.step ? bytesByPath.get(part.step.path) : undefined)
+            const cachedRebuild = rebuildCache.current.get(part.mark)
+            const made =
+              cachedRebuild && cachedRebuild.nc === ncStamp && cachedRebuild.step === stepStamp
+                ? cachedRebuild.result
+                : await pool.reconstruct(ncText, {
+                    measure: true,
+                  })
+            if (
+              !cachedRebuild ||
+              cachedRebuild.nc !== ncStamp ||
+              cachedRebuild.step !== stepStamp
+            ) {
+              // Keep the measure and the sabre rows, not the STEP text: the viewer cache already
+              // holds those, and a copy per part would cost megabytes for nothing.
+              rebuildCache.current.set(part.mark, {
+                nc: ncStamp,
+                step: stepStamp,
+                result: { ...made, step: null },
+              })
+            }
             if (cancelled) return
             // The export is cheap and lets the viewer open this part from cache.
             if (made.step) primeReconstructForViewer(ncText, made.step)
@@ -2024,7 +2086,7 @@ export function PreflightPage() {
       cancelled = true
       getStepWorkerPool().abort()
     }
-  }, [result, bytesByPath])
+  }, [result, bytesByPath, stampOf])
 
   /** Marks already fast-tracked for the viewer, so map updates don't re-fire the same work. */
   const fastTrackInFlight = useRef(new Set<string>())
