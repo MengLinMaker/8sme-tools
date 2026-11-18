@@ -39,7 +39,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Toggle } from '@/components/ui/toggle'
-import { auditEntries } from '@/lib/audit/auditJob'
+import { auditEntries, markFromFilename } from '@/lib/audit/auditJob'
 import { assessBevelChangeGeometry, type BevelChangeIssue } from '@/lib/audit/bevelChange'
 import { assessCutReachGeometry, type CutMarker, type CutReachFailure } from '@/lib/audit/cutReach'
 import { AUTO_FIX_CODES, type FixTier, fixTierForCode } from '@/lib/audit/fixTier'
@@ -151,6 +151,7 @@ import { cn } from '@/lib/utils'
 import { buildNcepFromNc } from '@/lib/wisecam/fromNc'
 import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
+import { FilesPanel } from './FilesPanel'
 import { NcLegend } from './NcLegend'
 import { createOrbitBus, requestLocation, requestView, type ViewPreset } from './orbitSync'
 import type { DiffStats } from './PartViewer'
@@ -565,6 +566,20 @@ function resolvedFindings(kind: StepFixKind): string[] {
 }
 
 /**
+ * A copy of `map` without `keys` — the same map when nothing is dropped, so React can skip the
+ * re-render when a removed file belonged to no part.
+ */
+function withoutKeys<T>(map: Map<string, T>, keys: ReadonlySet<string>): Map<string, T> {
+  let next = map
+  for (const key of keys) {
+    if (!next.has(key)) continue
+    if (next === map) next = new Map(map)
+    next.delete(key)
+  }
+  return next
+}
+
+/**
  * The one-click fix a finding code maps to, when the warning is fixable at all. `clean` /
  * `regenerate` / `simplify` swap the part's STEP; `removeCut` edits the NC (stripping the flagged
  * cut) and rebuilds the model from it; `setBevel` edits the NC (unifying the cut line's bevel) via
@@ -801,6 +816,54 @@ export function PreflightPage() {
     clearViewerModels()
     setResult(auditEntries(input.sourceName, input.entries))
   }, [])
+
+  /** Back to the empty page: no job, no derived state (the drop zone is all that is left). */
+  const clearBundle = useCallback(() => {
+    setError(null)
+    setBundle(null)
+    setResult(null)
+    setViewing(null)
+    setStepOverrides(new Map())
+    setNcOverrides(new Map())
+    setResolvedFixes(new Map())
+    setSelectedMarks(new Set())
+    selectAnchor.current = null
+    setMarkQuery('')
+    setAssemblyFilter(null)
+    clearViewerModels()
+  }, [])
+
+  /**
+   * Drops files from the loaded job and re-audits what is left. A part that loses a file also loses
+   * its applied fix: an NC edit is indexed into that NC's text and a STEP override into that STEP,
+   * so keeping either would aim the fix at a line that no longer exists.
+   */
+  const deleteEntries = useCallback(
+    (paths: string[]) => {
+      if (!bundle || paths.length === 0) return
+      const drop = new Set(paths)
+      const removed = bundle.entries.filter((entry) => drop.has(entry.path))
+      if (removed.length === 0) return
+      const entries = bundle.entries.filter((entry) => !drop.has(entry.path))
+      if (entries.length === 0) {
+        clearBundle()
+        return
+      }
+      const marks = new Set(removed.map((entry) => markFromFilename(entry.path)))
+      setBundle({ ...bundle, entries })
+      setViewing(null)
+      setNcOverrides((prev) => withoutKeys(prev, marks))
+      setStepOverrides((prev) => withoutKeys(prev, marks))
+      setResolvedFixes((prev) => withoutKeys(prev, marks))
+      setSelectedMarks((prev) => {
+        const next = new Set(prev)
+        for (const mark of marks) next.delete(mark)
+        return next.size === prev.size ? prev : next
+      })
+      setResult(auditEntries(bundle.sourceName, entries))
+    },
+    [bundle, clearBundle],
+  )
 
   const bytesByPath = useMemo(() => {
     const map = new Map<string, Uint8Array>()
@@ -4811,6 +4874,10 @@ export function PreflightPage() {
             </CardContent>
           )}
         </Card>
+      )}
+
+      {result && bundle && (
+        <FilesPanel entries={bundle.entries} onDelete={deleteEntries} onDeleteAll={clearBundle} />
       )}
 
       <Dialog
