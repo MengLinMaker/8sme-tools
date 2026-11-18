@@ -105,6 +105,11 @@ skips lengthwise edges (they are normally the stock silhouette), so this is its 
   misreads a lengthwise pass (e.g. a tab edge across the web) as a deep bore. `cutReach` now only
   surfaces the corner-placement check (`CUT_CORNER`); the 3D sabre `CUT_DEPTH` below remains the
   real over-cut check.
+- **The manufactured STEP cuts through the fillet band too.** The I-section `v`/`h` silhouette is
+  trimmed through the web plate only (so a flange tip past a mitred web survives), so the rebuild
+  clips the notch to each root-fillet band and cuts it across the fillet width. Without it the STEP
+  keeps a curved fillet wing along the tab edge — and the whole band at the tab start once the cut
+  is moved onto the flat web. See `docs/nc-to-step.md`.
 - Validated on the real `3uc-110` (`UC250*73`): a 195 mm tab edge on each web root fillet needs a
   14 mm inward move; applying both fixes clears the check. Synthetic regression tests live in
   `src/lib/audit/rootFillet.test.ts` and `src/lib/parsers/ncEdit.test.ts`.

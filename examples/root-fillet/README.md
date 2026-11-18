@@ -28,4 +28,7 @@ root-fillet cut. These examples square the flange end at the tab start (`x = 281
   CUT_DEPTH is the shared web-root over-cut. One edge alone leaves 12 samples; both give 0.
 - `UC250-clean` has no CUT_DEPTH to begin with; it is the minimal detector/fix case.
 
-These are NC-only, so the preflight builds the manufactured model from the NC itself.
+These are NC-only, so the preflight builds the manufactured model from the NC itself. After both
+fillet moves the NC→STEP rebuild also cuts the root-fillet band through at the tab start, so the
+generated STEP has the flat-web tab edge instead of a leftover curved fillet wing
+(`docs/nc-to-step.md`).

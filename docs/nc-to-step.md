@@ -87,6 +87,26 @@ manufactured NC→STEP rebuild and is the fix that made the UB STEP register as 
 Regression test: `reconstructFromNc.test.ts` rebuilds `M_12` and asserts
 `detectStepSection` finds `250UB31.4` with score > 0.95.
 
+## Cutting through the root fillet (implemented)
+
+A lengthwise cut — a web-tenon tab edge, or one the preflight moved off the fillet with
+`moveCutInNc` — is drawn on the **web face plane**, but the rolled web/flange root fillet bulges
+`r` in front of that plane. The I-section side (`v`/`h`) silhouette is trimmed through the web
+plate only, which is what keeps a flange tip past a mitred web (TR9 `3uc-101`/`3uc-104`). That
+web-only trim leaves the fillet material standing along the cut, and after a fillet move removes
+the **whole fillet band at the tab start**, so the manufactured STEP was wrong.
+
+The rebuild now also clears the root fillet: each band (`tf…tf+r` and `d−tf−r…d−tf` in the
+centred depth coordinate) is clipped out of the face's notch and cut across the fillet width —
+and only inside the band, so the flange plates and mitred tips are untouched. This is the same
+"follow the cut through the stock root radius" rule the PFC web face already used
+(`buildFaceCut`), applied to an I-section's web silhouette. Once both fillet cuts are applied,
+`UC250-clean` produces a STEP whose tab start is the flat web, with no curved fillet wing.
+
+Regression: `reconstructFromNc.test.ts` applies the two real `UC250-clean` fillet moves, rebuilds
+the STEP, and asserts no material remains in the fillet band past the flange end while the web
+tenon still reaches the NC end.
+
 ## Open items
 
 - Confirm which matrix variant registers as UB.

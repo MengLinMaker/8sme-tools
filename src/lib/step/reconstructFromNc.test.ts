@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { fixture, nw30Bottom, nw31Top, OUTPUT_DIR } from '@test/fixtures'
 import {
   BufferGeometry,
@@ -11,7 +12,9 @@ import {
   Vector3,
 } from 'three'
 import { describe, expect, it } from 'vitest'
+import { assessRootFillet } from '@/lib/audit/rootFillet'
 import { parseDstv } from '@/lib/parsers/dstv'
+import { moveCutInNc } from '@/lib/parsers/ncEdit'
 import { faceNormal, placeNcFace, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { arcSamples, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { projectNc, type Vec3 } from '@/lib/parsers/ncProject'
@@ -374,6 +377,69 @@ describe('reconstructFromNc — I-section mitred flange end (synthetic)', () => 
       minX = Math.min(minX, meshed.vertices[i] as number)
     expect(minX).toBeLessThan(1)
   }, 120000)
+})
+
+const ROOT_FILLET = fileURLToPath(new URL('../../../examples/root-fillet/', import.meta.url))
+
+describe('reconstructFromNc — cut through the rolled root fillet (UC examples)', () => {
+  // UC250-clean/UC310-clean carry a web tenon whose lengthwise tab edge lies on the rolled
+  // web/flange root fillet. The fillet bulges `r` in front of the web face, so a web-only trim
+  // leaves a curved fillet wing along the cut — and once the edge is moved onto the flat web
+  // (`moveCutInNc`), the whole fillet band at the tab start has to go. The NC rebuild must cut
+  // through the fillet, not just the web plate, or the manufactured STEP is wrong.
+  const file = join(ROOT_FILLET, 'UC250-clean.nc1')
+
+  it.skipIf(!existsSync(file))(
+    'clears the fillet wing after moving the tab edge off it',
+    async () => {
+      const original = readFileSync(file, 'utf8')
+      const header = parseDstv(original).header
+      const section = partSectionForCode(header.profile, header.dimensions)
+      expect(section).toBeTruthy()
+      if (!section) return
+      const issues = assessRootFillet(original, {
+        section: section.points,
+        dimensions: header.dimensions,
+        profile: header.profile,
+      })
+      expect(issues.length).toBe(2)
+      let moved = original
+      for (const issue of issues) {
+        moved = moveCutInNc(moved, {
+          contourIndex: issue.contourIndex,
+          vertices: issue.vertices,
+          deltaY: issue.delta,
+        })
+      }
+      const step = await reconstructStepFromNc(moved)
+      expect(step).toBeTruthy()
+      if (!step) return
+      const built = await measure(step)
+      // Full NC extent, tenon included.
+      expect(Math.abs((built.size[0] as number) - 3007.42)).toBeLessThan(3)
+      const meshed = await meshStepFile('fillet', new TextEncoder().encode(step))
+      // UC250*73: depth 254, flange 14.2, root r 14 → fillet bands at depth 14.2…28.2 and
+      // 225.8…239.8, i.e. canonical Y 98.8…112.8 (and mirrored). The flange ends at x = 2812.73.
+      const bandLow = 98.8
+      const bandHigh = 112.8
+      let wing = 0
+      let tenonMaxX = Number.NEGATIVE_INFINITY
+      for (let i = 0; i + 2 < meshed.vertices.length; i += 3) {
+        const x = meshed.vertices[i] as number
+        const y = meshed.vertices[i + 1] as number
+        const z = meshed.vertices[i + 2] as number
+        const inBand = Math.abs(y) > bandLow && Math.abs(y) < bandHigh
+        // Beyond the tab start at fillet depth, only the web may remain.
+        if (x > 2820 && inBand) wing = Math.max(wing, Math.abs(z))
+        // The web tab itself must still reach the NC end.
+        if (x > 2900 && Math.abs(y) < 100 && Math.abs(z) < 8) tenonMaxX = Math.max(tenonMaxX, x)
+      }
+      // No fillet bulge in front of the web face (webHalf 4.3 + kerf + mesh slack).
+      expect(wing).toBeLessThan(8)
+      expect(tenonMaxX).toBeGreaterThan(3000)
+    },
+    180000,
+  )
 })
 
 const M71 = nw30Bottom('m71.nc1')

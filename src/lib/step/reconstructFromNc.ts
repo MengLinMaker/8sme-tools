@@ -1070,6 +1070,52 @@ export async function reconstructSolidFromNc(
               .extrude(2 * slab)
               .translate(0, slab, 0) as unknown as SolidOps,
           )
+          // The web slab is only `tw` wide, but a cut line may sit on — or be moved onto — the
+          // rolled web/flange root fillet, which bulges `r` in front of the web face. The NC
+          // draws that line in the web silhouette (a tenon edge, or one cleared by
+          // `moveCutInNc`), so the cut must also clear the fillet material at those depths or the
+          // STEP keeps a curved fillet wing along the cut. Clip the notch to each fillet band
+          // (`tf…tf+r`, `d−tf−r…d−tf`) and cut it out across the fillet width — and only there,
+          // so a flange that runs past a mitred web is still kept.
+          const rootRadius = Math.max(0, header.dimensions[4] ?? 0)
+          const depth = header.dimensions[0] ?? 0
+          const flange = header.dimensions[2] ?? 0
+          if (rootRadius > 0 && depth > 0 && flange > 0) {
+            const filletHalf = webHalf + rootRadius + CUT_MARGIN
+            const low = endMinX - 2
+            const high = maxX + 22
+            const bands: [number, number][] = [
+              [flange, flange + rootRadius],
+              [depth - flange - rootRadius, depth - flange],
+            ]
+            for (const [bandLow, bandHigh] of bands) {
+              const lo = bandLow - half
+              const hi = bandHigh - half
+              try {
+                const strip = (
+                  notch as unknown as {
+                    intersect: (other: unknown) => unknown
+                  }
+                ).intersect(
+                  poly([
+                    [low, lo],
+                    [high, lo],
+                    [high, hi],
+                    [low, hi],
+                  ]),
+                )
+                if (!strip) continue
+                solid = solid.cut(
+                  (strip as ReturnType<typeof poly>)
+                    .sketchOnPlane('XZ')
+                    .extrude(2 * filletHalf)
+                    .translate(0, filletHalf, 0) as unknown as SolidOps,
+                )
+              } catch {
+                // A band that will not clip leaves the web-only cut; never fail the rebuild.
+              }
+            }
+          }
         }
       } else {
         const faceOut = halfOf(0 as Axis)
