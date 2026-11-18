@@ -94,9 +94,6 @@ function RootLayout() {
       <main className="flex-1 py-7">
         <Outlet />
       </main>
-      <footer className="border-t border-border py-5 text-xs text-muted-foreground">
-        {t('common.footer')}
-      </footer>
       <PwaUpdater />
     </div>
   )

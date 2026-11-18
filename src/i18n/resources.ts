@@ -4,7 +4,6 @@ export const en = {
     nav: {
       preflight: 'Preflight',
     },
-    footer: 'Built for 8 Star Metal Engineering · runs entirely in your browser',
     language: {
       label: 'Language',
       en: 'English',
@@ -592,7 +591,6 @@ export const zh = {
     nav: {
       preflight: '预检',
     },
-    footer: '为 8 Star Metal Engineering 打造 · 完全在浏览器中运行',
     language: {
       label: '语言',
       en: 'English',
