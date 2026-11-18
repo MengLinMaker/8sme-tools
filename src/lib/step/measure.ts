@@ -140,6 +140,14 @@ export function ncOnlySizeCheck(length: number, dims: number[]): SizeCheck | nul
   }
 }
 
+/** Length tolerance for the size check: 3 mm or 2% of the part, whichever is larger. */
+export function lengthToleranceMm(expectedLength: number): number {
+  return Math.max(3, expectedLength * 0.02)
+}
+
+/** Cross-section tolerance for the size check (mm) — a section's dims are exact spec values. */
+export const CROSS_TOLERANCE_MM = Math.max(2, 0.03)
+
 /**
  * Compares measured bounding-box extents to an expected part length and cross-section.
  * Orientation-agnostic: the longest extent is taken as the length, the other two matched
@@ -153,8 +161,8 @@ export function compareSize(
   bodies = 1,
   extra = false,
 ): SizeCheck {
-  const lengthTol = Math.max(3, expectedLength * 0.02)
-  const crossTol = Math.max(2, 0.03)
+  const lengthTol = lengthToleranceMm(expectedLength)
+  const crossTol = CROSS_TOLERANCE_MM
 
   const sorted = [...measured].sort((a, b) => b - a)
   const length = sorted[0]

@@ -334,7 +334,7 @@ export const en = {
       mass: 'Mass',
       profile: 'Profile',
       grade: 'Grade',
-      model: 'Model size',
+      model: 'Size',
     },
     qty: {
       fallbackTitle: 'No drawing qty — showing NC qty',
@@ -413,7 +413,7 @@ export const en = {
       length: 'Length',
     },
     model: {
-      sizeMismatch: '{{measured}} vs expected {{expected}}',
+      sizeBoth: '{{measured}} · expected {{expected}}',
       ncMatches: 'NC build matches STEP ({{size}})',
       ncMismatch: 'NC build {{size}} vs STEP {{expected}}',
       volume: ' · volume {{delta}}',
@@ -901,7 +901,7 @@ export const zh = {
       mass: '重量',
       profile: '型材',
       grade: '牌号',
-      model: '模型尺寸',
+      model: '尺寸',
     },
     qty: {
       fallbackTitle: '无图纸数量——显示 NC 数量',
@@ -978,7 +978,7 @@ export const zh = {
       length: '长度',
     },
     model: {
-      sizeMismatch: '{{measured}} 与预期 {{expected}} 不符',
+      sizeBoth: '实测 {{measured}} · 预期 {{expected}}',
       ncMatches: 'NC 构建与 STEP 一致（{{size}}）',
       ncMismatch: 'NC 构建 {{size}} 与 STEP {{expected}} 不符',
       volume: ' · 体积 {{delta}}',

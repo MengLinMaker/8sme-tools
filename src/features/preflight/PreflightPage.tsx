@@ -100,10 +100,12 @@ import {
 } from '@/lib/sections/stock'
 import { stockFaceThicknesses } from '@/lib/step/cutEdges'
 import {
+  CROSS_TOLERANCE_MM,
   compareGeometry,
   compareModels,
   compareSize,
   type GeometryCheck,
+  lengthToleranceMm,
   type ModelComparison,
   ncOnlySizeCheck,
   type SizeCheck,
@@ -592,19 +594,59 @@ function mismatchGrade(comparison: ModelComparison): 'ok' | 'warning' | 'error' 
   return 'ok'
 }
 
-/** Formats a measured-vs-expected size check for display (localised). */
-function formatSizeCheck(t: TFunction, check?: SizeCheck): string {
-  if (!check) return '—'
-  if (check.error === 'noDims') return t('preflight.model.noDims')
-  if (check.error === 'measureFailed') return t('preflight.model.measureFailed')
-  if (!check.measured) return '—'
-  const [l, a, b] = check.measured.map((value) => value.toFixed(0))
-  const measured = `L${l} × ${a} × ${b}`
-  // No expected size to compare against (a STEP-only part) or the check passed: the size stands
-  // alone. A body/stray issue is already a Status warning, so it is not repeated here.
-  if (!check.expected || check.ok) return measured
-  const [el, ea, eb] = check.expected.map((value) => value.toFixed(0))
-  return t('preflight.model.sizeMismatch', { measured, expected: `L${el} × ${ea} × ${eb}` })
+/** One run of text in the model-size cell; `bad` marks the dimension outside tolerance. */
+interface SizeSegment {
+  /** Which extent this is, so the cell can key on it and the failure stays stable across renders. */
+  dim: 'length' | 'crossA' | 'crossB' | 'note'
+  text: string
+  bad?: boolean
+}
+
+/**
+ * The model-size cell, split so the dimension that failed can be highlighted. A pass (or a part
+ * with no expected size) shows the length alone — the cross-section is fixed by the profile — while
+ * a failure prints the measured triple and, next to the failing dimension, what it should have
+ * been, so the row reads without the tooltip.
+ */
+function sizeSegments(t: TFunction, check?: SizeCheck): SizeSegment[] {
+  if (!check) return [{ dim: 'note', text: '—' }]
+  if (check.error === 'noDims') return [{ dim: 'note', text: t('preflight.model.noDims') }]
+  if (check.error === 'measureFailed')
+    return [{ dim: 'note', text: t('preflight.model.measureFailed') }]
+  if (!check.measured) return [{ dim: 'note', text: '—' }]
+  const [l, a, b] = check.measured
+  if (!check.expected || check.ok) return [{ dim: 'length', text: `L${l.toFixed(0)}` }]
+
+  const [el, ea, eb] = check.expected
+  const lengthBad = Math.abs(l - el) > lengthToleranceMm(el)
+  const crossBad = [Math.abs(a - ea) > CROSS_TOLERANCE_MM, Math.abs(b - eb) > CROSS_TOLERANCE_MM]
+  // A failure with every extent in tolerance is a matching quirk (the cross dims matched in the
+  // reverse order some other way): show both cross dims as the difference rather than none.
+  if (!lengthBad && !crossBad.some(Boolean)) crossBad.fill(true)
+
+  const shown = [l, a, b].map((value) => value.toFixed(0))
+  const expected = [el, ea, eb].map((value) => value.toFixed(0))
+  const differs = (bad: boolean, index: number) => (bad ? ` ≠ ${expected[index]}` : '')
+  return [
+    { dim: 'length', text: `L${shown[0]}${differs(lengthBad, 0)}`, bad: lengthBad },
+    { dim: 'crossA', text: ` × ${shown[1]}${differs(crossBad[0], 1)}`, bad: crossBad[0] },
+    { dim: 'crossB', text: ` × ${shown[2]}${differs(crossBad[1], 2)}`, bad: crossBad[1] },
+  ]
+}
+
+/** The full measured (and expected) extents, for the size cell's tooltip. */
+function sizeCheckTitle(t: TFunction, check?: SizeCheck): string | undefined {
+  if (!check?.measured) return undefined
+  const text = (size: [number, number, number]) =>
+    `${size.map((value) => value.toFixed(0)).join(' × ')} mm`
+  const measured = text(check.measured)
+  if (!check.expected) return measured
+  return t('preflight.model.sizeBoth', { measured, expected: text(check.expected) })
+}
+
+/** A real mismatch: there is an expected size and the check failed (not a STEP-only reading). */
+function failsSize(check?: SizeCheck): boolean {
+  return Boolean(check?.expected && !check.ok)
 }
 
 /** Colour for the model-size cell: a STEP-only or NC-only size is neutral, a real check is pass/fail. */
@@ -4518,6 +4560,8 @@ export function PreflightPage() {
                       : undefined
                     const qtyKnown = assemblyUsage != null || pdfQty != null || ncQty != null
                     const section = sectionLabel(part)
+                    const sizeCheck = modelChecks.get(part.mark)
+                    const sizeFails = failsSize(sizeCheck)
                     return (
                       <TableRow
                         key={part.mark}
@@ -4715,9 +4759,27 @@ export function PreflightPage() {
                                 ? t(`common.fix.${overrideFor(part)?.kind}`)
                                 : ''}
                             </Badge>
-                          ) : modelChecks.has(part.mark) ? (
-                            <span className={sizeCheckTone(modelChecks.get(part.mark))}>
-                              {formatSizeCheck(t, modelChecks.get(part.mark))}
+                          ) : sizeCheck ? (
+                            <span
+                              // On a mismatch the colour moves to the failing dimension, so the
+                              // rest of the triple fades back and the wrong number stands out.
+                              className={cn(!sizeFails && sizeCheckTone(sizeCheck))}
+                              title={sizeCheckTitle(t, sizeCheck)}
+                            >
+                              {sizeSegments(t, sizeCheck).map((segment) => (
+                                <span
+                                  key={segment.dim}
+                                  className={
+                                    sizeFails
+                                      ? segment.bad
+                                        ? 'font-semibold text-amber-400'
+                                        : 'text-muted-foreground'
+                                      : undefined
+                                  }
+                                >
+                                  {segment.text}
+                                </span>
+                              ))}
                             </span>
                           ) : (
                             <span className="text-muted-foreground">—</span>
