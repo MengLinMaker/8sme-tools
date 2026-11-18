@@ -330,7 +330,7 @@ export const en = {
     columns: {
       mark: 'Mark',
       status: 'Status',
-      assembly: 'Assembly',
+      assembly: 'ASSY',
       qty: 'Qty',
       mass: 'Mass (kg)',
       profile: 'Profile',
