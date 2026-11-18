@@ -276,8 +276,7 @@ export const en = {
     },
     projects: {
       title: 'Saved projects',
-      subtitle: 'Reopen a job and carry on. Everything is stored in this browser.',
-      empty: 'No saved projects yet — drop a job above to start one.',
+      empty: 'No projects yet',
       loading: 'Loading…',
       saving: 'Saving the job…',
       name: 'Project',
@@ -875,8 +874,7 @@ export const zh = {
     },
     projects: {
       title: '已保存作业',
-      subtitle: '重新打开作业即可继续。全部保存在此浏览器中。',
-      empty: '还没有已保存的作业——在上方拖入作业即可开始。',
+      empty: '暂无作业',
       loading: '正在加载…',
       saving: '正在保存作业…',
       name: '作业',

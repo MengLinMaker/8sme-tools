@@ -113,10 +113,7 @@ export function ProjectsPage() {
 
       <Card>
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-col gap-1">
-            <CardTitle>{t('preflight.projects.title')}</CardTitle>
-            <p className="text-sm text-muted-foreground">{t('preflight.projects.subtitle')}</p>
-          </div>
+          <CardTitle>{t('preflight.projects.title')}</CardTitle>
           {usage.usage != null && usage.quota != null && (
             <span className="text-xs text-muted-foreground">
               {t('preflight.projects.usage', {
