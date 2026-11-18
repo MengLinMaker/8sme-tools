@@ -77,23 +77,27 @@ describe('buildPurchaseTrackerWorkbook', () => {
     const buy = workbook.Sheets['Parts to buy']
     if (!nesting || !marks || !buy) throw new Error('sheet missing')
 
-    expect(nesting.A1?.v).toBe('Layout')
-    expect(nesting.E1?.v).toBe('Qty')
-    expect(nesting.F1?.v).toBe('Cut')
-    expect(marks.B1?.v).toBe('Profile')
-    expect(marks.C1?.v).toBe('Qty')
-    expect(marks.D1?.v).toBe('Cut')
+    expect(nesting.A1?.v).toBe('TOTAL')
+    expect(nesting.A2?.v).toBe('Layout')
+    expect(nesting.E2?.v).toBe('Qty')
+    expect(nesting.F2?.v).toBe('Cut')
+    expect(marks.B2?.v).toBe('Profile')
+    expect(marks.C2?.v).toBe('Qty')
+    expect(marks.D2?.v).toBe('Cut')
     expect(formulas(marks).some((formula) => formula.includes('Nesting!$F'))).toBe(true)
     expect(formulas(marks).some((formula) => formula.includes('*2'))).toBe(true)
     expect(formulas(buy).some((formula) => formula.includes('SUMIF'))).toBe(true)
     expect(formulas(buy).some((formula) => formula.includes('Nesting!$A'))).toBe(true)
     expect(formulas(buy).every((formula) => !formula.includes('Nesting!$B'))).toBe(true)
     expect(formulas(buy).every((formula) => !formula.includes('%'))).toBe(true)
-    expect(formulas(nesting).some((formula) => formula.startsWith('SUM(E2:E'))).toBe(true)
-    expect(formulas(marks).some((formula) => formula.startsWith('SUM(C2:C'))).toBe(true)
-    expect(formulas(buy).some((formula) => formula.startsWith('SUM(D2:D'))).toBe(true)
-    expect(buy.A2?.v).toBe('RHS')
-    expect(buy.B2?.v).toBe('150×100×6')
+    expect(formulas(nesting).some((formula) => formula.startsWith('SUM(E3:E'))).toBe(true)
+    expect(formulas(marks).some((formula) => formula.startsWith('SUM(C3:C'))).toBe(true)
+    expect(formulas(buy).some((formula) => formula.startsWith('SUM(D3:D'))).toBe(true)
+    // Totals are pinned above the headers, so every sheet sums its own data block.
+    expect(nesting.A1?.v).toBe('TOTAL')
+    expect(formulas(nesting)).toContain('SUM(F3:F3)')
+    expect(buy.A3?.v).toBe('RHS')
+    expect(buy.B3?.v).toBe('150×100×6')
   })
 
   it('merges repeated family/size labels in Parts to buy', () => {
@@ -123,8 +127,8 @@ describe('buildPurchaseTrackerWorkbook', () => {
     const workbook = XLSX.read(bytes, { type: 'array', cellFormula: true, sheetStubs: true })
     const nesting = workbook.Sheets.Nesting
     if (!nesting) throw new Error('nesting missing')
-    expect(nesting.A2?.v).toContain('L01')
-    expect(nesting.C2?.v).toBe(6000)
+    expect(nesting.A3?.v).toContain('L01')
+    expect(nesting.C3?.v).toBe(6000)
     expect(nesting['!merges']?.length).toBeGreaterThan(0)
   })
 
@@ -142,7 +146,7 @@ describe('buildPurchaseTrackerWorkbook', () => {
     expect(styles).toContain('<dxfs count="4">')
   })
 
-  it('freezes the header row on every sheet', () => {
+  it('pins the total band and header row on every sheet', () => {
     const bytes = buildPurchaseTrackerWorkbookForGroups([rhsGroup()], 'NW31')
     const files = unzipSync(new Uint8Array(bytes))
     const decoder = new TextDecoder()
@@ -153,9 +157,18 @@ describe('buildPurchaseTrackerWorkbook', () => {
     ]) {
       const xml = decoder.decode(files[file])
       expect(xml).toContain('state="frozen"')
-      expect(xml).toContain('ySplit="1"')
-      expect(xml).toContain('topLeftCell="A2"')
+      expect(xml).toContain('ySplit="2"')
+      expect(xml).toContain('topLeftCell="A3"')
       expect(xml).not.toContain('xSplit')
+    }
+
+    const workbook = XLSX.read(bytes, { type: 'array', cellFormula: true, sheetStubs: true })
+    for (const name of ['Nesting', 'Marks', 'Parts to buy']) {
+      const sheet = workbook.Sheets[name]
+      if (!sheet) throw new Error(`${name} missing`)
+      expect(sheet.A1?.v).toBe('TOTAL')
+      // The autofilter starts at the header, so filtering can never hide the pinned total.
+      expect(sheet['!autofilter']?.ref?.startsWith('A2:')).toBe(true)
     }
   })
 })

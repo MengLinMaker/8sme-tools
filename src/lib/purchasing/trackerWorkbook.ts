@@ -30,6 +30,11 @@ const NESTING_HEADER = ['Layout', 'Stock', 'Length mm', 'Marks', 'Qty', 'Cut'] a
 const MARKS_HEADER = ['Mark', 'Profile', 'Qty', 'Cut', 'Picked up', 'Status'] as const
 const BUY_HEADER = ['Family', 'Size', 'Length (m)', 'Qty', 'Cut'] as const
 
+/** Row 1 is the pinned total band, row 2 the column headers, so data starts at row 3. */
+const TOTAL_ROW = 1
+const HEADER_ROW = 2
+const DATA_ROW = 3
+
 export interface TrackerMarkCount {
   mark: string
   count: number
@@ -210,7 +215,8 @@ const STATUS_STYLE: CellStyle = {
 const TOTAL_STYLE: CellStyle = {
   font: { bold: true, color: { rgb: '1F1F1F' } },
   fill: { fgColor: { rgb: 'C6E0B4' } },
-  border: { top: { color: { rgb: '375623' }, style: 'medium' }, bottom: BORDER },
+  // Sits above the headers, so the heavier rule belongs underneath it.
+  border: { top: BORDER, bottom: { color: { rgb: '375623' }, style: 'medium' } },
 }
 
 function styleCell(sheet: XLSX.WorkSheet, row: number, col: number, style: CellStyle): void {
@@ -230,11 +236,14 @@ function styleRow(
   for (let col = from; col < cols; col++) styleCell(sheet, row, col, style)
 }
 
-/** The sheet the shop works on: Qty is the number of identical beams; enter how many are cut. */
+/**
+ * The sheet the shop works on: Qty is the number of identical beams; enter how many are cut.
+ * The total band sits above the headers so both are pinned in the frozen top two rows.
+ */
 function nestingSheet(model: PurchaseTrackerModel): XLSX.WorkSheet {
-  const dataLast = model.layouts.length + 1
-  const totalRow = dataLast + 1
+  const dataLast = Math.max(DATA_ROW, model.layouts.length + HEADER_ROW)
   const rows: (string | number)[][] = [
+    ['TOTAL', '', '', '', '', ''],
     [...NESTING_HEADER],
     ...model.layouts.map((layout) => [
       layout.layout,
@@ -244,54 +253,55 @@ function nestingSheet(model: PurchaseTrackerModel): XLSX.WorkSheet {
       layout.qty,
       0,
     ]),
-    ['TOTAL', '', '', '', '', ''],
   ]
   const sheet = XLSX.utils.aoa_to_sheet(rows)
-  setFormula(sheet, totalRow - 1, 4, `SUM(E2:E${dataLast})`)
-  setFormula(sheet, totalRow - 1, 5, `SUM(F2:F${dataLast})`)
+  setFormula(sheet, TOTAL_ROW - 1, 4, `SUM(E${DATA_ROW}:E${dataLast})`)
+  setFormula(sheet, TOTAL_ROW - 1, 5, `SUM(F${DATA_ROW}:F${dataLast})`)
   sheet['!cols'] = [{ wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 40 }, { wch: 8 }, { wch: 8 }]
-  sheet['!autofilter'] = { ref: `A1:F${Math.max(1, dataLast)}` }
+  // The filter starts at the header, so the pinned total band is never hidden by a filter.
+  sheet['!autofilter'] = { ref: `A${HEADER_ROW}:F${dataLast}` }
   addRunMerges(
     sheet,
     model.layouts.map((layout) => layout.stock),
     1,
+    HEADER_ROW,
   )
   addRunMerges(
     sheet,
     model.layouts.map((layout) => `${layout.stock}|${layout.stockLength}`),
     2,
+    HEADER_ROW,
   )
 
-  styleRow(sheet, 0, 6, HEADER_STYLE)
+  styleRow(sheet, TOTAL_ROW - 1, 6, TOTAL_STYLE)
+  styleRow(sheet, HEADER_ROW - 1, 6, HEADER_STYLE)
   model.layouts.forEach((_, index) => {
-    const row = index + 1
+    const row = index + HEADER_ROW
     styleCell(sheet, row, 1, GROUP_STYLE)
     styleCell(sheet, row, 2, GROUP_STYLE)
     styleCell(sheet, row, 4, CALC_STYLE)
     styleCell(sheet, row, 5, INPUT_STYLE)
   })
-  styleRow(sheet, totalRow - 1, 6, TOTAL_STYLE)
   return sheet
 }
 
 /** One row per mark: Qty total, Cut auto-counted from the layouts, Picked up by hand. */
 function marksSheet(model: PurchaseTrackerModel): XLSX.WorkSheet {
-  const dataLast = model.marks.length + 1
-  const totalRow = dataLast + 1
+  const dataLast = Math.max(DATA_ROW, model.marks.length + HEADER_ROW)
   const rows: (string | number)[][] = [
+    ['TOTAL', '', '', '', '', ''],
     [...MARKS_HEADER],
     ...model.marks.map((mark) => [mark.mark, mark.profile, mark.qty, '', 0, '']),
-    ['TOTAL', '', '', '', '', ''],
   ]
   const sheet = XLSX.utils.aoa_to_sheet(rows)
-  const nestingLastRow = Math.max(2, model.layouts.length + 1)
+  const nestingLastRow = Math.max(DATA_ROW, model.layouts.length + HEADER_ROW)
   model.marks.forEach((mark, index) => {
-    const row = index + 2
+    const row = index + DATA_ROW
     const cut =
       mark.contributions
         .map(
           ({ layout, perBeam }) =>
-            `SUMIF(Nesting!$A$2:$A$${nestingLastRow},"${layout}",Nesting!$F$2:$F$${nestingLastRow})*${perBeam}`,
+            `SUMIF(Nesting!$A$${DATA_ROW}:$A$${nestingLastRow},"${layout}",Nesting!$F$${DATA_ROW}:$F$${nestingLastRow})*${perBeam}`,
         )
         .join('+') || '0'
     setFormula(sheet, row - 1, 3, cut)
@@ -303,22 +313,22 @@ function marksSheet(model: PurchaseTrackerModel): XLSX.WorkSheet {
       's',
     )
   })
-  setFormula(sheet, totalRow - 1, 2, `SUM(C2:C${dataLast})`)
-  setFormula(sheet, totalRow - 1, 3, `SUM(D2:D${dataLast})`)
-  setFormula(sheet, totalRow - 1, 4, `SUM(E2:E${dataLast})`)
+  setFormula(sheet, TOTAL_ROW - 1, 2, `SUM(C${DATA_ROW}:C${dataLast})`)
+  setFormula(sheet, TOTAL_ROW - 1, 3, `SUM(D${DATA_ROW}:D${dataLast})`)
+  setFormula(sheet, TOTAL_ROW - 1, 4, `SUM(E${DATA_ROW}:E${dataLast})`)
   sheet['!cols'] = [{ wch: 16 }, { wch: 18 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 11 }]
-  sheet['!autofilter'] = { ref: `A1:F${Math.max(1, dataLast)}` }
+  sheet['!autofilter'] = { ref: `A${HEADER_ROW}:F${dataLast}` }
 
-  styleRow(sheet, 0, 6, HEADER_STYLE)
+  styleRow(sheet, TOTAL_ROW - 1, 6, TOTAL_STYLE)
+  styleRow(sheet, HEADER_ROW - 1, 6, HEADER_STYLE)
   model.marks.forEach((_, index) => {
-    const row = index + 1
+    const row = index + HEADER_ROW
     styleCell(sheet, row, 1, GROUP_STYLE)
     styleCell(sheet, row, 2, CALC_STYLE)
     styleCell(sheet, row, 3, CALC_STYLE)
     styleCell(sheet, row, 4, INPUT_STYLE)
     styleCell(sheet, row, 5, STATUS_STYLE)
   })
-  styleRow(sheet, totalRow - 1, 6, TOTAL_STYLE)
   return sheet
 }
 
@@ -357,14 +367,17 @@ function splitStock(stock: string): { family: string; size: string } {
 }
 
 /** Merge runs of identical values so repeated family/size labels read as one group. */
-function addRunMerges(sheet: XLSX.WorkSheet, values: string[], col: number): void {
+function addRunMerges(sheet: XLSX.WorkSheet, values: string[], col: number, firstRow = 1): void {
   const merges = sheet['!merges'] ?? []
   let start = 0
   for (let index = 1; index <= values.length; index++) {
     if (index === values.length || values[index] !== values[start]) {
       const end = index - 1
       if (end > start) {
-        merges.push({ s: { r: start + 1, c: col }, e: { r: end + 1, c: col } })
+        merges.push({
+          s: { r: start + firstRow, c: col },
+          e: { r: end + firstRow, c: col },
+        })
       }
       start = index
     }
@@ -399,52 +412,53 @@ function buyListSheet(model: PurchaseTrackerModel): XLSX.WorkSheet {
       a.size.localeCompare(b.size, undefined, { numeric: true }) ||
       a.length - b.length,
   )
-  const dataLast = buys.length + 1
-  const totalRow = dataLast + 1
+  const dataLast = Math.max(DATA_ROW, buys.length + HEADER_ROW)
   const rows: (string | number)[][] = [
+    ['TOTAL', '', '', '', ''],
     [...BUY_HEADER],
     ...buys.map((buy) => [buy.family, buy.size, (buy.length / 1000).toFixed(1), buy.qty, '']),
-    ['TOTAL', '', '', '', ''],
   ]
   const sheet = XLSX.utils.aoa_to_sheet(rows)
-  const nestingLastRow = Math.max(2, model.layouts.length + 1)
+  const nestingLastRow = Math.max(DATA_ROW, model.layouts.length + HEADER_ROW)
   buys.forEach((buy, index) => {
-    const row = index + 2
+    const row = index + DATA_ROW
     // Layout ids are never merged, so the cut total stays correct under stock/length merges.
     const formula =
       model.layouts
         .filter((layout) => layout.stock === buy.stock && layout.stockLength === buy.length)
         .map((layout) => {
           const id = layout.layout.replace(/"/g, '""')
-          return `SUMIF(Nesting!$A$2:$A$${nestingLastRow},"${id}",Nesting!$F$2:$F$${nestingLastRow})`
+          return `SUMIF(Nesting!$A$${DATA_ROW}:$A$${nestingLastRow},"${id}",Nesting!$F$${DATA_ROW}:$F$${nestingLastRow})`
         })
         .join('+') || '0'
     setFormula(sheet, row - 1, 4, formula)
   })
-  setFormula(sheet, totalRow - 1, 3, `SUM(D2:D${dataLast})`)
-  setFormula(sheet, totalRow - 1, 4, `SUM(E2:E${dataLast})`)
+  setFormula(sheet, TOTAL_ROW - 1, 3, `SUM(D${DATA_ROW}:D${dataLast})`)
+  setFormula(sheet, TOTAL_ROW - 1, 4, `SUM(E${DATA_ROW}:E${dataLast})`)
   sheet['!cols'] = [{ wch: 10 }, { wch: 16 }, { wch: 11 }, { wch: 8 }, { wch: 8 }]
-  sheet['!autofilter'] = { ref: `A1:E${Math.max(1, dataLast)}` }
+  sheet['!autofilter'] = { ref: `A${HEADER_ROW}:E${dataLast}` }
   addRunMerges(
     sheet,
     buys.map((buy) => buy.family),
     0,
+    HEADER_ROW,
   )
   addRunMerges(
     sheet,
     buys.map((buy) => `${buy.family}|${buy.size}`),
     1,
+    HEADER_ROW,
   )
 
-  styleRow(sheet, 0, 5, HEADER_STYLE)
+  styleRow(sheet, TOTAL_ROW - 1, 5, TOTAL_STYLE)
+  styleRow(sheet, HEADER_ROW - 1, 5, HEADER_STYLE)
   buys.forEach((_, index) => {
-    const row = index + 1
+    const row = index + HEADER_ROW
     styleCell(sheet, row, 0, GROUP_STYLE)
     styleCell(sheet, row, 1, GROUP_STYLE)
     styleCell(sheet, row, 3, CALC_STYLE)
     styleCell(sheet, row, 4, CALC_STYLE)
   })
-  styleRow(sheet, totalRow - 1, 5, TOTAL_STYLE)
   return sheet
 }
 
@@ -465,18 +479,18 @@ const DXF_BLOCK = `<dxfs count="4">
 <dxf><fill><patternFill><bgColor rgb="FFBDD7EE"/></patternFill></fill></dxf>
 </dxfs>`
 
-/** Frozen top row so the header stays readable down a long layout/mark list. */
-const FROZEN_HEADER =
-  '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
-  '<selection pane="bottomLeft" activeCell="A2" sqref="A2"/>'
+/** Frozen total + header band so both stay readable down a long layout/mark list. */
+const FROZEN_TOP =
+  '<pane ySplit="2" topLeftCell="A3" activePane="bottomLeft" state="frozen"/>' +
+  '<selection pane="bottomLeft" activeCell="A3" sqref="A3"/>'
 
 /** Rewrite the sheetView xlsx-js-style writes (empty) into a frozen-pane view. */
 function freezeHeaderRow(xml: string): string {
   const selfClosing = /<sheetView(?: [^>]*)?\/>/
   if (selfClosing.test(xml)) {
-    return xml.replace(selfClosing, (tag) => `${tag.slice(0, -2)}>${FROZEN_HEADER}</sheetView>`)
+    return xml.replace(selfClosing, (tag) => `${tag.slice(0, -2)}>${FROZEN_TOP}</sheetView>`)
   }
-  return xml.replace(/(<sheetView(?: [^>]*)?>)/, `$1${FROZEN_HEADER}`)
+  return xml.replace(/(<sheetView(?: [^>]*)?>)/, `$1${FROZEN_TOP}`)
 }
 
 /**
@@ -536,11 +550,12 @@ export function buildPurchaseTrackerWorkbook(
   jobName = 'job',
 ): ArrayBuffer {
   const model = buildPurchaseTrackerModel(groups, plans, jobName)
-  const nestingLast = Math.max(2, model.layouts.length + 1)
-  const marksLast = Math.max(2, model.marks.length + 1)
+  const nestingLast = Math.max(DATA_ROW, model.layouts.length + HEADER_ROW)
+  const marksLast = Math.max(DATA_ROW, model.marks.length + HEADER_ROW)
   const buyLast = Math.max(
-    2,
-    new Set(model.layouts.map((layout) => `${layout.stock}|${layout.stockLength}`)).size + 1,
+    DATA_ROW,
+    new Set(model.layouts.map((layout) => `${layout.stock}|${layout.stockLength}`)).size +
+      HEADER_ROW,
   )
   const workbook = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(workbook, nestingSheet(model), NESTING_SHEET)
@@ -554,11 +569,11 @@ export function buildPurchaseTrackerWorkbook(
       freezeHeader: true,
       ranges: [
         {
-          sqref: `F2:F${nestingLast}`,
+          sqref: `F${DATA_ROW}:F${nestingLast}`,
           rules: [
-            { dxf: 0, formula: 'F2=0' },
-            { dxf: 1, formula: 'AND(F2&gt;0,F2&lt;E2)' },
-            { dxf: 2, formula: 'F2&gt;=E2' },
+            { dxf: 0, formula: `F${DATA_ROW}=0` },
+            { dxf: 1, formula: `AND(F${DATA_ROW}&gt;0,F${DATA_ROW}&lt;E${DATA_ROW})` },
+            { dxf: 2, formula: `F${DATA_ROW}&gt;=E${DATA_ROW}` },
           ],
         },
       ],
@@ -568,28 +583,28 @@ export function buildPurchaseTrackerWorkbook(
       freezeHeader: true,
       ranges: [
         {
-          sqref: `D2:D${marksLast}`,
+          sqref: `D${DATA_ROW}:D${marksLast}`,
           rules: [
-            { dxf: 0, formula: 'D2=0' },
-            { dxf: 1, formula: 'AND(D2&gt;0,D2&lt;C2)' },
-            { dxf: 2, formula: 'D2&gt;=C2' },
+            { dxf: 0, formula: `D${DATA_ROW}=0` },
+            { dxf: 1, formula: `AND(D${DATA_ROW}&gt;0,D${DATA_ROW}&lt;C${DATA_ROW})` },
+            { dxf: 2, formula: `D${DATA_ROW}&gt;=C${DATA_ROW}` },
           ],
         },
         {
-          sqref: `E2:E${marksLast}`,
+          sqref: `E${DATA_ROW}:E${marksLast}`,
           rules: [
-            { dxf: 0, formula: 'E2=0' },
-            { dxf: 1, formula: 'AND(E2&gt;0,E2&lt;C2)' },
-            { dxf: 2, formula: 'E2&gt;=C2' },
+            { dxf: 0, formula: `E${DATA_ROW}=0` },
+            { dxf: 1, formula: `AND(E${DATA_ROW}&gt;0,E${DATA_ROW}&lt;C${DATA_ROW})` },
+            { dxf: 2, formula: `E${DATA_ROW}&gt;=C${DATA_ROW}` },
           ],
         },
         {
-          sqref: `F2:F${marksLast}`,
+          sqref: `F${DATA_ROW}:F${marksLast}`,
           rules: [
-            { dxf: 0, formula: '$F2=&quot;Pending&quot;' },
-            { dxf: 1, formula: '$F2=&quot;In progress&quot;' },
-            { dxf: 3, formula: '$F2=&quot;Cut&quot;' },
-            { dxf: 2, formula: '$F2=&quot;Picked up&quot;' },
+            { dxf: 0, formula: `$F${DATA_ROW}=&quot;Pending&quot;` },
+            { dxf: 1, formula: `$F${DATA_ROW}=&quot;In progress&quot;` },
+            { dxf: 3, formula: `$F${DATA_ROW}=&quot;Cut&quot;` },
+            { dxf: 2, formula: `$F${DATA_ROW}=&quot;Picked up&quot;` },
           ],
         },
       ],
@@ -599,11 +614,11 @@ export function buildPurchaseTrackerWorkbook(
       freezeHeader: true,
       ranges: [
         {
-          sqref: `E2:E${buyLast}`,
+          sqref: `E${DATA_ROW}:E${buyLast}`,
           rules: [
-            { dxf: 0, formula: 'E2=0' },
-            { dxf: 1, formula: 'AND(E2&gt;0,E2&lt;D2)' },
-            { dxf: 2, formula: 'E2&gt;=D2' },
+            { dxf: 0, formula: `E${DATA_ROW}=0` },
+            { dxf: 1, formula: `AND(E${DATA_ROW}&gt;0,E${DATA_ROW}&lt;D${DATA_ROW})` },
+            { dxf: 2, formula: `E${DATA_ROW}&gt;=D${DATA_ROW}` },
           ],
         },
       ],
