@@ -53,6 +53,19 @@ export function normalizeMark(mark: string): string {
   return mark.toLowerCase().replace(/[/_]/g, '')
 }
 
+/**
+ * Pieces declared in a Tekla export filename: `<integer> OFF`, e.g.
+ * `12095, ITEM 35, SHS 75x75x6, 24 OFF[C].STEP` → 24. Strict on purpose — only a whole number
+ * directly followed by `OFF` counts, so a bare number in a mark (`TR9-1`) is never a quantity.
+ * STEP content carries no quantity, so this is what a STEP-only article has to go on.
+ */
+export function quantityFromFilename(path: string): number | null {
+  const match = baseName(path).match(/(?:^|[^0-9])([0-9]{1,4})\s*off\b/i)
+  if (!match) return null
+  const quantity = Number(match[1])
+  return Number.isInteger(quantity) && quantity > 0 ? quantity : null
+}
+
 const decoder = new TextDecoder('utf-8')
 function decodeText(bytes: Uint8Array): string {
   return decoder.decode(bytes)
@@ -127,7 +140,9 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
       part.nc ??= parseNcFile(entry.path, decodeText(entry.bytes))
     } else if (kind === 'step') {
       counts.step++
-      part.step ??= parseStepFile(entry.path, decodeText(entry.bytes))
+      const step = parseStepFile(entry.path, decodeText(entry.bytes))
+      step.quantity = quantityFromFilename(entry.path)
+      part.step ??= step
     } else {
       counts.pdf++
       part.pdf ??= parsePdfFile(entry.path, entry.bytes)

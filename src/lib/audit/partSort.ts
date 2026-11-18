@@ -56,8 +56,8 @@ function partValue(part: PartRecord, key: PartSortKey, context: PartSortContext)
     case 'profile':
       return part.nc?.profile ?? part.expected?.profile ?? ''
     case 'qty':
-      // Drawing (ground truth) first, NC only as a fallback.
-      return material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
+      // Drawing (ground truth) first, then NC, then the STEP filename's `<n> OFF` token.
+      return material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? part.step?.quantity ?? null
     case 'mass':
       // Use the same per-piece mass the table shows (drawing first, then a section estimate).
       if (context.mass) return context.mass(part)

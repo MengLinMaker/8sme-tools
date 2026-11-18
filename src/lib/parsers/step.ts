@@ -26,5 +26,7 @@ export function parseStepFile(path: string, text: string): StepFile {
     schema,
     entityCount,
     problems,
+    // STEP content has no quantity; the audit reads an `<n> OFF` token from the filename.
+    quantity: null,
   }
 }

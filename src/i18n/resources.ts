@@ -369,7 +369,9 @@ export const en = {
     },
     qty: {
       fallbackTitle: 'No drawing qty — showing NC qty',
-      unknownTitle: 'Quantity cannot be determined — no drawing, part list or NC quantity',
+      stepFallbackTitle: 'No drawing or NC qty — showing the STEP filename qty',
+      unknownTitle:
+        'Quantity cannot be determined — no drawing, part list, NC or STEP filename quantity',
       mismatchTitle: 'NC qty {{nc}} differs from drawing qty {{pdf}}',
       assemblyTitle: '{{assembly}}: {{qty}} per assembly × {{count}} = {{total}}',
     },
@@ -565,7 +567,7 @@ export const en = {
     STEP_INVALID: '{{file}} may not open: {{problems}}',
     PDF_INVALID: '{{file}} may not open: {{problems}}',
     QTY_UNKNOWN:
-      'Quantity for {{mark}} cannot be determined — no drawing, part list or NC quantity',
+      'Quantity for {{mark}} cannot be determined — no drawing, part list, NC or STEP filename quantity',
     NC_MARK_MISMATCH: 'NC internal mark "{{internal}}" does not match filename mark "{{mark}}"',
     MISSING_STEP: 'No STEP file found for {{mark}}',
     MISSING_PDF: 'No drawing PDF found for {{mark}}',
@@ -967,7 +969,8 @@ export const zh = {
     },
     qty: {
       fallbackTitle: '无图纸数量——显示 NC 数量',
-      unknownTitle: '无法确定数量——图纸、零件清单和 NC 中都没有数量',
+      stepFallbackTitle: '无图纸和 NC 数量——显示 STEP 文件名中的数量',
+      unknownTitle: '无法确定数量——图纸、零件清单、NC 和 STEP 文件名中都没有数量',
       mismatchTitle: 'NC 数量 {{nc}} 与图纸数量 {{pdf}} 不一致',
       assemblyTitle: '{{assembly}}：每套 {{qty}} × {{count}} = {{total}}',
     },
@@ -1137,7 +1140,7 @@ export const zh = {
     NC_INVALID: '{{file}} 可能无法打开：{{problems}}',
     STEP_INVALID: '{{file}} 可能无法打开：{{problems}}',
     PDF_INVALID: '{{file}} 可能无法打开：{{problems}}',
-    QTY_UNKNOWN: '无法确定 {{mark}} 的数量——图纸、零件清单和 NC 中都没有数量',
+    QTY_UNKNOWN: '无法确定 {{mark}} 的数量——图纸、零件清单、NC 和 STEP 文件名中都没有数量',
     NC_MARK_MISMATCH: 'NC 内部标记 "{{internal}}" 与文件名标记 "{{mark}}" 不一致',
     MISSING_STEP: '未找到 {{mark}} 的 STEP 文件',
     MISSING_PDF: '未找到 {{mark}} 的图纸 PDF',

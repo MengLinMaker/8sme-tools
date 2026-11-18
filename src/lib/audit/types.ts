@@ -26,6 +26,11 @@ export interface StepFile {
   schema: string | null
   entityCount: number
   problems: string[]
+  /**
+   * Pieces the filename declares (`24 OFF`), when Tekla's comma-separated export name carries one.
+   * STEP content has no quantity, so this is the only quantity a STEP-only article can offer.
+   */
+  quantity: number | null
 }
 
 export interface PdfFile {

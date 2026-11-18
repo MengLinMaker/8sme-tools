@@ -22,7 +22,10 @@ the hard way — do not re-litigate them.
   profile, length, dims…}`. The cross-section dims for a **T** (`T` profile type) are
   `[flange width b, half depth d/2, tf, tw, root r]` of the parent UB.
 - **STEP** parts are OpenCASCADE **AP214**. They contain the real part geometry (holes,
-  curves, mitres). They carry **no quantity** (that's why WiseCAM drops quantity on import).
+  curves, mitres). They carry **no quantity** (that's why WiseCAM drops quantity on import), but
+  the Tekla filename does: `<n> OFF` (`12095, ITEM 35, SHS 75x75x6, 24 OFF[C].STEP`). The audit
+  reads that token as the last-resort quantity for a STEP-only part
+  (`quantityFromFilename` in `src/lib/audit/auditJob.ts`).
 
 ## T beams
 

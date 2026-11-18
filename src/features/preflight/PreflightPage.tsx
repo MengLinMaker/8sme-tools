@@ -2356,14 +2356,18 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       const fillet = rechecked?.rootFillet ?? rootFilletChecks.get(part.mark)
       const sabre = sabreRecheck.get(part.mark) ?? sabreChecks.get(part.mark)
       const material = drawingMaterials.get(part.mark)
-      const qtyKnown = material != null || part.expected?.qty != null || part.nc?.quantity != null
+      const qtyKnown =
+        material != null ||
+        part.expected?.qty != null ||
+        part.nc?.quantity != null ||
+        part.step?.quantity != null
       const qtyPending = !qtyKnown && part.pdf != null && drawingChecking
       if (!qtyKnown && !qtyPending) {
         extra.push({
           severity: 'warning',
           code: 'QTY_UNKNOWN',
           mark: part.mark,
-          message: `Quantity for ${part.mark} cannot be determined — no drawing, part list or NC quantity`,
+          message: `Quantity for ${part.mark} cannot be determined — no drawing, part list, NC or STEP filename quantity`,
           params: { mark: part.mark },
         })
       }
@@ -2608,12 +2612,16 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   )
 
   /**
-   * Pieces for a mark: drawing qty is ground truth, then the part list, then the NC batch qty.
-   * A part with none of those (a bare STEP-only article) is a single piece.
+   * Pieces for a mark: drawing qty is ground truth, then the part list, then the NC batch qty,
+   * then the `<n> OFF` token in the STEP filename. A part with none of those is a single piece.
    */
   const partQty = useCallback(
     (part: PartRecord): number =>
-      drawingMaterials.get(part.mark)?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? 1,
+      drawingMaterials.get(part.mark)?.qty ??
+      part.expected?.qty ??
+      part.nc?.quantity ??
+      part.step?.quantity ??
+      1,
     [drawingMaterials],
   )
 
@@ -4858,8 +4866,10 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                     const material = drawingMaterials.get(part.mark)
                     const pdfQty = material?.qty ?? part.expected?.qty ?? null
                     const ncQty = part.nc?.quantity ?? null
+                    const stepQty = part.step?.quantity ?? null
                     const qtyMismatch = pdfQty != null && ncQty != null && pdfQty !== ncQty
                     const qtyFallback = pdfQty == null && ncQty != null
+                    const stepQtyFallback = pdfQty == null && ncQty == null && stepQty != null
                     const mass = pieceMass(part)
                     const band = massBand(mass)
                     const pills = issuesByMark.get(part.mark) ?? []
@@ -4867,7 +4877,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                     const assemblyUsage = assemblyFilter
                       ? part.assemblies?.find((usage) => usage.assembly === assemblyFilter)
                       : undefined
-                    const qtyKnown = assemblyUsage != null || pdfQty != null || ncQty != null
+                    const qtyKnown =
+                      assemblyUsage != null || pdfQty != null || ncQty != null || stepQty != null
                     const section = sectionLabel(part)
                     const sizeCheck = modelChecks.get(part.mark)
                     const sizeFails = failsSize(sizeCheck)
@@ -5033,10 +5044,12 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                                   ? t('preflight.qty.mismatchTitle', { nc: ncQty, pdf: pdfQty })
                                   : qtyFallback
                                     ? t('preflight.qty.fallbackTitle')
-                                    : undefined
+                                    : stepQtyFallback
+                                      ? t('preflight.qty.stepFallbackTitle')
+                                      : undefined
                           }
                         >
-                          {assemblyUsage?.total ?? pdfQty ?? ncQty ?? '?'}
+                          {assemblyUsage?.total ?? pdfQty ?? ncQty ?? stepQty ?? '?'}
                           {!assemblyUsage && qtyMismatch && (
                             <span className="ml-1 text-xs">≠ {ncQty}</span>
                           )}
@@ -5679,7 +5692,13 @@ function PartSummary({
 }) {
   const { t, i18n } = useTranslation()
   const section = profile ?? listedProfile(part) ?? '—'
-  const qty = qtyProp ?? material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
+  const qty =
+    qtyProp ??
+    material?.qty ??
+    part.expected?.qty ??
+    part.nc?.quantity ??
+    part.step?.quantity ??
+    null
   const length = lengthMm ?? material?.length ?? part.expected?.length ?? part.nc?.length ?? null
   const mass = massKg ?? material?.weight ?? part.expected?.weight ?? null
   const grade = part.nc?.grade ?? part.expected?.grade ?? '—'

@@ -2,7 +2,7 @@ import { strToU8, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import * as XLSX from 'xlsx'
 import type { ZipEntry } from '@/lib/zip'
-import { auditEntries, markFromFilename } from './auditJob'
+import { auditEntries, markFromFilename, quantityFromFilename } from './auditJob'
 
 function makeNc(mark: string, qty: number, length: number): string {
   return `ST
@@ -105,6 +105,27 @@ describe('markFromFilename', () => {
     expect(markFromFilename('12095, ITEM 1, PFC 250, 1 OFF[C].STEP')).toBe('item1')
     expect(markFromFilename('12095, ITEM 35, SHS 75x75x6, 2 OFF[C].STEP')).toBe('item35')
     expect(markFromFilename('item10.stp')).toBe('item10')
+  })
+})
+
+describe('quantityFromFilename', () => {
+  it('reads the <n> OFF token from comma-separated Tekla STEP names', () => {
+    expect(quantityFromFilename('12095, ITEM 1, PFC 250, 1 OFF[C].STEP')).toBe(1)
+    expect(quantityFromFilename('12095, ITEM 35, SHS 75x75x6, 24 OFF[C].STEP')).toBe(24)
+  })
+
+  it('accepts lowercase and no space', () => {
+    expect(quantityFromFilename('item1, SHS 75x75x6, 24off.stp')).toBe(24)
+  })
+
+  it('does not mistake a number in the mark for a quantity', () => {
+    expect(quantityFromFilename('TR9-1.nc1')).toBeNull()
+    expect(quantityFromFilename('3ub-1 offcut.stp')).toBeNull()
+    expect(quantityFromFilename('24 pieces.stp')).toBeNull()
+  })
+
+  it('rejects zero', () => {
+    expect(quantityFromFilename('item1, 0 OFF.stp')).toBeNull()
   })
 })
 
@@ -215,6 +236,14 @@ describe('auditEntries', () => {
     ])
     expect(result.parts.map((part) => part.mark)).toEqual(['item1', 'item2'])
     expect(result.parts[0]?.step?.path).toBe('STEP/12095, ITEM 1, PFC 250, 1 OFF[C].STEP')
+    expect(result.parts[0]?.step?.quantity).toBe(1)
+  })
+
+  it('reads a quantity from a STEP filename without an NC or part list', () => {
+    const result = auditEntries('j12095.zip', [
+      { path: 'STEP/12095, ITEM 7, SHS 75x75x6, 24 OFF[C].STEP', bytes: strToU8(VALID_STEP) },
+    ])
+    expect(result.parts[0]?.step?.quantity).toBe(24)
   })
 
   it('reads a macro-enabled .xlsm part list', () => {
