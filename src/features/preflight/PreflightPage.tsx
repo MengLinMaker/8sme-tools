@@ -4345,7 +4345,6 @@ export function PreflightPage() {
                   onChange={(event) => setMarkQuery(event.target.value)}
                   placeholder={t('preflight.parts.searchPlaceholder')}
                   aria-label={t('preflight.parts.searchPlaceholder')}
-                  title={t('preflight.parts.filterHint')}
                   className="h-8 w-56 rounded-md border border-border bg-background pl-7 pr-7 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
                 />
                 {markQuery && (
@@ -4463,9 +4462,6 @@ export function PreflightPage() {
                     </select>
                   </label>
                 )}
-                <span className="ml-auto text-[11px] text-muted-foreground">
-                  {t('preflight.parts.filterHint')}
-                </span>
               </div>
               <Table containerClassName="max-h-[70vh] overflow-auto">
                 <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:border-b [&_th]:border-border [&_th]:bg-card [&_th:first-child]:left-0 [&_th:first-child]:z-30 [&_th:nth-child(2)]:left-8 [&_th:nth-child(2)]:z-30">
