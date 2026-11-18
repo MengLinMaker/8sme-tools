@@ -4308,7 +4308,7 @@ export function PreflightPage() {
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs">
                         {group.massKg > 0 ? (
-                          `${group.massKg.toFixed(1)} kg`
+                          group.massKg.toFixed(1)
                         ) : (
                           <span className="text-muted-foreground">
                             {t('preflight.profiles.noMass')}
@@ -4738,7 +4738,7 @@ export function PreflightPage() {
                                 : undefined
                           }
                         >
-                          {mass != null ? `${mass.toFixed(1)} kg` : '—'}
+                          {mass != null ? mass.toFixed(1) : '—'}
                         </TableCell>
                         <TableCell className="font-mono text-xs">
                           <FilterPill
@@ -5370,7 +5370,7 @@ function PartSummary({
     [t('preflight.columns.grade'), grade],
     [t('preflight.columns.qty'), qty != null ? String(qty) : '—'],
     [t('preflight.meta.length'), length != null ? `${length} mm` : '—'],
-    [t('preflight.columns.mass'), mass != null ? `${mass.toFixed(1)} kg` : '—'],
+    [t('preflight.meta.mass'), mass != null ? `${mass.toFixed(1)} kg` : '—'],
   ]
   return (
     <div className="overflow-hidden rounded-lg border border-border">
