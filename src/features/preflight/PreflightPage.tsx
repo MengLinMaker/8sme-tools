@@ -228,30 +228,31 @@ const MAX_BEVEL_DEG = Math.max(Math.abs(MACHINE.bevel.minDeg), Math.abs(MACHINE.
 const SECTION_TRUST_SCORE = 0.9
 
 /**
- * The parts table's columns. Widths are fixed rather than content-driven so the table stays put
- * while values stream in (a size or mass lands after the model check) — content-sizing makes every
- * arrival nudge the columns beside it. Value columns are right-aligned; Mark and Status stay left,
- * where their content starts.
+ * The parts table's columns. Status is the only flexible one (`w-full`): it absorbs the table's
+ * spare width and its pills wrap inside it, so fixes changing the badges never move the columns
+ * beside it. Everything else hugs its content — those values are short and stable (marks and
+ * assemblies are fixed the moment the job is read; qty/mass/size only fill in once), so a column
+ * grows by a character or two at most and never reflows on every render.
  */
 const PART_COLUMNS: {
   labelKey: string
   key: PartSortKey
   align?: 'right'
-  /** Fixed column width class, so a value changing length never reflows the table. */
+  /** Width class: `w-full` for the flexible column, `w-px` to hug content. */
   width: string
 }[] = [
   { labelKey: 'preflight.columns.mark', key: 'mark', width: 'w-px' },
-  { labelKey: 'preflight.columns.status', key: 'severity', width: 'w-72' },
+  { labelKey: 'preflight.columns.status', key: 'severity', width: 'w-full' },
   {
     labelKey: 'preflight.columns.assembly',
     key: 'assembly',
     align: 'right',
-    width: 'w-32',
+    width: 'w-px',
   },
-  { labelKey: 'preflight.columns.qty', key: 'qty', align: 'right', width: 'w-16' },
-  { labelKey: 'preflight.columns.mass', key: 'mass', align: 'right', width: 'w-16' },
-  { labelKey: 'preflight.columns.profile', key: 'profile', align: 'right', width: 'w-28' },
-  { labelKey: 'preflight.columns.model', key: 'model', align: 'right', width: 'w-32' },
+  { labelKey: 'preflight.columns.qty', key: 'qty', align: 'right', width: 'w-px' },
+  { labelKey: 'preflight.columns.mass', key: 'mass', align: 'right', width: 'w-px' },
+  { labelKey: 'preflight.columns.profile', key: 'profile', align: 'right', width: 'w-px' },
+  { labelKey: 'preflight.columns.model', key: 'model', align: 'right', width: 'w-px' },
 ]
 
 /** How the 2–3 viewer panes are arranged: `auto` picks rows/cols to maximise zoom. */
