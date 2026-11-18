@@ -2533,7 +2533,11 @@ export function PreflightPage() {
     return [...map.values()].sort((a, b) => totalLength(b) - totalLength(a))
   }, [result, partLength, partQty, sectionLabel, sectionGuesses])
 
-  /** One status pill per distinct *active* finding code, so the parts table carries its own triage. */
+  /**
+   * One status pill per distinct *active* finding code, so the parts table carries its own triage.
+   * Pills are ordered worst-first then by code, so the same kind of problem sits in the same place
+   * from row to row and the table can be scanned down a column of badges.
+   */
   const issuesByMark = useMemo(() => {
     const map = new Map<string, StatusPill[]>()
     for (const finding of activeFindings) {
@@ -2552,6 +2556,12 @@ export function PreflightPage() {
         })
       }
       map.set(mark, list)
+    }
+    for (const list of map.values()) {
+      list.sort(
+        (a, b) =>
+          SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code),
+      )
     }
     return map
   }, [activeFindings])
@@ -4616,18 +4626,6 @@ export function PreflightPage() {
                             </FilterPill>
                           ) : (
                             <div className="flex flex-wrap gap-1">
-                              {weld && (
-                                <FilterPill
-                                  token="weld"
-                                  active={isFilterTokenActive('weld')}
-                                  title={weldEtchingsTitle(t, weld)}
-                                  onToggle={toggleFilterToken}
-                                >
-                                  <Badge variant="info" className="gap-1 font-mono">
-                                    {t('preflight.status.weld')}
-                                  </Badge>
-                                </FilterPill>
-                              )}
                               {pills.map((pill) => {
                                 const tier = fixTier(part, pill.finding)
                                 return (
@@ -4661,6 +4659,19 @@ export function PreflightPage() {
                                   </FilterPill>
                                 )
                               })}
+                              {/* Weld etchings are info, not a problem: last, after the findings. */}
+                              {weld && (
+                                <FilterPill
+                                  token="weld"
+                                  active={isFilterTokenActive('weld')}
+                                  title={weldEtchingsTitle(t, weld)}
+                                  onToggle={toggleFilterToken}
+                                >
+                                  <Badge variant="info" className="gap-1 font-mono">
+                                    {t('preflight.status.weld')}
+                                  </Badge>
+                                </FilterPill>
+                              )}
                             </div>
                           )}
                         </TableCell>
