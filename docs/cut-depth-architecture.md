@@ -93,6 +93,14 @@ skips lengthwise edges (they are normally the stock silhouette), so this is its 
   through / its marker hidden only when the recheck no longer reports that issue, matched by face
   + member span. So any rechecked finding at the same tab becomes visually disabled **only
   if the move actually clears it**; otherwise it stays active. Each finding has its own op/Undo.
+  - The recheck is **cached per part on its override object** and all four checks share **one NC
+    parse**, so a bulk auto-fix re-checks each edited part once. Re-checking every edited part on
+    every commit was O(n²) synchronous parse/probe work on the main thread — the "auto fix freezes
+    the page" report. Likewise the CUT_DEPTH re-probe effect is keyed on the override object, not
+    on the whole `ncOverrides` map, so it never queues O(n²) OCC rebuilds.
+  - Auto-fix itself is two phases: NC edits planned and committed in **one** state update (yielding
+    to the main thread per part), then the STEP rebuilds/cleans queued through the shared OCC worker
+    pool (`PRIORITY_NEIGHBOR`, so an open part still preempts them), reporting progress per part.
 - **The 2D `cutReach` depth finding is retired in preflight.** Its "Cut can't pass through" message
   misreads a lengthwise pass (e.g. a tab edge across the web) as a deep bore. `cutReach` now only
   surfaces the corner-placement check (`CUT_CORNER`); the 3D sabre `CUT_DEPTH` below remains the

@@ -1,4 +1,5 @@
 import type { SectionGuess } from '@/lib/sections/detect'
+import type { CleanResult } from './clean'
 import type { StepMeasure } from './measure'
 import type { MeshedStep } from './mesh'
 import type { DiffPayload } from './occDiff'
@@ -100,6 +101,11 @@ export type StepRequest =
     }
   | {
       id: number
+      kind: 'clean'
+      step: Uint8Array
+    }
+  | {
+      id: number
       kind: 'tab'
       step: Uint8Array
       /** Tabs per metre along the beam. */
@@ -132,6 +138,7 @@ export type StepResponse =
   | { id: number; kind: 'reconstruct'; ok: true; value: ReconstructResult }
   | { id: number; kind: 'seat'; ok: true; value: SeatResult }
   | { id: number; kind: 'repair'; ok: true; value: RepairResult }
+  | { id: number; kind: 'clean'; ok: true; value: CleanResult | null }
   | { id: number; kind: 'tab'; ok: true; value: TabResult | null }
   | { id: number; kind: 'tab-defaults'; ok: true; value: TabDefaults }
   | { id: number; kind: 'mesh'; ok: true; value: MeshedStep }

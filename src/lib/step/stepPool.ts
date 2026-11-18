@@ -1,5 +1,6 @@
 import type { Matrix4 } from 'three'
 import { createStepWorker } from '@/lib/step/stepWorkerFactory'
+import type { CleanResult } from './clean'
 import type { MeshedStep } from './mesh'
 import type { DiffPayload } from './occDiff'
 import type {
@@ -141,6 +142,20 @@ class StepWorkerPool {
         overrun: options.overrun,
       },
       transfer,
+      options.priority ?? PRIORITY_BACKGROUND,
+    )
+  }
+
+  /**
+   * Strip stray floating bodies from a STEP, keeping the largest. Runs in the OCC worker: the
+   * import/boolean/export is seconds of CPU, so doing it on the main thread freezes the page — which
+   * is exactly what a multi-part auto-fix used to do.
+   */
+  clean(bytes: Uint8Array, options: { priority?: number } = {}): Promise<CleanResult | null> {
+    const copy = new Uint8Array(bytes)
+    return this.run<CleanResult | null>(
+      { id: this.nextId++, kind: 'clean', step: copy },
+      [copy.buffer],
       options.priority ?? PRIORITY_BACKGROUND,
     )
   }

@@ -124,6 +124,9 @@ async function handle(request: StepRequest): Promise<void> {
           : { bytes: request.features, valid: false, redrilled: 0, cleaned: false }
       }
       scope.postMessage({ id: request.id, kind: 'repair', ok: true, value })
+    } else if (request.kind === 'clean') {
+      const value = await cleanStep(request.step)
+      scope.postMessage({ id: request.id, kind: 'clean', ok: true, value })
     } else if (request.kind === 'tab') {
       const value = await tabStep(request.step, {
         density: request.density,

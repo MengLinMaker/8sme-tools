@@ -1,5 +1,10 @@
 import { MACHINE } from '@/lib/machine/profile'
-import { type NcContour, type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import {
+  type NcContour,
+  type NcFace,
+  type NcGeometry,
+  parseNcGeometry,
+} from '@/lib/parsers/ncGeometry'
 import type { CutMarker } from './cutReach'
 
 /**
@@ -171,7 +176,12 @@ function clusterAngles(line: LineVertex[]): AngleCluster[] {
 
 /** Runs the bevel-change check over every outer face contour in an NC file. */
 export function assessBevelChange(ncText: string): BevelChangeIssue[] {
-  const { contours } = parseNcGeometry(ncText)
+  return assessBevelChangeGeometry(parseNcGeometry(ncText))
+}
+
+/** As {@link assessBevelChange} but on already-parsed NC geometry (several checks share one parse). */
+export function assessBevelChangeGeometry(nc: NcGeometry): BevelChangeIssue[] {
+  const { contours } = nc
   const issues: BevelChangeIssue[] = []
 
   for (let contourIndex = 0; contourIndex < contours.length; contourIndex++) {

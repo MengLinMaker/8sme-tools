@@ -39,8 +39,8 @@ import {
 } from '@/components/ui/table'
 import { Toggle } from '@/components/ui/toggle'
 import { auditEntries } from '@/lib/audit/auditJob'
-import { assessBevelChange, type BevelChangeIssue } from '@/lib/audit/bevelChange'
-import { assessCutReach, type CutMarker, type CutReachFailure } from '@/lib/audit/cutReach'
+import { assessBevelChangeGeometry, type BevelChangeIssue } from '@/lib/audit/bevelChange'
+import { assessCutReachGeometry, type CutMarker, type CutReachFailure } from '@/lib/audit/cutReach'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { MASS_BAND_CLASS, MASS_RED_KG, MASS_YELLOW_KG, massBand } from '@/lib/audit/mass'
 import {
@@ -54,9 +54,9 @@ import {
 } from '@/lib/audit/partFilter'
 import { listedProfile } from '@/lib/audit/partProfile'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
-import { assessRootFillet, type RootFilletIssue } from '@/lib/audit/rootFillet'
+import { assessRootFilletGeometry, type RootFilletIssue } from '@/lib/audit/rootFillet'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
-import { assessUnclosedCuts, type UnclosedCutIssue } from '@/lib/audit/unclosedCuts'
+import { assessUnclosedCutsGeometry, type UnclosedCutIssue } from '@/lib/audit/unclosedCuts'
 import { findWeldingEtchings, type WeldingEtchings } from '@/lib/audit/weldingEtchings'
 import { downloadBlob, fileStem } from '@/lib/download'
 import { MACHINE } from '@/lib/machine/profile'
@@ -85,6 +85,7 @@ import { buildNcepFromIr } from '@/lib/part/toNcep'
 import { partIrToNcGeometry } from '@/lib/part/toNcGeometry'
 import type { PurchaseGroupInput } from '@/lib/purchasing/purchase'
 import type { InputBundle } from '@/lib/readInput'
+import { yieldToMain } from '@/lib/scheduler'
 import { CUT_FACES, FACE_DIRECTIONS, profileFamily } from '@/lib/sections/canonical'
 import type { SectionGuess } from '@/lib/sections/detect'
 import { inferTee } from '@/lib/sections/infer'
@@ -95,7 +96,6 @@ import {
   type StockOutline,
   sectionMassPerMetre,
 } from '@/lib/sections/stock'
-import { cleanStep } from '@/lib/step/clean'
 import { stockFaceThicknesses } from '@/lib/step/cutEdges'
 import {
   compareGeometry,
@@ -820,8 +820,10 @@ export function PreflightPage() {
   useEffect(() => writePrefString('tabLength', tabLength), [tabLength])
   useEffect(() => writePrefString('tabWidth', tabWidth), [tabWidth])
   useEffect(() => writePrefString('tabEngagement', tabEngagement), [tabEngagement])
+  /** The viewed part's own NC edit, if any — not the whole map, so other parts' fixes don't re-run it. */
+  const viewingNcOverride = viewing ? ncOverrides.get(viewing.mark) : undefined
   const ncBytes = viewing?.nc
-    ? (ncOverrides.get(viewing.mark)?.bytes ?? bytesByPath.get(viewing.nc.path))
+    ? (viewingNcOverride?.bytes ?? bytesByPath.get(viewing.nc.path))
     : undefined
   const stepBytes = viewing
     ? (stepOverrides.get(viewing.mark)?.bytes ??
@@ -1169,7 +1171,7 @@ export function PreflightPage() {
     // rebuild is cheap/separate. A no-STEP part needs both the probe and the STEP, so build it
     // once and share the result (the background pass primes the same cache key). An NC edit makes
     // the stored sabre stale, so re-probe the edited NC too.
-    const hasNcOverride = Boolean(viewingMark && ncOverrides.has(viewingMark))
+    const hasNcOverride = Boolean(viewingNcOverride)
     if (!viewingHasStep || hasNcOverride) {
       void reconstructViewerWithSabre(ncText).then(
         ({ bytes, sabre }) => {
@@ -1201,7 +1203,7 @@ export function PreflightPage() {
     return () => {
       cancelled = true
     }
-  }, [ncBytes, viewingMark, viewingHasStep, ncOverrides])
+  }, [ncBytes, viewingMark, viewingHasStep, viewingNcOverride])
 
   // Kick off the overlay diff as soon as the manufactured model lands, so it is already computed
   // (in the OCC worker) by the time the overlay pane mounts — the viewer then reads it from cache
@@ -1579,12 +1581,15 @@ export function PreflightPage() {
           })
           issues.set(part.mark, list)
         }
-        const bevelIssues = assessBevelChange(ncText)
+        // One parse feeds every cut check below — each of them re-parses the whole NC otherwise,
+        // which is seconds of blocking work across a large job.
+        const nc = parseNcGeometry(ncText)
+        const bevelIssues = assessBevelChangeGeometry(nc)
         if (bevelIssues.length > 0) bevel.set(part.mark, bevelIssues)
         const section = part.nc?.profile
           ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
           : null
-        const unclosedIssues = assessUnclosedCuts(ncText, {
+        const unclosedIssues = assessUnclosedCutsGeometry(nc, {
           section: section?.points,
           profile: part.nc?.profile,
         })
@@ -1594,7 +1599,7 @@ export function PreflightPage() {
           markUnchecked(part.mark, `unrecognised section ${profile}`, { profile })
           continue
         }
-        const failures = assessCutReach(ncText, section.points, section.holes ?? [], {
+        const failures = assessCutReachGeometry(nc, section.points, section.holes ?? [], {
           toleranceMm: MACHINE.placementToleranceMm,
           profile: part.nc?.profile,
         }).filter(
@@ -1604,7 +1609,7 @@ export function PreflightPage() {
           (failure) => failure.reason === 'corner',
         )
         if (failures.length > 0) reach.set(part.mark, failures)
-        const filletIssues = assessRootFillet(ncText, {
+        const filletIssues = assessRootFilletGeometry(nc, {
           section: section.points,
           dimensions: part.nc?.dimensions ?? [],
           profile: part.nc?.profile,
@@ -1947,32 +1952,54 @@ export function PreflightPage() {
   /**
    * Re-runs the NC cut checks on any part with an applied NC edit. The issue list is the check on
    * the **current NC**, so fixed issues simply disappear and remaining issues are re-reported.
+   *
+   * Cached per part on its override object: an auto-fix over many marks commits one override at a
+   * time, and re-checking every already-edited part on each commit is O(n²) NC parses + ray probes
+   * — the reason a big auto-fix used to lock the page up. Unchanged overrides reuse their result.
    */
+  const ncRecheckCache = useRef(new Map<string, { override: NcOverride; value: NcRecheck }>())
   const ncRecheck = useMemo(() => {
     const out = new Map<string, NcRecheck>()
-    if (!result) return out
+    const cache = ncRecheckCache.current
+    if (!result) {
+      cache.clear()
+      return out
+    }
+    const live = new Set<string>()
     for (const part of result.parts) {
       const override = ncOverrides.get(part.mark)
       if (!override) continue
+      live.add(part.mark)
+      const cached = cache.get(part.mark)
+      if (cached?.override === override) {
+        out.set(part.mark, cached.value)
+        continue
+      }
       const section = part.nc?.profile
         ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
         : null
       if (!section) continue
       const ncText = new TextDecoder().decode(override.bytes)
       const options = { section: section.points, profile: part.nc?.profile }
-      out.set(part.mark, {
-        reach: assessCutReach(ncText, section.points, section.holes ?? [], {
+      // All four checks run on one parse: each parses the whole NC on its own otherwise.
+      const nc = parseNcGeometry(ncText)
+      const value: NcRecheck = {
+        reach: assessCutReachGeometry(nc, section.points, section.holes ?? [], {
           toleranceMm: MACHINE.placementToleranceMm,
           profile: part.nc?.profile,
         }).filter((failure) => failure.reason === 'corner'),
-        rootFillet: assessRootFillet(ncText, {
+        rootFillet: assessRootFilletGeometry(nc, {
           ...options,
           dimensions: part.nc?.dimensions ?? [],
         }),
-        bevel: assessBevelChange(ncText),
-        unclosed: assessUnclosedCuts(ncText, options),
-      })
+        bevel: assessBevelChangeGeometry(nc),
+        unclosed: assessUnclosedCutsGeometry(nc, options),
+      }
+      cache.set(part.mark, { override, value })
+      out.set(part.mark, value)
     }
+    // Drop cache entries for parts whose override was undone, so the map can't grow across a job.
+    for (const mark of cache.keys()) if (!live.has(mark)) cache.delete(mark)
     return out
   }, [result, ncOverrides])
 
@@ -3061,12 +3088,25 @@ export function PreflightPage() {
   // Re-run the CUT_DEPTH probe on every edited NC after a fix. The **new manufactured model**
   // decides it: if the edit actually removed the over-cut, the issue clears; otherwise it stays.
   // This is independent of the viewed part, so the parts table updates too.
+  //
+  // Keyed on the override object: an auto-fix over many marks commits one part per update, and
+  // re-probing every already-edited part on each commit queued O(n²) multi-second OCC rebuilds
+  // (and thrashed the 32-entry rebuild cache). A result is applied only while it is still that
+  // part's current override, so no part is validated against an NC that has since been edited.
+  const ncOverridesRef = useRef(ncOverrides)
+  ncOverridesRef.current = ncOverrides
+  const sabreProbedOverride = useRef(new Map<string, NcOverride>())
   useEffect(() => {
     if (!result) return
-    let cancelled = false
+    const probed = sabreProbedOverride.current
     for (const part of result.parts) {
       const override = ncOverrides.get(part.mark)
-      if (!override) continue
+      if (!override) {
+        probed.delete(part.mark)
+        continue
+      }
+      if (probed.get(part.mark) === override) continue
+      probed.set(part.mark, override)
       // The viewed part's recheck must jump the queue: background work is held while a part is
       // open, which otherwise leaves its CUT_DEPTH untested until the viewer closes.
       const priority = part.mark === viewing?.mark ? PRIORITY_FOREGROUND : PRIORITY_BACKGROUND
@@ -3074,18 +3114,16 @@ export function PreflightPage() {
         priority,
       })
         .then(({ sabre }) => {
-          if (cancelled) return
+          if (ncOverridesRef.current.get(part.mark) !== override) return
           if (import.meta.env.DEV) {
             console.info('[cut-depth recheck]', part.mark, 'sabre samples', sabre.length)
           }
           setSabreRecheck((prev) => new Map(prev).set(part.mark, sabre))
         })
         .catch(() => {
-          // best-effort; the viewer rebuild retries the same NC
+          // best-effort; clear the mark so a later render can retry it
+          if (probed.get(part.mark) === override) probed.delete(part.mark)
         })
-    }
-    return () => {
-      cancelled = true
     }
   }, [result, ncOverrides, viewing?.mark])
 
@@ -3210,7 +3248,7 @@ export function PreflightPage() {
     [bytesByPath],
   )
 
-  /** Cleans one part's stray STEP bodies, keeping the real geometry untouched. */
+  /** Cleans one part's stray STEP bodies, keeping the real geometry untouched (in the OCC worker). */
   const cleanPart = useCallback(
     async (part: PartRecord) => {
       const path = part.step?.path
@@ -3218,7 +3256,7 @@ export function PreflightPage() {
       if (!path || !bytes) return
       setFixingMark(part.mark)
       try {
-        const cleaned = await cleanStep(bytes)
+        const cleaned = await getStepWorkerPool().clean(bytes, { priority: PRIORITY_FOREGROUND })
         if (cleaned && cleaned.removed > 0) setOverride(part.mark, cleaned.bytes, 'cleaned')
       } catch {
         // leave the original in place if cleaning fails
@@ -3402,7 +3440,9 @@ export function PreflightPage() {
         }
       } catch {
         try {
-          const cleaned = await cleanStep(featureBytes)
+          const cleaned = await getStepWorkerPool().clean(featureBytes, {
+            priority: PRIORITY_FOREGROUND,
+          })
           if (cleaned) setOverride(part.mark, cleaned.bytes, 'cleaned')
         } catch {
           // leave the original in place
@@ -3692,81 +3732,71 @@ export function PreflightPage() {
   }, [result, selectedMarks, autoFixableFindings])
 
   /**
-   * Applies every available fix to one part: the NC edits stack into a single override (using each
-   * finding's recommended value, the same one its mini menu prefills), then one STEP rebuild is
-   * chosen — simplify (keeps a bevelled end attached), regenerate from the NC, or a stray-body
-   * clean, in that priority. Findings resolved by a STEP rebuild drop out of the check on their own.
+   * The NC edits auto-fix would make to one part, applied to a running copy of its NC. Pure — the
+   * caller commits the result — so a bulk fix can stack every part's edits into one update.
    */
-  const autoFixPart = useCallback(
-    async (part: PartRecord) => {
-      const findings = autoFixableFindings(part)
-      if (findings.length === 0) return
+  const planNcFixes = useCallback(
+    (
+      part: PartRecord,
+      findings: Finding[],
+      base: NcOverride | undefined,
+    ): {
+      original: Uint8Array
+      ncText: string
+      ops: NcOp[]
+      newOps: NcOp[]
+      applied: Finding[]
+    } | null => {
       const ncPath = part.nc?.path
       const original = ncPath ? bytesByPath.get(ncPath) : undefined
-
-      // --- NC edits: apply to one running copy of the NC, then record them as ordered ops.
-      const existing = ncOverrides.get(part.mark)
-      let ncText = existing
-        ? new TextDecoder().decode(existing.bytes)
-        : original
-          ? new TextDecoder().decode(original)
-          : null
+      if (!original) return null
+      let ncText = new TextDecoder().decode(base?.bytes ?? original)
       const newOps: NcOp[] = []
-      const appliedNc: Finding[] = []
-      if (ncText && original) {
-        const candidates = findings
-          .map((finding) => ({ finding, op: ncOpForFinding(finding) }))
-          .filter((entry): entry is { finding: Finding; op: NcOp } => entry.op != null)
-        // Line-preserving edits first, then removals in descending vertex order within a contour, so
-        // a removal never shifts the indices of an edit still to come.
-        const preserving = candidates.filter(({ op }) => op.kind !== 'removeCut')
-        const removing = candidates
-          .filter(({ op }) => op.kind === 'removeCut')
-          .sort((a, b) => {
-            if (a.op.kind !== 'removeCut' || b.op.kind !== 'removeCut') return 0
-            return (
-              b.op.contourIndex - a.op.contourIndex ||
-              b.op.removeVertices[0] - a.op.removeVertices[0]
-            )
-          })
-        for (const { finding, op } of [...preserving, ...removing]) {
-          try {
-            const next = applyNcOp(ncText, op)
-            // A no-op means the edit can't be made against this NC; leave the finding for a human.
-            if (next === ncText) continue
-            ncText = next
-            newOps.push(op)
-            appliedNc.push(finding)
-          } catch {
-            // leave this finding alone
-          }
+      const applied: Finding[] = []
+      const candidates = findings
+        .map((finding) => ({ finding, op: ncOpForFinding(finding) }))
+        .filter((entry): entry is { finding: Finding; op: NcOp } => entry.op != null)
+      // Line-preserving edits first, then removals in descending vertex order within a contour, so
+      // a removal never shifts the indices of an edit still to come.
+      const preserving = candidates.filter(({ op }) => op.kind !== 'removeCut')
+      const removing = candidates
+        .filter(({ op }) => op.kind === 'removeCut')
+        .sort((a, b) => {
+          if (a.op.kind !== 'removeCut' || b.op.kind !== 'removeCut') return 0
+          return (
+            b.op.contourIndex - a.op.contourIndex || b.op.removeVertices[0] - a.op.removeVertices[0]
+          )
+        })
+      for (const { finding, op } of [...preserving, ...removing]) {
+        try {
+          const next = applyNcOp(ncText, op)
+          // A no-op means the edit can't be made against this NC; leave the finding for a human.
+          if (next === ncText) continue
+          ncText = next
+          newOps.push(op)
+          applied.push(finding)
+        } catch {
+          // leave this finding alone
         }
       }
-      if (newOps.length > 0 && original) {
-        // `existing.ops` is from this render, and the loop never touches the same mark twice.
-        const ops = [...(existing?.ops ?? []), ...newOps]
-        setNcOverrides((prev) => withNcOps(prev, part.mark, ops, original))
-        if (newOps.some((op) => op.kind === 'moveCut')) {
-          // The override effect re-probes the edited NC; drop the old CUT_DEPTH rows meanwhile.
-          setSabreRecheck((prev) => new Map(prev).set(part.mark, []))
-        }
-        for (const finding of appliedNc) rememberResolvedFix(part, finding)
-      }
+      return { original, ncText, ops: [...(base?.ops ?? []), ...newOps], newOps, applied }
+    },
+    [bytesByPath],
+  )
 
-      // --- One STEP rebuild per part.
-      const nc = ncText
-      if (!nc) {
-        if (findings.some((finding) => finding.code === 'STRAY_BODY')) {
-          const path = part.step?.path
-          const bytes = path ? bytesByPath.get(path) : undefined
-          if (!bytes) return
-          try {
-            const cleaned = await cleanStep(bytes)
-            if (cleaned && cleaned.removed > 0) setOverride(part.mark, cleaned.bytes, 'cleaned')
-          } catch {
-            // leave the original in place if cleaning fails
-          }
-        }
+  /**
+   * The one STEP fix a part's findings need, run in the OCC worker pool: a stray-body clean, then a
+   * rebuild — simplify (keeps a bevelled end attached) or regenerate from the NC, in that priority.
+   * Findings resolved by a STEP rebuild drop out of the check on their own.
+   */
+  const fixStepForPart = useCallback(
+    async (part: PartRecord, findings: Finding[], ncText: string | null) => {
+      if (!ncText) {
+        if (!findings.some((finding) => finding.code === 'STRAY_BODY')) return
+        const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
+        if (!bytes) return
+        const cleaned = await getStepWorkerPool().clean(bytes, { priority: PRIORITY_NEIGHBOR })
+        if (cleaned && cleaned.removed > 0) setOverride(part.mark, cleaned.bytes, 'cleaned')
         return
       }
       const rebuild = findings.some((finding) => finding.code === 'CUT_END_PIECE')
@@ -3779,48 +3809,110 @@ export function PreflightPage() {
             )
           ? 'regenerated'
           : null
-      if (rebuild === 'simplified') {
-        try {
-          const step = await reconstructForViewer(nc, { simplify: true })
-          if (step) setOverride(part.mark, step, 'simplified')
-        } catch {
-          // leave the original in place if the rebuild fails
-        }
-      } else if (rebuild === 'regenerated') {
-        try {
-          const step = await reconstructForViewer(nc)
-          if (step) setOverride(part.mark, step, 'regenerated')
-        } catch {
-          // leave the original in place if the rebuild fails
-        }
-      }
+      if (!rebuild) return
+      const step = await reconstructForViewer(ncText, {
+        simplify: rebuild === 'simplified',
+        priority: PRIORITY_NEIGHBOR,
+      })
+      if (step) setOverride(part.mark, step, rebuild)
     },
-    [autoFixableFindings, bytesByPath, ncOverrides, rememberResolvedFix, setOverride],
+    [bytesByPath, setOverride],
   )
 
-  /** Auto-fixes every ticked mark that has a fixable finding, one part at a time. */
+  /**
+   * Auto-fixes every ticked mark that has a fixable finding.
+   *
+   * Two phases, so nothing runs as one long main-thread task:
+   *  1. **NC edits** are cheap text rewrites. They are planned one part at a time against the
+   *     override map as it grows and committed in **one** update, so the NC checks re-run once for
+   *     the whole batch instead of once per part — that per-part re-check over every already-edited
+   *     part was the O(n²) freeze. A yield between parts keeps the page and progress label live.
+   *  2. **STEP rebuilds** are seconds of OCC work each, so they go through the worker pool a few at
+   *     a time (the same queue the background analysis uses) and report progress as each part
+   *     lands. They sit below viewer priority, so opening a part still preempts this bulk work.
+   */
   const autoFixSelected = useCallback(async () => {
     if (!result || autoFixing) return
     const parts = result.parts.filter((part) => autoFixableMarks.has(part.mark))
     if (parts.length === 0) return
     setAutoFixing({ done: 0, total: parts.length })
     try {
-      let done = 0
+      // --- Phase 1: NC edits, planned against the map as it grows (never this render's snapshot).
+      const commits: Array<{ mark: string; ops: NcOp[]; original: Uint8Array }> = []
+      const resolved: Array<{ part: PartRecord; finding: Finding }> = []
+      const moved = new Set<string>()
+      const jobs: Array<{ part: PartRecord; findings: Finding[]; ncText: string | null }> = []
+      let overrides = ncOverrides
       for (const part of parts) {
-        setFixingMark(part.mark)
-        try {
-          await autoFixPart(part)
-        } catch {
-          // one part's failure must not stop the rest
+        const findings = autoFixableFindings(part)
+        const plan = planNcFixes(part, findings, overrides.get(part.mark))
+        if (plan && plan.newOps.length > 0) {
+          commits.push({ mark: part.mark, ops: plan.ops, original: plan.original })
+          for (const finding of plan.applied) resolved.push({ part, finding })
+          if (plan.newOps.some((op) => op.kind === 'moveCut')) moved.add(part.mark)
+          overrides = withNcOps(overrides, part.mark, plan.ops, plan.original)
         }
-        done += 1
-        setAutoFixing({ done, total: parts.length })
+        jobs.push({ part, findings, ncText: plan?.ncText ?? null })
+        // Hand the thread back: the edits above are synchronous, so without this a big batch
+        // never lets the progress label paint or the page handle input.
+        await yieldToMain()
       }
+      if (commits.length > 0) {
+        setNcOverrides((prev) => {
+          let next = prev
+          for (const commit of commits)
+            next = withNcOps(next, commit.mark, commit.ops, commit.original)
+          return next
+        })
+        for (const { part, finding } of resolved) rememberResolvedFix(part, finding)
+        if (moved.size > 0) {
+          // The override effect re-probes the edited NC; drop the old CUT_DEPTH rows meanwhile.
+          setSabreRecheck((prev) => {
+            const next = new Map(prev)
+            for (const mark of moved) next.set(mark, [])
+            return next
+          })
+        }
+      }
+
+      // --- Phase 2: STEP rebuilds, a pool-full at a time, progress per finished part.
+      const viewingMark = viewing?.mark ?? null
+      if (viewingMark && jobs.some(({ part }) => part.mark === viewingMark))
+        setFixingMark(viewingMark)
+      let done = 0
+      let cursor = 0
+      const work = async () => {
+        while (cursor < jobs.length) {
+          const job = jobs[cursor++]
+          if (!job) return
+          try {
+            await fixStepForPart(job.part, job.findings, job.ncText)
+          } catch {
+            // one part's failure must not stop the rest
+          }
+          done += 1
+          // Batched with the override the fix sets, so the table and the label move together.
+          setAutoFixing({ done, total: parts.length })
+        }
+      }
+      await Promise.all(
+        Array.from({ length: Math.min(STEP_WORKER_COUNT, jobs.length) }, () => work()),
+      )
     } finally {
       setFixingMark(null)
       setAutoFixing(null)
     }
-  }, [result, autoFixing, autoFixableMarks, autoFixPart])
+  }, [
+    result,
+    autoFixing,
+    autoFixableMarks,
+    autoFixableFindings,
+    ncOverrides,
+    planNcFixes,
+    fixStepForPart,
+    rememberResolvedFix,
+    viewing?.mark,
+  ])
 
   /** The canonical cross-section to seat / rewrite a part's export against, or null when unknown. */
   const exportProfile = useCallback(
