@@ -90,6 +90,15 @@ import { partIrSvgParts } from '@/lib/part/svg'
 import { buildNcepFromIr } from '@/lib/part/toNcep'
 import { partIrToNcGeometry } from '@/lib/part/toNcGeometry'
 import {
+  loadProjectEdits,
+  type NcOp,
+  type NcOverride,
+  type ProjectEdit,
+  type StepFixKind,
+  type StepOverride,
+  saveProjectEdit,
+} from '@/lib/projects/edits'
+import {
   deleteProject,
   loadProject,
   putProjectFiles,
@@ -370,40 +379,6 @@ function writePrefString(key: string, value: string): void {
   } catch {
     // ignored
   }
-}
-
-/**
- * A per-part STEP fix the user applied: cleaned (stray bodies dropped), tabbed (all nested bodies
- * kept and joined), regenerated from the NC, or simplified (a bevel-cut surface left flat/uncut so
- * a sloped end stays attached). There is deliberately no auto "simplify" fix for CUT_STEP — a
- * sudden uncuttable step is a judgement call (cut at an angle on the radius), so it is flagged as
- * an error and left alone.
- */
-type StepFixKind = 'cleaned' | 'tabbed' | 'regenerated' | 'simplified' | 'repaired'
-interface StepOverride {
-  bytes: Uint8Array
-  kind: StepFixKind
-  /** Bytes are already in the canonical frame (NC-derived); skip export re-seating. */
-  seated?: boolean
-}
-
-/**
- * A per-part NC (`.nc1`) edit: a stray cut removed, or a cut line's changing bevel unified to one
- * angle (`0` = no bevel). These override the bundled NC for the manufactured model and the export.
- */
-/**
- * One NC edit applied by a finding. Edits stack in the order they were applied on the original NC, and
- * each is keyed to the finding it resolves, so fixes coexist and each one can be undone on its own.
- */
-type NcOp =
-  | { key: string; kind: 'unifyBevel'; contourIndex: number; vertices: number[]; angle: number }
-  | { key: string; kind: 'outOfRangeBevel'; contourIndex: number; vertex: number; angle: number }
-  | { key: string; kind: 'removeCut'; contourIndex: number; removeVertices: [number, number] }
-  | { key: string; kind: 'moveCut'; contourIndex: number; vertices: number[]; deltaY: number }
-interface NcOverride {
-  /** The original NC with every op applied, in order. */
-  bytes: Uint8Array
-  ops: NcOp[]
 }
 
 /** The NC checks re-run on an edited NC, so fixes resolve only the issues they actually clear. */
@@ -791,6 +766,12 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   const [sabreRecheck, setSabreRecheck] = useState<Map<string, SabreFailure[]>>(new Map())
   /** Findings fixed by an NC edit, kept as resolved rows so the existing per-row Undo survives. */
   const [resolvedFixes, setResolvedFixes] = useState<Map<string, Finding[]>>(new Map())
+  const [stepOverrides, setStepOverrides] = useState<Map<string, StepOverride>>(new Map())
+  /**
+   * Per-part NC edits (a stray cut removed). These are the source of truth for the manufactured
+   * model and the export: they override the bundled `.nc1` bytes and mark the part export-ready.
+   */
+  const [ncOverrides, setNcOverrides] = useState<Map<string, NcOverride>>(new Map())
   /** Per-part cut-reach failures (a bevel whose bore exceeds the head's pierce cap). */
   const [reachChecks, setReachChecks] = useState<Map<string, CutReachFailure[]>>(new Map())
   /** Per-part bevel-change lines (one cut line whose bevel is not a single angle). */
@@ -955,6 +936,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
    * `handOffProject`), so an import doesn't have to be written and read straight back.
    */
   const openedProject = useRef<string | null>(null)
+  /** The edits last written to the project, per mark, so a change saves only what changed. */
+  const savedEdits = useRef(new Map<string, ProjectEdit>())
   useEffect(() => {
     if (openedProject.current === projectId) return
     let cancelled = false
@@ -969,8 +952,25 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           setLoadingProject(false)
           return
         }
+        const saved = await loadProjectEdits(projectId)
+        if (cancelled) return
         openedProject.current = projectId
         handleBundle(opened)
+        // The fixes travel with the project: NC edits (with their ops), STEP replacements, and the
+        // resolved rows that keep their Undo available.
+        const nc = new Map<string, NcOverride>()
+        const step = new Map<string, StepOverride>()
+        const resolved = new Map<string, Finding[]>()
+        savedEdits.current = new Map()
+        for (const [mark, edit] of saved) {
+          if (edit.nc) nc.set(mark, edit.nc)
+          if (edit.step) step.set(mark, edit.step)
+          if (edit.resolved) resolved.set(mark, edit.resolved)
+          savedEdits.current.set(mark, edit)
+        }
+        setNcOverrides(nc)
+        setStepOverrides(step)
+        setResolvedFixes(resolved)
       } catch (err) {
         if (cancelled) return
         setError(err instanceof Error ? err.message : String(err))
@@ -983,6 +983,49 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       cancelled = true
     }
   }, [projectId, handleBundle])
+
+  /**
+   * Saves the applied fixes as they change. Compares against what was last written per mark, so a
+   * fix writes one record (its NC is kilobytes; a STEP override is megabytes) instead of the job.
+   */
+  useEffect(() => {
+    if (!bundle || loadingProject || missingProject) return
+    const marks = new Set([
+      ...ncOverrides.keys(),
+      ...stepOverrides.keys(),
+      ...resolvedFixes.keys(),
+      ...savedEdits.current.keys(),
+    ])
+    for (const mark of marks) {
+      const nc = ncOverrides.get(mark)
+      const step = stepOverrides.get(mark)
+      const resolved = resolvedFixes.get(mark)
+      const next: ProjectEdit = {}
+      if (nc) next.nc = nc
+      if (step) next.step = step
+      if (resolved) next.resolved = resolved
+      const previous = savedEdits.current.get(mark)
+      if (
+        previous &&
+        previous.nc === next.nc &&
+        previous.step === next.step &&
+        previous.resolved === next.resolved
+      ) {
+        continue
+      }
+      if (!next.nc && !next.step && !next.resolved) {
+        savedEdits.current.delete(mark)
+        void saveProjectEdit(projectId, mark, null).catch((err) =>
+          setError(err instanceof Error ? err.message : String(err)),
+        )
+      } else {
+        savedEdits.current.set(mark, next)
+        void saveProjectEdit(projectId, mark, next).catch((err) =>
+          setError(err instanceof Error ? err.message : String(err)),
+        )
+      }
+    }
+  }, [bundle, loadingProject, missingProject, projectId, ncOverrides, stepOverrides, resolvedFixes])
 
   const bytesByPath = useMemo(() => {
     const map = new Map<string, Uint8Array>()
@@ -1027,12 +1070,6 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     [viewing, sectionGuesses],
   )
 
-  const [stepOverrides, setStepOverrides] = useState<Map<string, StepOverride>>(new Map())
-  /**
-   * Per-part NC edits (a stray cut removed). These are the source of truth for the manufactured
-   * model and the export: they override the bundled `.nc1` bytes and mark the part export-ready.
-   */
-  const [ncOverrides, setNcOverrides] = useState<Map<string, NcOverride>>(new Map())
   const [fixingMark, setFixingMark] = useState<string | null>(null)
   /** The `CUT_BEVEL_CHANGE` finding whose "unify bevel" mini menu is open, if any. */
   const [bevelEdit, setBevelEdit] = useState<{ part: PartRecord; finding: Finding } | null>(null)

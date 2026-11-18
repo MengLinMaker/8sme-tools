@@ -1,5 +1,14 @@
 import type { InputBundle } from '@/lib/readInput'
 import type { ZipEntry } from '@/lib/zip'
+import {
+  EDIT_STORE,
+  FILE_STORE,
+  finished,
+  META_STORE,
+  openDatabase,
+  projectRange,
+  result,
+} from './db'
 
 /**
  * Saved jobs, in IndexedDB.
@@ -12,11 +21,6 @@ import type { ZipEntry } from '@/lib/zip'
  * the File System Access API because that would drop Safari/Firefox. The bytes still never leave
  * the machine — but they do live in this browser's profile until the project is deleted.
  */
-
-const DB_NAME = 'sme-projects'
-const DB_VERSION = 1
-const META_STORE = 'projects'
-const FILE_STORE = 'files'
 
 /** What the project list shows — no file bytes, so listing stays cheap. */
 export interface ProjectMeta {
@@ -32,51 +36,6 @@ export interface ProjectMeta {
 interface FileRecord {
   path: string
   bytes: Uint8Array
-}
-
-let dbPromise: Promise<IDBDatabase> | null = null
-
-function openDatabase(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise
-  dbPromise = new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') {
-      reject(new Error('This browser has no IndexedDB, so projects cannot be saved.'))
-      return
-    }
-    const request = indexedDB.open(DB_NAME, DB_VERSION)
-    request.onupgradeneeded = () => {
-      const db = request.result
-      if (!db.objectStoreNames.contains(META_STORE)) {
-        db.createObjectStore(META_STORE, { keyPath: 'id' })
-      }
-      if (!db.objectStoreNames.contains(FILE_STORE)) {
-        db.createObjectStore(FILE_STORE)
-      }
-    }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error ?? new Error('IndexedDB refused to open'))
-  })
-  return dbPromise
-}
-
-function result<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-}
-
-function finished(tx: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error)
-    tx.onabort = () => reject(tx.error)
-  })
-}
-
-/** The key range covering every file of one project. Paths never start with an empty string. */
-function fileRange(id: string): IDBKeyRange {
-  return IDBKeyRange.bound([id, ''], [id, '\uffff'])
 }
 
 /**
@@ -127,7 +86,9 @@ export async function loadProject(id: string): Promise<InputBundle | null> {
   const meta = await getProjectMeta(id)
   if (!meta) return null
   const tx = db.transaction(FILE_STORE, 'readonly')
-  const records = (await result(tx.objectStore(FILE_STORE).getAll(fileRange(id)))) as FileRecord[]
+  const records = (await result(
+    tx.objectStore(FILE_STORE).getAll(projectRange(id)),
+  )) as FileRecord[]
   await finished(tx)
   const entries: ZipEntry[] = records.map((record) => ({
     path: record.path,
@@ -200,9 +161,10 @@ export async function removeProjectFiles(id: string, paths: string[]): Promise<P
 
 export async function deleteProject(id: string): Promise<void> {
   const db = await openDatabase()
-  const tx = db.transaction([META_STORE, FILE_STORE], 'readwrite')
+  const tx = db.transaction([META_STORE, FILE_STORE, EDIT_STORE], 'readwrite')
   tx.objectStore(META_STORE).delete(id)
-  tx.objectStore(FILE_STORE).delete(fileRange(id))
+  tx.objectStore(FILE_STORE).delete(projectRange(id))
+  tx.objectStore(EDIT_STORE).delete(projectRange(id))
   await finished(tx)
 }
 
