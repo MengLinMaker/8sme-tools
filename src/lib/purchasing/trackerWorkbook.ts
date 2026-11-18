@@ -494,29 +494,110 @@ function freezeHeaderRow(xml: string): string {
 }
 
 /**
- * xlsx-js-style has no conditional-formatting or freeze-pane writer, so lift the styles/fills and
- * frozen header into the generated package. This keeps the status and 0/partial/full colours live
- * as the shop edits the workbook, with the headings in view while scrolling.
+ * Sheet protection with the few allowances the shop needs: sort and filter the lists, select
+ * anything, but no cell/column/row moves and no restyling. Unlocked input cells keep working —
+ * a sheet-level protection only makes *locked* cells read-only.
+ */
+const SHEET_PROTECTION =
+  '<sheetProtection sheet="1" objects="1" scenarios="1" formatCells="1" formatColumns="1"' +
+  ' formatRows="1" insertColumns="1" insertRows="1" deleteColumns="1" deleteRows="1"' +
+  ' sort="0" autoFilter="0" selectLockedCells="0" selectUnlockedCells="0"/>'
+
+/** Cell references covered by A1 ranges, so a style used by an editable range can be found. */
+function expandRefs(ranges: string[]): Set<string> {
+  const cells = new Set<string>()
+  for (const range of ranges) {
+    const match = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(range)
+    if (!match) {
+      cells.add(range)
+      continue
+    }
+    const [, fromCol, fromRow, toCol, toRow] = match
+    for (let row = Number(fromRow); row <= Number(toRow); row++) {
+      for (let col = columnIndex(fromCol); col <= columnIndex(toCol); col++) {
+        cells.add(`${columnName(col)}${row}`)
+      }
+    }
+  }
+  return cells
+}
+
+function columnIndex(name: string): number {
+  let index = 0
+  for (const char of name) index = index * 26 + (char.charCodeAt(0) - 64)
+  return index
+}
+
+function columnName(index: number): string {
+  let name = ''
+  for (let value = index; value > 0; value = Math.floor((value - 1) / 26)) {
+    name = String.fromCharCode(((value - 1) % 26) + 65) + name
+  }
+  return name
+}
+
+/** Style (xf) indexes used by the given cells — the ones whose protection must be lifted. */
+function styleIndexesOf(xml: string, cells: Set<string>): number[] {
+  const found = new Set<number>()
+  for (const match of xml.matchAll(/<c r="([A-Z]+\d+)"([^>]*)>/g)) {
+    const style = /\ss="(\d+)"/.exec(match[2] ?? '')
+    if (match[1] && style?.[1] && cells.has(match[1])) found.add(Number(style[1]))
+  }
+  return [...found]
+}
+
+/** Mark the given cell formats unlocked so protected sheets still accept typing in them. */
+function unlockCellXfs(xml: string, indexes: Set<number>): string {
+  const start = xml.indexOf('<cellXfs')
+  if (start < 0) return xml
+  const bodyStart = xml.indexOf('>', start) + 1
+  const bodyEnd = xml.indexOf('</cellXfs>', bodyStart)
+  if (bodyEnd < 0) return xml
+  let index = 0
+  const body = xml
+    .slice(bodyStart, bodyEnd)
+    .replace(/<xf\b[^>]*?\/>|<xf\b[^>]*>[\s\S]*?<\/xf>/g, (xf) => {
+      if (!indexes.has(index++)) return xf
+      const tagged = xf.replace(/^<xf\b/, '<xf applyProtection="1"')
+      return tagged.endsWith('/>')
+        ? `${tagged.slice(0, -2)}><protection locked="0"/></xf>`
+        : tagged.replace('</xf>', '<protection locked="0"/></xf>')
+    })
+  return xml.slice(0, bodyStart) + body + xml.slice(bodyEnd)
+}
+
+/**
+ * xlsx-js-style has no conditional-formatting, freeze-pane or protection writer, so lift them into
+ * the generated package. This keeps the status and 0/partial/full colours live as the shop edits
+ * the workbook, with the headings in view and only the input cells editable.
  */
 function patchWorkbook(
   bytes: ArrayBuffer,
-  sheets: { file: string; freezeHeader?: boolean; ranges: CfRange[] }[],
+  sheets: {
+    file: string
+    freezeHeader?: boolean
+    /** A1 ranges that stay typeable; every other cell is locked. */
+    editable?: string[]
+    ranges: CfRange[]
+  }[],
 ): ArrayBuffer {
   const files = unzipSync(new Uint8Array(bytes))
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
 
   const stylesFile = files['xl/styles.xml']
-  if (stylesFile) {
-    const styles = decoder.decode(stylesFile).replace(/<dxfs count="0"\/>/, DXF_BLOCK)
-    files['xl/styles.xml'] = encoder.encode(styles)
-  }
+  let styles = stylesFile ? decoder.decode(stylesFile) : ''
+  const editableStyles = new Set<number>()
 
-  for (const { file, freezeHeader, ranges } of sheets) {
+  for (const { file, freezeHeader, editable, ranges } of sheets) {
     const sheetFile = files[file]
     if (!sheetFile) continue
     let xml = decoder.decode(sheetFile)
     if (freezeHeader) xml = freezeHeaderRow(xml)
+    if (editable) {
+      xml = xml.replace('</sheetData>', `</sheetData>${SHEET_PROTECTION}`)
+      for (const style of styleIndexesOf(xml, expandRefs(editable))) editableStyles.add(style)
+    }
     let priority = 1
     const blocks = ranges
       .map((range) => {
@@ -534,6 +615,12 @@ function patchWorkbook(
       ? xml.replace('<ignoredErrors', `${blocks}<ignoredErrors`)
       : xml.replace('</worksheet>', `${blocks}</worksheet>`)
     files[file] = encoder.encode(xml)
+  }
+
+  if (stylesFile) {
+    styles = styles.replace(/<dxfs count="0"\/>/, DXF_BLOCK)
+    if (editableStyles.size > 0) styles = unlockCellXfs(styles, editableStyles)
+    files['xl/styles.xml'] = encoder.encode(styles)
   }
 
   const output = zipSync(files)
@@ -567,6 +654,8 @@ export function buildPurchaseTrackerWorkbook(
     {
       file: 'xl/worksheets/sheet1.xml',
       freezeHeader: true,
+      // Only the Cut counts are typed by hand; layout, stock, marks and totals stay locked.
+      editable: [`F${DATA_ROW}:F${nestingLast}`],
       ranges: [
         {
           sqref: `F${DATA_ROW}:F${nestingLast}`,
@@ -581,6 +670,8 @@ export function buildPurchaseTrackerWorkbook(
     {
       file: 'xl/worksheets/sheet2.xml',
       freezeHeader: true,
+      // Picked-up counts are the only input here; Cut and Status are formula-driven.
+      editable: [`E${DATA_ROW}:E${marksLast}`],
       ranges: [
         {
           sqref: `D${DATA_ROW}:D${marksLast}`,
@@ -612,6 +703,8 @@ export function buildPurchaseTrackerWorkbook(
     {
       file: 'xl/worksheets/sheet3.xml',
       freezeHeader: true,
+      // The buy list is all derived from the other sheets, so nothing on it is editable.
+      editable: [],
       ranges: [
         {
           sqref: `E${DATA_ROW}:E${buyLast}`,

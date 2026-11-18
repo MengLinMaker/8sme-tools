@@ -171,4 +171,45 @@ describe('buildPurchaseTrackerWorkbook', () => {
       expect(sheet['!autofilter']?.ref?.startsWith('A2:')).toBe(true)
     }
   })
+
+  it('protects every sheet and leaves only the hand-typed cells unlocked', () => {
+    const bytes = buildPurchaseTrackerWorkbookForGroups([rhsGroup()], 'NW31')
+    const files = unzipSync(new Uint8Array(bytes))
+    const decoder = new TextDecoder()
+    const styles = decoder.decode(files['xl/styles.xml'])
+
+    const xfAt = (index: number): string => {
+      const start = styles.indexOf('<cellXfs')
+      const body = styles.slice(styles.indexOf('>', start) + 1, styles.indexOf('</cellXfs>'))
+      const xfs = body.match(/<xf\b[^>]*?\/>|<xf\b[^>]*>[\s\S]*?<\/xf>/g) ?? []
+      const xf = xfs[index]
+      if (!xf) throw new Error(`no xf ${index}`)
+      return xf
+    }
+    const styleOf = (xml: string, ref: string): number => {
+      const tag = new RegExp(`<c r="${ref}"([^>]*)>`).exec(xml)?.[1] ?? ''
+      return Number(/s="(\d+)"/.exec(tag)?.[1])
+    }
+
+    for (const name of ['sheet1', 'sheet2', 'sheet3']) {
+      const xml = decoder.decode(files[`xl/worksheets/${name}.xml`])
+      expect(xml).toContain('<sheetProtection')
+      // Protection must sit between the data and the autofilter, per the sheet schema.
+      expect(xml.indexOf('<sheetProtection')).toBeGreaterThan(xml.indexOf('</sheetData>'))
+      expect(xml.indexOf('<sheetProtection')).toBeLessThan(xml.indexOf('<autoFilter'))
+      // Filtering and sorting stay available on a protected sheet.
+      expect(xml).toContain('autoFilter="0"')
+      expect(xml).toContain('sort="0"')
+    }
+
+    const nesting = decoder.decode(files['xl/worksheets/sheet1.xml'])
+    const marks = decoder.decode(files['xl/worksheets/sheet2.xml'])
+    const buy = decoder.decode(files['xl/worksheets/sheet3.xml'])
+    expect(xfAt(styleOf(nesting, 'F3'))).toContain('<protection locked="0"/>')
+    expect(xfAt(styleOf(marks, 'E3'))).toContain('<protection locked="0"/>')
+    // Everything else — headers, marks, totals, the whole buy list — stays locked.
+    expect(xfAt(styleOf(nesting, 'A2'))).not.toContain('locked="0"')
+    expect(xfAt(styleOf(nesting, 'E1'))).not.toContain('locked="0"')
+    expect(xfAt(styleOf(buy, 'D3'))).not.toContain('locked="0"')
+  })
 })
