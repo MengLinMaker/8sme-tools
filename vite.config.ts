@@ -15,6 +15,12 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  optimizeDeps: {
+    // The tracker workbook is only reached through `await import()` in the purchase dialog, so it
+    // can miss Vite's initial scan — the export then triggers a late re-optimize (504 on the dep,
+    // surfacing as "Failed to fetch dynamically imported module"). Pre-bundle it at startup.
+    include: ['xlsx-js-style', 'fflate'],
+  },
   plugins: [
     tanstackRouter({ target: 'react', autoCodeSplitting: true }),
     react(),

@@ -465,13 +465,28 @@ const DXF_BLOCK = `<dxfs count="4">
 <dxf><fill><patternFill><bgColor rgb="FFBDD7EE"/></patternFill></fill></dxf>
 </dxfs>`
 
+/** Frozen top row so the header stays readable down a long layout/mark list. */
+const FROZEN_HEADER =
+  '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
+  '<selection pane="bottomLeft" activeCell="A2" sqref="A2"/>'
+
+/** Rewrite the sheetView xlsx-js-style writes (empty) into a frozen-pane view. */
+function freezeHeaderRow(xml: string): string {
+  const selfClosing = /<sheetView(?: [^>]*)?\/>/
+  if (selfClosing.test(xml)) {
+    return xml.replace(selfClosing, (tag) => `${tag.slice(0, -2)}>${FROZEN_HEADER}</sheetView>`)
+  }
+  return xml.replace(/(<sheetView(?: [^>]*)?>)/, `$1${FROZEN_HEADER}`)
+}
+
 /**
- * xlsx-js-style has no conditional-formatting writer, so lift the styles/fills into the generated
- * package. This keeps the status and 0/partial/full colours live as the shop edits the workbook.
+ * xlsx-js-style has no conditional-formatting or freeze-pane writer, so lift the styles/fills and
+ * frozen header into the generated package. This keeps the status and 0/partial/full colours live
+ * as the shop edits the workbook, with the headings in view while scrolling.
  */
-function addConditionalFormatting(
+function patchWorkbook(
   bytes: ArrayBuffer,
-  sheets: { file: string; ranges: CfRange[] }[],
+  sheets: { file: string; freezeHeader?: boolean; ranges: CfRange[] }[],
 ): ArrayBuffer {
   const files = unzipSync(new Uint8Array(bytes))
   const decoder = new TextDecoder()
@@ -483,10 +498,11 @@ function addConditionalFormatting(
     files['xl/styles.xml'] = encoder.encode(styles)
   }
 
-  for (const { file, ranges } of sheets) {
+  for (const { file, freezeHeader, ranges } of sheets) {
     const sheetFile = files[file]
     if (!sheetFile) continue
     let xml = decoder.decode(sheetFile)
+    if (freezeHeader) xml = freezeHeaderRow(xml)
     let priority = 1
     const blocks = ranges
       .map((range) => {
@@ -532,9 +548,10 @@ export function buildPurchaseTrackerWorkbook(
   XLSX.utils.book_append_sheet(workbook, buyListSheet(model), BUY_LIST_SHEET)
   const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer
 
-  return addConditionalFormatting(bytes, [
+  return patchWorkbook(bytes, [
     {
       file: 'xl/worksheets/sheet1.xml',
+      freezeHeader: true,
       ranges: [
         {
           sqref: `F2:F${nestingLast}`,
@@ -548,6 +565,7 @@ export function buildPurchaseTrackerWorkbook(
     },
     {
       file: 'xl/worksheets/sheet2.xml',
+      freezeHeader: true,
       ranges: [
         {
           sqref: `D2:D${marksLast}`,
@@ -578,6 +596,7 @@ export function buildPurchaseTrackerWorkbook(
     },
     {
       file: 'xl/worksheets/sheet3.xml',
+      freezeHeader: true,
       ranges: [
         {
           sqref: `E2:E${buyLast}`,

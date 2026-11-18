@@ -141,4 +141,21 @@ describe('buildPurchaseTrackerWorkbook', () => {
     expect(buy).toContain('conditionalFormatting')
     expect(styles).toContain('<dxfs count="4">')
   })
+
+  it('freezes the header row on every sheet', () => {
+    const bytes = buildPurchaseTrackerWorkbookForGroups([rhsGroup()], 'NW31')
+    const files = unzipSync(new Uint8Array(bytes))
+    const decoder = new TextDecoder()
+    for (const file of [
+      'xl/worksheets/sheet1.xml',
+      'xl/worksheets/sheet2.xml',
+      'xl/worksheets/sheet3.xml',
+    ]) {
+      const xml = decoder.decode(files[file])
+      expect(xml).toContain('state="frozen"')
+      expect(xml).toContain('ySplit="1"')
+      expect(xml).toContain('topLeftCell="A2"')
+      expect(xml).not.toContain('xSplit')
+    }
+  })
 })
