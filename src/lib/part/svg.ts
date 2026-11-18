@@ -102,6 +102,71 @@ const pointsAttr = (points: UvPoint[]): string =>
 const escapeXml = (value: string): string =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
+/** How close a developed end cut must come to the net edge to count as spanning it (mm). */
+const EDGE_MATCH_MM = 1
+
+function crossProduct(o: UvPoint, a: UvPoint, b: UvPoint): number {
+  return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+}
+
+function signedArea(points: UvPoint[]): number {
+  let twice = 0
+  for (let index = 0; index < points.length; index++) {
+    const a = points[index] as UvPoint
+    const b = points[(index + 1) % points.length] as UvPoint
+    twice += a[0] * b[1] - b[0] * a[1]
+  }
+  return twice / 2
+}
+
+/** True when two non-adjacent edges of the closed polygon properly cross. */
+function selfIntersects(points: UvPoint[]): boolean {
+  const count = points.length
+  for (let i = 0; i < count; i++) {
+    const a = points[i] as UvPoint
+    const b = points[(i + 1) % count] as UvPoint
+    for (let j = i + 2; j < count; j++) {
+      if (i === 0 && j === count - 1) continue
+      const c = points[j] as UvPoint
+      const d = points[(j + 1) % count] as UvPoint
+      if (
+        crossProduct(a, b, c) * crossProduct(a, b, d) < 0 &&
+        crossProduct(c, d, a) * crossProduct(c, d, b) < 0
+      )
+        return true
+    }
+  }
+  return false
+}
+
+/**
+ * The material panel behind a chart: the strip between the two end cuts.
+ *
+ * `startCut`/`endCut` are only a usable boundary when **both** reach the net edges and the two
+ * curves do not cross. A square-cut end develops to a single station (the stock edges, not a
+ * trim), and a notched end can step back at one station. Clipping to such a boundary drew an
+ * empty or bow-tied panel — the rounded-corner strips and face lines vanished with it. Return
+ * `null` so the caller falls back to the full net rectangle.
+ */
+function materialBoundary(part: PartIr, half: number): UvPoint[] | null {
+  const start = part.startCut
+  const end = part.endCut
+  if (!start || !end || start.length < 2 || end.length < 2) return null
+  const stations = [...start, ...end].map(([station]) => station)
+  if (Math.min(...stations) > -half + EDGE_MATCH_MM || Math.max(...stations) < half - EDGE_MATCH_MM)
+    return null
+  // Walk each cut in station order, then trace the other back to close the strip. Keep the
+  // developed order (never sort by station: a notched end's step would become a crossing).
+  const oriented = (points: UvPoint[]): UvPoint[] => {
+    const first = points[0] as UvPoint
+    const last = points[points.length - 1] as UvPoint
+    return first[0] <= last[0] ? points : [...points].reverse()
+  }
+  const polygon = [...oriented(start), ...oriented(end).reverse()]
+  if (Math.abs(signedArea(polygon)) < 1e-6 || selfIntersects(polygon)) return null
+  return polygon
+}
+
 const STROKE = '#94a3b8'
 const HOLE = '#38bdf8'
 const MARK = '#fb923c'
@@ -360,15 +425,8 @@ function chartLayer(
     }
   }
   const body = `${elements.join('\n')}`
-  const cutBoundary =
-    chart.id === 'front' && part.startCut && part.endCut
-      ? (() => {
-          const start = [...part.startCut].sort((a, b) => a[0] - b[0])
-          const end = [...part.endCut].sort((a, b) => a[0] - b[0])
-          return pointsAttr([...start, ...end.reverse()])
-        })()
-      : null
-  const clip = cutBoundary
+  const boundary = chart.id === 'front' ? materialBoundary(part, half) : null
+  const clip = boundary ? pointsAttr(boundary) : null
   const background = clip
     ? `<polygon points="${clip}" fill="#0f172a" stroke="none"/>`
     : `<rect x="${fmt(-half)}" y="0" width="${fmt(chart.layout.seam)}" height="${fmt(part.length)}" fill="#0f172a" stroke="#334155" stroke-width="${fmt(stroke * 0.7)}"/>`

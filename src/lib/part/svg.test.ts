@@ -75,6 +75,34 @@ describe('PartIR SVG view', () => {
     expect(svg).toContain('fill-opacity="0.22"')
   })
 
+  it('never clips the material panel to a degenerate end cut', () => {
+    // M-35 is a square-cut SHS: both ends develop to a single station, so the strip between them
+    // has zero area. Clipping to it blanked the panel (and the rounded-corner strips with it).
+    const ir = part('M-35')
+    expect(ir.startCut).toHaveLength(2)
+    const svg = partIrSvg(ir)
+    expect(svg).not.toContain('<clipPath')
+    expect(svg).toContain('fill="#0f172a" stroke="#334155"')
+  })
+
+  it('keeps the cut-boundary clip for a shaped end', () => {
+    const ir = part('M-3')
+    const half = (ir.charts[0]?.layout.seam ?? 0) / 2
+    const svg = partIrSvg(ir)
+    const clip = /<clipPath id="[^"]+"><polygon points="([^"]+)"/.exec(svg)
+    expect(clip).not.toBeNull()
+    const stations = (clip?.[1] ?? '').split(' ').map((pair) => Number(pair.split(',')[0]))
+    expect(Math.min(...stations)).toBeCloseTo(-half, 0)
+    expect(Math.max(...stations)).toBeCloseTo(half, 0)
+  })
+
+  it('falls back to the net when an end cut does not span the perimeter', () => {
+    // M-42's developed end boundary covers only part of the net; the sorted polygon used to
+    // bow-tie and paint a nonsense material panel.
+    const ir = part('M-42')
+    expect(partIrSvg(ir)).not.toContain('<clipPath')
+  })
+
   it('draws cut polylines and marks from the canonical UV geometry', () => {
     const ir = part('M-3')
     const svg = partIrSvg(ir)
