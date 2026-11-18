@@ -112,6 +112,12 @@ describe('filterParts', () => {
     expect(marks(filterParts(shaped, '300plus', context))).toEqual(['A', 'B'])
   })
 
+  it('matches a section label that only the STEP geometry supplied', () => {
+    const shaped: PartRecord[] = [{ mark: 'A' }, { mark: 'B' }]
+    const context = { ...baseContext([]), sectionLabels: new Map([['A', '200UB29.8']]) }
+    expect(marks(filterParts(shaped, '200ub', context))).toEqual(['A'])
+  })
+
   it('keeps every part when the query is blank', () => {
     const context = baseContext(findings)
     expect(filterParts(parts, '   ', context)).toBe(parts)

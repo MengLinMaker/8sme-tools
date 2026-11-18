@@ -33,6 +33,11 @@ export interface PartFilterContext {
   modelChecks?: Map<string, { ok: boolean; error?: string }>
   /** Marks whose NC carries welding-location etchings. */
   weldingMarks?: ReadonlySet<string>
+  /**
+   * Each part's section label. A part with no NC or part-list profile gets its section read off
+   * the STEP, so without this its profile would not be searchable.
+   */
+  sectionLabels?: ReadonlyMap<string, string>
   /** Finds a finding's human text (localised) so free-text search can match it. */
   findingText?: (finding: Finding) => string
   /** Finds the localised weld-etching description for a mark. */
@@ -117,6 +122,7 @@ export function partSearchText(part: PartRecord, context: PartFilterContext): st
     part.nc?.grade,
     part.nc?.orientation,
     material?.section,
+    context.sectionLabels?.get(part.mark),
     part.step ? 'step' : undefined,
     part.nc ? 'nc' : undefined,
     part.pdf ? 'pdf' : undefined,

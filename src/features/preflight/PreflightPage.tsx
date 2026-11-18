@@ -285,6 +285,7 @@ function FilterPill({
         event.stopPropagation()
         onToggle(token)
       }}
+      onKeyDown={(event) => event.stopPropagation()}
       className={cn(
         'cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring',
         active && 'ring-2 ring-ring ring-offset-1 ring-offset-card',
@@ -2836,6 +2837,11 @@ export function PreflightPage() {
         : [],
     [result, sort, activeFindings, drawingMaterials, modelChecks, weldEtchings, pieceMass],
   )
+  /** Each part's section label, so a profile is searchable even when it came from the STEP. */
+  const sectionLabels = useMemo(
+    () => new Map((result?.parts ?? []).map((part) => [part.mark, sectionLabel(part)])),
+    [result, sectionLabel],
+  )
   /** Everything the parts search can match: mark, profile/grade, findings and weld etchings. */
   const partFilterContext = useMemo<PartFilterContext>(
     () => ({
@@ -2843,13 +2849,14 @@ export function PreflightPage() {
       materials: drawingMaterials,
       modelChecks,
       weldingMarks: new Set(weldEtchings.keys()),
+      sectionLabels,
       findingText,
       weldingText: (mark) => {
         const etchings = weldEtchings.get(mark)
         return etchings ? weldEtchingsTitle(t, etchings) : ''
       },
     }),
-    [activeFindings, drawingMaterials, modelChecks, weldEtchings, findingText, t],
+    [activeFindings, drawingMaterials, modelChecks, weldEtchings, sectionLabels, findingText, t],
   )
   /** Distinct assemblies in the job, for the filter and the assembly column. */
   const assemblyOptions = useMemo(() => {
@@ -4304,11 +4311,7 @@ export function PreflightPage() {
                 {t('preflight.parts.title')}
                 <span className="text-sm font-normal text-muted-foreground">
                   ({visibleParts.length}
-                  {(markQuery.trim() || assemblyFilter) &&
-                  sortedParts.length !== visibleParts.length
-                    ? `/${sortedParts.length}`
-                    : ''}
-                  )
+                  {sortedParts.length !== visibleParts.length ? `/${sortedParts.length}` : ''})
                 </span>
                 {drawingChecking && (
                   <span className="text-xs font-normal text-muted-foreground">
@@ -4514,6 +4517,7 @@ export function PreflightPage() {
                       ? part.assemblies?.find((usage) => usage.assembly === assemblyFilter)
                       : undefined
                     const qtyKnown = assemblyUsage != null || pdfQty != null || ncQty != null
+                    const section = sectionLabel(part)
                     return (
                       <TableRow
                         key={part.mark}
@@ -4692,7 +4696,18 @@ export function PreflightPage() {
                         >
                           {mass != null ? `${mass.toFixed(1)} kg` : '—'}
                         </TableCell>
-                        <TableCell className="font-mono text-xs">{sectionLabel(part)}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          <FilterPill
+                            token={section}
+                            active={isFilterTokenActive(section)}
+                            title={t('preflight.columns.profile')}
+                            onToggle={toggleFilterToken}
+                          >
+                            <Badge variant="muted" className="font-mono">
+                              {section}
+                            </Badge>
+                          </FilterPill>
+                        </TableCell>
                         <TableCell className="text-xs">
                           {overrideFor(part) ? (
                             <Badge variant="success">
