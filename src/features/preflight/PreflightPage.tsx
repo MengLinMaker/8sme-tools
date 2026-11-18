@@ -62,6 +62,7 @@ import { assessUnclosedCutsGeometry, type UnclosedCutIssue } from '@/lib/audit/u
 import { findWeldingEtchings, type WeldingEtchings } from '@/lib/audit/weldingEtchings'
 import { downloadBlob, fileStem } from '@/lib/download'
 import { onGlobalDrop } from '@/lib/dropTarget'
+import { formatMass, formatNumber } from '@/lib/format'
 import { MACHINE } from '@/lib/machine/profile'
 import {
   moveCutInNc,
@@ -820,9 +821,39 @@ export function PreflightPage() {
   }, [])
 
   /**
-   * One drop listener for the page: a file dropped anywhere loads a job, whether or not a zone is on
-   * screen — the empty state has the big one, a loaded job has the compact one inside its card, and
-   * that card can be collapsed. The zone component is only the visible target.
+   * Adds a drop to the loaded job: a same-path file replaces the old one, everything else is kept
+   * and appended. New entries go first so a part that the export renamed (`old/M-1.nc1` →
+   * `job/M-1.nc1`) audits the new file — the audit keeps the first file it sees per mark.
+   */
+  const addToBundle = useCallback(
+    (input: InputBundle) => {
+      if (!bundle) {
+        handleBundle(input)
+        return
+      }
+      const added = new Map(input.entries.map((entry) => [entry.path, entry]))
+      if (added.size === 0) return
+      const replaced = bundle.entries.filter((entry) => added.has(entry.path))
+      const entries = [
+        ...added.values(),
+        ...bundle.entries.filter((entry) => !added.has(entry.path)),
+      ]
+      // A replaced file invalidates that part's edits: an NC op is indexed into the old text.
+      const marks = new Set(replaced.map((entry) => markFromFilename(entry.path)))
+      setError(null)
+      setBundle({ ...bundle, entries })
+      setViewing(null)
+      setNcOverrides((prev) => withoutKeys(prev, marks))
+      setStepOverrides((prev) => withoutKeys(prev, marks))
+      setResolvedFixes((prev) => withoutKeys(prev, marks))
+      setResult(auditEntries(bundle.sourceName, entries))
+    },
+    [bundle, handleBundle],
+  )
+
+  /**
+   * One drop listener for the page: a drop anywhere loads a job, or adds to the loaded one. The
+   * card can be collapsed, so the visible zone is a target, not the only way in.
    */
   useEffect(
     () =>
@@ -834,13 +865,14 @@ export function PreflightPage() {
               setError(t('dropzone.noFiles'))
               return
             }
-            handleBundle(dropped)
+            if (bundle) addToBundle(dropped)
+            else handleBundle(dropped)
           } catch (err) {
             setError(err instanceof Error ? err.message : String(err))
           }
         })()
       }),
-    [handleBundle, t],
+    [bundle, addToBundle, handleBundle, t],
   )
 
   /** Back to the empty page: no job, no derived state (the drop zone is all that is left). */
@@ -4290,10 +4322,9 @@ export function PreflightPage() {
         <JobPanel
           sourceName={bundle.sourceName}
           entries={bundle.entries}
-          onBundle={handleBundle}
+          onAdd={addToBundle}
           onError={setError}
           onDelete={deleteEntries}
-          onDeleteAll={clearBundle}
         />
       ) : (
         <DropZone onBundle={handleBundle} onError={setError} />
@@ -4316,7 +4347,10 @@ export function PreflightPage() {
           />
           <Stat
             label={t('preflight.stats.totalMass')}
-            value={totalMassKg > 0 ? `${totalMassKg.toFixed(1)} kg` : '—'}
+            value={totalMassKg > 0 ? formatMass(totalMassKg, i18n.language) : '—'}
+            title={
+              totalMassKg > 0 ? `${formatNumber(totalMassKg, 1, i18n.language)} kg` : undefined
+            }
             pending={analyzing && drawingChecking}
           />
         </section>
@@ -4404,7 +4438,7 @@ export function PreflightPage() {
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs">
                         {group.massKg > 0 ? (
-                          group.massKg.toFixed(1)
+                          formatMass(group.massKg, i18n.language)
                         ) : (
                           <span className="text-muted-foreground">
                             {t('preflight.profiles.noMass')}
@@ -5466,7 +5500,7 @@ function PartSummary({
   qty?: number | null
   lengthMm?: number | null
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const section = profile ?? listedProfile(part) ?? '—'
   const qty = qtyProp ?? material?.qty ?? part.expected?.qty ?? part.nc?.quantity ?? null
   const length = lengthMm ?? material?.length ?? part.expected?.length ?? part.nc?.length ?? null
@@ -5478,7 +5512,7 @@ function PartSummary({
     [t('preflight.columns.grade'), grade],
     [t('preflight.columns.qty'), qty != null ? String(qty) : '—'],
     [t('preflight.meta.length'), length != null ? `${length} mm` : '—'],
-    [t('preflight.meta.mass'), mass != null ? `${mass.toFixed(1)} kg` : '—'],
+    [t('preflight.meta.mass'), mass != null ? formatMass(mass, i18n.language) : '—'],
   ]
   return (
     <div className="overflow-hidden rounded-lg border border-border">
@@ -6042,14 +6076,19 @@ function Stat({
   value,
   tone,
   pending,
+  title,
 }: {
   label: string
   value: number | string
   tone?: Severity
   pending?: boolean
+  title?: string
 }) {
   return (
-    <div className="flex flex-col gap-0.5 rounded-xl border border-border bg-card px-3.5 py-3">
+    <div
+      className="flex flex-col gap-0.5 rounded-xl border border-border bg-card px-3.5 py-3"
+      title={title}
+    >
       <span className={cn('text-2xl font-bold tracking-tight', tone && STAT_TONE[tone])}>
         {pending ? '…' : value}
       </span>

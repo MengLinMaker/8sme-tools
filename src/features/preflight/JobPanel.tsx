@@ -1,11 +1,9 @@
-import { ChevronDown, FolderOpen, Trash2 } from 'lucide-react'
-import { Fragment, useMemo, useState } from 'react'
+import { ChevronRight, Folder, Trash2 } from 'lucide-react'
+import { Fragment, type ReactNode, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Dialog } from '@/components/ui/dialog'
 import {
   Table,
   TableBody,
@@ -38,12 +36,6 @@ function baseName(path: string): string {
   return parts[parts.length - 1] ?? path
 }
 
-/** The folder a file sits in (`''` for the job root). */
-function folderOf(path: string): string {
-  const index = path.lastIndexOf('/')
-  return index < 0 ? '' : path.slice(0, index)
-}
-
 function kindOf(path: string): string {
   const name = baseName(path)
   const dot = name.lastIndexOf('.')
@@ -59,68 +51,191 @@ export function formatBytes(bytes: number): string {
   return `${(kb / 1024).toFixed(1)} MB`
 }
 
-interface FileGroup {
-  /** Folder path, `''` for the job root. */
-  folder: string
-  entries: ZipEntry[]
+/** One folder in the job's tree; `path` is its full folder path (`''` for the job root). */
+interface TreeNode {
+  /** Last path segment, used as the label. */
+  name: string
+  path: string
+  /** Files directly in this folder. */
+  files: ZipEntry[]
+  folders: TreeNode[]
+  /** Files in this folder and everything below it. */
+  count: number
   bytes: number
 }
 
-/** Entries grouped by folder: root first, then folders and files alphabetically. */
-function groupFiles(entries: ZipEntry[]): FileGroup[] {
-  const groups = new Map<string, FileGroup>()
+function emptyNode(name: string, path: string): TreeNode {
+  return { name, path, files: [], folders: [], count: 0, bytes: 0 }
+}
+
+/** Builds the folder tree, then sorts and totals it bottom-up. */
+function buildTree(entries: ZipEntry[]): TreeNode {
+  const root = emptyNode('', '')
+  const folders = new Map<string, TreeNode>([['', root]])
+
   for (const entry of entries) {
-    const folder = folderOf(entry.path)
-    const group = groups.get(folder) ?? { folder, entries: [], bytes: 0 }
-    group.entries.push(entry)
-    group.bytes += entry.bytes.length
-    groups.set(folder, group)
+    const segments = entry.path.split('/')
+    segments.pop()
+    let parent = root
+    let path = ''
+    for (const segment of segments) {
+      path = path === '' ? segment : `${path}/${segment}`
+      let node = folders.get(path)
+      if (!node) {
+        node = emptyNode(segment, path)
+        folders.set(path, node)
+        parent.folders.push(node)
+      }
+      parent = node
+    }
+    parent.files.push(entry)
   }
-  const list = [...groups.values()]
-  for (const group of list) {
-    group.entries.sort((a, b) =>
+
+  const sortAndTotal = (node: TreeNode) => {
+    node.files.sort((a, b) =>
       baseName(a.path).localeCompare(baseName(b.path), undefined, { numeric: true }),
     )
+    node.folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+    for (const child of node.folders) sortAndTotal(child)
+    node.count = node.files.length + node.folders.reduce((sum, child) => sum + child.count, 0)
+    node.bytes =
+      node.files.reduce((sum, file) => sum + file.bytes.length, 0) +
+      node.folders.reduce((sum, child) => sum + child.bytes, 0)
   }
-  return list.sort((a, b) => {
-    if (a.folder === b.folder) return 0
-    if (a.folder === '') return -1
-    if (b.folder === '') return 1
-    return a.folder.localeCompare(b.folder, undefined, { numeric: true })
-  })
+  sortAndTotal(root)
+  return root
+}
+
+/** Every file path at or below a folder — what its delete action removes. */
+function pathsIn(node: TreeNode): string[] {
+  const paths = node.files.map((file) => file.path)
+  for (const child of node.folders) paths.push(...pathsIn(child))
+  return paths
+}
+
+/** Indentation for a tree row: one folder level per 14px. */
+function indent(depth: number) {
+  return { paddingLeft: `${8 + depth * 14}px` }
 }
 
 /**
- * The loaded job: its name, the drop target that replaces it, and the files it contains grouped by
- * folder with a remove action per file, per folder and for the whole job.
+ * The loaded job: its name, a drop target that **adds** files to it, and a collapsible folder tree
+ * with a remove action per file and per folder.
  *
- * Everything is session state — the original `.zip` is untouched. Removing a file drops it from the
- * set the audit re-runs over, and with it the affected part's applied fixes, because an NC edit is
- * indexed into the NC text it was made against.
+ * Everything is session state — the original `.zip` is untouched. Removing (or replacing) a file
+ * drops the affected part's applied fixes with it, because an NC edit is indexed into the NC text it
+ * was made against.
  */
 export function JobPanel({
   sourceName,
   entries,
-  onBundle,
+  onAdd,
   onError,
   onDelete,
-  onDeleteAll,
 }: {
   sourceName: string
   entries: ZipEntry[]
-  onBundle: (bundle: InputBundle) => void
+  /** Adds files to the job; same-path entries replace, everything else is kept. */
+  onAdd: (bundle: InputBundle) => void
   onError?: (message: string) => void
   onDelete: (paths: string[]) => void
-  onDeleteAll: () => void
 }) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(true)
-  const [confirmAll, setConfirmAll] = useState(false)
-  const groups = useMemo(() => groupFiles(entries), [entries])
-  const totalBytes = useMemo(
-    () => entries.reduce((sum, entry) => sum + entry.bytes.length, 0),
-    [entries],
+  // Collapsed by default: the header already says which job is loaded and how big it is.
+  const [open, setOpen] = useState(false)
+  /** Folder paths the operator has expanded; empty means just the root's own files. */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
+  const tree = useMemo(() => buildTree(entries), [entries])
+  const totalBytes = tree.bytes
+
+  const toggleFolder = (path: string) => {
+    setExpanded((current) => {
+      const next = new Set(current)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  /** A file row, indented under its folder. */
+  const fileRow = (entry: ZipEntry, depth: number) => (
+    <TableRow key={entry.path}>
+      <TableCell className="font-mono text-xs" title={entry.path} style={indent(depth)}>
+        {baseName(entry.path)}
+      </TableCell>
+      <TableCell className="w-px">
+        <Badge variant="muted" className="font-mono">
+          {kindOf(entry.path)}
+        </Badge>
+      </TableCell>
+      <TableCell className="w-px text-right font-mono text-xs tabular-nums text-muted-foreground">
+        {formatBytes(entry.bytes.length)}
+      </TableCell>
+      <TableCell className="w-px text-right">
+        <button
+          type="button"
+          title={t('preflight.files.delete', { name: baseName(entry.path) })}
+          aria-label={t('preflight.files.delete', { name: baseName(entry.path) })}
+          onClick={() => onDelete([entry.path])}
+          className="rounded p-1 text-muted-foreground hover:text-destructive-foreground"
+        >
+          <Trash2 className="size-3.5" aria-hidden />
+        </button>
+      </TableCell>
+    </TableRow>
   )
+
+  /** A folder row plus, when expanded, its files and subfolders. */
+  const folderRows = (node: TreeNode, depth: number): ReactNode => {
+    const isOpen = expanded.has(node.path)
+    return (
+      <Fragment key={node.path}>
+        <TableRow className="bg-muted/40 hover:bg-muted/40">
+          <TableCell className="py-1.5" colSpan={2} style={indent(depth)}>
+            <button
+              type="button"
+              aria-expanded={isOpen}
+              onClick={() => toggleFolder(node.path)}
+              className="flex items-center gap-1.5 rounded-sm text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <ChevronRight
+                className={cn(
+                  'size-3.5 shrink-0 text-muted-foreground transition-transform',
+                  isOpen && 'rotate-90',
+                )}
+                aria-hidden
+              />
+              <Folder className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="font-mono">{node.name}/</span>
+              <span className="text-muted-foreground">
+                {t('preflight.files.count', { count: node.count })}
+              </span>
+            </button>
+          </TableCell>
+          <TableCell className="py-1.5 text-right font-mono text-xs text-muted-foreground">
+            {formatBytes(node.bytes)}
+          </TableCell>
+          <TableCell className="py-1.5 text-right">
+            <button
+              type="button"
+              title={t('preflight.files.deleteFolder', { folder: node.path })}
+              aria-label={t('preflight.files.deleteFolder', { folder: node.path })}
+              onClick={() => onDelete(pathsIn(node))}
+              className="rounded p-1 text-muted-foreground hover:text-destructive-foreground"
+            >
+              <Trash2 className="size-3.5" aria-hidden />
+            </button>
+          </TableCell>
+        </TableRow>
+        {isOpen && (
+          <>
+            {node.files.map((file) => fileRow(file, depth + 1))}
+            {node.folders.map((child) => folderRows(child, depth + 1))}
+          </>
+        )}
+      </Fragment>
+    )
+  }
 
   return (
     <Card>
@@ -131,10 +246,10 @@ export function JobPanel({
           aria-expanded={open}
           className="flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <ChevronDown
+          <ChevronRight
             className={cn(
               'size-4 shrink-0 text-muted-foreground transition-transform',
-              !open && '-rotate-90',
+              open && 'rotate-90',
             )}
           />
           <CardTitle className="flex flex-wrap items-center gap-2">
@@ -149,23 +264,10 @@ export function JobPanel({
             </span>
           </CardTitle>
         </button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={entries.length === 0}
-          onClick={() => setConfirmAll(true)}
-        >
-          {t('preflight.files.deleteAll')}
-        </Button>
       </CardHeader>
       {open && (
         <CardContent className="flex flex-col gap-3">
-          <DropZone
-            compact
-            title={t('dropzone.replaceTitle')}
-            onBundle={onBundle}
-            onError={onError}
-          />
+          <DropZone compact title={t('dropzone.addTitle')} onBundle={onAdd} onError={onError} />
           <Table containerClassName="max-h-[50vh] overflow-auto">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
@@ -176,97 +278,19 @@ export function JobPanel({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {groups.map((group) => (
-                <Fragment key={group.folder || '/'}>
-                  <TableRow className="bg-muted/40 hover:bg-muted/40">
-                    <TableCell className="py-1.5" colSpan={2}>
-                      <span className="flex items-center gap-1.5 text-xs">
-                        <FolderOpen
-                          className="size-3.5 shrink-0 text-muted-foreground"
-                          aria-hidden
-                        />
-                        <span className="font-mono">
-                          {group.folder === '' ? t('preflight.files.root') : `${group.folder}/`}
-                        </span>
-                        <span className="text-muted-foreground">
-                          {t('preflight.files.count', { count: group.entries.length })}
-                        </span>
-                      </span>
-                    </TableCell>
-                    <TableCell className="py-1.5 text-right font-mono text-xs text-muted-foreground">
-                      {formatBytes(group.bytes)}
-                    </TableCell>
-                    <TableCell className="py-1.5 text-right">
-                      <button
-                        type="button"
-                        title={t('preflight.files.deleteFolder', { folder: group.folder || '.' })}
-                        aria-label={t('preflight.files.deleteFolder', {
-                          folder: group.folder || '.',
-                        })}
-                        onClick={() => onDelete(group.entries.map((entry) => entry.path))}
-                        className="rounded p-1 text-muted-foreground hover:text-destructive-foreground"
-                      >
-                        <Trash2 className="size-3.5" aria-hidden />
-                      </button>
-                    </TableCell>
-                  </TableRow>
-                  {group.entries.map((entry) => (
-                    <TableRow key={entry.path}>
-                      <TableCell className="font-mono text-xs" title={entry.path}>
-                        {baseName(entry.path)}
-                      </TableCell>
-                      <TableCell className="w-px">
-                        <Badge variant="muted" className="font-mono">
-                          {kindOf(entry.path)}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="w-px text-right font-mono text-xs tabular-nums text-muted-foreground">
-                        {formatBytes(entry.bytes.length)}
-                      </TableCell>
-                      <TableCell className="w-px text-right">
-                        <button
-                          type="button"
-                          title={t('preflight.files.delete', { name: baseName(entry.path) })}
-                          aria-label={t('preflight.files.delete', { name: baseName(entry.path) })}
-                          onClick={() => onDelete([entry.path])}
-                          className="rounded p-1 text-muted-foreground hover:text-destructive-foreground"
-                        >
-                          <Trash2 className="size-3.5" aria-hidden />
-                        </button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </Fragment>
-              ))}
+              {entries.length === 0 && (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell colSpan={4} className="text-sm text-muted-foreground">
+                    {t('preflight.files.empty')}
+                  </TableCell>
+                </TableRow>
+              )}
+              {tree.files.map((file) => fileRow(file, 0))}
+              {tree.folders.map((folder) => folderRows(folder, 0))}
             </TableBody>
           </Table>
         </CardContent>
       )}
-      <Dialog
-        open={confirmAll}
-        onClose={() => setConfirmAll(false)}
-        title={t('preflight.files.deleteAllTitle')}
-      >
-        <div className="flex flex-col gap-4 p-5">
-          <p className="text-sm text-muted-foreground">
-            {t('preflight.files.deleteAllHint', { count: entries.length })}
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => setConfirmAll(false)}>
-              {t('common.actions.cancel')}
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => {
-                setConfirmAll(false)
-                onDeleteAll()
-              }}
-            >
-              {t('preflight.files.deleteAll')}
-            </Button>
-          </div>
-        </div>
-      </Dialog>
     </Card>
   )
 }
