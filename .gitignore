@@ -19,3 +19,6 @@ test/.out/
 *.njsproj
 *.sln
 *.sw?
+
+# TanStack Router generator cache (routeTree.gen.ts is the committed output)
+.tanstack/
