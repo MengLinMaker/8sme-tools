@@ -61,6 +61,7 @@ import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib
 import { assessUnclosedCutsGeometry, type UnclosedCutIssue } from '@/lib/audit/unclosedCuts'
 import { findWeldingEtchings, type WeldingEtchings } from '@/lib/audit/weldingEtchings'
 import { downloadBlob, fileStem } from '@/lib/download'
+import { onGlobalDrop } from '@/lib/dropTarget'
 import { MACHINE } from '@/lib/machine/profile'
 import {
   moveCutInNc,
@@ -87,6 +88,7 @@ import { buildNcepFromIr } from '@/lib/part/toNcep'
 import { partIrToNcGeometry } from '@/lib/part/toNcGeometry'
 import type { PurchaseGroupInput } from '@/lib/purchasing/purchase'
 import type { InputBundle } from '@/lib/readInput'
+import { readDroppedInput } from '@/lib/readInput'
 import { yieldToMain } from '@/lib/scheduler'
 import { CUT_FACES, FACE_DIRECTIONS, profileFamily } from '@/lib/sections/canonical'
 import type { SectionGuess } from '@/lib/sections/detect'
@@ -151,7 +153,7 @@ import { cn } from '@/lib/utils'
 import { buildNcepFromNc } from '@/lib/wisecam/fromNc'
 import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
-import { FilesPanel } from './FilesPanel'
+import { JobPanel } from './JobPanel'
 import { NcLegend } from './NcLegend'
 import { createOrbitBus, requestLocation, requestView, type ViewPreset } from './orbitSync'
 import type { DiffStats } from './PartViewer'
@@ -816,6 +818,30 @@ export function PreflightPage() {
     clearViewerModels()
     setResult(auditEntries(input.sourceName, input.entries))
   }, [])
+
+  /**
+   * One drop listener for the page: a file dropped anywhere loads a job, whether or not a zone is on
+   * screen — the empty state has the big one, a loaded job has the compact one inside its card, and
+   * that card can be collapsed. The zone component is only the visible target.
+   */
+  useEffect(
+    () =>
+      onGlobalDrop((input) => {
+        void (async () => {
+          try {
+            const dropped = await readDroppedInput(input)
+            if (dropped.entries.length === 0) {
+              setError(t('dropzone.noFiles'))
+              return
+            }
+            handleBundle(dropped)
+          } catch (err) {
+            setError(err instanceof Error ? err.message : String(err))
+          }
+        })()
+      }),
+    [handleBundle, t],
+  )
 
   /** Back to the empty page: no job, no derived state (the drop zone is all that is left). */
   const clearBundle = useCallback(() => {
@@ -4260,19 +4286,17 @@ export function PreflightPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <DropZone onBundle={handleBundle} onError={setError} />
-
-      {result && (
-        <Card>
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-3">
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">
-              {t('preflight.source')}
-            </span>
-            <span className="font-mono text-lg font-semibold tracking-tight">
-              {result.sourceName}
-            </span>
-          </div>
-        </Card>
+      {result && bundle ? (
+        <JobPanel
+          sourceName={bundle.sourceName}
+          entries={bundle.entries}
+          onBundle={handleBundle}
+          onError={setError}
+          onDelete={deleteEntries}
+          onDeleteAll={clearBundle}
+        />
+      ) : (
+        <DropZone onBundle={handleBundle} onError={setError} />
       )}
 
       {error && (
@@ -4352,7 +4376,7 @@ export function PreflightPage() {
                     </TableHead>
                   </TableRow>
                 </TableHeader>
-                <TableBody>
+                <TableBody className="row-spotlight">
                   {profileGroups.map((group, index) => (
                     <TableRow
                       key={group.profile}
@@ -4604,7 +4628,7 @@ export function PreflightPage() {
                     ))}
                   </TableRow>
                 </TableHeader>
-                <TableBody className="[&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card [&_td:nth-child(2)]:sticky [&_td:nth-child(2)]:left-8 [&_td:nth-child(2)]:z-10 [&_td:nth-child(2)]:bg-card">
+                <TableBody className="row-spotlight row-spotlight--sticky-cols [&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:z-10 [&_td:first-child]:bg-card [&_td:nth-child(2)]:sticky [&_td:nth-child(2)]:left-8 [&_td:nth-child(2)]:z-10 [&_td:nth-child(2)]:bg-card">
                   {visibleParts.length === 0 && (
                     <TableRow className="hover:bg-transparent">
                       <TableCell
@@ -4675,7 +4699,9 @@ export function PreflightPage() {
                           </label>
                         </TableCell>
                         <TableCell className="whitespace-nowrap font-mono text-xs">
-                          {part.mark}
+                          {/* A span so the row spotlight can fade the sticky cell's
+                              contents without fading its opaque background. */}
+                          <span>{part.mark}</span>
                         </TableCell>
                         <TableCell className="text-left">
                           <div className="flex flex-wrap gap-1">
@@ -4875,10 +4901,6 @@ export function PreflightPage() {
             </CardContent>
           )}
         </Card>
-      )}
-
-      {result && bundle && (
-        <FilesPanel entries={bundle.entries} onDelete={deleteEntries} onDeleteAll={clearBundle} />
       )}
 
       <Dialog

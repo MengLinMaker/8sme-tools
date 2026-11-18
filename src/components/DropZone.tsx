@@ -1,7 +1,6 @@
-import { type DragEvent, type InputHTMLAttributes, useEffect, useRef, useState } from 'react'
+import { type DragEvent, type InputHTMLAttributes, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
-import { onGlobalDrop } from '@/lib/dropTarget'
 import {
   type DroppedInput,
   type InputBundle,
@@ -21,9 +20,11 @@ export interface DropZoneProps {
   onBundle: (bundle: InputBundle) => void
   onError?: (message: string) => void
   title?: string
+  /** One-line version, for a page that already has a job loaded. */
+  compact?: boolean
 }
 
-export function DropZone({ onBundle, onError, title }: DropZoneProps) {
+export function DropZone({ onBundle, onError, title, compact }: DropZoneProps) {
   const { t } = useTranslation()
   const [dragging, setDragging] = useState(false)
   const [reading, setReading] = useState(false)
@@ -54,11 +55,6 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
     void ingest(() => readDroppedInput(input), hasPayload ? undefined : t('dropzone.unreadable'))
   }
 
-  // Keep the latest render's handler reachable from the window-level drop listener.
-  const acceptDropRef = useRef(acceptDrop)
-  acceptDropRef.current = acceptDrop
-  useEffect(() => onGlobalDrop((input) => acceptDropRef.current(input)), [])
-
   const onDrop = (event: DragEvent<HTMLFieldSetElement>) => {
     event.preventDefault()
     dragDepth.current = 0
@@ -83,12 +79,39 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
     }
   }
 
+  const label = reading ? t('dropzone.reading') : (title ?? t('dropzone.title'))
+  const actions = (
+    <div className={cn('flex items-center gap-2', !compact && 'flex-wrap justify-center')}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={reading}
+        onClick={() => inputRef.current?.click()}
+      >
+        {t('dropzone.chooseZip')}
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={reading}
+        onClick={() => void chooseFolder()}
+      >
+        {t('dropzone.chooseFolder')}
+      </Button>
+    </div>
+  )
+
   return (
     <fieldset
       data-dropzone=""
       aria-label={t('dropzone.aria')}
       className={cn(
-        'flex flex-col items-center gap-3 rounded-xl border border-dashed px-5 py-9 text-center transition-colors',
+        'rounded-xl border border-dashed transition-colors',
+        compact
+          ? 'flex flex-wrap items-center gap-2 px-3 py-2 text-xs'
+          : 'flex flex-col items-center gap-3 px-5 py-9 text-center',
         dragging
           ? 'border-primary bg-primary/5'
           : 'border-input hover:border-primary/50 hover:bg-accent/40',
@@ -134,29 +157,10 @@ export function DropZone({ onBundle, onError, title }: DropZoneProps) {
           event.target.value = ''
         }}
       />
-      <span className="text-lg font-semibold">
-        {reading ? t('dropzone.reading') : (title ?? t('dropzone.title'))}
+      <span className={cn(compact ? 'mr-auto text-muted-foreground' : 'text-lg font-semibold')}>
+        {label}
       </span>
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={reading}
-          onClick={() => inputRef.current?.click()}
-        >
-          {t('dropzone.chooseZip')}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={reading}
-          onClick={() => void chooseFolder()}
-        >
-          {t('dropzone.chooseFolder')}
-        </Button>
-      </div>
+      {actions}
     </fieldset>
   )
 }

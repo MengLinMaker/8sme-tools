@@ -88,6 +88,7 @@ export const en = {
     title: 'Drop a project .zip / .rar or folder',
     chooseZip: 'Choose .zip / .rar',
     chooseFolder: 'Choose folder',
+    replaceTitle: 'Drop a new job to replace this one',
     noFiles: 'No readable NC / STEP / PDF / part-list files found.',
     unreadable:
       "Couldn't read the dropped item. If it is still inside a .zip, extract it first — or drop the .zip itself. You can also use Choose folder.",
@@ -677,6 +678,7 @@ export const zh = {
     title: '拖入项目 .zip / .rar 或文件夹',
     chooseZip: '选择 .zip / .rar',
     chooseFolder: '选择文件夹',
+    replaceTitle: '拖入新作业以替换当前作业',
     noFiles: '未找到可读取的 NC / STEP / PDF / 零件清单文件。',
     unreadable:
       '无法读取拖入的项目。若它仍在 .zip 压缩包内，请先解压，或直接拖入 .zip 文件。也可以点击“选择文件夹”。',

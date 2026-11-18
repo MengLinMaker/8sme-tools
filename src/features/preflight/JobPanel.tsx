@@ -1,6 +1,7 @@
 import { ChevronDown, FolderOpen, Trash2 } from 'lucide-react'
 import { Fragment, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -13,6 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import type { InputBundle } from '@/lib/readInput'
 import { cn } from '@/lib/utils'
 import type { ZipEntry } from '@/lib/zip'
 
@@ -89,22 +91,30 @@ function groupFiles(entries: ZipEntry[]): FileGroup[] {
 }
 
 /**
- * The files currently loaded in the job, grouped by folder, with a remove action per file, per
- * folder and for the whole job. Everything lives in memory for this session — removing a file drops
- * it from the set the audit re-runs over, and the affected part's applied fixes with it, because an
- * NC edit is indexed into the NC text it was made against.
+ * The loaded job: its name, the drop target that replaces it, and the files it contains grouped by
+ * folder with a remove action per file, per folder and for the whole job.
+ *
+ * Everything is session state — the original `.zip` is untouched. Removing a file drops it from the
+ * set the audit re-runs over, and with it the affected part's applied fixes, because an NC edit is
+ * indexed into the NC text it was made against.
  */
-export function FilesPanel({
+export function JobPanel({
+  sourceName,
   entries,
+  onBundle,
+  onError,
   onDelete,
   onDeleteAll,
 }: {
+  sourceName: string
   entries: ZipEntry[]
+  onBundle: (bundle: InputBundle) => void
+  onError?: (message: string) => void
   onDelete: (paths: string[]) => void
   onDeleteAll: () => void
 }) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)
   const [confirmAll, setConfirmAll] = useState(false)
   const groups = useMemo(() => groupFiles(entries), [entries])
   const totalBytes = useMemo(
@@ -119,7 +129,7 @@ export function FilesPanel({
           type="button"
           onClick={() => setOpen((current) => !current)}
           aria-expanded={open}
-          className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ChevronDown
             className={cn(
@@ -128,7 +138,10 @@ export function FilesPanel({
             )}
           />
           <CardTitle className="flex flex-wrap items-center gap-2">
-            {t('preflight.files.title')}
+            <span className="text-xs uppercase tracking-wide text-muted-foreground">
+              {t('preflight.source')}
+            </span>
+            <span className="truncate font-mono text-base font-semibold">{sourceName}</span>
             <span className="text-sm font-normal text-muted-foreground">
               (
               {t('preflight.files.total', { count: entries.length, size: formatBytes(totalBytes) })}
@@ -146,7 +159,13 @@ export function FilesPanel({
         </Button>
       </CardHeader>
       {open && (
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
+          <DropZone
+            compact
+            title={t('dropzone.replaceTitle')}
+            onBundle={onBundle}
+            onError={onError}
+          />
           <Table containerClassName="max-h-[50vh] overflow-auto">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
