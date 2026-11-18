@@ -85,3 +85,33 @@
     -webkit-font-smoothing: antialiased;
   }
 }
+
+@layer components {
+  /* Row spotlight for the dense preflight tables: the hovered (or keyboard-focused)
+     row keeps full contrast while the rest of the body fades, so a row's saturated
+     status pills can't pull the eye away from the row actually under the cursor. */
+  .row-spotlight > tr > td {
+    transition: opacity 120ms ease-out;
+  }
+
+  .row-spotlight:has(> tr:hover, > tr:focus-within) > tr:not(:hover):not(:focus-within) > td {
+    opacity: 0.4;
+  }
+
+  /* Sticky columns keep their opaque background while faded. Dimming the whole cell
+     would make `bg-card` translucent and ghost whichever columns are scrolled
+     underneath it, so fade the cell's contents instead. The mark is wrapped in a
+     span (and the checkbox already lives in a label) for that reason. */
+  .row-spotlight--sticky-cols:has(> tr:hover, > tr:focus-within)
+    > tr:not(:hover):not(:focus-within)
+    > td:is(:first-child, :nth-child(2)) {
+    opacity: 1;
+  }
+
+  .row-spotlight--sticky-cols:has(> tr:hover, > tr:focus-within)
+    > tr:not(:hover):not(:focus-within)
+    > td:is(:first-child, :nth-child(2))
+    > * {
+    opacity: 0.4;
+  }
+}
