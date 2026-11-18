@@ -1,6 +1,6 @@
 import { useNavigate } from '@tanstack/react-router'
-import { FolderOpen, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { FolderOpen, Search, Trash2, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
 import { Button } from '@/components/ui/button'
@@ -42,6 +42,7 @@ export function ProjectsPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [projects, setProjects] = useState<ProjectMeta[] | null>(null)
+  const [query, setQuery] = useState('')
   const [usage, setUsage] = useState<{ usage?: number; quota?: number }>({})
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -60,6 +61,15 @@ export function ProjectsPage() {
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  const trimmedQuery = query.trim().toLowerCase()
+  const filtered = useMemo(
+    () =>
+      (projects ?? []).filter(
+        (project) => !trimmedQuery || project.name.toLowerCase().includes(trimmedQuery),
+      ),
+    [projects, trimmedQuery],
+  )
 
   /** Import a dropped job: store it, then open it as a project. */
   const startProject = useCallback(
@@ -116,14 +126,43 @@ export function ProjectsPage() {
       <Card>
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
           <CardTitle>{t('preflight.projects.title')}</CardTitle>
-          {usage.usage != null && usage.quota != null && (
-            <span className="text-xs text-muted-foreground">
-              {t('preflight.projects.usage', {
-                used: formatBytes(usage.usage),
-                quota: formatBytes(usage.quota),
-              })}
-            </span>
-          )}
+          <div className="flex flex-wrap items-center gap-3">
+            {projects !== null && projects.length > 0 && (
+              <div className="relative">
+                <Search
+                  className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden
+                />
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={t('preflight.projects.searchPlaceholder')}
+                  aria-label={t('preflight.projects.searchPlaceholder')}
+                  className="h-8 w-56 rounded-md border border-border bg-background pl-7 pr-7 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    onClick={() => setQuery('')}
+                    aria-label={t('preflight.projects.searchClear')}
+                    title={t('preflight.projects.searchClear')}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
+            {usage.usage != null && usage.quota != null && (
+              <span className="text-xs text-muted-foreground">
+                {t('preflight.projects.usage', {
+                  used: formatBytes(usage.usage),
+                  quota: formatBytes(usage.quota),
+                })}
+              </span>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {projects === null ? (
@@ -131,6 +170,10 @@ export function ProjectsPage() {
           ) : projects.length === 0 ? (
             <p className="py-4 text-sm text-muted-foreground">
               {saving ? t('preflight.projects.saving') : t('preflight.projects.empty')}
+            </p>
+          ) : filtered.length === 0 ? (
+            <p className="py-4 text-sm text-muted-foreground">
+              {t('preflight.projects.searchEmpty', { query: query.trim() })}
             </p>
           ) : (
             <Table>
@@ -144,7 +187,7 @@ export function ProjectsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {projects.map((project) => (
+                {filtered.map((project) => (
                   <TableRow
                     key={project.id}
                     className="cursor-pointer"

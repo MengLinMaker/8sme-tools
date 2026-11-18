@@ -290,6 +290,9 @@ export const en = {
       usage: '{{used}} used of {{quota}} available',
       notFound: 'That project is no longer stored in this browser.',
       back: 'Back to projects',
+      searchPlaceholder: 'Filter projects…',
+      searchClear: 'Clear search',
+      searchEmpty: 'No projects match “{{query}}”.',
     },
     files: {
       title: 'Files',
@@ -887,6 +890,9 @@ export const zh = {
       usage: '已用 {{used}}，可用 {{quota}}',
       notFound: '此浏览器中已没有该作业。',
       back: '返回作业列表',
+      searchPlaceholder: '筛选作业…',
+      searchClear: '清除搜索',
+      searchEmpty: '没有匹配“{{query}}”的作业。',
     },
     files: {
       title: '文件',
