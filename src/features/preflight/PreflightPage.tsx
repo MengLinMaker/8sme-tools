@@ -240,7 +240,7 @@ const PART_COLUMNS: {
   /** Fixed column width class, so a value changing length never reflows the table. */
   width: string
 }[] = [
-  { labelKey: 'preflight.columns.mark', key: 'mark', width: 'w-28' },
+  { labelKey: 'preflight.columns.mark', key: 'mark', width: 'w-px' },
   { labelKey: 'preflight.columns.status', key: 'severity', width: 'w-72' },
   {
     labelKey: 'preflight.columns.assembly',
@@ -4600,7 +4600,9 @@ export function PreflightPage() {
                             />
                           </label>
                         </TableCell>
-                        <TableCell className="font-mono text-xs">{part.mark}</TableCell>
+                        <TableCell className="whitespace-nowrap font-mono text-xs">
+                          {part.mark}
+                        </TableCell>
                         <TableCell className="text-left">
                           {pills.length === 0 && !weld ? (
                             <FilterPill
