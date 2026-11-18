@@ -2320,12 +2320,6 @@ export function PreflightPage() {
     [allFindings, stepOverrides],
   )
 
-  const counts = useMemo(() => {
-    const result = { error: 0, warning: 0, info: 0 }
-    for (const finding of activeFindings) result[finding.severity]++
-    return result
-  }, [activeFindings])
-
   /**
    * Pieces for a mark: drawing qty is ground truth, then the part list, then the NC batch qty.
    * A part with none of those (a bare STEP-only article) is a single piece.
@@ -4207,7 +4201,7 @@ export function PreflightPage() {
       )}
 
       {result && (
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label={t('preflight.stats.parts')} value={result.summary.parts} />
           <Stat label={t('preflight.stats.totalQty')} value={totalQty} />
           <Stat
@@ -4219,19 +4213,6 @@ export function PreflightPage() {
             label={t('preflight.stats.totalMass')}
             value={totalMassKg > 0 ? `${totalMassKg.toFixed(1)} kg` : '—'}
             pending={analyzing && drawingChecking}
-          />
-          <Stat label={t('preflight.stats.profiles')} value={profileGroups.length} />
-          <Stat
-            label={t('preflight.stats.errors')}
-            value={counts.error}
-            tone="error"
-            pending={analyzing}
-          />
-          <Stat
-            label={t('preflight.stats.warnings')}
-            value={counts.warning}
-            tone="warning"
-            pending={analyzing}
           />
         </section>
       )}
