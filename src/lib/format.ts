@@ -34,3 +34,14 @@ export function formatMass(kg: number, locale?: string): string {
   }
   return `${formatNumber(kg, 1, locale)} kg`
 }
+
+/** Human-readable byte size (`1.2 MB`) for file lists and storage totals. */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes < 1024) return `${Math.round(bytes)} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${Math.round(kb)} KB`
+  const mb = kb / 1024
+  if (mb < 1024) return `${mb.toFixed(1)} MB`
+  return `${(mb / 1024).toFixed(1)} GB`
+}

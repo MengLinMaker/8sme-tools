@@ -12,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { formatBytes } from '@/lib/format'
 import type { InputBundle } from '@/lib/readInput'
 import { cn } from '@/lib/utils'
 import type { ZipEntry } from '@/lib/zip'
@@ -41,14 +42,6 @@ function kindOf(path: string): string {
   const dot = name.lastIndexOf('.')
   const ext = dot < 0 ? '' : name.slice(dot + 1).toLowerCase()
   return KIND_LABEL[ext] ?? (ext ? ext.toUpperCase() : '—')
-}
-
-/** Human-readable byte size (`1.2 MB`), since a job is mostly megabytes of STEP. */
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  const kb = bytes / 1024
-  if (kb < 1024) return `${Math.round(kb)} KB`
-  return `${(kb / 1024).toFixed(1)} MB`
 }
 
 /** One folder in the job's tree; `path` is its full folder path (`''` for the job root). */

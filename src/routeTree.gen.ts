@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PreflightRouteImport } from './routes/preflight'
+import { Route as PreflightProjectIdRouteImport } from './routes/preflight.$projectId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +23,39 @@ const PreflightRoute = PreflightRouteImport.update({
   path: '/preflight',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PreflightProjectIdRoute = PreflightProjectIdRouteImport.update({
+  id: '/$projectId',
+  path: '/$projectId',
+  getParentRoute: () => PreflightRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/preflight': typeof PreflightRoute
+  '/preflight': typeof PreflightRouteWithChildren
+  '/preflight/$projectId': typeof PreflightProjectIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/preflight': typeof PreflightRoute
+  '/preflight': typeof PreflightRouteWithChildren
+  '/preflight/$projectId': typeof PreflightProjectIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/preflight': typeof PreflightRoute
+  '/preflight': typeof PreflightRouteWithChildren
+  '/preflight/$projectId': typeof PreflightProjectIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/preflight'
+  fullPaths: '/' | '/preflight' | '/preflight/$projectId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/preflight'
-  id: '__root__' | '/' | '/preflight'
+  to: '/' | '/preflight' | '/preflight/$projectId'
+  id: '__root__' | '/' | '/preflight' | '/preflight/$projectId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  PreflightRoute: typeof PreflightRoute
+  PreflightRoute: typeof PreflightRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -65,12 +74,31 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PreflightRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/preflight/$projectId': {
+      id: '/preflight/$projectId'
+      path: '/$projectId'
+      fullPath: '/preflight/$projectId'
+      preLoaderRoute: typeof PreflightProjectIdRouteImport
+      parentRoute: typeof PreflightRoute
+    }
   }
 }
 
+interface PreflightRouteChildren {
+  PreflightProjectIdRoute: typeof PreflightProjectIdRoute
+}
+
+const PreflightRouteChildren: PreflightRouteChildren = {
+  PreflightProjectIdRoute: PreflightProjectIdRoute,
+}
+
+const PreflightRouteWithChildren = PreflightRoute._addFileChildren(
+  PreflightRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  PreflightRoute: PreflightRoute,
+  PreflightRoute: PreflightRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

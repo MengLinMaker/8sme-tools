@@ -1,3 +1,4 @@
+import { useNavigate } from '@tanstack/react-router'
 import { zipSync } from 'fflate'
 import type { TFunction } from 'i18next'
 import {
@@ -88,6 +89,13 @@ import type { PartIr } from '@/lib/part/ir'
 import { partIrSvgParts } from '@/lib/part/svg'
 import { buildNcepFromIr } from '@/lib/part/toNcep'
 import { partIrToNcGeometry } from '@/lib/part/toNcGeometry'
+import {
+  deleteProject,
+  loadProject,
+  putProjectFiles,
+  removeProjectFiles,
+  takeHandOffProject,
+} from '@/lib/projects/store'
 import type { PurchaseGroupInput } from '@/lib/purchasing/purchase'
 import type { InputBundle } from '@/lib/readInput'
 import { readDroppedInput } from '@/lib/readInput'
@@ -741,8 +749,9 @@ function stockThicknessesFor(
   return stockFaceThicknesses(section, holes ?? [], normals)
 }
 
-export function PreflightPage() {
+export function PreflightPage({ projectId }: { projectId: string }) {
   const { t, i18n } = useTranslation()
+  const navigate = useNavigate()
   const findingText = useCallback(
     (finding: Finding) =>
       t(`findings.${finding.code}`, { ...finding.params, defaultValue: finding.message }),
@@ -752,6 +761,10 @@ export function PreflightPage() {
   const [bundle, setBundle] = useState<InputBundle | null>(null)
   const [viewing, setViewing] = useState<PartRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** True while the route's project is being read out of IndexedDB. */
+  const [loadingProject, setLoadingProject] = useState(true)
+  /** The route points at a project this browser no longer has. */
+  const [missingProject, setMissingProject] = useState(false)
   /** Marks ticked in the parts table for the selective PDF/STEP/NC export. */
   const [selectedMarks, setSelectedMarks] = useState<Set<string>>(new Set())
   /** True while an export is re-seating STEPs / re-emitting NCs in the OCC workers. */
@@ -849,8 +862,12 @@ export function PreflightPage() {
       setStepOverrides((prev) => withoutKeys(prev, marks))
       setResolvedFixes((prev) => withoutKeys(prev, marks))
       setResult(auditEntries(bundle.sourceName, entries))
+      // Only the dropped records are written, so adding a part to a big job stays cheap.
+      void putProjectFiles(projectId, bundle.sourceName, input.entries).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
     },
-    [bundle, handleBundle],
+    [bundle, handleBundle, projectId],
   )
 
   /**
@@ -906,7 +923,11 @@ export function PreflightPage() {
       if (removed.length === 0) return
       const entries = bundle.entries.filter((entry) => !drop.has(entry.path))
       if (entries.length === 0) {
+        // Deleting the last file deletes the project: there is nothing left to reopen.
         clearBundle()
+        void deleteProject(projectId)
+          .then(() => navigate({ to: '/preflight' }))
+          .catch((err) => setError(err instanceof Error ? err.message : String(err)))
         return
       }
       const marks = new Set(removed.map((entry) => markFromFilename(entry.path)))
@@ -921,9 +942,47 @@ export function PreflightPage() {
         return next.size === prev.size ? prev : next
       })
       setResult(auditEntries(bundle.sourceName, entries))
+      // Keep the saved copy in step: only the removed records are touched.
+      void removeProjectFiles(projectId, [...drop]).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
     },
-    [bundle, clearBundle],
+    [bundle, clearBundle, navigate, projectId],
   )
+
+  /**
+   * Opens the project the route points at. A freshly imported job is handed over in memory (see
+   * `handOffProject`), so an import doesn't have to be written and read straight back.
+   */
+  const openedProject = useRef<string | null>(null)
+  useEffect(() => {
+    if (openedProject.current === projectId) return
+    let cancelled = false
+    setLoadingProject(true)
+    setMissingProject(false)
+    void (async () => {
+      try {
+        const opened = takeHandOffProject(projectId) ?? (await loadProject(projectId))
+        if (cancelled) return
+        if (!opened) {
+          setMissingProject(true)
+          setLoadingProject(false)
+          return
+        }
+        openedProject.current = projectId
+        handleBundle(opened)
+      } catch (err) {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : String(err))
+        setMissingProject(true)
+      } finally {
+        if (!cancelled) setLoadingProject(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [projectId, handleBundle])
 
   const bytesByPath = useMemo(() => {
     const map = new Map<string, Uint8Array>()
@@ -4377,6 +4436,25 @@ export function PreflightPage() {
     exportNcepBytes,
     t,
   ])
+
+  if (loadingProject) {
+    return (
+      <div className="rounded-lg border border-border px-3.5 py-3 text-sm text-muted-foreground">
+        {t('preflight.projects.loading')}
+      </div>
+    )
+  }
+
+  if (missingProject) {
+    return (
+      <div className="flex flex-col items-start gap-3 rounded-lg border border-border px-3.5 py-3">
+        <p className="text-sm text-muted-foreground">{t('preflight.projects.notFound')}</p>
+        <Button size="sm" onClick={() => void navigate({ to: '/preflight' })}>
+          {t('preflight.projects.back')}
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-6">
