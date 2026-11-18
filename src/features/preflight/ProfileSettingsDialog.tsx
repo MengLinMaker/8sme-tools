@@ -20,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { formatMass } from '@/lib/format'
 import {
   BEVEL_PRESETS_DEG,
   bevelThicknessMm,
@@ -189,7 +190,7 @@ function SectionDimensions({ profile, dims }: { profile: string; dims: number[] 
 
 /** Cross-section, suggested cut parameters and (optionally) the per-mark rollup for a profile. */
 export function ProfileInfo({ profile, dims, marks = [] }: ProfileInfoProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [markSort, setMarkSort] = useState<{ key: MarkSortKey; dir: 1 | -1 }>({
     key: 'mark',
     dir: 1,
@@ -267,7 +268,7 @@ export function ProfileInfo({ profile, dims, marks = [] }: ProfileInfoProps) {
                     {(totals.lengthMm / 1000).toFixed(1)}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
-                    {totals.massKg.toFixed(1)}
+                    {formatMass(totals.massKg, i18n.language)}
                   </TableCell>
                 </TableRow>
               </TableBody>
@@ -316,7 +317,7 @@ export function ProfileInfo({ profile, dims, marks = [] }: ProfileInfoProps) {
                       {row.lengthMm > 0 ? (row.lengthMm / 1000).toFixed(1) : '—'}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {row.massKg > 0 ? row.massKg.toFixed(1) : '—'}
+                      {row.massKg > 0 ? formatMass(row.massKg, i18n.language) : '—'}
                     </TableCell>
                   </TableRow>
                 ))}
