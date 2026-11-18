@@ -9,6 +9,7 @@ import {
   EyeOff,
   Search,
   Undo2,
+  Wand,
   Wrench,
   X,
 } from 'lucide-react'
@@ -41,6 +42,7 @@ import { Toggle } from '@/components/ui/toggle'
 import { auditEntries } from '@/lib/audit/auditJob'
 import { assessBevelChangeGeometry, type BevelChangeIssue } from '@/lib/audit/bevelChange'
 import { assessCutReachGeometry, type CutMarker, type CutReachFailure } from '@/lib/audit/cutReach'
+import { AUTO_FIX_CODES, type FixTier, fixTierForCode } from '@/lib/audit/fixTier'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { MASS_BAND_CLASS, MASS_RED_KG, MASS_YELLOW_KG, massBand } from '@/lib/audit/mass'
 import {
@@ -565,8 +567,6 @@ interface StatusPill {
   code: string
   severity: Severity
   count: number
-  /** A one-click STEP fix exists for this code (shown with a wrench). */
-  fixable: boolean
   finding: Finding
 }
 
@@ -2484,7 +2484,6 @@ export function PreflightPage() {
     for (const finding of activeFindings) {
       if (!finding.mark) continue
       const mark = finding.mark
-      const fixable = fixForFinding(finding) != null
       const list = map.get(mark) ?? []
       const existing = list.find((pill) => pill.code === finding.code)
       if (existing) {
@@ -2494,7 +2493,6 @@ export function PreflightPage() {
           code: finding.code,
           severity: finding.severity,
           count: 1,
-          fixable,
           finding,
         })
       }
@@ -2823,6 +2821,8 @@ export function PreflightPage() {
   const [markQuery, setMarkQuery] = useState('')
   /** Assembly chosen in the parts table; null shows every assembly and the job totals. */
   const [assemblyFilter, setAssemblyFilter] = useState<string | null>(null)
+  /** Fixability pill: auto-fixable, needs a human, or off (null shows both). */
+  const [fixFilter, setFixFilter] = useState<FixTier | null>(null)
   const sortedParts = useMemo(
     () =>
       result
@@ -2864,12 +2864,95 @@ export function PreflightPage() {
     () => filterParts(sortedParts, markQuery, partFilterContext),
     [sortedParts, markQuery, partFilterContext],
   )
+
+  /**
+   * Whether one finding can be handled by the batch "Auto fix" on this part. Only codes with a
+   * well-defined default are eligible (see `lib/audit/fixTier.ts`); a resolved finding, or one a
+   * STEP override already cleared, drops out.
+   */
+  const isAutoFixable = useCallback(
+    (part: PartRecord, finding: Finding): boolean => {
+      if (!AUTO_FIX_CODES.has(finding.code)) return false
+      if (finding.params?.resolved === 1) return false
+      const stepKind = stepOverrides.get(part.mark)?.kind
+      if (stepKind && resolvedFindings(stepKind).includes(finding.code)) return false
+      // CUT_END_PIECE rebuilds the STEP (simplified); every other auto fix edits the NC.
+      if (finding.code === 'CUT_END_PIECE') return Boolean(part.nc)
+      return Boolean(part.nc) && ncOpForFinding(finding) != null
+    },
+    [stepOverrides],
+  )
+
+  /**
+   * Whether a fix exists for this finding but needs the operator to choose, so it is only ever
+   * applied one at a time from the finding's own fix menu.
+   */
+  const isManuallyFixable = useCallback(
+    (part: PartRecord, finding: Finding): boolean => {
+      if (fixTierForCode(finding.code) !== 'manual') return false
+      if (finding.params?.resolved === 1) return false
+      const stepKind = stepOverrides.get(part.mark)?.kind
+      if (stepKind && resolvedFindings(stepKind).includes(finding.code)) return false
+      const kind = fixForFinding(finding)
+      if (kind === 'clean') return Boolean(part.step)
+      if (kind === 'regenerate') return Boolean(part.nc)
+      if (!kind) return false
+      return Boolean(part.nc) && ncOpForFinding(finding) != null
+    },
+    [stepOverrides],
+  )
+
+  /** How a finding's fix can be applied: by the batch, one at a time, or not at all. */
+  const fixTier = useCallback(
+    (part: PartRecord, finding: Finding): FixTier | null => {
+      if (isAutoFixable(part, finding)) return 'auto'
+      if (isManuallyFixable(part, finding)) return 'manual'
+      return null
+    },
+    [isAutoFixable, isManuallyFixable],
+  )
+
+  /**
+   * Which fix tiers each part carries, in one pass over the findings. A part can carry both: the
+   * batch clears its auto findings, and its manual ones still need a human — the same split the
+   * "Auto fix" button counts, so the pills and the button never disagree.
+   */
+  const fixTiersByMark = useMemo(() => {
+    const parts = new Map((result?.parts ?? []).map((part) => [part.mark, part]))
+    const tiers = new Map<string, Set<FixTier>>()
+    for (const finding of activeFindings) {
+      if (!finding.mark) continue
+      const part = parts.get(finding.mark)
+      if (!part) continue
+      const tier = fixTier(part, finding)
+      if (!tier) continue
+      const set = tiers.get(finding.mark) ?? new Set<FixTier>()
+      set.add(tier)
+      tiers.set(finding.mark, set)
+    }
+    return tiers
+  }, [result, activeFindings, fixTier])
+
+  const fixCounts = useMemo(() => {
+    const counts: Record<FixTier, number> = { auto: 0, manual: 0 }
+    for (const part of sortedParts) {
+      const tiers = fixTiersByMark.get(part.mark)
+      if (tiers?.has('auto')) counts.auto++
+      if (tiers?.has('manual')) counts.manual++
+    }
+    return counts
+  }, [sortedParts, fixTiersByMark])
+
   const visibleParts = useMemo(() => {
-    if (!assemblyFilter) return searchedParts
-    return searchedParts.filter((part) =>
-      part.assemblies?.some((usage) => usage.assembly === assemblyFilter),
-    )
-  }, [searchedParts, assemblyFilter])
+    let parts = searchedParts
+    if (assemblyFilter) {
+      parts = parts.filter((part) =>
+        part.assemblies?.some((usage) => usage.assembly === assemblyFilter),
+      )
+    }
+    if (fixFilter) parts = parts.filter((part) => fixTiersByMark.get(part.mark)?.has(fixFilter))
+    return parts
+  }, [searchedParts, assemblyFilter, fixFilter, fixTiersByMark])
   const parsedPartQuery = useMemo(() => parsePartQuery(markQuery), [markQuery])
   /** Status chips are single-select; "all" is the absence of a status word. */
   const activeStatus = parsedPartQuery.statuses.length === 1 ? parsedPartQuery.statuses[0] : null
@@ -3686,34 +3769,7 @@ export function PreflightPage() {
     [bevelEdit, changeBevel, changeOutOfRangeBevel],
   )
 
-  /**
-   * Whether one finding can be auto-fixed on this part with the checks currently available. A
-   * simplified override deliberately differs from the NC (the bevel-cut end stays attached), so its
-   * volume mismatch is a consequence of that fix, not a new problem to fix again.
-   */
-  const isAutoFixable = useCallback(
-    (part: PartRecord, finding: Finding): boolean => {
-      const kind = fixForFinding(finding)
-      if (!kind) return false
-      if (finding.params?.resolved === 1) return false
-      const stepKind = stepOverrides.get(part.mark)?.kind
-      if (stepKind && resolvedFindings(stepKind).includes(finding.code)) return false
-      if (
-        stepKind === 'simplified' &&
-        (finding.code === 'STRAY_BODY' ||
-          finding.code === 'MANUFACTURE_MISMATCH' ||
-          finding.code === 'MANUFACTURE_BORDERLINE')
-      )
-        return false
-      if (kind === 'clean') return isCleanable(part)
-      if (kind === 'regenerate') return isRegeneratable(part)
-      if (kind === 'simplify') return isSimplifiable(part)
-      return Boolean(part.nc) && ncOpForFinding(finding) != null
-    },
-    [isCleanable, isRegeneratable, isSimplifiable, stepOverrides],
-  )
-
-  /** A part's still-active findings that auto-fix can resolve, worst/location order preserved. */
+  /** A part's still-active findings that the batch auto-fix can resolve, in listing order. */
   const autoFixableFindings = useCallback(
     (part: PartRecord): Finding[] =>
       allFindings.filter((finding) => finding.mark === part.mark && isAutoFixable(part, finding)),
@@ -3785,38 +3841,21 @@ export function PreflightPage() {
   )
 
   /**
-   * The one STEP fix a part's findings need, run in the OCC worker pool: a stray-body clean, then a
-   * rebuild — simplify (keeps a bevelled end attached) or regenerate from the NC, in that priority.
-   * Findings resolved by a STEP rebuild drop out of the check on their own.
+   * The one STEP fix the batch applies: `CUT_END_PIECE` rebuilds the model simplified, so a
+   * bevelled end stays attached instead of detaching. Stray-body cleaning and NC regeneration are
+   * per-case judgement calls (see `lib/audit/fixTier.ts`) and never run here.
    */
   const fixStepForPart = useCallback(
     async (part: PartRecord, findings: Finding[], ncText: string | null) => {
-      if (!ncText) {
-        if (!findings.some((finding) => finding.code === 'STRAY_BODY')) return
-        const bytes = part.step ? bytesByPath.get(part.step.path) : undefined
-        if (!bytes) return
-        const cleaned = await getStepWorkerPool().clean(bytes, { priority: PRIORITY_NEIGHBOR })
-        if (cleaned && cleaned.removed > 0) setOverride(part.mark, cleaned.bytes, 'cleaned')
-        return
-      }
-      const rebuild = findings.some((finding) => finding.code === 'CUT_END_PIECE')
-        ? 'simplified'
-        : findings.some(
-              (finding) =>
-                finding.code === 'STRAY_BODY' ||
-                finding.code === 'MANUFACTURE_MISMATCH' ||
-                finding.code === 'MANUFACTURE_BORDERLINE',
-            )
-          ? 'regenerated'
-          : null
-      if (!rebuild) return
+      if (!ncText) return
+      if (!findings.some((finding) => finding.code === 'CUT_END_PIECE')) return
       const step = await reconstructForViewer(ncText, {
-        simplify: rebuild === 'simplified',
+        simplify: true,
         priority: PRIORITY_NEIGHBOR,
       })
-      if (step) setOverride(part.mark, step, rebuild)
+      if (step) setOverride(part.mark, step, 'simplified')
     },
-    [bytesByPath, setOverride],
+    [setOverride],
   )
 
   /**
@@ -4327,6 +4366,7 @@ export function PreflightPage() {
                 disabled={autoFixableMarks.size === 0 || exporting || autoFixing !== null}
                 title={t('preflight.findings.autoFixHint')}
               >
+                <Wand className="size-4 shrink-0" aria-hidden />
                 {autoFixing
                   ? t('preflight.findings.autoFixing', autoFixing)
                   : t('preflight.findings.autoFix', { count: autoFixableMarks.size })}
@@ -4379,6 +4419,33 @@ export function PreflightPage() {
                     <span className="font-mono opacity-60">{count}</span>
                   </Toggle>
                 ))}
+                <span className="mx-0.5 h-3.5 w-px bg-border" aria-hidden />
+                <Toggle
+                  size="xs"
+                  pressed={fixFilter === 'auto'}
+                  disabled={fixCounts.auto === 0}
+                  onPressedChange={() =>
+                    setFixFilter((current) => (current === 'auto' ? null : 'auto'))
+                  }
+                  title={t('preflight.filters.autoFixableHint')}
+                >
+                  <Wand className="size-3! shrink-0" aria-hidden />
+                  {t('preflight.filters.autoFixable')}
+                  <span className="font-mono opacity-60">{fixCounts.auto}</span>
+                </Toggle>
+                <Toggle
+                  size="xs"
+                  pressed={fixFilter === 'manual'}
+                  disabled={fixCounts.manual === 0}
+                  onPressedChange={() =>
+                    setFixFilter((current) => (current === 'manual' ? null : 'manual'))
+                  }
+                  title={t('preflight.filters.fixIndividuallyHint')}
+                >
+                  <Wrench className="size-3! shrink-0" aria-hidden />
+                  {t('preflight.filters.fixIndividually')}
+                  <span className="font-mono opacity-60">{fixCounts.manual}</span>
+                </Toggle>
                 {assemblyOptions.length > 0 && (
                   <label className="ml-2 flex items-center gap-1.5 text-xs text-muted-foreground">
                     <span>{t('preflight.parts.filterAssembly')}</span>
@@ -4431,7 +4498,9 @@ export function PreflightPage() {
                       >
                         {assemblyFilter && !markQuery.trim()
                           ? t('preflight.parts.assemblyEmpty', { assembly: assemblyFilter })
-                          : t('preflight.parts.searchEmpty', { query: markQuery.trim() })}
+                          : fixFilter
+                            ? t('preflight.filters.fixEmpty')
+                            : t('preflight.parts.searchEmpty', { query: markQuery.trim() })}
                       </TableCell>
                     </TableRow>
                   )}
@@ -4512,29 +4581,39 @@ export function PreflightPage() {
                                   </Badge>
                                 </FilterPill>
                               )}
-                              {pills.map((pill) => (
-                                <FilterPill
-                                  key={pill.code}
-                                  token={pill.code}
-                                  active={isFilterTokenActive(pill.code)}
-                                  title={
-                                    findingText(pill.finding) +
-                                    (pill.fixable ? ` · ${t('preflight.status.autoFix')}` : '')
-                                  }
-                                  onToggle={toggleFilterToken}
-                                >
-                                  <Badge
-                                    variant={SEVERITY_VARIANT[pill.severity]}
-                                    className="gap-1 font-mono"
+                              {pills.map((pill) => {
+                                const tier = fixTier(part, pill.finding)
+                                return (
+                                  <FilterPill
+                                    key={pill.code}
+                                    token={pill.code}
+                                    active={isFilterTokenActive(pill.code)}
+                                    title={
+                                      findingText(pill.finding) +
+                                      (tier === 'auto'
+                                        ? ` · ${t('preflight.status.autoFix')}`
+                                        : tier === 'manual'
+                                          ? ` · ${t('preflight.status.fixIndividually')}`
+                                          : '')
+                                    }
+                                    onToggle={toggleFilterToken}
                                   >
-                                    {pill.fixable && (
-                                      <Wrench className="size-3 shrink-0" aria-hidden />
-                                    )}
-                                    {pill.code}
-                                    {pill.count > 1 && ` ×${pill.count}`}
-                                  </Badge>
-                                </FilterPill>
-                              ))}
+                                    <Badge
+                                      variant={SEVERITY_VARIANT[pill.severity]}
+                                      className="gap-1 font-mono"
+                                    >
+                                      {tier === 'auto' && (
+                                        <Wand className="size-3 shrink-0" aria-hidden />
+                                      )}
+                                      {tier === 'manual' && (
+                                        <Wrench className="size-3 shrink-0" aria-hidden />
+                                      )}
+                                      {pill.code}
+                                      {pill.count > 1 && ` ×${pill.count}`}
+                                    </Badge>
+                                  </FilterPill>
+                                )
+                              })}
                             </div>
                           )}
                         </TableCell>
