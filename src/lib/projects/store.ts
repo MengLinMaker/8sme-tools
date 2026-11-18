@@ -80,19 +80,29 @@ function fileRange(id: string): IDBKeyRange {
 }
 
 /**
- * A stable id from the job name, so dropping the same export again resumes that project instead of
- * piling up near-duplicates. Anything that isn't a letter or digit collapses to a dash, which also
- * keeps the URL readable.
+ * A project id from the job's **contents**, not its name: two exports called `job.zip` are different
+ * projects, and re-importing the same export resumes the one already saved.
+ *
+ * Two FNV-1a passes (different offsets/primes) give 64 bits as 16 hex characters, streamed over the
+ * sorted paths and their bytes so the id doesn't depend on the order the archive listed them in.
+ * Hashing is a few hundred megabytes a second, so a big job costs a fraction of a second on import.
  */
-export function projectIdFor(name: string): string {
-  const base = name
-    .trim()
-    .toLowerCase()
-    .replace(/\.[^.]+$/, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60)
-  return base || 'job'
+export function projectIdFor(entries: ZipEntry[]): string {
+  let a = 0x811c9dc5
+  let b = 0x9e3779b9
+  const mix = (byte: number) => {
+    a = Math.imul(a ^ byte, 0x01000193) >>> 0
+    b = Math.imul(b ^ byte, 0x85ebca6b) >>> 0
+  }
+  const encoder = new TextEncoder()
+  const sorted = [...entries].sort((left, right) => left.path.localeCompare(right.path))
+  for (const entry of sorted) {
+    for (const byte of encoder.encode(entry.path)) mix(byte)
+    mix(0)
+    for (let index = 0; index < entry.bytes.length; index++) mix(entry.bytes[index] ?? 0)
+    mix(0xff)
+  }
+  return `${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`
 }
 
 export async function listProjects(): Promise<ProjectMeta[]> {

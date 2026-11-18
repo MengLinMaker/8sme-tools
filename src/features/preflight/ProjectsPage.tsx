@@ -67,7 +67,7 @@ export function ProjectsPage() {
       setError(null)
       setSaving(true)
       try {
-        const id = projectIdFor(bundle.sourceName)
+        const id = projectIdFor(bundle.entries)
         await putProjectFiles(id, bundle.sourceName, bundle.entries)
         void requestPersistentStorage()
         // Hand the parsed bundle straight to the project page; it only reads IndexedDB on reload.
@@ -104,6 +104,8 @@ export function ProjectsPage() {
   return (
     <div className="flex flex-col gap-6">
       <DropZone onBundle={startProject} onError={setError} />
+
+      {saving && <p className="text-xs text-muted-foreground">{t('preflight.projects.saving')}</p>}
 
       {error && (
         <div className="rounded-lg border border-destructive bg-destructive/10 px-3.5 py-3 text-sm text-destructive-foreground">
@@ -143,7 +145,11 @@ export function ProjectsPage() {
               </TableHeader>
               <TableBody>
                 {projects.map((project) => (
-                  <TableRow key={project.id} className="cursor-pointer">
+                  <TableRow
+                    key={project.id}
+                    className="cursor-pointer"
+                    onClick={() => openProject(project.id)}
+                  >
                     <TableCell className="font-mono text-xs">
                       <button
                         type="button"
