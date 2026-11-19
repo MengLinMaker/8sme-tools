@@ -424,6 +424,18 @@ function teeOutline(
 }
 
 /**
+ * Nominal outside corner radius of a cold-formed hollow, from **AS/NZS 1163:2016 Appendix D/E**:
+ * `2.5t` for wall thickness greater than 3 mm, `2.0t` for 3 mm and under (inside radius `1.5t` /
+ * `1.0t`). The standard's manufacturing tolerance on the external corner profile is 1.8t–3.0t for
+ * sections over 50×50, so this is the *stock* radius — a part modelled with a smaller corner is the
+ * deviation, not the ghost.
+ */
+function hollowCornerRadius(wall: number): number {
+  if (!(wall > 0)) return 0
+  return (wall > 3 ? 2.5 : 2) * wall
+}
+
+/**
  * Canonical **H** stance for an I-section: rotate the DSTV/Tekla reference pose (web vertical,
  * flanges horizontal; x = flange width, y = depth) 90° CCW, so the **depth runs horizontal and the
  * flange width vertical** — the flanges become the two vertical strokes (the letter "H") and the
@@ -599,7 +611,7 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
       // `dims[4]` is usually absent. Defaulting to 0 drew a sharp-cornered stock ghost over a real
       // rounded hollow — item35's SHS75*75*6 looked like a sharp box. Match `sectionDimensions`,
       // which derives 2.5 × wall when no dim is supplied.
-      const radius = dims[4] ?? (wall > 0 ? 2.5 * wall : 0)
+      const radius = dims[4] ?? hollowCornerRadius(wall)
       if (height > 0 && width > 0 && wall > 0 && wall < Math.min(height, width) / 2) {
         const rect = hollowRect(width, height, wall, radius, INFLATE)
         points = rect.points
@@ -739,7 +751,7 @@ export function partSectionForCode(
       // `dims[4]` is usually absent. Defaulting to 0 drew a sharp-cornered stock ghost over a real
       // rounded hollow — item35's SHS75*75*6 looked like a sharp box. Match `sectionDimensions`,
       // which derives 2.5 × wall when no dim is supplied.
-      const radius = dims[4] ?? (wall > 0 ? 2.5 * wall : 0)
+      const radius = dims[4] ?? hollowCornerRadius(wall)
       if (height > 0 && width > 0 && wall > 0 && wall < Math.min(height, width) / 2) {
         const iw = width - 2 * wall
         const ih = height - 2 * wall
@@ -988,7 +1000,7 @@ export function sectionDimensions(code: string, dims: number[]): SectionDimensio
       const a = n[0] ?? dims[0]
       const b = n[1] ?? dims[1] ?? a
       const wall = n[2] ?? dims[2]
-      const radius = dims[4] ?? (wall ? 2.5 * wall : undefined)
+      const radius = dims[4] ?? (wall ? hollowCornerRadius(wall) : undefined)
       mm('sideA', a)
       if (a !== b) mm('sideB', b)
       mm('wall', wall)

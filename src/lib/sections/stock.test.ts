@@ -317,3 +317,30 @@ describe('hollow stock outline', () => {
     }
   })
 })
+
+describe('hollow corner radius (AS/NZS 1163)', () => {
+  it('uses 2.5t over 3 mm wall and 2.0t at or under', () => {
+    const radiusOf = (code: string): number => {
+      const section = partSectionForCode(code, [])
+      expect(section, code).toBeTruthy()
+      const xs = (section?.points ?? []).map(([x]) => x)
+      const ys = (section?.points ?? []).map(([, y]) => y)
+      const width = Math.max(...xs) - Math.min(...xs)
+      const height = Math.max(...ys) - Math.min(...ys)
+      // A rounded rectangle's area is W·H − (4 − π)R².
+      let twice = 0
+      const points = section?.points ?? []
+      for (let i = 0; i < points.length; i++) {
+        const a = points[i] as [number, number]
+        const b = points[(i + 1) % points.length] as [number, number]
+        twice += a[0] * b[1] - b[0] * a[1]
+      }
+      const area = Math.abs(twice) / 2
+      return Math.sqrt(Math.max(0, (width * height - area) / (4 - Math.PI)))
+    }
+    // 75×75×6 → 2.5 × 6 = 15; 89×89×5 → 12.5; a thin wall 50×50×3 → 2.0 × 3 = 6.
+    expect(radiusOf('SHS75*75*6.0')).toBeCloseTo(15, 0)
+    expect(radiusOf('SHS89*89*5.0')).toBeCloseTo(12.5, 0)
+    expect(radiusOf('SHS50*50*3.0')).toBeCloseTo(6, 0)
+  })
+})

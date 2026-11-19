@@ -42,7 +42,6 @@ import {
 } from '@/components/ui/table'
 import { Toggle } from '@/components/ui/toggle'
 import { auditEntries, markFromFilename } from '@/lib/audit/auditJob'
-import { profileFromFilename } from '@/lib/sections/fromFilename'
 import { assessBevelChangeGeometry, type BevelChangeIssue } from '@/lib/audit/bevelChange'
 import { assessCutReachGeometry, type CutMarker, type CutReachFailure } from '@/lib/audit/cutReach'
 import { findingOpKey, ncOpForFinding } from '@/lib/audit/fixOps'
@@ -117,6 +116,7 @@ import { readDroppedInput } from '@/lib/readInput'
 import { yieldToMain } from '@/lib/scheduler'
 import { CUT_FACES, FACE_DIRECTIONS, profileFamily } from '@/lib/sections/canonical'
 import type { SectionGuess } from '@/lib/sections/detect'
+import { profileFromFilename } from '@/lib/sections/fromFilename'
 import { inferTee } from '@/lib/sections/infer'
 import {
   layoutDimensions,
@@ -136,8 +136,12 @@ import { stockFaceThicknesses } from '@/lib/step/cutEdges'
 function withFilenameProfile(guess: SectionGuess, stepPath: string | undefined): SectionGuess {
   if (!stepPath) return guess
   const profile = profileFromFilename(stepPath)
-  return profile ? { ...guess, code: profile.code, dims: profile.dims } : guess
+  if (!profile) return guess
+  // Keep the detected dims when the filename carries none: they include the corner radius measured
+  // from the part, which the ghost needs (a rounded SHS drawn as a sharp box reads as wrong stock).
+  return { ...guess, code: profile.code, dims: profile.dims.length > 0 ? profile.dims : guess.dims }
 }
+
 import {
   CROSS_TOLERANCE_MM,
   compareGeometry,
@@ -2175,10 +2179,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
             })
             measure = inspected.measure
             if (inspected.section) {
-              const guess = withFilenameProfile(
-                inspected.section as SectionGuess,
-                part.step?.path,
-              )
+              const guess = withFilenameProfile(inspected.section as SectionGuess, part.step?.path)
               setSectionGuesses((prev) => new Map(prev).set(mark, guess))
             }
             if (measure) {
