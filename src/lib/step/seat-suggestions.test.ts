@@ -8,8 +8,8 @@ import { partSectionForCode } from '@/lib/sections/stock'
 import { detectStepSection } from '@/lib/step/readSection'
 import { seatedFromSeat, seatedStepProfile } from '@/lib/step/seat'
 import {
-  faceFlats,
   type Flat,
+  faceFlats,
   ransacSectionPose,
   recentreSeat,
   scoreSeat,
@@ -46,8 +46,12 @@ function icpStep(
   gate: number,
 ): { angle: number; tu: number; tv: number } | null {
   const cos = Math.cos((10 * Math.PI) / 180)
-  const pairs: { normal: [number, number]; point: [number, number]; target: number; weight: number }[] =
-    []
+  const pairs: {
+    normal: [number, number]
+    point: [number, number]
+    target: number
+    weight: number
+  }[] = []
   for (const flat of catalogue) {
     let best: { flat: Flat; residual: number } | null = null
     for (const candidate of model) {
@@ -179,7 +183,10 @@ describe('CAD refinement suggestions, measured', () => {
   it('pins what sampling, robust ICP and RANSAC each contribute', async () => {
     const parts: Part[] = []
     for (const mark of ['item1', 'item9', 'item10', 'item11', 'item12', 'item13', 'item35']) {
-      const part = await loadPart(mark, new Uint8Array(readFileSync(hexModuleFrames(`${mark}.stp`))))
+      const part = await loadPart(
+        mark,
+        new Uint8Array(readFileSync(hexModuleFrames(`${mark}.stp`))),
+      )
       if (part) parts.push(part)
     }
     const ub = await loadPart(
@@ -198,8 +205,7 @@ describe('CAD refinement suggestions, measured', () => {
     let worstSampledOffset = 0
 
     for (const part of parts) {
-      const scoreOf = (matrix: Matrix4) =>
-        scoreSeat(part.catalogue, faceFlats(part.faces, matrix))
+      const scoreOf = (matrix: Matrix4) => scoreSeat(part.catalogue, faceFlats(part.faces, matrix))
       for (const face of part.faces) {
         if (!face.planar) continue
         const sampled = sampledPlaneError(face)
