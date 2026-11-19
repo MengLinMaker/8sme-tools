@@ -4678,16 +4678,6 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                 </TableBody>
               </Table>
             )}
-            {result && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                {t('preflight.source')}:{' '}
-                <span className="font-mono">
-                  {result.entriesTotal} {t('preflight.stats.files').toLowerCase()} ·{' '}
-                  {t('preflight.stats.partList')}:{' '}
-                  {result.summary.hasPartList ? t('preflight.stats.yes') : t('preflight.stats.no')}
-                </span>
-              </p>
-            )}
           </CardContent>
         )}
       </Card>

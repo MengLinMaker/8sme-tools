@@ -97,17 +97,12 @@ export const en = {
     source: 'Job',
     batches: {
       label: 'Batches',
-      hint: 'Copies of this job being made. Total qty, length, mass, profile pieces, purchase lengths and the tracking sheet are multiplied by it.',
     },
     stats: {
       parts: 'Parts',
       totalQty: 'Total qty',
       totalLength: 'Total length',
       totalMass: 'Total mass',
-      files: 'Files',
-      partList: 'Part list',
-      yes: 'yes',
-      no: 'no',
     },
     profiles: {
       title: 'Profiles',
@@ -713,17 +708,12 @@ export const zh = {
     source: '作业',
     batches: {
       label: '批次',
-      hint: '本作业要生产的套数。总数量、长度、重量、型材件数、采购长度和跟踪表都会按此倍数计算。',
     },
     stats: {
       parts: '零件',
       totalQty: '总数量',
       totalLength: '总长度',
       totalMass: '总重量',
-      files: '文件',
-      partList: '零件清单',
-      yes: '有',
-      no: '无',
     },
     profiles: {
       title: '型材汇总',

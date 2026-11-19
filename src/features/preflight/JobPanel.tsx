@@ -131,10 +131,7 @@ function BatchInput({ value, onChange }: { value: number; onChange: (value: numb
   }
 
   return (
-    <label
-      className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-muted-foreground"
-      title={t('preflight.batches.hint')}
-    >
+    <label className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-muted-foreground">
       {t('preflight.batches.label')}
       <input
         type="number"
@@ -143,7 +140,6 @@ function BatchInput({ value, onChange }: { value: number; onChange: (value: numb
         inputMode="numeric"
         value={draft}
         aria-label={t('preflight.batches.label')}
-        title={t('preflight.batches.hint')}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
         onKeyDown={(event) => {
@@ -303,10 +299,7 @@ export function JobPanel({
       </CardHeader>
       {open && (
         <CardContent className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <BatchInput value={batches} onChange={onBatchesChange} />
-            <span className="text-xs text-muted-foreground">{t('preflight.batches.hint')}</span>
-          </div>
+          <BatchInput value={batches} onChange={onBatchesChange} />
           <DropZone compact title={t('dropzone.addTitle')} onBundle={onAdd} onError={onError} />
           <Table containerClassName="max-h-[50vh] overflow-auto">
             <TableHeader>
