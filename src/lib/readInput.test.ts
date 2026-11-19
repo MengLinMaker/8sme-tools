@@ -105,7 +105,7 @@ describe('readDroppedInput', () => {
     }
     const bundle = await readDroppedInput(input)
     expect(paths(bundle.entries)).toEqual(['job/a.nc1', 'job/b.stp'])
-    expect(bundle.sourceName).toBe('job/ (2 files)')
+    expect(bundle.sourceName).toBe('job')
   })
 
   it('falls back to webkit entries when handles are unavailable', async () => {

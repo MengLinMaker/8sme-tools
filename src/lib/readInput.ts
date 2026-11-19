@@ -153,7 +153,7 @@ function deriveSourceName(dropped: DroppedFile[]): string {
   const folders = new Set(
     dropped.map((d) => (d.path.includes('/') ? d.path.split('/')[0] : d.path)),
   )
-  if (folders.size === 1) return `${[...folders][0]}/ (${dropped.length} files)`
+  if (folders.size === 1) return [...folders][0] ?? 'input'
   return `${dropped.length} files`
 }
 

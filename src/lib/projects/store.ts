@@ -40,6 +40,14 @@ export function normalizeBatches(value: number | null | undefined): number {
   return value != null && Number.isFinite(value) && value >= 1 ? Math.floor(value) : 1
 }
 
+/**
+ * Older imports suffixed a folder job with its file count (`job/ (351 files)`). That count belongs
+ * in the file list, not the title, so show just the folder name for saved jobs too.
+ */
+function projectDisplayName(name: string): string {
+  return name.replace(/\s*\/\s*\(\d+\s+files?\)$/, '')
+}
+
 interface FileRecord {
   path: string
   bytes: Uint8Array
@@ -76,7 +84,9 @@ export async function listProjects(): Promise<ProjectMeta[]> {
   const tx = db.transaction(META_STORE, 'readonly')
   const all = (await result(tx.objectStore(META_STORE).getAll())) as ProjectMeta[]
   await finished(tx)
-  return all.sort((a, b) => b.savedAt - a.savedAt)
+  return all
+    .map((meta) => ({ ...meta, name: projectDisplayName(meta.name) }))
+    .sort((a, b) => b.savedAt - a.savedAt)
 }
 
 export async function getProjectMeta(id: string): Promise<ProjectMeta | null> {
@@ -84,7 +94,7 @@ export async function getProjectMeta(id: string): Promise<ProjectMeta | null> {
   const tx = db.transaction(META_STORE, 'readonly')
   const meta = (await result(tx.objectStore(META_STORE).get(id))) as ProjectMeta | undefined
   await finished(tx)
-  return meta ?? null
+  return meta ? { ...meta, name: projectDisplayName(meta.name) } : null
 }
 
 /** The saved job as a bundle, or null when nothing is stored under that id. */
