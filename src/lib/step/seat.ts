@@ -6,6 +6,8 @@ import {
   faceArea,
   faceFlats,
   fitSectionPlanes,
+  ransacSectionPose,
+  recentreSeat,
   type SeatScore,
   scoreSeat,
   sectionFlats,
@@ -200,12 +202,17 @@ export function seatFromStockFaces(
   const original = matrix.clone()
   const originalScore = scoreOf(original)
 
-  // 1. Member axis + roll from the stock-face normals. Which group is "heaviest" is not reliable
-  // (a PFC's web and flanges are comparable), so build a candidate per axis assignment and let the
-  // stock-plane score choose — never the face-count.
+  // 1. Global pose: exhaustive plane-pair RANSAC. This is the stage that survives a badly wrong
+  // start pose — with a 25 deg roll it still finds 7-8 of 8 stock planes, where ICP cannot move at
+  // all (its residual is translation-invariant along the planes it has already matched).
   let candidate = original.clone()
   let bestScore = originalScore
-  for (const frameSeat of stockFrameSeats(vertices, faces, matrix)) {
+  const global = ransacSectionPose(catalogue, brep, vertices, original, 1)
+  if (global && global.inliers >= 3 && global.offset < bestScore.offset - 0.01) {
+    candidate = global.matrix
+    bestScore = { ...originalScore, offset: global.offset }
+  }
+  for (const frameSeat of stockFrameSeats(vertices, faces, candidate)) {
     const score = scoreOf(frameSeat)
     if (score.offset < bestScore.offset - 0.01) {
       candidate = frameSeat
@@ -217,9 +224,9 @@ export function seatFromStockFaces(
   for (let iteration = 0; iteration < 24; iteration++) {
     const fit = fitSectionPlanes(catalogue, faceFlats(brep, candidate))
     if (!fit) break
-    const step = -Math.max(-ICP_MAX_STEP_RAD, Math.min(ICP_MAX_STEP_RAD, fit.angle)) * ICP_DAMPING
-    const correction = sectionTranslation(-fit.tu, -fit.tv).multiply(sectionRotationMatrix(step))
-    candidate = recentre(vertices, new Matrix4().copy(correction).multiply(candidate))
+    const step = Math.max(-ICP_MAX_STEP_RAD, Math.min(ICP_MAX_STEP_RAD, fit.angle)) * ICP_DAMPING
+    const correction = sectionTranslation(fit.tu, fit.tv).multiply(sectionRotationMatrix(step))
+    candidate = recentreSeat(vertices, new Matrix4().copy(correction).multiply(candidate))
     if (Math.abs(fit.angle) < 1e-4 && Math.hypot(fit.tu, fit.tv) < 1e-3) break
   }
 
@@ -232,9 +239,9 @@ export function seatFromStockFaces(
   for (let iteration = 0; iteration < 6; iteration++) {
     const fit = fitSectionPlanes(catalogue, faceFlats(brep, candidate), 20, limit)
     if (!fit) break
-    const step = -Math.max(-ICP_MAX_STEP_RAD, Math.min(ICP_MAX_STEP_RAD, fit.angle)) * ICP_DAMPING
-    const correction = sectionTranslation(-fit.tu, -fit.tv).multiply(sectionRotationMatrix(step))
-    candidate = recentre(vertices, new Matrix4().copy(correction).multiply(candidate))
+    const step = Math.max(-ICP_MAX_STEP_RAD, Math.min(ICP_MAX_STEP_RAD, fit.angle)) * ICP_DAMPING
+    const correction = sectionTranslation(fit.tu, fit.tv).multiply(sectionRotationMatrix(step))
+    candidate = recentreSeat(vertices, new Matrix4().copy(correction).multiply(candidate))
     if (Math.abs(fit.angle) < 1e-4 && Math.hypot(fit.tu, fit.tv) < 1e-3) break
   }
 
@@ -242,20 +249,6 @@ export function seatFromStockFaces(
   if (refined.offset > originalScore.offset + 0.05) return null
   if (refined.tilt > originalScore.tilt + 0.5) return null
   return candidate
-}
-
-/**
- * Re-centres a seat on the transformed model's bbox. The new translation is `position − centre`
- * (what the transform already does, minus where the model's centre ended up) — **not** `−centre`,
- * which drops the existing translation and makes an iterated fit walk off the part.
- */
-function recentre(vertices: number[], matrix: Matrix4): Matrix4 {
-  const rotation = new Quaternion()
-  const position = new Vector3()
-  const scale = new Vector3()
-  matrix.decompose(position, rotation, scale)
-  const centre = bboxOfVertices(transformVertices(vertices, matrix)).getCenter(new Vector3())
-  return new Matrix4().compose(position.sub(centre), rotation, scale)
 }
 
 /**

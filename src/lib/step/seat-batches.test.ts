@@ -15,6 +15,7 @@ import {
 import {
   faceFlats,
   fitSectionPlanes,
+  ransacSectionPose,
   scoreSeat,
   sectionFlats,
   sectionRotationMatrix,
@@ -79,6 +80,21 @@ function applyCorrection(vertices: number[], base: Matrix4, correction: Matrix4)
     .multiply(new Matrix4().compose(position, rotation, scale))
 }
 
+/** Damped plane ICP from a given start — the local refinement every technique shares. */
+function polish(part: Part, start: Matrix4): Matrix4 {
+  const catalogue = sectionFlats(part.section)
+  let matrix = start
+  for (let iteration = 0; iteration < 24; iteration++) {
+    const fit = fitSectionPlanes(catalogue, faceFlats(part.faces, matrix))
+    if (!fit) break
+    const step = Math.max(-0.12, Math.min(0.12, fit.angle)) * 0.5
+    const correction = sectionTranslation(fit.tu, fit.tv).multiply(sectionRotationMatrix(step))
+    matrix = applyCorrection(part.vertices, matrix, correction)
+    if (Math.abs(fit.angle) < 1e-4 && Math.hypot(fit.tu, fit.tv) < 1e-3) break
+  }
+  return matrix
+}
+
 const TECHNIQUES: { name: string; seat: (part: Part) => Matrix4 | null }[] = [
   {
     // Baseline: the detector's frame + the profile-anchored heuristic seat (PCA + containment).
@@ -115,20 +131,17 @@ const TECHNIQUES: { name: string; seat: (part: Part) => Matrix4 | null }[] = [
   {
     // Plane ICP alone (no member-axis stage), damped, with the corrected sign.
     name: 'plane-icp',
+    seat: (part) => polish(part, baseSeat(part)),
+  },
+  {
+    // Batch 4: exhaustive plane-pair RANSAC, then ICP polish. Global — it does not need a good
+    // start pose, which is what the "floating"/lopsided cases actually are.
+    name: 'ransac',
     seat: (part) => {
       const catalogue = sectionFlats(part.section)
-      let matrix = baseSeat(part)
-      for (let iteration = 0; iteration < 24; iteration++) {
-        const fit = fitSectionPlanes(catalogue, faceFlats(part.faces, matrix))
-        if (!fit) break
-        const step = -Math.max(-0.12, Math.min(0.12, fit.angle)) * 0.5
-        const correction = sectionTranslation(-fit.tu, -fit.tv).multiply(
-          sectionRotationMatrix(step),
-        )
-        matrix = applyCorrection(part.vertices, matrix, correction)
-        if (Math.abs(fit.angle) < 1e-4 && Math.hypot(fit.tu, fit.tv) < 1e-3) break
-      }
-      return matrix
+      const base = baseSeat(part)
+      const global = ransacSectionPose(catalogue, part.faces, part.vertices, base, 1)
+      return global ? polish(part, global.matrix) : null
     },
   },
   {
@@ -299,5 +312,52 @@ describe('seat technique batches', () => {
     expect(item12?.get('shipped')?.offset, 'item12 shipped').toBeLessThan(2)
     const item13 = scores.get('item13')
     expect(item13?.get('shipped')?.tilt, 'item13 roll').toBeLessThan(1)
+  }, 600_000)
+
+  it('RANSAC recovers a pose that ICP cannot (globality)', async () => {
+    // ICP's basin of attraction varies by part (item12 happens to survive 25° of roll), so the
+    // assertion is: RANSAC recovers every part, and at least one part is a case ICP loses.
+    let trapped = 0
+    for (const mark of ['item1', 'item10', 'item11', 'item12', 'item13']) {
+      const bytes = new Uint8Array(readFileSync(hexModuleFrames(`${mark}.stp`)))
+      const guess = await detectStepSection(bytes)
+      if (!guess) continue
+      const section = partSectionForCode(guess.code, guess.dims)
+      if (!section) continue
+      const mesh = await meshStepFile(mark, bytes)
+      const part: Part = {
+        mark,
+        vertices: mesh.vertices,
+        faces: mesh.bodies.flatMap((body) => body.brep ?? []),
+        section: section.points,
+        code: guess.code,
+        seat: guess.seat ?? null,
+      }
+      const catalogue = sectionFlats(part.section)
+      const scoreOf = (matrix: Matrix4) => scoreSeat(catalogue, faceFlats(part.faces, matrix))
+      // A start nobody would call "close": 25° of roll.
+      const broken = applyCorrection(
+        part.vertices,
+        baseSeat(part),
+        sectionRotationMatrix((25 * Math.PI) / 180),
+      )
+      const brokenScore = scoreOf(broken)
+      expect(brokenScore.offset, `${mark} broken start is really broken`).toBeGreaterThan(10)
+
+      // Local refinement usually cannot escape it — count the cases where it cannot.
+      const icp = scoreOf(polish(part, broken))
+      if (icp.offset > 10) trapped++
+
+      // The global stage does, and needs no seed: every plane pair is a hypothesis.
+      const global = ransacSectionPose(catalogue, part.faces, part.vertices, broken, 1)
+      expect(global, `${mark} ransac`).not.toBeNull()
+      expect(global?.inliers, `${mark} inliers`).toBeGreaterThanOrEqual(5)
+      const recovered = scoreOf(polish(part, (global as { matrix: Matrix4 }).matrix))
+      console.log(
+        `[globality] ${mark.padEnd(6)} broken ${brokenScore.offset.toFixed(1)} | icp ${icp.offset.toFixed(1)} | ransac ${recovered.offset.toFixed(2)} (${global?.inliers}/8)`,
+      )
+      expect(recovered.offset, `${mark} ransac recovery`).toBeLessThan(2)
+    }
+    expect(trapped, 'parts where ICP is trapped by the broken start').toBeGreaterThanOrEqual(1)
   }, 600_000)
 })

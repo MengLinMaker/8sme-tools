@@ -178,6 +178,48 @@ removes the initial-pose dependence entirely, and directly closes the translatio
 "floating" lives in. It also subsumes the quarter-turn search (a wrong stance simply scores no
 inliers).
 
+## Batch 4 — global pose (plane-pair RANSAC)
+
+Batch 2/3 is a *local* method: it refines a pose it is given. The "floating" and "lopsided" cases
+are poses that are wrong *before* refinement, and a plane fit cannot climb out of that — its residual
+is translation-invariant along the planes it has already matched (the null space in
+§"How floating happens"). So the seat now starts with a **global** stage.
+
+Design (`seatFit.ransacSectionPose`):
+
+- **Minimal sample = a plane pair.** One plane gives one equation; two planes with independent
+  normals determine the section pose exactly — the normals fix the roll, the two offset equations
+  fix `(tu, tv)`. Pairs whose normals disagree on the roll are rejected as inconsistent.
+- **Exhaustive, not random.** With 8 catalogue flats and 2–4 parallel model faces each there are a
+  few hundred hypotheses — enumerate them all. Deterministic, no seed, microseconds. (Classic
+  RANSAC samples at random because the minimal set for 3-D point clouds needs 3+ points from
+  thousands; here the model is small and known.)
+- **Score by inliers.** A hypothesis is good when it brings the most catalogue flats within 1 mm;
+  ties go to the smaller mean residual. Length-weighting is deliberately *not* used for the inlier
+  count — a single big face must not outvote several correct small ones.
+- **Polish.** The winner goes through the batch-2/3 damped ICP + robust pass, then the acceptance
+  rule (never return something worse than the input).
+
+**Globality, measured.** Start each part at 25° of roll — nobody would call that close — and compare:
+
+| part | broken | ICP from broken | RANSAC + ICP | inliers |
+|---|---|---|---|---|
+| item1 | 20.0 | **20.0 (trapped)** | **0.06** | 8/8 |
+| item10 | 20.0 | **20.0 (trapped)** | **0.00** | 8/8 |
+| item11 | 20.0 | **20.0 (trapped)** | **1.24** | 5/8 |
+| item12 | 20.0 | 0.80 | 0.80 | 7/8 |
+| item13 | 20.0 | 1.20 | 1.24 | 7/8 |
+
+ICP's basin of attraction varies by part — item12/13 happen to survive 25° — but on item1/10/11 it
+cannot move at all, while RANSAC recovers every part. That asymmetry is the reason for the stage,
+and the regression test asserts both halves (RANSAC always recovers; at least one part traps ICP).
+
+**Sign trap (cost a round).** `sectionRotationMatrix` must rotate section coordinates by `+angle`.
+The naive `makeRotationX(-angle)` reads as the opposite rotation because the section frame maps
+`u = −z`, `v = +y`; with the inverted helper the first RANSAC build produced **zero inliers on
+every part**, and the batch-1 ICP column showed 20 mm on parts that were actually perfect. Verify
+any new section-frame transform against a world-space round trip before trusting it.
+
 ## Why the old seat failed at all
 
 Two independent causes, both fixed:
@@ -195,7 +237,7 @@ Two independent causes, both fixed:
 | file | role |
 |---|---|
 | `src/lib/step/seatFit.ts` | flats, scoring, association + damped rigid step (the rig's maths) |
-| `src/lib/step/seat.ts` | `seatFromStockFaces`: frame candidates → ICP → robust pass → acceptance |
+| `src/lib/step/seat.ts` | `seatFromStockFaces`: RANSAC pose → frame candidates → ICP → robust pass → acceptance |
 | `src/lib/step/mesh.ts` | geometric planarity for B-spline flats |
 | `src/lib/step/seat-batches.test.ts` | the batch table + the pinned outcome |
 | `src/lib/step/seat-ub.test.ts` | the single-part UB regression (exact bbox after seating) |

@@ -206,10 +206,14 @@ export function scoreSeat(
   }
 }
 
-/** A section-plane rotation `angle` (u → v), as a world rotation about the member axis. */
+/**
+ * A section-plane rotation by `angle` (u → v). Verified against a world-space round trip: applying
+ * it to `(1, 0)` yields `(cos angle, sin angle)`. (The naive `makeRotationX(-angle)` reads as the
+ * opposite rotation because of the `u = −z` mapping — that cost a debugging round in the RANSAC
+ * hypothesis builder.)
+ */
 export function sectionRotationMatrix(angle: number): Matrix4 {
-  // u = −z, v = +y, so a section rotation by `angle` is a world rotation by −angle about +X.
-  return new Matrix4().makeRotationX(-angle)
+  return new Matrix4().makeRotationX(angle)
 }
 
 /** A section-plane translation `(tu, tv)`, in world coordinates. */
@@ -299,4 +303,160 @@ export function fitSectionPlanes(
     pairs: pairs.length,
     residual,
   }
+}
+
+/** Re-centres a seat on the transformed model's bbox — same rule the catalogue outline is built with. */
+export function recentreSeat(vertices: number[], matrix: Matrix4): Matrix4 {
+  const rotation = new Quaternion()
+  const position = new Vector3()
+  const scale = new Vector3()
+  matrix.decompose(position, rotation, scale)
+  const point = new Vector3()
+  const min = new Vector3(
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+  )
+  const max = new Vector3(
+    Number.NEGATIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+  )
+  for (let i = 0; i + 2 < vertices.length; i += 3) {
+    point
+      .set(vertices[i] as number, vertices[i + 1] as number, vertices[i + 2] as number)
+      .applyMatrix4(matrix)
+    min.min(point)
+    max.max(point)
+  }
+  return new Matrix4().compose(position.sub(min.add(max).multiplyScalar(0.5)), rotation, scale)
+}
+
+/**
+ * Pose hypothesis from two plane correspondences — the RANSAC minimal sample.
+ *
+ * A plane gives one equation, so two planes with independent normals determine the section pose
+ * exactly: their normals give the roll, their two offset equations give `(tu, tv)`. Pairs whose two
+ * normals disagree on the roll are inconsistent associations and are rejected.
+ */
+export function poseFromPlanePair(
+  first: { catalogue: Flat; model: Flat },
+  second: { catalogue: Flat; model: Flat },
+): Matrix4 | null {
+  const angleOf = (normal: [number, number]): number => Math.atan2(normal[1], normal[0])
+  const delta = angleOf(first.catalogue.normal) - angleOf(first.model.normal)
+  const residual = angleOf(second.catalogue.normal) - angleOf(second.model.normal) - delta
+  const wrapped = Math.atan2(Math.sin(residual), Math.cos(residual))
+  if (Math.abs(wrapped) > 0.05) return null
+
+  const cos = Math.cos(delta)
+  const sin = Math.sin(delta)
+  const rotate = (point: [number, number]): [number, number] => [
+    point[0] * cos - point[1] * sin,
+    point[0] * sin + point[1] * cos,
+  ]
+  const equations: { normal: [number, number]; rhs: number }[] = []
+  for (const { catalogue, model } of [first, second]) {
+    const rotated = rotate(model.point)
+    equations.push({
+      normal: catalogue.normal,
+      rhs: catalogue.offset - (catalogue.normal[0] * rotated[0] + catalogue.normal[1] * rotated[1]),
+    })
+  }
+  const a = equations[0]
+  const b = equations[1]
+  if (!a || !b) return null
+  const det = a.normal[0] * b.normal[1] - a.normal[1] * b.normal[0]
+  if (Math.abs(det) < 0.1) return null
+  const tu = (a.rhs * b.normal[1] - a.normal[1] * b.rhs) / det
+  const tv = (a.normal[0] * b.rhs - a.rhs * b.normal[0]) / det
+  return sectionTranslation(tu, tv).multiply(sectionRotationMatrix(delta))
+}
+
+/** Section `(u, v)` point as a world vector, and back. `u` = −z, `v` = +y. */
+export function sectionToWorld(point: [number, number]): Vector3 {
+  return new Vector3(0, point[1], -point[0])
+}
+
+export function worldToSection(point: Vector3): [number, number] {
+  return [-point.z, point.y]
+}
+
+/** Moves measured flats by a section-plane correction (rigid, so areas are unchanged). */
+export function transformFlats(flats: readonly Flat[], correction: Matrix4): Flat[] {
+  const rotation = new Quaternion().setFromRotationMatrix(correction)
+  return flats.map((flat) => {
+    const normal = sectionToWorld(flat.normal).applyQuaternion(rotation)
+    const point = sectionToWorld(flat.point).applyMatrix4(correction)
+    const inPlane = worldToSection(normal)
+    const length = Math.hypot(inPlane[0], inPlane[1]) || 1
+    const unit: [number, number] = [inPlane[0] / length, inPlane[1] / length]
+    const position = worldToSection(point)
+    return {
+      normal: unit,
+      offset: unit[0] * position[0] + unit[1] * position[1],
+      length: flat.length,
+      point: position,
+    }
+  })
+}
+
+/**
+ * Exhaustive plane-pair RANSAC — the global pose stage.
+ *
+ * Every compatible (catalogue flat, model face) pair seeds a hypothesis; each hypothesis is scored
+ * by how many catalogue flats it brings within `inlierMm`. With a handful of stock planes the
+ * search is exhaustive rather than random, so it is deterministic and needs no seed. This is what
+ * recovers a part from a badly wrong start pose, where point-to-plane ICP cannot move (its residual
+ * has a translation null space along the matched planes).
+ */
+export function ransacSectionPose(
+  catalogue: readonly Flat[],
+  faces: readonly BrepFace[],
+  vertices: number[],
+  base: Matrix4,
+  inlierMm = 1,
+  normalTolDeg = 45,
+): { matrix: Matrix4; inliers: number; offset: number } | null {
+  if (catalogue.length < 2) return null
+  // Read the model's faces once; each hypothesis only rotates/translates those flats. Re-reading
+  // the B-rep per hypothesis would recompute every face area hundreds of times.
+  const model = faceFlats(faces, base)
+  const cos = Math.cos((normalTolDeg * Math.PI) / 180)
+  const candidates = catalogue.map((flat) =>
+    model.filter(
+      (face) => flat.normal[0] * face.normal[0] + flat.normal[1] * face.normal[1] >= cos,
+    ),
+  )
+  let best: { matrix: Matrix4; inliers: number; offset: number } | null = null
+  for (let i = 0; i < catalogue.length; i++) {
+    for (let j = i + 1; j < catalogue.length; j++) {
+      const a = catalogue[i] as Flat
+      const b = catalogue[j] as Flat
+      // Independent normals only: parallel planes give the roll no information.
+      if (Math.abs(a.normal[0] * b.normal[0] + a.normal[1] * b.normal[1]) > 0.98) continue
+      for (const modelA of candidates[i] ?? []) {
+        for (const modelB of candidates[j] ?? []) {
+          const correction = poseFromPlanePair(
+            { catalogue: a, model: modelA },
+            { catalogue: b, model: modelB },
+          )
+          if (!correction) continue
+          const score = scoreSeat(catalogue, transformFlats(model, correction))
+          const inliers = score.residuals.filter((residual) => residual <= inlierMm).length
+          if (
+            !best ||
+            inliers > best.inliers ||
+            (inliers === best.inliers && score.offset < best.offset)
+          )
+            best = {
+              matrix: recentreSeat(vertices, new Matrix4().multiplyMatrices(correction, base)),
+              inliers,
+              offset: score.offset,
+            }
+        }
+      }
+    }
+  }
+  return best
 }
