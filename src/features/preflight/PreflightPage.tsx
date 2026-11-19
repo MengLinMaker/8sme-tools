@@ -42,6 +42,7 @@ import {
 } from '@/components/ui/table'
 import { Toggle } from '@/components/ui/toggle'
 import { auditEntries, markFromFilename } from '@/lib/audit/auditJob'
+import { profileFromFilename } from '@/lib/sections/fromFilename'
 import { assessBevelChangeGeometry, type BevelChangeIssue } from '@/lib/audit/bevelChange'
 import { assessCutReachGeometry, type CutMarker, type CutReachFailure } from '@/lib/audit/cutReach'
 import { findingOpKey, ncOpForFinding } from '@/lib/audit/fixOps'
@@ -125,6 +126,18 @@ import {
   sectionMassPerMetre,
 } from '@/lib/sections/stock'
 import { stockFaceThicknesses } from '@/lib/step/cutEdges'
+
+/**
+ * Tekla filenames carry the exact callout (`200UB25`, `SHS 75x75x6`, `PFC 250`), which is more
+ * trustworthy than a STEP slice read: the detector can land on a neighbouring mass variant, and
+ * that reads as a millimetre-scale stock mismatch however well the part is seated. The filename
+ * wins when it parses; detection keeps everything else (seat frame, score, outline).
+ */
+function withFilenameProfile(guess: SectionGuess, stepPath: string | undefined): SectionGuess {
+  if (!stepPath) return guess
+  const profile = profileFromFilename(stepPath)
+  return profile ? { ...guess, code: profile.code, dims: profile.dims } : guess
+}
 import {
   CROSS_TOLERANCE_MM,
   compareGeometry,
@@ -1979,7 +1992,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
             }
             if (cancelled) return
             if (inspected.section) {
-              sections.set(part.mark, inspected.section)
+              const guess = withFilenameProfile(inspected.section, part.step?.path)
+              sections.set(part.mark, guess)
               setSectionGuesses(new Map(sections))
             }
             // Record the measured mass whenever the STEP measured, even without NC dims: a
@@ -2161,9 +2175,11 @@ export function PreflightPage({ projectId }: { projectId: string }) {
             })
             measure = inspected.measure
             if (inspected.section) {
-              setSectionGuesses((prev) =>
-                new Map(prev).set(mark, inspected.section as SectionGuess),
+              const guess = withFilenameProfile(
+                inspected.section as SectionGuess,
+                part.step?.path,
               )
+              setSectionGuesses((prev) => new Map(prev).set(mark, guess))
             }
             if (measure) {
               const checked = compareGeometry(measure, drawingMaterials.get(mark) ?? {})
