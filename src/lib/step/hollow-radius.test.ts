@@ -3,8 +3,8 @@ import { createRequire } from 'node:module'
 import { hexModuleFrames } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { partSectionForCode } from '@/lib/sections/stock'
-import { detectStepSection } from '@/lib/step/readSection'
 import { setOcWasmUrl } from '@/lib/step/occInit'
+import { detectStepSection } from '@/lib/step/readSection'
 
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { partSectionForCode } from './stock'
 import { profileFromFilename } from './fromFilename'
+import { partSectionForCode } from './stock'
 
 /**
  * Real Tekla filenames from the J12095 job. `SHS 75x75x6` must resolve to the catalogue's
