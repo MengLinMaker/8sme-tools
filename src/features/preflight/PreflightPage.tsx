@@ -31,6 +31,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
+import { type ColumnSort, SortHead, toggleColumnSort } from '@/components/ui/sort-head'
 import {
   Table,
   TableBody,
@@ -635,6 +636,9 @@ function stockThicknessesFor(
         ]
   return stockFaceThicknesses(section, holes ?? [], normals)
 }
+
+/** Columns of the profiles rollup that can carry the table's sort. */
+type ProfileSortKey = 'profile' | 'marks' | 'pieces' | 'length' | 'mass'
 
 export function PreflightPage({ projectId }: { projectId: string }) {
   const { t, i18n } = useTranslation()
@@ -3081,6 +3085,11 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   const [partsOpen, setPartsOpen] = useState(true)
   /** Free-text filter on the profiles card: a profile designation or a mark inside it. */
   const [profileQuery, setProfileQuery] = useState('')
+  /** Profiles open sorted longest-first, the order the stock plan cares about. */
+  const [profileSort, setProfileSort] = useState<ColumnSort<ProfileSortKey>>({
+    key: 'length',
+    dir: -1,
+  })
   /** Index into `profileGroups` of the profile whose cut-settings dialog is open. */
   const [settingsProfileIndex, setSettingsProfileIndex] = useState<number | null>(null)
   const [purchaseOpen, setPurchaseOpen] = useState(false)
@@ -3111,6 +3120,32 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         group.marks.some((mark) => mark.mark.toLowerCase().includes(query)),
     )
   }, [profileGroups, profileQuery])
+  const sortedProfileGroups = useMemo(() => {
+    const groups = [...visibleProfileGroups]
+    groups.sort((a, b) => {
+      // The unread profile is never useful at the top, whichever way the table is sorted.
+      const unknownA = a.profile === '—' ? 1 : 0
+      const unknownB = b.profile === '—' ? 1 : 0
+      if (unknownA !== unknownB) return unknownA - unknownB
+      const byColumn =
+        profileSort.key === 'profile'
+          ? a.profile.localeCompare(b.profile, undefined, { numeric: true })
+          : profileSort.key === 'marks'
+            ? a.markCount - b.markCount
+            : profileSort.key === 'pieces'
+              ? a.pieces - b.pieces
+              : profileSort.key === 'length'
+                ? a.lengthMm - b.lengthMm
+                : a.massKg - b.massKg
+      if (byColumn !== 0) return byColumn * profileSort.dir
+      return a.profile.localeCompare(b.profile, undefined, { numeric: true })
+    })
+    return groups
+  }, [visibleProfileGroups, profileSort])
+  /** Switch the profiles sort: a new column starts ascending, the active one flips. */
+  const sortProfiles = useCallback((key: ProfileSortKey) => {
+    setProfileSort((current) => toggleColumnSort(current, key))
+  }, [])
 
   // Parts table sorting — defaults to worst-problem-first so triage is quick.
   const [sort, setSort] = useState<{ key: PartSortKey; dir: 1 | -1 }>({ key: 'severity', dir: 1 })
@@ -4567,19 +4602,42 @@ export function PreflightPage({ projectId }: { projectId: string }) {
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <TableHead>{t('preflight.profiles.profile')}</TableHead>
-                    <TableHead>{t('preflight.profiles.marks')}</TableHead>
-                    <TableHead>{t('preflight.profiles.pieces')}</TableHead>
-                    <TableHead className="text-right">
-                      {t('preflight.profiles.totalLength')}
-                    </TableHead>
-                    <TableHead className="text-right">
-                      {t('preflight.profiles.totalMass')}
-                    </TableHead>
+                    <SortHead
+                      label={t('preflight.profiles.profile')}
+                      sortKey="profile"
+                      sort={profileSort}
+                      onSort={sortProfiles}
+                    />
+                    <SortHead
+                      label={t('preflight.profiles.marks')}
+                      sortKey="marks"
+                      sort={profileSort}
+                      onSort={sortProfiles}
+                    />
+                    <SortHead
+                      label={t('preflight.profiles.pieces')}
+                      sortKey="pieces"
+                      sort={profileSort}
+                      onSort={sortProfiles}
+                    />
+                    <SortHead
+                      label={t('preflight.profiles.totalLength')}
+                      sortKey="length"
+                      sort={profileSort}
+                      onSort={sortProfiles}
+                      align="right"
+                    />
+                    <SortHead
+                      label={t('preflight.profiles.totalMass')}
+                      sortKey="mass"
+                      sort={profileSort}
+                      onSort={sortProfiles}
+                      align="right"
+                    />
                   </TableRow>
                 </TableHeader>
                 <TableBody className="row-spotlight">
-                  {visibleProfileGroups.map((group) => (
+                  {sortedProfileGroups.map((group) => (
                     <TableRow
                       key={group.profile}
                       className={cn(group.profile !== '—' && 'cursor-pointer')}
@@ -6618,40 +6676,6 @@ function PaneTag({ children }: { children: ReactNode }) {
     <span className="pointer-events-none absolute left-0 top-0 z-10 whitespace-nowrap rounded-br-sm bg-card/85 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground backdrop-blur">
       {children}
     </span>
-  )
-}
-
-function SortHead({
-  label,
-  sortKey,
-  sort,
-  onSort,
-  align,
-  width,
-}: {
-  label: string
-  sortKey: PartSortKey
-  sort: { key: PartSortKey; dir: 1 | -1 }
-  onSort: (key: PartSortKey) => void
-  /** Value columns sit at the right edge, over their numbers. */
-  align?: 'right'
-  /** Fixed width, so the column never moves as its values change. */
-  width?: string
-}) {
-  const active = sort.key === sortKey
-  return (
-    <TableHead className={cn(width, align === 'right' ? 'text-right' : 'text-left')}>
-      <button
-        type="button"
-        onClick={() => onSort(sortKey)}
-        className="inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-foreground"
-      >
-        {label}
-        <span className="text-[9px] leading-none">
-          {active ? (sort.dir === 1 ? '▲' : '▼') : ''}
-        </span>
-      </button>
-    </TableHead>
   )
 }
 

@@ -6,6 +6,7 @@ import { DropZone } from '@/components/DropZone'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
+import { type ColumnSort, SortHead, toggleColumnSort } from '@/components/ui/sort-head'
 import {
   Table,
   TableBody,
@@ -33,6 +34,9 @@ const savedAtFormat = new Intl.DateTimeFormat(undefined, {
   timeStyle: 'short',
 })
 
+/** Columns of the saved-projects table that can carry its sort. */
+type ProjectSortKey = 'name' | 'saved' | 'files' | 'size'
+
 /**
  * The preflight start page: drop a job to start (or resume) a project, and reopen one saved earlier.
  *
@@ -44,6 +48,8 @@ export function ProjectsPage() {
   const navigate = useNavigate()
   const [projects, setProjects] = useState<ProjectMeta[] | null>(null)
   const [query, setQuery] = useState('')
+  /** Saved projects open newest-first, the order a resumed job is most often in. */
+  const [sort, setSort] = useState<ColumnSort<ProjectSortKey>>({ key: 'saved', dir: -1 })
   const [figures, setFigures] = useState<StorageFigures>({})
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -101,6 +107,26 @@ export function ProjectsPage() {
       ),
     [projects, trimmedQuery],
   )
+  const sorted = useMemo(() => {
+    const list = [...filtered]
+    list.sort((a, b) => {
+      const byColumn =
+        sort.key === 'name'
+          ? a.name.localeCompare(b.name, undefined, { numeric: true })
+          : sort.key === 'saved'
+            ? a.savedAt - b.savedAt
+            : sort.key === 'files'
+              ? a.fileCount - b.fileCount
+              : a.size - b.size
+      if (byColumn !== 0) return byColumn * sort.dir
+      return a.name.localeCompare(b.name, undefined, { numeric: true })
+    })
+    return list
+  }, [filtered, sort])
+  /** Switch the projects sort: a new column starts ascending, the active one flips. */
+  const sortBy = useCallback((key: ProjectSortKey) => {
+    setSort((current) => toggleColumnSort(current, key))
+  }, [])
 
   /** Import a dropped job: store it, then open it as a project. */
   const startProject = useCallback(
@@ -210,15 +236,40 @@ export function ProjectsPage() {
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead>{t('preflight.projects.name')}</TableHead>
-                  <TableHead className="w-px">{t('preflight.projects.saved')}</TableHead>
-                  <TableHead className="w-px text-right">{t('preflight.projects.files')}</TableHead>
-                  <TableHead className="w-px text-right">{t('preflight.projects.size')}</TableHead>
+                  <SortHead
+                    label={t('preflight.projects.name')}
+                    sortKey="name"
+                    sort={sort}
+                    onSort={sortBy}
+                  />
+                  <SortHead
+                    label={t('preflight.projects.saved')}
+                    sortKey="saved"
+                    sort={sort}
+                    onSort={sortBy}
+                    width="w-px"
+                  />
+                  <SortHead
+                    label={t('preflight.projects.files')}
+                    sortKey="files"
+                    sort={sort}
+                    onSort={sortBy}
+                    align="right"
+                    width="w-px"
+                  />
+                  <SortHead
+                    label={t('preflight.projects.size')}
+                    sortKey="size"
+                    sort={sort}
+                    onSort={sortBy}
+                    align="right"
+                    width="w-px"
+                  />
                   <TableHead className="w-px" />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((project) => (
+                {sorted.map((project) => (
                   <TableRow
                     key={project.id}
                     className="cursor-pointer"
