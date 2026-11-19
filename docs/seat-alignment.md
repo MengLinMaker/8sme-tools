@@ -121,10 +121,19 @@ Final shipped column:
 | item13 | 1.24 / 9.23° | 1.24 / 6.44 / **0.02** |
 | item35 | 0.00 / 0.00° | 0.00 / 0.00 / 0.00 |
 
-**Open:** items 11–13 still carry a 4–6 mm residual on *one* plane while the tilt is 0.02–0.04° and
-the rest of the section is within ~1 mm. That is one face not where the catalogue puts it, not a
-pose error — the next diagnostic is to print that flat's normal/offset (variant swaps were already
-ruled out).
+**Open (now diagnosed): the 4–6 mm is the part's geometry, not the seat.** On item11 the only
+mismatched catalogue flat is the **+u flange outer face** (nominal +101.5); the model's face with
+the same normal sits at **+97.28** — a second full-length parallel plane (area 535k mm², i.e. the
+whole flange width over the whole member) 4.22 mm inside nominal. The opposite flange matches to
+0.00 mm, as do both web faces. item13 shows the same pattern at 6.44 mm. That is a **lengthwise cut
+on one flange** (the outer 4.2 / 6.4 mm removed, leaving a thin flange): a plane the part genuinely
+does not have. No rigid seat can place a face that is not there, and the operator sees the result as
+a 4–6 mm gap against the stock ghost — which reads as "bad alignment".
+
+Consequence for the rig: scoring is **catalogue → model**, so an absent nominal plane counts as a
+20 mm miss. For alignment, the honest direction is **model → catalogue** (every stock face the part
+*does* present must land on a catalogue plane); the reverse direction belongs in a geometry audit
+("stock removed"), not in the seat score.
 
 ## How "floating in the middle of nowhere" happens
 
