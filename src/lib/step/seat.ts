@@ -6,6 +6,7 @@ import {
   faceArea,
   faceFlats,
   ransacSectionPose,
+  recentreSeat,
   type SeatScore,
   scoreSeat,
   sectionFlats,
@@ -208,29 +209,47 @@ export function seatFromStockFaces(
     if (attempt && attempt.inliers >= 3) break
   }
   // The member axis is not part of RANSAC: its hypotheses only roll and translate within the
-  // section plane, so a part whose *length* axis is off (PCA seating on a real UB tilted it 0.14°
-  // — 12.8 mm of false depth over 5.3 m) needs the axis taken from the stock-face normals too.
-  // Both proposals are scored; the better pose wins.
+  // section plane, so the *length* axis is inherited from the incoming pose. That lean is invisible
+  // to offset/tilt — a stock face stays on its plane while the member tilts — but on screen it is
+  // the difference between "excellent" and "slightly off" (measured: item10 0.003°, item12 0.885°).
+  // So the stock-face axis is proposed from the best pose so far, and the score's `lean` decides.
   const proposals: Matrix4[] = global && global.inliers >= 3 ? [global.matrix] : []
-  for (const frameSeat of stockFrameSeats(vertices, faces, matrix)) proposals.push(frameSeat)
+  const axisBase = proposals[0] ?? matrix
+  for (const frameSeat of stockFrameSeats(vertices, faces, axisBase)) proposals.push(frameSeat)
   if (proposals.length === 0) return null
 
-  // Never adopt a pose that scores worse than the one we were given (offset first, tilt on ties).
-  // Both tolerances are tight because the quantities are: 0.01 mm of offset, and 0.005° of tilt —
-  // on a 5.3 m member that is already ~0.4 mm of drift, so a coarser tilt gate would reject a
-  // genuinely better pose (it did: M_12's 0.016° heuristic tilt was left in place).
+  // Compare proposals by the deviation they produce **on screen**, in millimetres, so a lean and a
+  // plane offset are the same currency: a lean of θ moves the member's end by (L/2)·sinθ, a roll
+  // moves the section's extremes by (extent/2)·sinθ. Without this, the axis fix is discarded every
+  // time because it trades a few millimetres of plane offset for degrees of end error — which is how
+  // a 0.7–1.35° lean survived a "perfect" score.
+  const seated = transformVertices(vertices, matrix)
+  let length = 0
+  {
+    let min = Number.POSITIVE_INFINITY
+    let max = Number.NEGATIVE_INFINITY
+    for (let i = 0; i + 2 < seated.length; i += 3) {
+      min = Math.min(min, seated[i] as number)
+      max = Math.max(max, seated[i] as number)
+    }
+    length = Math.max(1, max - min)
+  }
+  const us = section.map(([u]) => u)
+  const vs = section.map(([, v]) => v)
+  const extent = Math.max(1, Math.max(...us) - Math.min(...us), Math.max(...vs) - Math.min(...vs))
+  const cost = (score: SeatScore): number =>
+    score.offset +
+    (score.lean * Math.PI * 0.5 * length) / 180 +
+    (score.tilt * Math.PI * 0.5 * extent) / 180
   const scoreOf = (candidate: Matrix4): SeatScore =>
     scoreSeat(catalogue, faceFlats(brep, candidate))
   let best = matrix.clone()
-  let bestScore = scoreOf(best)
+  let bestCost = cost(scoreOf(best))
   for (const proposal of proposals) {
-    const score = scoreOf(proposal)
-    const better =
-      score.offset < bestScore.offset - 0.01 ||
-      (Math.abs(score.offset - bestScore.offset) <= 0.01 && score.tilt < bestScore.tilt - 0.005)
-    if (better) {
+    const proposalCost = cost(scoreOf(proposal))
+    if (proposalCost < bestCost - 0.01) {
       best = proposal
-      bestScore = score
+      bestCost = proposalCost
     }
   }
   return best === matrix ? null : best
@@ -267,28 +286,40 @@ function stockFrameSeats(
   if (groups.length < 2) return []
 
   const candidates: Matrix4[] = []
-  for (const first of groups.slice(0, 3)) {
-    const crossing = groups.find(
-      (group) => group !== first && Math.abs(group.normal.dot(first.normal)) < 0.3,
-    )
-    if (!crossing) continue
-    const u = first.normal.clone()
-    if (u.dot(CANONICAL_X_AXIS) < 0) u.negate()
-    const m = new Vector3().crossVectors(first.normal, crossing.normal).normalize()
-    if (m.dot(member) < 0) m.negate()
-    const v = new Vector3().crossVectors(m, u).normalize()
-    const memberAxis = new Vector3().crossVectors(u, v).normalize()
-    const target = new Matrix4().makeBasis(CANONICAL_X_AXIS, CANONICAL_Y_AXIS, CANONICAL_MEMBER)
-    const source = new Matrix4().makeBasis(u, v, memberAxis)
-    const correction = new Matrix4().multiplyMatrices(target, new Matrix4().copy(source).invert())
-    const delta = new Quaternion().setFromRotationMatrix(correction)
-    const deltaAngle = 2 * Math.acos(Math.min(1, Math.abs(delta.w)))
-    if (deltaAngle > MAX_STOCK_FIX_RAD) continue
-    const rotated = new Matrix4().copy(correction).multiply(matrix)
-    const centre = bboxOfVertices(transformVertices(vertices, rotated))
-      .getCenter(new Vector3())
-      .negate()
-    candidates.push(new Matrix4().compose(centre, delta.multiply(rotation), scale))
+  // Which stock normal is the section's `x` is not knowable from the face areas — on one part the
+  // flange outers are the depth axis, on another the same-weight faces are the flange edges, and the
+  // wrong choice is an exact 90° error (rejected by the guard, which silently discarded every axis
+  // fix on items 11–13: measured delta 89.64°). So build *both* assignments and let the score pick.
+  const leading = groups.slice(0, 4)
+  for (let i = 0; i < leading.length; i++) {
+    for (let j = i + 1; j < leading.length; j++) {
+      const a = leading[i] as { normal: Vector3 }
+      const b = leading[j] as { normal: Vector3 }
+      if (Math.abs(a.normal.dot(b.normal)) > 0.3) continue
+      for (const [first, crossing] of [
+        [a, b],
+        [b, a],
+      ] as const) {
+        const u = first.normal.clone()
+        if (u.dot(CANONICAL_X_AXIS) < 0) u.negate()
+        const m = new Vector3().crossVectors(first.normal, crossing.normal).normalize()
+        if (m.dot(member) < 0) m.negate()
+        const v = new Vector3().crossVectors(m, u).normalize()
+        const memberAxis = new Vector3().crossVectors(u, v).normalize()
+        const target = new Matrix4().makeBasis(CANONICAL_X_AXIS, CANONICAL_Y_AXIS, CANONICAL_MEMBER)
+        const source = new Matrix4().makeBasis(u, v, memberAxis)
+        const correction = new Matrix4().multiplyMatrices(
+          target,
+          new Matrix4().copy(source).invert(),
+        )
+        const deltaAngle =
+          2 * Math.acos(Math.min(1, Math.abs(new Quaternion().setFromRotationMatrix(correction).w)))
+        // A stock-frame fix is a de-tilt, never a re-orientation: anything past 10° means the pair
+        // was two faces of the same axis family.
+        if (deltaAngle > MAX_STOCK_FIX_RAD) continue
+        candidates.push(recentreSeat(vertices, new Matrix4().copy(correction).multiply(matrix)))
+      }
+    }
   }
   return candidates
 }

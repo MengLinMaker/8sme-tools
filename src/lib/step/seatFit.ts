@@ -29,6 +29,13 @@ export interface Flat {
   offset: number
   /** Length (mm) — the score weight. */
   length: number
+  /**
+   * Out-of-plane lean (rad): the angle by which this face's normal departs from the section plane,
+   * i.e. how far the member axis is off. A stock face is perpendicular to the member, so a leaning
+   * member leaves a small X component that the 2-D projection discards — invisible to offset/tilt
+   * but obvious on screen. Omitted (0) for catalogue flats, which are exact by construction.
+   */
+  lean?: number
   /** A point on the face, away from the plane's foot point (see module note). */
   point: [number, number]
 }
@@ -134,6 +141,7 @@ export function faceFlats(faces: readonly BrepFace[], matrix: Matrix4): Flat[] {
       offset: flat[0] * -centre.z + flat[1] * centre.y,
       length: Math.max(0.001, faceArea(face)),
       point: [-centre.z, centre.y],
+      lean: Math.asin(Math.min(1, Math.abs(normal.x))),
     })
   }
   return flats
@@ -150,6 +158,8 @@ export interface SeatScore {
   missing: number
   /** Flats the score was taken over. */
   matched: number
+  /** Length-weighted out-of-plane lean of the matched faces, degrees (see `Flat.lean`). */
+  lean: number
   /** Per-catalogue-flat residuals (mm), in catalogue order — the robust pass filters on these. */
   residuals: number[]
 }
@@ -170,15 +180,20 @@ export function scoreSeat(
   let tiltWeighted = 0
   let missing = 0
   let matched = 0
+  let leanWeighted = 0
   const residuals: number[] = []
   for (const flat of catalogue) {
-    let best: { residual: number; angle: number } | null = null
+    let best: { residual: number; angle: number; lean: number } | null = null
     for (const candidate of model) {
       const dot = flat.normal[0] * candidate.normal[0] + flat.normal[1] * candidate.normal[1]
       if (dot < cosTol) continue
       const residual = Math.abs(candidate.offset - flat.offset)
       if (!best || residual < best.residual)
-        best = { residual, angle: (Math.acos(Math.min(1, dot)) * 180) / Math.PI }
+        best = {
+          residual,
+          angle: (Math.acos(Math.min(1, dot)) * 180) / Math.PI,
+          lean: candidate.lean ?? 0,
+        }
     }
     if (!best || best.residual > MATCH_TOL_MM) {
       residuals.push(MATCH_TOL_MM)
@@ -190,6 +205,7 @@ export function scoreSeat(
       continue
     }
     matched++
+    leanWeighted += flat.length * best.lean
     residuals.push(best.residual)
     weight += flat.length
     weighted += flat.length * best.residual
@@ -203,6 +219,7 @@ export function scoreSeat(
     missing,
     matched,
     residuals,
+    lean: weight > 0 ? ((leanWeighted / weight) * 180) / Math.PI : Number.POSITIVE_INFINITY,
   }
 }
 
