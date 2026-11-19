@@ -539,8 +539,9 @@ interface SizeSegment {
 /**
  * The model-size cell, split so the dimension that failed can be highlighted. A pass (or a part
  * with no expected size) shows the length alone — the cross-section is fixed by the profile — while
- * a failure prints the measured triple and, next to the failing dimension, what it should have
- * been, so the row reads without the tooltip.
+ * a failure prints the measured extents one dimension per line and, next to the failing dimension,
+ * what it should have been, so the row reads without the tooltip. Stacking keeps the Size column
+ * narrow: an unequal cross-section gets three lines instead of one long `L × a × b` run.
  */
 function sizeSegments(t: TFunction, check?: SizeCheck): SizeSegment[] {
   if (!check) return [{ dim: 'note', text: '—' }]
@@ -561,11 +562,21 @@ function sizeSegments(t: TFunction, check?: SizeCheck): SizeSegment[] {
   const shown = [l, a, b].map((value) => value.toFixed(0))
   const expected = [el, ea, eb].map((value) => value.toFixed(0))
   const differs = (bad: boolean, index: number) => (bad ? ` ≠ ${expected[index]}` : '')
-  return [
+  const segments: SizeSegment[] = [
     { dim: 'length', text: `L${shown[0]}${differs(lengthBad, 0)}`, bad: lengthBad },
-    { dim: 'crossA', text: ` × ${shown[1]}${differs(crossBad[0], 1)}`, bad: crossBad[0] },
-    { dim: 'crossB', text: ` × ${shown[2]}${differs(crossBad[1], 2)}`, bad: crossBad[1] },
   ]
+  // A square cross-section reads the same on both axes, so one cross line is enough; unequal dims
+  // get a line each.
+  const square = shown[1] === shown[2] && expected[1] === expected[2] && crossBad[0] === crossBad[1]
+  segments.push({ dim: 'crossA', text: `${shown[1]}${differs(crossBad[0], 1)}`, bad: crossBad[0] })
+  if (!square) {
+    segments.push({
+      dim: 'crossB',
+      text: `${shown[2]}${differs(crossBad[1], 2)}`,
+      bad: crossBad[1],
+    })
+  }
+  return segments
 }
 
 /** The full measured (and expected) extents, for the size cell's tooltip. */
@@ -5128,7 +5139,10 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                             <span
                               // On a mismatch the colour moves to the failing dimension, so the
                               // rest of the triple fades back and the wrong number stands out.
-                              className={cn(!sizeFails && sizeCheckTone(sizeCheck))}
+                              className={cn(
+                                'inline-flex flex-col items-end leading-tight',
+                                !sizeFails && sizeCheckTone(sizeCheck),
+                              )}
                               title={sizeCheckTitle(t, sizeCheck)}
                             >
                               {sizeSegments(t, sizeCheck).map((segment) => (
