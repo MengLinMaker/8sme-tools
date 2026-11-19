@@ -200,5 +200,8 @@ on the far side is the intended bevel/corner feature, not a sudden thickness cha
 - 8 Star — service-area copy (Berwick / Dandenong / Hallam …) confirming 900 mm × 13.5 m, H-beam 800×300: <https://8starmetalengineering.com.au/services/structural-steel-fabricators-berwick/>
 - Weihong — WiseCAM Tube (the toolpath producer): <https://www.weihong.com.cn/en/products/detail/121>
 - Weihong — NcStudio / TubePro control manual: <https://d.fscut.com/wordpress-fscut/2020/10/TubePro-User-Manual.pdf>
+- Weihong — **中文原版 controller manual for this machine class**, scraped to text: see
+  `docs/manuals/` (TU7500M 四卡盘 heavy-tube, 304 pp, plus the FA30A 型钢三维五轴 and TU7000M
+  candidates). No manual is published under the `KL-90010-T` code itself.
 - FSCUT / BOCHU — tube cutting control systems (heavy-tube / bevel): <https://d.fscut.com/wordpress-fscut/2024/03/FSCUT-Laser-Cutting-Control-System-Product-Brochure.pdf>
 - Comparable OEM examples (class reference only): Longxin `LX-H100` <https://longxinlaser.com/product>; Acme `LH` series <https://acmelaser.com/lh-series-feed-type-beam-laser-cutting-machine>; Han's `TX12050T` <https://www.hansme.net/detail/TX_Series>
