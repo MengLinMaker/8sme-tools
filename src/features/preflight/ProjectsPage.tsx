@@ -23,7 +23,8 @@ import {
   projectIdFor,
   putProjectFiles,
   requestPersistentStorage,
-  storageEstimate,
+  type StorageFigures,
+  storageFigures,
 } from '@/lib/projects/store'
 import type { InputBundle } from '@/lib/readInput'
 
@@ -43,7 +44,7 @@ export function ProjectsPage() {
   const navigate = useNavigate()
   const [projects, setProjects] = useState<ProjectMeta[] | null>(null)
   const [query, setQuery] = useState('')
-  const [usage, setUsage] = useState<{ usage?: number; quota?: number }>({})
+  const [figures, setFigures] = useState<StorageFigures>({})
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<ProjectMeta | null>(null)
@@ -51,7 +52,7 @@ export function ProjectsPage() {
   const refresh = useCallback(async () => {
     try {
       setProjects(await listProjects())
-      setUsage(await storageEstimate())
+      setFigures(await storageFigures())
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setProjects([])
@@ -63,6 +64,36 @@ export function ProjectsPage() {
   }, [refresh])
 
   const trimmedQuery = query.trim().toLowerCase()
+  /** What saved jobs occupy — the part of the total the user can free by deleting one. */
+  const projectBytes = useMemo(
+    () => (projects ?? []).reduce((total, project) => total + project.size, 0),
+    [projects],
+  )
+
+  /**
+   * Bytes the total holds that are neither a saved project nor the offline cache: the saved fixes
+   * and the browser's own bookkeeping. Only meaningful when the browser splits its usage down.
+   */
+  const otherBytes =
+    figures.usage != null && figures.cached != null
+      ? Math.max(0, figures.usage - projectBytes - figures.cached)
+      : undefined
+
+  /**
+   * Hover breakdown of the total. A cache-dominated figure looks alarming on a machine with no
+   * projects, so name the parts: jobs (which deleting frees), the app's offline copy, and the rest.
+   */
+  const usageHint = [
+    t('preflight.projects.usageHint'),
+    t('preflight.projects.usageProjects', { size: formatBytes(projectBytes) }),
+    figures.cached != null
+      ? t('preflight.projects.usageAppCache', { size: formatBytes(figures.cached) })
+      : undefined,
+    otherBytes ? t('preflight.projects.usageOther', { size: formatBytes(otherBytes) }) : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join('\n')
+
   const filtered = useMemo(
     () =>
       (projects ?? []).filter(
@@ -154,11 +185,11 @@ export function ProjectsPage() {
                 )}
               </div>
             )}
-            {usage.usage != null && usage.quota != null && (
-              <span className="text-xs text-muted-foreground">
+            {projects !== null && figures.quota != null && (
+              <span className="text-xs text-muted-foreground" title={usageHint}>
                 {t('preflight.projects.usage', {
-                  used: formatBytes(usage.usage),
-                  quota: formatBytes(usage.quota),
+                  used: formatBytes(figures.usage ?? projectBytes),
+                  quota: formatBytes(figures.quota),
                 })}
               </span>
             )}

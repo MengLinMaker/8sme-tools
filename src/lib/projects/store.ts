@@ -168,10 +168,38 @@ export async function deleteProject(id: string): Promise<void> {
   await finished(tx)
 }
 
-export async function storageEstimate(): Promise<{ usage?: number; quota?: number }> {
+export interface StorageFigures {
+  /** Everything the origin holds, exactly as the browser counts it for eviction. */
+  usage?: number
+  /** The origin's storage limit. */
+  quota?: number
+  /** Of `usage`, the bytes in Cache Storage — the precached app shell and CAD kernel. */
+  cached?: number
+}
+
+/**
+ * The browser's storage figures for this origin.
+ *
+ * `usage` is the honest total: it is the number the browser uses for its quota, so it is what
+ * "37.9 MB used" means. It includes the service-worker caches — the precached app shell and the
+ * ~23 MB CAD kernel — which exist before any job is imported and do not shrink when one is deleted.
+ * `usageDetails` splits the cache out where the browser reports it, so the page can show the saved
+ * projects and that cache separately instead of letting one masquerade as the other.
+ *
+ * There is no way to compact IndexedDB from the web: Chrome's LevelDB backend repacks on its own
+ * schedule, and after a delete the disk figure can trail the records for a while. Our deletes do
+ * remove every record of a project (meta, files and edits), so the jobs figure drops immediately.
+ */
+export async function storageFigures(): Promise<StorageFigures> {
   try {
-    const estimate = await navigator.storage?.estimate?.()
-    return { usage: estimate?.usage, quota: estimate?.quota }
+    const estimate = (await navigator.storage?.estimate?.()) as
+      | { usage?: number; quota?: number; usageDetails?: { caches?: number } }
+      | undefined
+    return {
+      usage: estimate?.usage,
+      quota: estimate?.quota,
+      cached: estimate?.usageDetails?.caches,
+    }
   } catch {
     return {}
   }
