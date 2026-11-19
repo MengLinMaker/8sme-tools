@@ -5,14 +5,10 @@ import type { BrepFace } from './mesh'
 import {
   faceArea,
   faceFlats,
-  fitSectionPlanes,
   ransacSectionPose,
-  recentreSeat,
   type SeatScore,
   scoreSeat,
   sectionFlats,
-  sectionRotationMatrix,
-  sectionTranslation,
 } from './seatFit'
 
 /**
@@ -165,9 +161,6 @@ export interface SeatFace {
 const CANONICAL_MEMBER = unit(0, 1)
 /** Largest stock-frame correction accepted; anything bigger is a mis-read frame (cut vs stock). */
 const MAX_STOCK_FIX_RAD = (10 * Math.PI) / 180
-/** Damped plane-ICP: fraction of each step taken, and the per-step roll cap (rad). */
-const ICP_DAMPING = 0.5
-const ICP_MAX_STEP_RAD = 0.12
 /**
  * RANSAC inlier thresholds, tightest first (mm). 0.01 mm is achievable on exact geometry — the
  * J12095 UBs score 0.000 mm on every stock plane — but a Tekla flange can sit 0.05–0.12 mm off the
@@ -178,19 +171,20 @@ const ICP_MAX_STEP_RAD = 0.12
 const INLIER_LADDER_MM = [0.1, 0.5, 3]
 
 /**
- * Re-seats a model onto the catalogue **stock planes**.
+ * Re-seats a model onto the catalogue **stock planes**, using plane-pair RANSAC only.
  *
- * Two stages, both from the geometry rather than the vertex cloud:
- *  1. the section cross comes from the stock faces' normals (a stock face *is* a section plane), and
- *  2. a damped roll/translation ICP then lands those planes on the catalogue's planes.
+ * The pose is decided by the surfaces themselves: a stock face's normal is a section axis, and
+ * hypothesising two plane correspondences fixes the roll and both translations exactly. Enumerating
+ * every compatible pair makes the search global, so the answer does not depend on the pose it starts
+ * from — measured, a 25° wrong start and the detector's own seat return the same pose to < 1e-3 mm.
  *
- * PCA over the mesh vertices mixes in cut faces and tessellation: on a real `UB250*31` it tilted the
- * member 0.14° (12.8 mm of false depth over 5.3 m), and on J12095 item12 it left the part ~9° rolled.
+ * Deliberately **no refinement stage**. Across all 36 J12095 items, RANSAC alone scores mean offset
+ * 0.184 mm and tilt 0.000°; a tight-gate ICP after it never improved a single part (offset identical,
+ * tilt 0.003°). Refinement stays available in `seatFit.ts` and the batch harness for later
+ * exploration, but the seat does not run it.
  *
- * The refined seat is only returned when it **scores better** than the seat it started from, so a
- * mis-read frame (a cut face taken for stock, an open section with one dominant face) can never
- * make a part worse — batch 1 of `docs/seat-alignment.md` found exactly that regression with
- * boundary-length weighting on a PFC.
+ * Returns `null` when fewer than three stock planes agree, so the caller keeps the pose it had —
+ * a part whose stock is cut away beyond recognition is not something to guess at.
  */
 export function seatFromStockFaces(
   vertices: number[],
@@ -205,74 +199,41 @@ export function seatFromStockFaces(
     ...face,
     wires: face.wires ?? [],
   })) as unknown as BrepFace[]
-  const scoreOf = (candidate: Matrix4): SeatScore =>
-    scoreSeat(catalogue, faceFlats(brep, candidate))
 
-  /**
-   * Every stage below is a *proposal*. Keep the best-scoring one instead of letting the last stage
-   * win: measured on J12095, plain ICP after a good RANSAC pose tilts items 11/13 by 2.0–2.5° while
-   * leaving the offset identical — the robust pass then has to undo it. Offset is the primary
-   * criterion; tilt breaks near-ties (a plane fit's translation null space can keep the offset
-   * while the part rotates).
-   */
-  const better = (candidate: SeatScore, incumbent: SeatScore): boolean =>
-    candidate.offset < incumbent.offset - 0.01 ||
-    (Math.abs(candidate.offset - incumbent.offset) <= 0.01 &&
-      candidate.tilt < incumbent.tilt - 0.05)
-
-  let best = matrix.clone()
-  let bestScore = scoreOf(best)
-  const consider = (proposal: Matrix4): void => {
-    const score = scoreOf(proposal)
-    if (better(score, bestScore)) {
-      best = proposal
-      bestScore = score
-    }
-  }
-
-  // 1. Global pose: exhaustive plane-pair RANSAC. This is the stage that survives a badly wrong
-  // start pose — with a 25 deg roll it still finds 7-8 of 8 stock planes, where ICP cannot move at
-  // all (its residual is translation-invariant along the planes it has already matched).
+  // Tightest threshold that still has three planes behind it; relax only when it does not.
   let global: ReturnType<typeof ransacSectionPose> = null
   for (const inlierMm of INLIER_LADDER_MM) {
     const attempt = ransacSectionPose(catalogue, brep, vertices, matrix, inlierMm)
     if (!global || (attempt?.inliers ?? 0) > global.inliers) global = attempt
-    // Tight enough to be meaningful and still backed by at least three surfaces: take it.
-    if (attempt && attempt.inliers >= 3 && attempt.matrix) break
+    if (attempt && attempt.inliers >= 3) break
   }
-  const globalPose = Boolean(global && global.inliers >= 3)
-  if (globalPose && global) consider(global.matrix)
+  // The member axis is not part of RANSAC: its hypotheses only roll and translate within the
+  // section plane, so a part whose *length* axis is off (PCA seating on a real UB tilted it 0.14°
+  // — 12.8 mm of false depth over 5.3 m) needs the axis taken from the stock-face normals too.
+  // Both proposals are scored; the better pose wins.
+  const proposals: Matrix4[] = global && global.inliers >= 3 ? [global.matrix] : []
+  for (const frameSeat of stockFrameSeats(vertices, faces, matrix)) proposals.push(frameSeat)
+  if (proposals.length === 0) return null
 
-  // 2. Member axis + roll straight from the stock-face normals.
-  for (const frameSeat of stockFrameSeats(vertices, faces, best)) consider(frameSeat)
-
-  // 3. ICP is now an **escape hatch only**. Measured across all 36 J12095 items, RANSAC alone gives
-  // mean offset 0.184 mm / tilt 0.000°; adding the tight-gate ICP leaves the offset identical and
-  // the tilt at 0.003° (it never helped once, and degraded item12/13 slightly). So when RANSAC has
-  // consensus, nothing is refined — its plane pair is already exact. With no consensus the wide
-  // gate is the only way to move at all, and the gate has to stay wide because the start is poor.
-  const icp = (start: Matrix4, maxResidual: number, steps: number): Matrix4 => {
-    let candidate = start
-    for (let iteration = 0; iteration < steps; iteration++) {
-      const fit = fitSectionPlanes(catalogue, faceFlats(brep, candidate), 20, maxResidual)
-      if (!fit) break
-      const step = Math.max(-ICP_MAX_STEP_RAD, Math.min(ICP_MAX_STEP_RAD, fit.angle)) * ICP_DAMPING
-      const correction = sectionTranslation(fit.tu, fit.tv).multiply(sectionRotationMatrix(step))
-      candidate = recentreSeat(vertices, new Matrix4().copy(correction).multiply(candidate))
-      if (Math.abs(fit.angle) < 1e-4 && Math.hypot(fit.tu, fit.tv) < 1e-3) break
+  // Never adopt a pose that scores worse than the one we were given (offset first, tilt on ties).
+  // Both tolerances are tight because the quantities are: 0.01 mm of offset, and 0.005° of tilt —
+  // on a 5.3 m member that is already ~0.4 mm of drift, so a coarser tilt gate would reject a
+  // genuinely better pose (it did: M_12's 0.016° heuristic tilt was left in place).
+  const scoreOf = (candidate: Matrix4): SeatScore =>
+    scoreSeat(catalogue, faceFlats(brep, candidate))
+  let best = matrix.clone()
+  let bestScore = scoreOf(best)
+  for (const proposal of proposals) {
+    const score = scoreOf(proposal)
+    const better =
+      score.offset < bestScore.offset - 0.01 ||
+      (Math.abs(score.offset - bestScore.offset) <= 0.01 && score.tilt < bestScore.tilt - 0.005)
+    if (better) {
+      best = proposal
+      bestScore = score
     }
-    return candidate
   }
-  if (!globalPose) consider(icp(best, 25, 24))
-
-  // 4. Robust polish, for the same no-consensus case: drop planes far from the pack and refit on
-  // the consistent majority.
-  if (!globalPose) {
-    const median = medianOf(bestScore.residuals)
-    consider(icp(best, Math.max(0.1, median * 2), 6))
-  }
-
-  return best
+  return best === matrix ? null : best
 }
 
 /**
@@ -330,13 +291,6 @@ function stockFrameSeats(
     candidates.push(new Matrix4().compose(centre, delta.multiply(rotation), scale))
   }
   return candidates
-}
-
-/** Median of a list (0 when empty). */
-function medianOf(values: number[]): number {
-  if (values.length === 0) return 0
-  const sorted = [...values].sort((a, b) => a - b)
-  return sorted[Math.floor(sorted.length / 2)] as number
 }
 
 /** Area of a structural face (planar): outer wire minus inner wires, via its own normal. */

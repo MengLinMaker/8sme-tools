@@ -76,6 +76,10 @@ Conclusions:
 
 ## Batch 2 — iterate the winner
 
+> **Status: superseded.** This stage shipped briefly, then measurement (batch 4, below) showed
+> RANSAC alone is at least as accurate. The ICP is kept in `seatFit.ts` and the batch harness for
+> later exploration; `seatFromStockFaces` no longer runs it. See §"RANSAC vs RANSAC + ICP".
+
 Winner: **stock-face frame + section-plane ICP** (`seatFromStockFaces`).
 
 1. **Frame** — a stock face's normal *is* a section axis; two perpendicular normals span the cross,
@@ -302,10 +306,18 @@ RANSAC never failed to find consensus, and the ICP never improved a single part 
 was item12 going from 0.01° to 0.03° of tilt. A plane pair is already the exact solution, so once the
 global stage has ≥3 inlier planes there is nothing left to refine.
 
-Consequently **ICP is no longer a default stage**: it runs only when RANSAC finds no consensus (a
-part whose stock is cut so heavily that <3 nominal planes survive), where a wide gate is the only way
-to move at all. Confidence is reported as the inlier *fraction*: 8/8 and 4/4 are both full agreement
-(tubes and angles only have four stock flats), 5/8 is a part with altered material.
+Consequently **ICP is not a stage at all** — not even as an escape hatch. `seatFromStockFaces` is
+RANSAC plus one non-refinement companion:
+
+- **RANSAC** (plane-pair hypotheses, inlier ladder 0.1 → 0.5 → 3 mm) decides roll and section-plane
+  translation, globally.
+- **The stock-face axis** decides the **member direction**, because a RANSAC hypothesis only rolls
+  and translates *within* the section plane. A real UB whose PCA member axis was 0.14° off needs
+  this: `axle = u × v` from two perpendicular stock normals. Bounded to a 10° correction, and both
+  proposals are scored, so it can never make a part worse.
+
+Confidence is reported as the inlier *fraction*: 8/8 and 4/4 are both full agreement (tubes and
+angles only have four stock flats), 5/8 is a part with altered material.
 
 **Sign trap (cost a round).** `sectionRotationMatrix` must rotate section coordinates by `+angle`.
 The naive `makeRotationX(-angle)` reads as the opposite rotation because the section frame maps
@@ -330,7 +342,7 @@ Two independent causes, both fixed:
 | file | role |
 |---|---|
 | `src/lib/step/seatFit.ts` | flats, scoring, association + damped rigid step (the rig's maths) |
-| `src/lib/step/seat.ts` | `seatFromStockFaces`: RANSAC consensus → frame candidates (ICP only when no consensus), merit-based acceptance |
+| `src/lib/step/seat.ts` | `seatFromStockFaces`: RANSAC (pose) + stock-face axis (member direction); no refinement |
 | `src/lib/step/mesh.ts` | geometric planarity for B-spline flats |
 | `src/lib/step/seat-batches.test.ts` | the batch table + the pinned outcome |
 | `src/lib/step/seat-ub.test.ts` | the single-part UB regression (exact bbox after seating) |
