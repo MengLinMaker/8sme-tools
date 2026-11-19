@@ -116,9 +116,9 @@ Final shipped column:
 | item1 | 0.06 / 0.14° | 0.06 / 0.12 / **0.03** |
 | item9 | 0.00 / 0.00° | 0.00 / 0.00 / 0.00 |
 | item10 | 0.00 / 0.27° | 0.00 / 0.00 / **0.00** |
-| item11 | 1.24 / 0.33° | 1.24 / 4.22 / **0.04** |
-| item12 | **20.0** / 10.0° | **0.80** / 3.08 / **0.03** |
-| item13 | 1.24 / 9.23° | 1.24 / 6.44 / **0.02** |
+| item11 | 1.24 / 0.33° | 1.24 / 4.22 / **0.000** |
+| item12 | **20.0** / 10.0° | **0.80** / 3.08 / **0.005** |
+| item13 | 1.24 / 9.23° | 1.24 / 6.44 / **0.002** |
 | item35 | 0.00 / 0.00° | 0.00 / 0.00 / 0.00 |
 
 **Open (now diagnosed): the 4–6 mm is the part's geometry, not the seat.** On item11 the only
@@ -214,6 +214,99 @@ ICP's basin of attraction varies by part — item12/13 happen to survive 25° �
 cannot move at all, while RANSAC recovers every part. That asymmetry is the reason for the stage,
 and the regression test asserts both halves (RANSAC always recovers; at least one part traps ICP).
 
+### How accurate is RANSAC by itself?
+
+Measured stage by stage (`offset / worst / tilt`):
+
+| part | RANSAC only | + ICP | + ICP + robust |
+|---|---|---|---|
+| item1 | 0.063 / 0.12 / **0.000** | 0.063 / 0.12 / 0.030 | 0.063 / 0.12 / 0.030 |
+| item9 | 0.000 / 0.00 / 0.000 | 0.000 / 0.00 / 0.000 | 0.000 / 0.00 / 0.000 |
+| item10 | 0.000 / 0.00 / 0.000 | 0.000 / 0.00 / 0.000 | 0.000 / 0.00 / 0.000 |
+| item11 | 1.236 / 4.22 / **0.000** | 1.236 / 4.22 / **2.527** | 1.236 / 4.22 / 0.000 |
+| item12 | 0.796 / 3.08 / **0.005** | 0.796 / 3.08 / 0.031 | 0.796 / 3.08 / 0.031 |
+| item13 | 1.244 / 6.44 / **0.002** | 1.244 / 6.44 / **2.093** | 1.244 / 6.44 / 0.016 |
+
+Three findings:
+
+1. **RANSAC alone is the most accurate pose.** A correct plane pair is exact — two planes and three
+   unknowns, no noise in the geometric data — so the hypothesis *is* the answer; the offsets it
+   produces are identical to the polished seat to three decimals, and the tilt is **0.000–0.005°**
+   versus 0.016–0.031° after polishing.
+2. **Plain ICP after RANSAC degrades the pose.** On items 11/13 it tilts the part by 2.0–2.5° while
+   leaving the offset unchanged, because the fit averages an inconsistent plane (the planed flange)
+   into a rotation. The robust pass exists to repair that — but the clean answer is not to accept
+   the damage in the first place.
+3. **Start-pose invariance.** RANSAC from a 25°-broken start and from the good seat return the same
+   pose to `< 1e-3` mm, with the same inlier count. Nothing about the result depends on the input
+   pose, which is the property a global stage is supposed to have.
+
+Consequence — the seat is now a **proposal stack with merit-based acceptance**: RANSAC, stock-face
+frame, ICP, robust ICP each produce a candidate, and a candidate replaces the incumbent only if it
+improves the offset by > 0.01 mm, or holds the offset within 0.01 mm and improves the tilt by
+> 0.05°. Tilt is the tie-breaker precisely because a plane fit has a translation null space that can
+keep the offset while rotating the part. Shipped tilt is now 0.000–0.015° on every item (asserted in
+`seat-batches.test.ts`).
+
+What RANSAC cannot fix is **geometry**: items 11/13 keep 1.24 mm mean / 4.2–6.4 mm worst because a
+flange is planed. No pose removes that.
+
+### How tight should the gates be?
+
+A 1 mm inlier threshold is not "aligned", it is "roughly there". Swept down to 0.01 mm, holding the
+solver fixed:
+
+| part | residuals at the reference pose (mm) | 1 mm | 0.1 mm | 0.01 mm |
+|---|---|---|---|---|
+| item1 | `0.045, 0, 0.045, 0.052, 0.123, 0, 0.123, 0.052` | 8/8 | 8/8 | 4/8 |
+| item9 | all `0.000` | 8/8 | 8/8 | **8/8** |
+| item10 | all `0.000` | 8/8 | 8/8 | **8/8** |
+| item11 | `4.224, 4.17, 0, 0.002, 0.002, 0.002, 0, 4.17` | 5/8 | 5/8 | 5/8 |
+| item12 | `3.075, 0.018, 0.706, 0.018, 0.028, 0.018, 0.706, 0.018` | 7/8 | 7/8 | 5/8 |
+
+Findings:
+
+- **The pose is gate-invariant.** Offset and tilt are *identical* at every threshold from 3 mm to
+  0.01 mm on every part — the winning pair of planes is exact, so the answer never depended on the
+  tolerance. The threshold changes **confidence**, not the result.
+- **Exact geometry reaches 0.01 mm.** Items 9/10 have zero residual on all eight stock planes, so a
+  10 µm threshold still scores 8/8. A 0.01 mm gate is *achievable* here, not aspirational.
+- **Real parts have a 0.05–0.12 mm floor.** item1's flange planes sit 0.045–0.123 mm off the
+  catalogue's rounded dims; item12 has a 0.706 mm plane (another altered surface). Those are
+  geometry, not pose — they must not be allowed to drag the fit.
+- **Tight gates are strictly better for the ICP.** The same ICP on item1 gives tilt 0.030° at a
+  0.1–3 mm gate but 0.000–0.002° at 0.02–0.05 mm: the loose gate keeps feeding it
+  rounding-level planes that it averages into a rotation.
+
+Adopted:
+
+- **RANSAC inlier ladder** `0.1 → 0.5 → 3 mm`, tightest first, stopping at the first level with
+  ≥ 3 inlier planes (`INLIER_LADDER_MM`). 0.1 mm is the "decent minimum" for this data; it discards
+  a planed flange (4.2–6.4 mm) and a 0.7 mm altered face without ever weakening the pose.
+- **ICP gate 0.05 mm** when a global pose exists (`ICP_GATE_MM`). Nothing coarser votes. The wide
+  25 mm gate survives only as the escape for parts where RANSAC finds no consensus at all.
+- **Inlier count is the confidence signal** to surface ("8/8 planes within 0.1 mm"), not the fit
+  criterion. A part scoring 8/8 at 0.1 mm is aligned to the stock to a tenth of a millimetre; one
+  scoring 5/8 is telling you material differs, which is an audit fact.
+
+### RANSAC vs RANSAC + ICP, across the whole job
+
+All 36 J12095 items (PFC, UB, angle, SHS), same rig, shipped ladder:
+
+| | mean offset | mean tilt | helped | hurt | failed |
+|---|---|---|---|---|---|
+| RANSAC alone | **0.184 mm** | **0.000°** | — | — | 0 |
+| + tight-gate ICP (0.05 mm) | 0.184 mm | 0.003° | **0** | 0 | 0 |
+
+RANSAC never failed to find consensus, and the ICP never improved a single part — the biggest change
+was item12 going from 0.01° to 0.03° of tilt. A plane pair is already the exact solution, so once the
+global stage has ≥3 inlier planes there is nothing left to refine.
+
+Consequently **ICP is no longer a default stage**: it runs only when RANSAC finds no consensus (a
+part whose stock is cut so heavily that <3 nominal planes survive), where a wide gate is the only way
+to move at all. Confidence is reported as the inlier *fraction*: 8/8 and 4/4 are both full agreement
+(tubes and angles only have four stock flats), 5/8 is a part with altered material.
+
 **Sign trap (cost a round).** `sectionRotationMatrix` must rotate section coordinates by `+angle`.
 The naive `makeRotationX(-angle)` reads as the opposite rotation because the section frame maps
 `u = −z`, `v = +y`; with the inverted helper the first RANSAC build produced **zero inliers on
@@ -237,7 +330,7 @@ Two independent causes, both fixed:
 | file | role |
 |---|---|
 | `src/lib/step/seatFit.ts` | flats, scoring, association + damped rigid step (the rig's maths) |
-| `src/lib/step/seat.ts` | `seatFromStockFaces`: RANSAC pose → frame candidates → ICP → robust pass → acceptance |
+| `src/lib/step/seat.ts` | `seatFromStockFaces`: RANSAC consensus → frame candidates (ICP only when no consensus), merit-based acceptance |
 | `src/lib/step/mesh.ts` | geometric planarity for B-spline flats |
 | `src/lib/step/seat-batches.test.ts` | the batch table + the pinned outcome |
 | `src/lib/step/seat-ub.test.ts` | the single-part UB regression (exact bbox after seating) |

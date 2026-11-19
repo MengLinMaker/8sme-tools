@@ -168,6 +168,14 @@ const MAX_STOCK_FIX_RAD = (10 * Math.PI) / 180
 /** Damped plane-ICP: fraction of each step taken, and the per-step roll cap (rad). */
 const ICP_DAMPING = 0.5
 const ICP_MAX_STEP_RAD = 0.12
+/**
+ * RANSAC inlier thresholds, tightest first (mm). 0.01 mm is achievable on exact geometry — the
+ * J12095 UBs score 0.000 mm on every stock plane — but a Tekla flange can sit 0.05–0.12 mm off the
+ * catalogue's rounded dims, so the ladder only relaxes when a threshold leaves too few planes to
+ * trust. A tight threshold makes the consensus *discriminative*: on item11 the planed flange
+ * (4.17–4.22 mm) is excluded at every level, so the pose is decided by the surfaces that agree.
+ */
+const INLIER_LADDER_MM = [0.1, 0.5, 3]
 
 /**
  * Re-seats a model onto the catalogue **stock planes**.
@@ -199,56 +207,72 @@ export function seatFromStockFaces(
   })) as unknown as BrepFace[]
   const scoreOf = (candidate: Matrix4): SeatScore =>
     scoreSeat(catalogue, faceFlats(brep, candidate))
-  const original = matrix.clone()
-  const originalScore = scoreOf(original)
 
-  // 1. Global pose: exhaustive plane-pair RANSAC. This is the stage that survives a badly wrong
-  // start pose — with a 25 deg roll it still finds 7-8 of 8 stock planes, where ICP cannot move at
-  // all (its residual is translation-invariant along the planes it has already matched).
-  let candidate = original.clone()
-  let bestScore = originalScore
-  const global = ransacSectionPose(catalogue, brep, vertices, original, 1)
-  if (global && global.inliers >= 3 && global.offset < bestScore.offset - 0.01) {
-    candidate = global.matrix
-    bestScore = { ...originalScore, offset: global.offset }
-  }
-  for (const frameSeat of stockFrameSeats(vertices, faces, candidate)) {
-    const score = scoreOf(frameSeat)
-    if (score.offset < bestScore.offset - 0.01) {
-      candidate = frameSeat
+  /**
+   * Every stage below is a *proposal*. Keep the best-scoring one instead of letting the last stage
+   * win: measured on J12095, plain ICP after a good RANSAC pose tilts items 11/13 by 2.0–2.5° while
+   * leaving the offset identical — the robust pass then has to undo it. Offset is the primary
+   * criterion; tilt breaks near-ties (a plane fit's translation null space can keep the offset
+   * while the part rotates).
+   */
+  const better = (candidate: SeatScore, incumbent: SeatScore): boolean =>
+    candidate.offset < incumbent.offset - 0.01 ||
+    (Math.abs(candidate.offset - incumbent.offset) <= 0.01 &&
+      candidate.tilt < incumbent.tilt - 0.05)
+
+  let best = matrix.clone()
+  let bestScore = scoreOf(best)
+  const consider = (proposal: Matrix4): void => {
+    const score = scoreOf(proposal)
+    if (better(score, bestScore)) {
+      best = proposal
       bestScore = score
     }
   }
 
-  // 2. Damped section-plane ICP: roll about the member + translation in the section plane.
-  for (let iteration = 0; iteration < 24; iteration++) {
-    const fit = fitSectionPlanes(catalogue, faceFlats(brep, candidate))
-    if (!fit) break
-    const step = Math.max(-ICP_MAX_STEP_RAD, Math.min(ICP_MAX_STEP_RAD, fit.angle)) * ICP_DAMPING
-    const correction = sectionTranslation(fit.tu, fit.tv).multiply(sectionRotationMatrix(step))
-    candidate = recentreSeat(vertices, new Matrix4().copy(correction).multiply(candidate))
-    if (Math.abs(fit.angle) < 1e-4 && Math.hypot(fit.tu, fit.tv) < 1e-3) break
+  // 1. Global pose: exhaustive plane-pair RANSAC. This is the stage that survives a badly wrong
+  // start pose — with a 25 deg roll it still finds 7-8 of 8 stock planes, where ICP cannot move at
+  // all (its residual is translation-invariant along the planes it has already matched).
+  let global: ReturnType<typeof ransacSectionPose> = null
+  for (const inlierMm of INLIER_LADDER_MM) {
+    const attempt = ransacSectionPose(catalogue, brep, vertices, matrix, inlierMm)
+    if (!global || (attempt?.inliers ?? 0) > global.inliers) global = attempt
+    // Tight enough to be meaningful and still backed by at least three surfaces: take it.
+    if (attempt && attempt.inliers >= 3 && attempt.matrix) break
+  }
+  const globalPose = Boolean(global && global.inliers >= 3)
+  if (globalPose && global) consider(global.matrix)
+
+  // 2. Member axis + roll straight from the stock-face normals.
+  for (const frameSeat of stockFrameSeats(vertices, faces, best)) consider(frameSeat)
+
+  // 3. ICP is now an **escape hatch only**. Measured across all 36 J12095 items, RANSAC alone gives
+  // mean offset 0.184 mm / tilt 0.000°; adding the tight-gate ICP leaves the offset identical and
+  // the tilt at 0.003° (it never helped once, and degraded item12/13 slightly). So when RANSAC has
+  // consensus, nothing is refined — its plane pair is already exact. With no consensus the wide
+  // gate is the only way to move at all, and the gate has to stay wide because the start is poor.
+  const icp = (start: Matrix4, maxResidual: number, steps: number): Matrix4 => {
+    let candidate = start
+    for (let iteration = 0; iteration < steps; iteration++) {
+      const fit = fitSectionPlanes(catalogue, faceFlats(brep, candidate), 20, maxResidual)
+      if (!fit) break
+      const step = Math.max(-ICP_MAX_STEP_RAD, Math.min(ICP_MAX_STEP_RAD, fit.angle)) * ICP_DAMPING
+      const correction = sectionTranslation(fit.tu, fit.tv).multiply(sectionRotationMatrix(step))
+      candidate = recentreSeat(vertices, new Matrix4().copy(correction).multiply(candidate))
+      if (Math.abs(fit.angle) < 1e-4 && Math.hypot(fit.tu, fit.tv) < 1e-3) break
+    }
+    return candidate
+  }
+  if (!globalPose) consider(icp(best, 25, 24))
+
+  // 4. Robust polish, for the same no-consensus case: drop planes far from the pack and refit on
+  // the consistent majority.
+  if (!globalPose) {
+    const median = medianOf(bestScore.residuals)
+    consider(icp(best, Math.max(0.1, median * 2), 6))
   }
 
-  // 3. Robust polish: drop planes that sit far from the pack (a variant flange thickness, a cut
-  // face that survived association) and refit on the consistent majority. This is what pulls the
-  // 3–6 mm worst-case planes in, without moving the bulk fit.
-  const milestone = scoreOf(candidate)
-  const median = medianOf(milestone.residuals)
-  const limit = Math.max(1, median * 2)
-  for (let iteration = 0; iteration < 6; iteration++) {
-    const fit = fitSectionPlanes(catalogue, faceFlats(brep, candidate), 20, limit)
-    if (!fit) break
-    const step = Math.max(-ICP_MAX_STEP_RAD, Math.min(ICP_MAX_STEP_RAD, fit.angle)) * ICP_DAMPING
-    const correction = sectionTranslation(fit.tu, fit.tv).multiply(sectionRotationMatrix(step))
-    candidate = recentreSeat(vertices, new Matrix4().copy(correction).multiply(candidate))
-    if (Math.abs(fit.angle) < 1e-4 && Math.hypot(fit.tu, fit.tv) < 1e-3) break
-  }
-
-  const refined = scoreOf(candidate)
-  if (refined.offset > originalScore.offset + 0.05) return null
-  if (refined.tilt > originalScore.tilt + 0.5) return null
-  return candidate
+  return best
 }
 
 /**
