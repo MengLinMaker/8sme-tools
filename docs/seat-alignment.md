@@ -337,6 +337,14 @@ Two independent causes, both fixed:
    `BrepFace.planar` was false on every stock face and *nothing* stock-face-based could run. `mesh.ts`
    now tests planarity **geometrically** (boundary points vs their best-fit plane, 0.1 mm).
 
+## CAD-grade refinement suggestions — benchmarked
+
+See `docs/architecture.md` §17 for the table. Summary: sampling adds nothing when the points come
+from CAD (a plane fitted to the boundary reproduces the analytic plane to 0.000° / 0.000 mm); outlier
+rejection is essential (no rejection → 2.5° of tilt from a 2° rough pose); Tukey and a hard gate
+trade wins per part, so neither is a rule; and no refinement reaches RANSAC's own result, because
+RANSAC *solves* the planes rather than minimising residuals.
+
 ## Where this lands in the code
 
 | file | role |

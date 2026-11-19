@@ -604,3 +604,88 @@ is **not** the NC root-line/bevel shift. NC `startCut` is a complex multi-statio
 Next candidate (not yet tried): project the short edge through its **cut face plane trace** onto
 the target face, as `projectToNearest` does for non-planar stock faces, instead of using the raw
 rim points. If the start cut is a shallow planar bevel, that trace reaches the NC outer line.
+
+## 17. Stock alignment (seating) — what was measured
+
+Companion file: **`docs/seat-alignment.md`** (full batch history, score tables, traps). This section
+is the summary and the decision record.
+
+### The problem and the rig
+
+Operator complaints on J12095: item1 "floating in the middle of nowhere", item11 "quite bad",
+item12 "still lopsided", item10 "decent". The old seat scored *containment* of the vertex cloud in
+the catalogue polygon — which cannot see placement or roll at all.
+
+The rig (`seatFit.ts`) scores a pose on **stock planes**: the catalogue section is read as flats
+(maximal collinear runs, outward normals), the seated model as planar faces in the section frame
+(`u = −world Z`, `v = +world Y`), each catalogue flat matches the nearest model face with the same
+normal, and the score is **length-weighted offset error (mm)** plus **normal error (tilt, °)**.
+Offset is placement; tilt is rotation. `item13` scored offset 0.00 with a 9.23° roll — the old rig
+would have called it perfect.
+
+### Batches (all measured, see the companion for tables)
+
+1. **Screen.** PCA / boundary-weighted faces / area-weighted faces / quarter-turn search / corner
+   matching. Edge-and-corner matching (the operator's hunch) lost badly on real parts (19.9 mm on a
+   PFC): cuts and chamfers interrupt the corner lines, so a 4-point fit over-constrains. Boundary
+   weighting flipped an open section. Quarter-turn search cannot fix a continuous roll.
+2. **Iterate.** Stock-face frame + damped section-plane ICP: item12 20 mm → 0.80 mm, item13
+   9.23° → 1.38°.
+3. **Refine.** Robust refit on the residual majority: tilt → 0.02°. The residual 1.2 mm offset was
+   then proved to be **geometry** (a planed flange, 4.2–6.4 mm removed), not pose.
+4. **Globalise.** Exhaustive **plane-pair RANSAC**: a plane gives one equation, so two planes with
+   independent normals fix roll and both translations. Enumerated, not sampled (8 flats, a few
+   hundred hypotheses). From a 25° broken start it recovers every part where ICP is trapped at
+   20 mm; start-pose invariant to < 1e-3 mm.
+
+**Decision: the seat is RANSAC only.** A stock-face **axis** stage stays because a RANSAC
+hypothesis only rolls/translates *within* the section plane — the member direction still comes from
+`u × v` of two perpendicular stock normals (a real UB's PCA axis was 0.14° off = 12.8 mm over
+5.3 m). Both are proposals; the better score wins; below three agreeing planes the seat declines and
+the caller keeps its pose. ICP remains in `seatFit.ts` for later exploration but is **not** run.
+
+Measured justification: across all 36 J12095 parts, RANSAC alone gives mean offset **0.184 mm**,
+mean tilt **0.000°**; adding a tight-gate ICP leaves the offset identical and the tilt at 0.003° —
+it improved **0 of 36** parts. A plane pair is already the exact solution.
+
+### CAD-grade refinement suggestions — benchmarked
+
+A "best refinement pipeline for STEP files" suggestion proposed (a) sampling points with analytical
+normals, (b) robust (Tukey/Cauchy) point-to-plane ICP at a 0.01–0.1 mm radius, (c) zero-sampling
+B-Rep feature/datum matching. Measured on 8 real parts:
+
+| claim | result |
+|---|---|
+| sampling with analytical normals beats mesh/vertex data | **moot here:** a plane fitted to the CAD boundary points reproduces the analytic plane to **0.000° / 0.000 mm**. Ours are analytic already (and the real bug was Tekla reporting flats as B-splines — fixed by geometric planarity in `mesh.ts`) |
+| reject outliers (their tight radius) | **confirmed:** with no rejection, a 2° rough pose "converges" to **2.53° / 2.09°** of tilt on items 11/13 |
+| an M-estimator beats a hard gate | **not on this data:** Tukey (c = 0.05) is bit-identical to a 0.05 mm hard gate; Tukey (c = 0.5) wins item1 (0.03° vs 0.51°) but loses M_12 (0.14° vs 0.00°). Neither dominates — "try both, keep the better" (the proposal stack) is the only rule that does |
+| refinement reaches machine precision | **no:** from a 2° rough pose the best refinement still leaves item1 at 0.03° and M_12 at 0.00°, i.e. it can only repair a pose that a global stage already found. RANSAC's own score is 0.000° because it *solves* the planes instead of minimising residuals |
+| zero-sampling B-Rep matching | **that is what we do** — the plane-pair solve is analytic; there is no cloud involved |
+
+### What is still open
+
+- **Cylindrical stock (CHS) has no plane path.** Measured: `CHS508*9.5` → model flats **0**,
+  catalogue "flats" **48** (chords of the sampled circle), `seatFromStockFaces` **declines**. Round
+  tube needs cylinder features (axis + radius from the existing `face.cylinder`), matched to the
+  catalogue OD/ID — two coaxial cylinders plus one end plane fix a full 3-D pose analytically.
+  The chord-as-flat artifact is the same one that once scored item1's root fillets as stock planes;
+  any surface read as flats needs a curvature test, not just a length threshold.
+- **A full 3-D three-plane hypothesis** would replace the pair + axis split and drop the 10° axis
+  guard. Today the axis is a separate candidate because a plane pair is 2-D.
+- **The score is catalogue → model**, so a plane the part genuinely lacks (the planed flange) is
+  charged as a 20 mm miss. The alignment-honest direction is **model → catalogue**; the reverse is
+  an audit ("stock removed"), not a seat score.
+- **Confidence is not surfaced.** Inlier fraction (8/8 vs 5/8) is the honest quality metric and
+  should be shown, since the residual offset no longer can be (it is geometry).
+
+### Invariants (do not re-learn these)
+
+- Section frame is `u = −world Z`, `v = +world Y`. `sectionRotationMatrix(δ)` rotates section
+  coordinates by **+δ**; `makeRotationX(−δ)` reads as the opposite rotation. Verify any new
+  transform with a world-space round trip (getting this wrong scored **zero inliers on every
+  part**).
+- Never sort a cut/hypothesis by station to build a polygon — a notch's step becomes a crossing.
+- Re-centring keeps the existing translation: new translation = `position − centre`, not `−centre`.
+- A flat is a *run*, an arc is not: sampled fillet/circle chords must not be read as stock planes.
+- ICP's residual is translation-invariant along matched planes — never let a local stage decide a
+  pose on its own.
