@@ -301,3 +301,19 @@ describe('layoutDimensions', () => {
     }
   })
 })
+
+describe('hollow stock outline', () => {
+  // The STEP detector returns `dims: []` for RHS/SHS because the code carries the size, so a
+  // radius defaulted from `dims[4]` alone drew a sharp-cornered box over a real rounded hollow
+  // (J12095 item35, SHS75*75*6, showed "stock is wrong — no curved corner").
+  it('keeps the corner arcs when no NC dims are supplied', () => {
+    for (const code of ['SHS75*75*6.0', 'SHS89*89*5.0', 'RHS150*100*9.0']) {
+      const section = partSectionForCode(code, [])
+      expect(section, `${code} section`).toBeTruthy()
+      if (!section) continue
+      // Corner arcs contribute many points; a sharp rectangle is four.
+      expect(section.points.length, `${code} corner arcs`).toBeGreaterThan(20)
+      expect(section.holes?.length ?? 0, `${code} hollow void`).toBe(1)
+    }
+  })
+})

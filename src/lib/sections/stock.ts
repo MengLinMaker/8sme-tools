@@ -595,7 +595,11 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
       // Canonical stance: longer cross-section side horizontal (see `docs/canonical-orientation.md`).
       const { width, height } = hollowCanonicalSize(n)
       const wall = n[2] ?? dims[2] ?? 0
-      const radius = dims[4] ?? 0
+      // Corner radius: the detector returns `dims: []` for RHS/SHS (the code carries the size), so
+      // `dims[4]` is usually absent. Defaulting to 0 drew a sharp-cornered stock ghost over a real
+      // rounded hollow — item35's SHS75*75*6 looked like a sharp box. Match `sectionDimensions`,
+      // which derives 2.5 × wall when no dim is supplied.
+      const radius = dims[4] ?? (wall > 0 ? 2.5 * wall : 0)
       if (height > 0 && width > 0 && wall > 0 && wall < Math.min(height, width) / 2) {
         const rect = hollowRect(width, height, wall, radius, INFLATE)
         points = rect.points
@@ -731,7 +735,11 @@ export function partSectionForCode(
       // `docs/canonical-orientation.md`), so swap the callout's `long*short` into `width*height`.
       const { width, height } = hollowCanonicalSize(n)
       const wall = n[2] ?? dims[2] ?? 0
-      const radius = dims[4] ?? 0
+      // Corner radius: the detector returns `dims: []` for RHS/SHS (the code carries the size), so
+      // `dims[4]` is usually absent. Defaulting to 0 drew a sharp-cornered stock ghost over a real
+      // rounded hollow — item35's SHS75*75*6 looked like a sharp box. Match `sectionDimensions`,
+      // which derives 2.5 × wall when no dim is supplied.
+      const radius = dims[4] ?? (wall > 0 ? 2.5 * wall : 0)
       if (height > 0 && width > 0 && wall > 0 && wall < Math.min(height, width) / 2) {
         const iw = width - 2 * wall
         const ih = height - 2 * wall

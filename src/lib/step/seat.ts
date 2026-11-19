@@ -270,7 +270,11 @@ function stockFrameSeats(
   const position = new Vector3()
   const scale = new Vector3()
   matrix.decompose(position, rotation, scale)
-  const member = CANONICAL_MEMBER.clone().applyQuaternion(rotation).normalize()
+  // The seat's job is to put the member on world +X, so after it the member *is* +X — not
+  // `R · X` (which equals +X only when the raw export happened to have the member along X).
+  // Assuming the wrong one made the stock-face filter pick end/oblique faces on any rotated export:
+  // on item13 the "member" came out as −Y, so every axis candidate was a 90° error and got rejected.
+  const member = unit(0, 1)
 
   const groups: { normal: Vector3; weight: number }[] = []
   for (const face of faces) {
