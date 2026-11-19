@@ -1,5 +1,5 @@
 import { ChevronRight, Folder, Trash2 } from 'lucide-react'
-import { Fragment, type ReactNode, useMemo, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
@@ -112,6 +112,50 @@ function indent(depth: number) {
 }
 
 /**
+ * Batch count editor for the job card.
+ *
+ * Keeps a draft string while typing so clearing the field doesn't immediately snap back to 1;
+ * commits a whole number ≥ 1 on blur or Enter. The value is job-wide: it multiplies every mark's
+ * quantity for the planning totals, purchase lengths and tracking sheet.
+ */
+function BatchInput({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  const { t } = useTranslation()
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => setDraft(String(value)), [value])
+
+  const commit = () => {
+    const parsed = Math.floor(Number(draft))
+    const next = Number.isFinite(parsed) && parsed >= 1 ? parsed : value
+    setDraft(String(next))
+    if (next !== value) onChange(next)
+  }
+
+  return (
+    <label
+      className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-muted-foreground"
+      title={t('preflight.batches.hint')}
+    >
+      {t('preflight.batches.label')}
+      <input
+        type="number"
+        min={1}
+        step={1}
+        inputMode="numeric"
+        value={draft}
+        aria-label={t('preflight.batches.label')}
+        title={t('preflight.batches.hint')}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+        }}
+        className="h-8 w-16 rounded-md border border-input bg-transparent px-2 text-center font-mono text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
+    </label>
+  )
+}
+
+/**
  * The loaded job: its name, a drop target that **adds** files to it, and a collapsible folder tree
  * with a remove action per file and per folder.
  *
@@ -122,12 +166,17 @@ function indent(depth: number) {
 export function JobPanel({
   sourceName,
   entries,
+  batches,
+  onBatchesChange,
   onAdd,
   onError,
   onDelete,
 }: {
   sourceName: string
   entries: ZipEntry[]
+  /** How many copies of the job are being made. */
+  batches: number
+  onBatchesChange: (batches: number) => void
   /** Adds files to the job; same-path entries replace, everything else is kept. */
   onAdd: (bundle: InputBundle) => void
   onError?: (message: string) => void
@@ -139,7 +188,6 @@ export function JobPanel({
   /** Folder paths the operator has expanded; empty means just the root's own files. */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const tree = useMemo(() => buildTree(entries), [entries])
-  const totalBytes = tree.bytes
 
   const toggleFolder = (path: string) => {
     setExpanded((current) => {
@@ -250,16 +298,15 @@ export function JobPanel({
               {t('preflight.source')}
             </span>
             <span className="truncate font-mono text-base font-semibold">{sourceName}</span>
-            <span className="text-sm font-normal text-muted-foreground">
-              (
-              {t('preflight.files.total', { count: entries.length, size: formatBytes(totalBytes) })}
-              )
-            </span>
           </CardTitle>
         </button>
       </CardHeader>
       {open && (
         <CardContent className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <BatchInput value={batches} onChange={onBatchesChange} />
+            <span className="text-xs text-muted-foreground">{t('preflight.batches.hint')}</span>
+          </div>
           <DropZone compact title={t('dropzone.addTitle')} onBundle={onAdd} onError={onError} />
           <Table containerClassName="max-h-[50vh] overflow-auto">
             <TableHeader>

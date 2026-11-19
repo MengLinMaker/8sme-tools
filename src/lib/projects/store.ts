@@ -31,6 +31,13 @@ export interface ProjectMeta {
   fileCount: number
   /** Total bytes of the saved files. */
   size: number
+  /** How many copies (batches) of the job are being made; planning quantities multiply by this. */
+  batches?: number
+}
+
+/** A batch count is a positive whole number; anything else means one batch. */
+export function normalizeBatches(value: number | null | undefined): number {
+  return value != null && Number.isFinite(value) && value >= 1 ? Math.floor(value) : 1
 }
 
 interface FileRecord {
@@ -141,7 +148,15 @@ export async function putProjectFiles(
     fileCount -= 1
   }
 
-  const meta: ProjectMeta = { id, name, savedAt: Date.now(), fileCount, size }
+  const meta: ProjectMeta = {
+    id,
+    name,
+    savedAt: Date.now(),
+    fileCount,
+    size,
+    // A file write must not reset how many batches the operator set.
+    ...(existing?.batches != null ? { batches: existing.batches } : {}),
+  }
   const tx = db.transaction([META_STORE, FILE_STORE], 'readwrite')
   tx.objectStore(META_STORE).put(meta)
   const store = tx.objectStore(FILE_STORE)
@@ -157,6 +172,21 @@ export async function removeProjectFiles(id: string, paths: string[]): Promise<P
   const meta = await getProjectMeta(id)
   if (!meta) return null
   return putProjectFiles(id, meta.name, [], paths)
+}
+
+/**
+ * Saves the job's batch count. Kept on the meta record so it costs one small write and never
+ * touches the files; `savedAt` is left alone because changing a planning setting is not a new save.
+ */
+export async function saveProjectBatches(id: string, batches: number): Promise<ProjectMeta | null> {
+  const meta = await getProjectMeta(id)
+  if (!meta) return null
+  const next: ProjectMeta = { ...meta, batches: normalizeBatches(batches) }
+  const db = await openDatabase()
+  const tx = db.transaction(META_STORE, 'readwrite')
+  tx.objectStore(META_STORE).put(next)
+  await finished(tx)
+  return next
 }
 
 export async function deleteProject(id: string): Promise<void> {

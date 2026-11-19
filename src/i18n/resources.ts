@@ -95,6 +95,10 @@ export const en = {
   preflight: {
     analyzing: 'Analyzing…',
     source: 'Job',
+    batches: {
+      label: 'Batches',
+      hint: 'Copies of this job being made. Total qty, length, mass, profile pieces, purchase lengths and the tracking sheet are multiplied by it.',
+    },
     stats: {
       parts: 'Parts',
       totalQty: 'Total qty',
@@ -303,8 +307,6 @@ export const en = {
       file: 'File',
       kind: 'Type',
       size: 'Size',
-      total_one: '{{count}} file · {{size}}',
-      total_other: '{{count}} files · {{size}}',
       count_one: '{{count}} file',
       count_other: '{{count}} files',
       delete: 'Remove {{name}}',
@@ -706,6 +708,10 @@ export const zh = {
   preflight: {
     analyzing: '正在分析…',
     source: '作业',
+    batches: {
+      label: '批次',
+      hint: '本作业要生产的套数。总数量、长度、重量、型材件数、采购长度和跟踪表都会按此倍数计算。',
+    },
     stats: {
       parts: '零件',
       totalQty: '总数量',
@@ -909,8 +915,6 @@ export const zh = {
       file: '文件',
       kind: '类型',
       size: '大小',
-      total_one: '{{count}} 个文件 · {{size}}',
-      total_other: '{{count}} 个文件 · {{size}}',
       count_one: '{{count}} 个文件',
       count_other: '{{count}} 个文件',
       delete: '移除 {{name}}',

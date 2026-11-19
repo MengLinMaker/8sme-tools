@@ -101,9 +101,12 @@ import {
 } from '@/lib/projects/edits'
 import {
   deleteProject,
+  getProjectMeta,
   loadProject,
+  normalizeBatches,
   putProjectFiles,
   removeProjectFiles,
+  saveProjectBatches,
   takeHandOffProject,
 } from '@/lib/projects/store'
 import type { PurchaseGroupInput } from '@/lib/purchasing/purchase'
@@ -649,6 +652,11 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   const [loadingProject, setLoadingProject] = useState(true)
   /** The route points at a project this browser no longer has. */
   const [missingProject, setMissingProject] = useState(false)
+  /**
+   * How many copies (batches) of this job are being made. Planning quantities — stats, profiles,
+   * purchase lengths and the tracking sheet — multiply by it. Saved with the project.
+   */
+  const [batches, setBatches] = useState(1)
   /** Marks ticked in the parts table for the selective PDF/STEP/NC export. */
   const [selectedMarks, setSelectedMarks] = useState<Set<string>>(new Set())
   /** True while an export is re-seating STEPs / re-emitting NCs in the OCC workers. */
@@ -724,6 +732,18 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     clearViewerModels()
     setResult(auditEntries(input.sourceName, input.entries))
   }, [])
+
+  /** A planning setting, so save it straight away — it is tiny and has no fix to commit. */
+  const changeBatches = useCallback(
+    (next: number) => {
+      const value = normalizeBatches(next)
+      setBatches(value)
+      void saveProjectBatches(projectId, value).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
+    },
+    [projectId],
+  )
 
   /**
    * Adds a drop to the loaded job: a same-path file replaces the old one, everything else is kept
@@ -862,8 +882,10 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           return
         }
         const saved = await loadProjectEdits(projectId)
+        const meta = await getProjectMeta(projectId)
         if (cancelled) return
         openedProject.current = projectId
+        setBatches(normalizeBatches(meta?.batches))
         handleBundle(opened)
         // The fixes travel with the project: NC edits (with their ops), STEP replacements, and the
         // resolved rows that keep their Undo available.
@@ -2552,9 +2574,9 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   const totalQty = useMemo(() => {
     if (!result) return 0
     let total = 0
-    for (const part of result.parts) total += partQty(part)
+    for (const part of result.parts) total += partQty(part) * batches
     return total
-  }, [result, partQty])
+  }, [result, partQty, batches])
 
   /** Cumulative cut length in mm (qty × length per mark, drawing length is ground truth). */
   const totalLengthMm = useMemo(() => {
@@ -2562,10 +2584,10 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     let total = 0
     for (const part of result.parts) {
       const length = partLength(part)
-      if (length != null) total += partQty(part) * length
+      if (length != null) total += partQty(part) * batches * length
     }
     return total
-  }, [result, partLength, partQty])
+  }, [result, partLength, partQty, batches])
 
   /**
    * Per-piece mass (kg) for display. The drawing / part-list WEIGHT is ground truth. When neither
@@ -2614,10 +2636,10 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     let total = 0
     for (const part of result.parts) {
       const mass = pieceMass(part)
-      if (mass != null) total += partQty(part) * mass
+      if (mass != null) total += partQty(part) * batches * mass
     }
     return total
-  }, [result, pieceMass, partQty])
+  }, [result, pieceMass, partQty, batches])
 
   /** Per-profile rollup: pieces, cumulative length and mass, so stock/pickup can be planned. */
   const profileGroups = useMemo(() => {
@@ -2646,7 +2668,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         const dims = part.nc?.dimensions ?? sectionGuesses.get(part.mark)?.dims ?? []
         if (dims.length > 0) entry.dims = dims
       }
-      const qty = partQty(part)
+      const qty = partQty(part) * batches
       const length = partLength(part)
       const mass = pieceMass(part)
       const mark = entry.marks.get(part.mark) ?? {
@@ -2677,19 +2699,19 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         dims: entry.dims,
       }))
       .sort((a, b) => b.lengthMm - a.lengthMm || b.pieces - a.pieces)
-  }, [result, pieceMass, sectionLabel, partQty, partLength, sectionGuesses])
+  }, [result, pieceMass, sectionLabel, partQty, partLength, sectionGuesses, batches])
 
   /**
    * Purchase groups for the stock calculator. A T is bought as its parent UB (one beam gives two
    * T bars), so all T profiles that resolve to the same UB are nested together; every other
-   * profile is nested on its own.
+   * profile is nested on its own. Quantities carry the job's batch multiplier.
    */
   const purchaseGroups = useMemo(() => {
     if (!result) return []
     const map = new Map<string, PurchaseGroupInput>()
     for (const part of result.parts) {
       const length = partLength(part)
-      const quantity = partQty(part)
+      const quantity = partQty(part) * batches
       if (length == null || length <= 0 || quantity <= 0) continue
 
       const profile = sectionLabel(part)
@@ -2727,7 +2749,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     const totalLength = (group: PurchaseGroupInput) =>
       group.pieces.reduce((sum, piece) => sum + piece.lengthMm * piece.quantity, 0)
     return [...map.values()].sort((a, b) => totalLength(b) - totalLength(a))
-  }, [result, partLength, partQty, sectionLabel, sectionGuesses])
+  }, [result, partLength, partQty, sectionLabel, sectionGuesses, batches])
 
   /**
    * One status pill per distinct *active* finding code, so the parts table carries its own triage.
@@ -4416,6 +4438,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         <JobPanel
           sourceName={bundle.sourceName}
           entries={bundle.entries}
+          batches={batches}
+          onBatchesChange={changeBatches}
           onAdd={addToBundle}
           onError={setError}
           onDelete={deleteEntries}
