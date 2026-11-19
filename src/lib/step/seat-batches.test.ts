@@ -312,6 +312,12 @@ describe('seat technique batches', () => {
     expect(item12?.get('shipped')?.offset, 'item12 shipped').toBeLessThan(2)
     const item13 = scores.get('item13')
     expect(item13?.get('shipped')?.tilt, 'item13 roll').toBeLessThan(1)
+    // RANSAC's pose is exact on correct plane pairs, so the seat should not merely be close — it
+    // should sit inside a hundredth of a degree on every part (the residual offset is geometry).
+    for (const part of parts) {
+      const shipped = scores.get(part.mark)?.get('shipped')
+      expect(shipped?.tilt, `${part.mark} shipped tilt`).toBeLessThanOrEqual(0.05)
+    }
   }, 600_000)
 
   it('RANSAC recovers a pose that ICP cannot (globality)', async () => {
@@ -343,6 +349,18 @@ describe('seat technique batches', () => {
       )
       const brokenScore = scoreOf(broken)
       expect(brokenScore.offset, `${mark} broken start is really broken`).toBeGreaterThan(10)
+
+      // Start-pose invariance: the global stage must return the *same* pose whatever it is given.
+      const fromGood = ransacSectionPose(catalogue, part.faces, part.vertices, baseSeat(part), 1)
+      const fromBroken = ransacSectionPose(catalogue, part.faces, part.vertices, broken, 1)
+      expect(fromGood, `${mark} ransac from good`).not.toBeNull()
+      expect(fromBroken, `${mark} ransac from broken`).not.toBeNull()
+      expect(
+        Math.abs(
+          (fromGood as { offset: number }).offset - (fromBroken as { offset: number }).offset,
+        ),
+        `${mark} start invariance`,
+      ).toBeLessThan(1e-3)
 
       // Local refinement usually cannot escape it — count the cases where it cannot.
       const icp = scoreOf(polish(part, broken))
