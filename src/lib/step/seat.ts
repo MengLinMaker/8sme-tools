@@ -1,6 +1,17 @@
 import { Box3, Matrix4, Quaternion, Vector3 } from 'three'
 import { detectOrientation, orientationFit } from '@/lib/sections/orient'
 import { principalAxes } from '@/lib/sections/pca'
+import type { BrepFace } from './mesh'
+import {
+  faceArea,
+  faceFlats,
+  fitSectionPlanes,
+  type SeatScore,
+  scoreSeat,
+  sectionFlats,
+  sectionRotationMatrix,
+  sectionTranslation,
+} from './seatFit'
 
 /**
  * Canonical seating shared by the viewer and the overlay diff.
@@ -138,154 +149,183 @@ export function seatQuaternion(
 }
 
 /**
- * A stock face the seating can trust, in whatever frame the model is currently in. Structural so
- * `BrepFace` (a slice of a meshed STEP) can be passed straight in; `weight` is a boundary-length
- * proxy — a long stock face is far heavier than a cut end or a hole rim.
+ * A model face the seating can trust: structural, so a meshed STEP's `BrepFace` passes straight in
+ * (planar, outward normal, a point on it, and its wires for area). A long stock face carries far
+ * more weight than a cut end or a hole rim.
  */
 export interface SeatFace {
   planar: boolean
   normal: [number, number, number]
   center: [number, number, number]
-  weight?: number
+  wires?: { edges: { points: number[] }[] }[]
 }
 
-/** The seater's section axes in world space, all orthonormal and right-handed: `u × v = m`. */
-interface StockFrame {
-  u: Vector3
-  v: Vector3
-  m: Vector3
-}
-
-/**
- * Adapts B-rep faces (a meshed STEP) to {@link SeatFace}, weighting each by its boundary length so
- * a long stock face outranks a cut end or a hole rim. Structural input keeps this module free of the
- * mesh types.
- */
-export function seatFacesFromBrep(
-  faces: readonly {
-    planar: boolean
-    normal: [number, number, number]
-    center: [number, number, number]
-    wires?: { edges: { points: number[] }[] }[]
-  }[],
-): SeatFace[] {
-  return faces.map((face) => {
-    let weight = 1
-    if (face.wires) {
-      let points = 0
-      for (const wire of face.wires) for (const edge of wire.edges) points += edge.points.length / 3
-      weight = Math.max(1, points)
-    }
-    return { planar: face.planar, normal: face.normal, center: face.center, weight }
-  })
-}
-
-const LENGTHWISE_DOT = 0.1
-/** Cosine gate for a pair of stock normals to count as one section cross. */
-const PERPENDICULAR_DOT = 0.3
-/** Fraction of the heaviest face's weight a direction must carry to define an axis. */
-const AXIS_WEIGHT_FRACTION = 0.25
-/** Largest stock-face correction accepted; anything bigger is a mis-read frame (cut vs stock). */
+const CANONICAL_MEMBER = unit(0, 1)
+/** Largest stock-frame correction accepted; anything bigger is a mis-read frame (cut vs stock). */
 const MAX_STOCK_FIX_RAD = (10 * Math.PI) / 180
+/** Damped plane-ICP: fraction of each step taken, and the per-step roll cap (rad). */
+const ICP_DAMPING = 0.5
+const ICP_MAX_STEP_RAD = 0.12
 
 /**
- * The section cross from the part's **stock faces**, not from its vertex cloud.
+ * Re-seats a model onto the catalogue **stock planes**.
  *
- * An I-section's flat stock faces are exact: their normals *are* the section axes, and two
- * perpendicular normals span the cross, so `u × v` is the true member direction. PCA over the mesh
- * vertices instead mixes in the cut faces and the tessellation, and on a real `UB250*31` it tilted
- * the member 0.14° — 12.8 mm of false depth over 5.3 m.
+ * Two stages, both from the geometry rather than the vertex cloud:
+ *  1. the section cross comes from the stock faces' normals (a stock face *is* a section plane), and
+ *  2. a damped roll/translation ICP then lands those planes on the catalogue's planes.
  *
- * Returns null when the faces do not present a clear perpendicular pair (an angle, a channel with
- * one dominant face, a heavily cut part); the caller then keeps its heuristic seat.
- */
-export function stockFrameOf(faces: readonly SeatFace[], member: Vector3): StockFrame | null {
-  const weightOf = (face: SeatFace): number => Math.max(0.001, face.weight ?? 1)
-  const lengthwise = faces.filter(
-    (face) => face.planar && Math.abs(new Vector3(...face.normal).dot(member)) < LENGTHWISE_DOT,
-  )
-  if (lengthwise.length < 2) return null
-
-  // Group coplanar-direction normals (a UB has two of each), summing their weights.
-  const groups: { normal: Vector3; weight: number }[] = []
-  for (const face of lengthwise) {
-    const normal = new Vector3(...face.normal).normalize()
-    const hit = groups.find((group) => group.normal.dot(normal) > 0.999)
-    if (hit) hit.weight += weightOf(face)
-    else groups.push({ normal, weight: weightOf(face) })
-  }
-  groups.sort((a, b) => b.weight - a.weight)
-  const heaviest = groups[0]?.weight ?? 0
-  if (heaviest <= 0) return null
-
-  const u = groups[0]?.normal.clone() ?? null
-  if (!u) return null
-  const crossing = groups.find((group) => Math.abs(group.normal.dot(u)) < PERPENDICULAR_DOT)?.normal
-  if (!crossing) return null
-  if (groups.filter((group) => group.weight >= heaviest * AXIS_WEIGHT_FRACTION).length < 2)
-    return null
-
-  // Right-handed member direction, oriented along the current member guess.
-  const m = new Vector3().crossVectors(u, crossing).normalize()
-  if (m.dot(member) < 0) m.negate()
-  const v = new Vector3().crossVectors(m, u).normalize()
-  return { u, v, m }
-}
-
-/**
- * Re-seats a model so its **stock faces** (not its bounding box) land on the catalogue section.
+ * PCA over the mesh vertices mixes in cut faces and tessellation: on a real `UB250*31` it tilted the
+ * member 0.14° (12.8 mm of false depth over 5.3 m), and on J12095 item12 it left the part ~9° rolled.
  *
- * The seat this replaces is PCA-based: the member axis is the point cloud's principal axis and the
- * roll matches a 2-D principal angle. Both are statistical, so a cut-heavy or unevenly tessellated
- * part tilts. Here the frame comes from the stock faces themselves, and the model is re-centred on
- * its own bbox afterwards — the same centring the catalogue outline is built with.
+ * The refined seat is only returned when it **scores better** than the seat it started from, so a
+ * mis-read frame (a cut face taken for stock, an open section with one dominant face) can never
+ * make a part worse — batch 1 of `docs/seat-alignment.md` found exactly that regression with
+ * boundary-length weighting on a PFC.
  */
 export function seatFromStockFaces(
   vertices: number[],
   faces: readonly SeatFace[],
   matrix: Matrix4,
+  section: [number, number][],
 ): Matrix4 | null {
-  if (faces.length < 2 || vertices.length < 9) return null
-  const quaternion = new Quaternion()
+  if (faces.length < 2 || section.length < 3 || vertices.length < 9) return null
+  const catalogue = sectionFlats(section)
+  if (catalogue.length < 2) return null
+  const brep = faces.map((face) => ({
+    ...face,
+    wires: face.wires ?? [],
+  })) as unknown as BrepFace[]
+  const scoreOf = (candidate: Matrix4): SeatScore =>
+    scoreSeat(catalogue, faceFlats(brep, candidate))
+  const original = matrix.clone()
+  const originalScore = scoreOf(original)
+
+  // 1. Member axis + roll from the stock-face normals. Which group is "heaviest" is not reliable
+  // (a PFC's web and flanges are comparable), so build a candidate per axis assignment and let the
+  // stock-plane score choose — never the face-count.
+  let candidate = original.clone()
+  let bestScore = originalScore
+  for (const frameSeat of stockFrameSeats(vertices, faces, matrix)) {
+    const score = scoreOf(frameSeat)
+    if (score.offset < bestScore.offset - 0.01) {
+      candidate = frameSeat
+      bestScore = score
+    }
+  }
+
+  // 2. Damped section-plane ICP: roll about the member + translation in the section plane.
+  for (let iteration = 0; iteration < 24; iteration++) {
+    const fit = fitSectionPlanes(catalogue, faceFlats(brep, candidate))
+    if (!fit) break
+    const step = -Math.max(-ICP_MAX_STEP_RAD, Math.min(ICP_MAX_STEP_RAD, fit.angle)) * ICP_DAMPING
+    const correction = sectionTranslation(-fit.tu, -fit.tv).multiply(sectionRotationMatrix(step))
+    candidate = recentre(vertices, new Matrix4().copy(correction).multiply(candidate))
+    if (Math.abs(fit.angle) < 1e-4 && Math.hypot(fit.tu, fit.tv) < 1e-3) break
+  }
+
+  // 3. Robust polish: drop planes that sit far from the pack (a variant flange thickness, a cut
+  // face that survived association) and refit on the consistent majority. This is what pulls the
+  // 3–6 mm worst-case planes in, without moving the bulk fit.
+  const milestone = scoreOf(candidate)
+  const median = medianOf(milestone.residuals)
+  const limit = Math.max(1, median * 2)
+  for (let iteration = 0; iteration < 6; iteration++) {
+    const fit = fitSectionPlanes(catalogue, faceFlats(brep, candidate), 20, limit)
+    if (!fit) break
+    const step = -Math.max(-ICP_MAX_STEP_RAD, Math.min(ICP_MAX_STEP_RAD, fit.angle)) * ICP_DAMPING
+    const correction = sectionTranslation(-fit.tu, -fit.tv).multiply(sectionRotationMatrix(step))
+    candidate = recentre(vertices, new Matrix4().copy(correction).multiply(candidate))
+    if (Math.abs(fit.angle) < 1e-4 && Math.hypot(fit.tu, fit.tv) < 1e-3) break
+  }
+
+  const refined = scoreOf(candidate)
+  if (refined.offset > originalScore.offset + 0.05) return null
+  if (refined.tilt > originalScore.tilt + 0.5) return null
+  return candidate
+}
+
+/**
+ * Re-centres a seat on the transformed model's bbox. The new translation is `position − centre`
+ * (what the transform already does, minus where the model's centre ended up) — **not** `−centre`,
+ * which drops the existing translation and makes an iterated fit walk off the part.
+ */
+function recentre(vertices: number[], matrix: Matrix4): Matrix4 {
+  const rotation = new Quaternion()
   const position = new Vector3()
   const scale = new Vector3()
-  matrix.decompose(position, quaternion, scale)
-  const member = unit(0, 1).clone().applyQuaternion(quaternion).normalize()
+  matrix.decompose(position, rotation, scale)
+  const centre = bboxOfVertices(transformVertices(vertices, matrix)).getCenter(new Vector3())
+  return new Matrix4().compose(position.sub(centre), rotation, scale)
+}
 
-  // Faces arrive in the model's own frame; lift them into the seated frame first.
-  const lifted = faces.map((face) => {
-    const normal = new Vector3(...face.normal).applyQuaternion(quaternion).normalize()
-    const center = new Vector3(...face.center).applyQuaternion(quaternion).add(position)
-    return {
-      ...face,
-      normal: normal.toArray() as [number, number, number],
-      center: center.toArray() as [number, number, number],
-    }
-  })
-  const frame = stockFrameOf(lifted, member)
-  if (!frame) return null
+/**
+ * Candidate seats from the part's stock faces. A stock face's normal is a section axis exactly, and
+ * two perpendicular normals span the cross, so `u × v` is the true member direction. Returns one
+ * candidate per plausible axis assignment (either of the two heaviest perpendicular normals as the
+ * section `x`); the caller scores them, because "heaviest" alone is ambiguous on an open section.
+ */
+function stockFrameSeats(
+  vertices: number[],
+  faces: readonly SeatFace[],
+  matrix: Matrix4,
+): Matrix4[] {
+  const rotation = new Quaternion()
+  const position = new Vector3()
+  const scale = new Vector3()
+  matrix.decompose(position, rotation, scale)
+  const member = CANONICAL_MEMBER.clone().applyQuaternion(rotation).normalize()
 
-  // Match the found cross onto the canonical section axes. Signs are picked to stay closest to the
-  // seat we already have (the section is symmetric, so only the cut lines depend on the sign).
-  const canonicalU = CANONICAL_X_AXIS.clone()
-  const canonicalV = CANONICAL_Y_AXIS.clone()
-  const u = frame.u.clone()
-  if (u.dot(canonicalU) < 0) u.negate()
-  const v = new Vector3().crossVectors(frame.m, u).normalize()
-  if (v.dot(canonicalV) < 0) v.negate()
-  const m = new Vector3().crossVectors(u, v).normalize()
+  const groups: { normal: Vector3; weight: number }[] = []
+  for (const face of faces) {
+    if (!face.planar) continue
+    const normal = new Vector3(...face.normal).applyQuaternion(rotation).normalize()
+    if (Math.abs(normal.dot(member)) > 0.1) continue
+    const weight = Math.max(1, oneFaceArea(face))
+    const hit = groups.find((group) => group.normal.dot(normal) > 0.999)
+    if (hit) hit.weight += weight
+    else groups.push({ normal, weight })
+  }
+  groups.sort((a, b) => b.weight - a.weight)
+  if (groups.length < 2) return []
 
-  const target = new Matrix4().makeBasis(canonicalU, canonicalV, unit(0, 1))
-  const source = new Matrix4().makeBasis(u, v, m)
-  const correction = new Matrix4().multiplyMatrices(target, new Matrix4().copy(source).invert())
-  // Only de-tilt: a frame that disagrees with the heuristic seat by more than a few degrees means a
-  // cut face was mistaken for stock, so keep the old seat rather than spin the part.
-  const delta = new Quaternion().setFromRotationMatrix(correction)
-  const deltaAngle = 2 * Math.acos(Math.min(1, Math.abs(delta.w)))
-  if (deltaAngle > MAX_STOCK_FIX_RAD) return null
-  const rotated = transformVertices(vertices, new Matrix4().multiplyMatrices(correction, matrix))
-  const centre = bboxOfVertices(rotated).getCenter(new Vector3()).negate()
-  return new Matrix4().compose(centre, delta.multiply(quaternion), scale)
+  const candidates: Matrix4[] = []
+  for (const first of groups.slice(0, 3)) {
+    const crossing = groups.find(
+      (group) => group !== first && Math.abs(group.normal.dot(first.normal)) < 0.3,
+    )
+    if (!crossing) continue
+    const u = first.normal.clone()
+    if (u.dot(CANONICAL_X_AXIS) < 0) u.negate()
+    const m = new Vector3().crossVectors(first.normal, crossing.normal).normalize()
+    if (m.dot(member) < 0) m.negate()
+    const v = new Vector3().crossVectors(m, u).normalize()
+    const memberAxis = new Vector3().crossVectors(u, v).normalize()
+    const target = new Matrix4().makeBasis(CANONICAL_X_AXIS, CANONICAL_Y_AXIS, CANONICAL_MEMBER)
+    const source = new Matrix4().makeBasis(u, v, memberAxis)
+    const correction = new Matrix4().multiplyMatrices(target, new Matrix4().copy(source).invert())
+    const delta = new Quaternion().setFromRotationMatrix(correction)
+    const deltaAngle = 2 * Math.acos(Math.min(1, Math.abs(delta.w)))
+    if (deltaAngle > MAX_STOCK_FIX_RAD) continue
+    const rotated = new Matrix4().copy(correction).multiply(matrix)
+    const centre = bboxOfVertices(transformVertices(vertices, rotated))
+      .getCenter(new Vector3())
+      .negate()
+    candidates.push(new Matrix4().compose(centre, delta.multiply(rotation), scale))
+  }
+  return candidates
+}
+
+/** Median of a list (0 when empty). */
+function medianOf(values: number[]): number {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)] as number
+}
+
+/** Area of a structural face (planar): outer wire minus inner wires, via its own normal. */
+function oneFaceArea(face: SeatFace): number {
+  if (!face.wires || face.wires.length === 0) return 1
+  return faceArea({ ...face, wires: face.wires } as unknown as BrepFace)
 }
 
 /** A rigid transform split into the rotate+translate calls replicad/OCC shapes expose. */
@@ -504,7 +544,7 @@ export function seatedFromSeat(
     new Matrix4().multiplyMatrices(memberAlign, new Matrix4().makeRotationFromQuaternion(align)),
   )
   return {
-    primary: (faces && seatFromStockFaces(vertices, faces, primary)) || primary,
+    primary: (faces && profile && seatFromStockFaces(vertices, faces, primary, profile)) || primary,
     compare: null,
     xAxis: inner.xAxis,
     yAxis: inner.yAxis,
@@ -542,7 +582,7 @@ export function seatedStepProfile(
   const inner = seatedPair(transformVertices(vertices, align), null, profile)
   const primary = new Matrix4().multiplyMatrices(inner.primary, align)
   return {
-    primary: (faces && seatFromStockFaces(vertices, faces, primary)) || primary,
+    primary: (faces && profile && seatFromStockFaces(vertices, faces, primary, profile)) || primary,
     compare: null,
     xAxis: inner.xAxis,
     yAxis: inner.yAxis,

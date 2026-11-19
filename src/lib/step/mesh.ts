@@ -3,6 +3,7 @@ import type {
   ReplicadMeshedEdges,
   ReplicadMeshedFaces,
 } from 'replicad-threejs-helper'
+import { principalAxes } from '@/lib/sections/pca'
 import { ensureOc } from './occInit'
 
 /**
@@ -190,6 +191,48 @@ function sampleNormals(face: FaceLike, points: number[]): number[] {
   return out
 }
 
+/** Max distance (mm) a face's boundary points may sit off their best-fit plane to count as flat. */
+const PLANAR_TOL_MM = 0.1
+
+/**
+ * The best-fit plane through a face's boundary points, or null when they are not coplanar. Used to
+ * recognise a flat exported as a B-spline patch (Tekla) as planar — `geomType` says `BSPLINE`,
+ * the geometry is a flat.
+ */
+function boundaryPlane(
+  wires: { edges: { points: number[] }[] }[],
+): { normal: [number, number, number]; deviation: number } | null {
+  const points: number[] = []
+  for (const wire of wires) {
+    for (const edge of wire.edges) {
+      for (let i = 0; i + 2 < edge.points.length; i += 3) {
+        points.push(
+          edge.points[i] as number,
+          edge.points[i + 1] as number,
+          edge.points[i + 2] as number,
+        )
+        if (points.length >= 600) break
+      }
+      if (points.length >= 600) break
+    }
+    if (points.length >= 600) break
+  }
+  if (points.length / 3 < 4) return null
+  const frame = principalAxes(points)
+  if (!frame) return null
+  // The least-variance axis is the plane normal.
+  const normal = frame.axes[2]
+  let deviation = 0
+  for (let i = 0; i + 2 < points.length; i += 3) {
+    const d =
+      ((points[i] as number) - frame.centre[0]) * normal[0] +
+      ((points[i + 1] as number) - frame.centre[1]) * normal[1] +
+      ((points[i + 2] as number) - frame.centre[2]) * normal[2]
+    deviation = Math.max(deviation, Math.abs(d))
+  }
+  return deviation <= PLANAR_TOL_MM ? { normal, deviation } : null
+}
+
 /** Direction-independent identity for an edge, so its adjacent faces map to one key. */
 function edgeKey(edge: EdgeLike, mid: VectorLike): string {
   const quantize = (value: number): number => Math.round(value * 100)
@@ -276,6 +319,24 @@ function extractBrepFaces(faces: FaceLike[]): BrepFace[] {
       }
     } catch {
       // A degenerate/unreadable face — keep the slot (so indices stay aligned) but with no wires.
+    }
+    // **Geometric** planarity. Tekla exports a flat as a B-spline patch, so `geomType` alone
+    // under-reports flats: on the J12095 I-sections every stock face came back non-planar and the
+    // stock-face seating and plane fit had nothing to work with. A patch whose boundary points all
+    // sit on one plane is a stock face whatever the B-rep calls it.
+    if (!planar && wires.length > 0) {
+      const plane = boundaryPlane(wires)
+      if (plane) {
+        planar = true
+        // `plane.normal` has the geometry's exact direction; keep OCC's outward sign.
+        const sign =
+          plane.normal[0] * normal[0] + plane.normal[1] * normal[1] + plane.normal[2] * normal[2] <
+          0
+            ? -1
+            : 1
+        normal = [plane.normal[0] * sign, plane.normal[1] * sign, plane.normal[2] * sign]
+        if (cylinder) cylinder = undefined
+      }
     }
     let cx = 0
     let cy = 0

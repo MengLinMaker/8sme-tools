@@ -6,7 +6,7 @@ import { parseDstv } from '@/lib/parsers/dstv'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { meshStepFile } from './mesh'
 import { setOcWasmUrl } from './occInit'
-import { seatedStepProfile, seatFacesFromBrep, transformVertices } from './seat'
+import { seatedStepProfile, transformVertices } from './seat'
 
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
@@ -34,7 +34,7 @@ describe('I-section stock seat', () => {
     expect(section, 'catalogue section').toBeTruthy()
     if (!section) return
     const mesh = await meshStepFile('M_12', new Uint8Array(readFileSync(ubSection('M_12.stp'))))
-    const faces = seatFacesFromBrep(mesh.bodies.flatMap((body) => body.brep ?? []))
+    const faces = mesh.bodies.flatMap((body) => body.brep ?? [])
     expect(faces.length).toBeGreaterThan(10)
 
     const heuristic = seatedStepProfile(mesh.vertices, section.points)

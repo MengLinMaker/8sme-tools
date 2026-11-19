@@ -81,7 +81,6 @@ import {
   seatedFromSeat,
   seatedPair,
   seatedStepProfile,
-  seatFacesFromBrep,
   seatQuaternion,
   transformVertices,
   unit,
@@ -862,7 +861,7 @@ function mountScene(
   const size = bboxOfVertices(primary.raw).getSize(new Vector3())
   scene.add(primary.group)
   // Stock faces for the seat: their planes are the exact section axes (`seatFromStockFaces`).
-  const stockFaces = seatFacesFromBrep(step.bodies.flatMap((body) => body.brep ?? []))
+  const stockFaces = step.bodies.flatMap((body) => body.brep ?? [])
 
   const compareGeometries: ReturnType<typeof syncGeometries>[] = []
   let compareGroup: Group | null = null
