@@ -727,6 +727,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     setSelectedMarks(new Set())
     selectAnchor.current = null
     setMarkQuery('')
+    setProfileQuery('')
     setAssemblyFilter(null)
     setAnalyzing(true)
     clearViewerModels()
@@ -816,6 +817,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     setSelectedMarks(new Set())
     selectAnchor.current = null
     setMarkQuery('')
+    setProfileQuery('')
     setAssemblyFilter(null)
     clearViewerModels()
   }, [])
@@ -3077,6 +3079,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   // and parts collapse like an accordion.
   const [profilesOpen, setProfilesOpen] = useState(true)
   const [partsOpen, setPartsOpen] = useState(true)
+  /** Free-text filter on the profiles card: a profile designation or a mark inside it. */
+  const [profileQuery, setProfileQuery] = useState('')
   /** Index into `profileGroups` of the profile whose cut-settings dialog is open. */
   const [settingsProfileIndex, setSettingsProfileIndex] = useState<number | null>(null)
   const [purchaseOpen, setPurchaseOpen] = useState(false)
@@ -3094,6 +3098,19 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     },
     [profileGroups.length],
   )
+  /**
+   * Profiles narrowed by the card's search. A query matches the designation ("200UB", "SHS75") or
+   * any mark the profile carries, so both the section and a known part can find its row.
+   */
+  const visibleProfileGroups = useMemo(() => {
+    const query = profileQuery.trim().toLowerCase()
+    if (!query) return profileGroups
+    return profileGroups.filter(
+      (group) =>
+        group.profile.toLowerCase().includes(query) ||
+        group.marks.some((mark) => mark.mark.toLowerCase().includes(query)),
+    )
+  }, [profileGroups, profileQuery])
 
   // Parts table sorting — defaults to worst-problem-first so triage is quick.
   const [sort, setSort] = useState<{ key: PartSortKey; dir: 1 | -1 }>({ key: 'severity', dir: 1 })
@@ -4491,11 +4508,40 @@ export function PreflightPage({ projectId }: { projectId: string }) {
             <CardTitle>
               {t('preflight.profiles.title')}
               <span className="ml-2 text-sm font-normal text-muted-foreground">
-                ({profileGroups.length})
+                ({visibleProfileGroups.length}
+                {visibleProfileGroups.length !== profileGroups.length
+                  ? `/${profileGroups.length}`
+                  : ''}
+                )
               </span>
             </CardTitle>
           </button>
           <div className="flex flex-wrap items-center gap-2">
+            <div className="relative">
+              <Search
+                className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <input
+                type="text"
+                value={profileQuery}
+                onChange={(event) => setProfileQuery(event.target.value)}
+                placeholder={t('preflight.profiles.searchPlaceholder')}
+                aria-label={t('preflight.profiles.searchPlaceholder')}
+                className="h-8 w-48 rounded-md border border-border bg-background pl-7 pr-7 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              {profileQuery && (
+                <button
+                  type="button"
+                  onClick={() => setProfileQuery('')}
+                  aria-label={t('preflight.profiles.searchClear')}
+                  title={t('preflight.profiles.searchClear')}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="size-3.5" />
+                </button>
+              )}
+            </div>
             <Button variant="outline" size="sm" onClick={() => setSectionLookupOpen(true)}>
               {t('preflight.profiles.lookup')}
             </Button>
@@ -4513,6 +4559,10 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           <CardContent>
             {profileGroups.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t('preflight.profiles.empty')}</p>
+            ) : visibleProfileGroups.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {t('preflight.profiles.searchEmpty', { query: profileQuery.trim() })}
+              </p>
             ) : (
               <Table>
                 <TableHeader>
@@ -4529,7 +4579,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                   </TableRow>
                 </TableHeader>
                 <TableBody className="row-spotlight">
-                  {profileGroups.map((group, index) => (
+                  {visibleProfileGroups.map((group) => (
                     <TableRow
                       key={group.profile}
                       className={cn(group.profile !== '—' && 'cursor-pointer')}
@@ -4539,7 +4589,9 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                           : undefined
                       }
                       onClick={() => {
-                        if (group.profile !== '—') setSettingsProfileIndex(index)
+                        if (group.profile !== '—') {
+                          setSettingsProfileIndex(profileGroups.indexOf(group))
+                        }
                       }}
                     >
                       <TableCell className="font-mono text-xs">{group.profile}</TableCell>
