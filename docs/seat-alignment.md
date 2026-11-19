@@ -48,13 +48,19 @@ Scores below are `offset / worst` in mm and `tilt` in degrees (best per row in b
 
 | part | detector | faces-boundary | faces-area | quarter-search | corners |
 |---|---|---|---|---|---|
-| item1 | **0.77** / 0.55 | 18.81 / 8.92 | 0.77 / 0.55 | 0.77 / 0.55 | 5.59 / 6.96 |
+| item1 | 0.06 / 0.14 | 18.81 / 8.92 | 0.06 / 0.14 | 0.06 / 0.14 | 20.0 / 10.0 |
 | item9 | 0.00 | 0.00 | **20.0** | 0.00 | 0.00 |
-| item10 | **0.00** / 0.27 | 0.00 | 0.00 | 0.00 / 0.27 | 0.00 / 0.27 |
-| item11 | 1.19 / 0.33 | 1.19 | 1.19 | 1.19 / 0.33 | 1.19 / 0.33 |
+| item10 | 0.00 / 0.27 | 0.00 | 0.00 | 0.00 / 0.27 | 0.00 / 0.27 |
+| item11 | 1.24 / 0.33 | 1.24 | 1.24 | 1.24 / 0.33 | 1.24 / 0.33 |
 | item12 | **20.0** / 10.0 | 20.0 | 20.0 | 20.0 | 20.0 |
-| item13 | 1.20 / **9.23** | 1.20 | 1.20 | 1.20 / 9.23 | 1.20 / 9.23 |
+| item13 | 1.24 / **9.23** | 1.24 | 1.24 | 1.24 / 9.23 | 1.24 / 9.23 |
 | item35 | 0.00 | 0.00 | 0.00 | **0.00** | 0.00 |
+
+> **Rig pitfall, fixed.** The first run had `item1` at 0.77 / 20 mm / 8 "missing" flats — a *rig* lie,
+> not a part fault. `sectionFlats` accepted runs ≥ 3 mm, and a sampled root fillet (r ≈ 12 mm at
+> ~1.5 mm sampling) yields 3 mm chords with oblique normals, so the arcs were scored as stock
+> faces. With `minLength = 8` item1's catalogue is 8 flats, **all 8 matched at ≤ 0.12 mm**. Any rig
+> that reads sampled geometry as primitives must exclude chords: a flat is a run, an arc is not.
 
 Conclusions:
 
@@ -107,16 +113,61 @@ Final shipped column:
 
 | part | detector offset / tilt | shipped offset / worst / tilt |
 |---|---|---|
-| item1 | 0.77 / 0.55° | 0.77 / 20.0 / 0.55 |
+| item1 | 0.06 / 0.14° | 0.06 / 0.12 / **0.03** |
 | item9 | 0.00 / 0.00° | 0.00 / 0.00 / 0.00 |
 | item10 | 0.00 / 0.27° | 0.00 / 0.00 / **0.00** |
-| item11 | 1.19 / 0.33° | 1.19 / 4.22 / **0.02** |
-| item12 | **20.0** / 10.0° | **0.77** / 3.08 / **0.01** |
-| item13 | 1.20 / 9.23° | 1.20 / 6.44 / **0.02** |
+| item11 | 1.24 / 0.33° | 1.24 / 4.22 / **0.04** |
+| item12 | **20.0** / 10.0° | **0.80** / 3.08 / **0.03** |
+| item13 | 1.24 / 9.23° | 1.24 / 6.44 / **0.02** |
 | item35 | 0.00 / 0.00° | 0.00 / 0.00 / 0.00 |
 
-(`item1`'s "missing 8" are catalogue flats a channel genuinely does not present at this length —
-not an alignment fault.)
+**Open:** items 11–13 still carry a 4–6 mm residual on *one* plane while the tilt is 0.02–0.04° and
+the rest of the section is within ~1 mm. That is one face not where the catalogue puts it, not a
+pose error — the next diagnostic is to print that flat's normal/offset (variant swaps were already
+ruled out).
+
+## How "floating in the middle of nowhere" happens
+
+A seat is a rigid fit; "floating" is its **translation null space**. Two mechanisms produce it, and
+this codebase has had both:
+
+1. **Moment-based initialisation.** `baseSeat` and `recentre` centre the model on its **own bbox**.
+   A part whose stock faces are cut away on one side (a longitudinal cope, a broken-out corner) has
+   a smaller bbox than the stock, so centring shifts the whole part by half the missing material.
+   The seat is then "correct" for the model's extent and wrong for the stock.
+2. **Plane-to-plane fitting is translation-invariant along the planes.** Sliding a part parallel to
+   a matched plane does not change that plane's residual. If the planes that would pin the sliding
+   direction are missing or unmatched (a channel's faces, a coped region), the fit's Jacobian has a
+   null space and the solver may drift through it freely — a perfect score on the faces it *has*,
+   the part sitting off the stock.
+
+That is why the acceptance rule and the candidate scoring matter: they compare *all* catalogue
+flats, not just the current associations. A solver that only minimises its current residual cannot
+see a null space.
+
+## Literature — what applies to this problem
+
+The problem is **model-based registration with a known template** (the catalogue section), in the
+section plane, with outliers (cut faces, arcs, chamfers). Relevant methods, and how each maps here:
+
+| method | idea | fit for us |
+|---|---|---|
+| **ICP / point-to-plane ICP** — Besl & McKay 1992; Chen & Medioni 1992 | iterate nearest-point correspondences, minimise plane distance | our solver; **local** convergence only — needs a decent pose and has a translation null space |
+| **RANSAC** — Fischler & Bolles 1981; SAC-IA, Rusu et al. 2009 | sample a minimal correspondence set, count inliers | the right *global* guard: sample 2–3 catalogue flats, solve roll+translation, score. With only 8–12 flats, **enumerate instead of sample** (deterministic, no seed) |
+| **Generalized Hough** — Ballard 1981 | vote pose parameters from feature correspondences | same enumeration, expressed as voting; a plane pair fixes roll, a third fixes translation |
+| **4PCS / Super4PCS** — Aiger et al. 2008; Mellado et al. 2014 | congruent 4-point bases under rigid motion | strong for scan-to-model with no initial pose; heavy for a 2-D template |
+| **PPF** — Drost et al. 2010 | hash point-pair features, vote | industrial bin-picking standard; a plane-pair feature is the analogue here |
+| **TEASER / TEASER++** — Yang & Carlone 2019/2021 | certifiably optimal, decoupled rotation/translation, extreme outlier rejection | the modern answer to "bad initial pose + outliers"; overkill now, the right ceiling if we ever register free-form 3-D scans |
+| **FGR / Go-ICP** — Zhou et al. 2016; Yang et al. 2016 | robust global optimisation; branch-and-bound | same role, more machinery than a 2-D template needs |
+| **Chamfer / distance-transform matching** — Borgefors 1986; Liu et al. 2010 | rasterise the template, distance transform, search pose | natural for a 2-D section polygon; cheap and global |
+| **3-2-1 datum locating** — ASME Y14.5 / fixture design | locate from a primary (3 DOF) + secondary (2) + tertiary (1) datum feature | exactly our stock planes; explains *which* planes should constrain which DOF, and why a channel's missing faces leave a DOF free |
+
+**Recommended next batch (batch 4): exhaustive plane-pair RANSAC.** Enumerate compatible
+(catalogue flat, model face) pairs, solve roll + translation per pair, score each hypothesis with
+the existing rig by inlier count, keep the best, then ICP-polish. It is O(8 × 30) — microseconds —
+removes the initial-pose dependence entirely, and directly closes the translation null space that
+"floating" lives in. It also subsumes the quarter-turn search (a wrong stance simply scores no
+inliers).
 
 ## Why the old seat failed at all
 

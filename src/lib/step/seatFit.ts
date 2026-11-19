@@ -49,7 +49,7 @@ export function orientation(points: [number, number][]): number {
  * (root fillets, tube corners) break the runs, so a UB yields its four outer faces, the two flange
  * undersides and the two web faces — exactly the planes the stock is cut from.
  */
-export function sectionFlats(points: [number, number][], minLength = 3): Flat[] {
+export function sectionFlats(points: [number, number][], minLength = 8): Flat[] {
   const sign = orientation(points)
   const runs: Flat[] = []
   for (let index = 0; index < points.length; index++) {
