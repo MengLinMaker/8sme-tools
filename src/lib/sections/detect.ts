@@ -331,10 +331,21 @@ function detectHollow(measured: MeasuredSection, outerArea: number): SectionGues
     family = 'rhs'
     code = `RHS${dimText(long)}*${dimText(short)}*${t}`
   }
+  // Corner radius from the part itself: a rounded rectangle W×H with radius R has area
+  // W·H − (4 − π)R². The ghost should sit on the drawing the operator is working to — Tekla's SHS
+  // profile uses a flat 10 mm outer radius, which is below AS/NZS 1163 for a 6 mm wall (1.67t vs
+  // the 1.8t minimum), yet it is what the part will be cut to. No measurement (NC-only parts) keeps
+  // the standard value from `hollowCornerRadius`.
+  let radius = 0
+  if (family !== 'chs') {
+    const rounded = (ow * oh - outerArea) / (4 - Math.PI)
+    if (rounded > 0) radius = round01(Math.sqrt(rounded))
+  }
   return {
     family,
     code,
-    dims: [],
+    // `[long, short, wall, wall, cornerRadius]` — the order `unrolledLayout` reads.
+    dims: radius > 0 ? [long, short, wall, wall, radius] : [],
     label: code,
     mass: sectionMassPerMetre(code, []),
     score: 1,
