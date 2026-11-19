@@ -81,6 +81,7 @@ import {
   seatedFromSeat,
   seatedPair,
   seatedStepProfile,
+  seatFacesFromBrep,
   seatQuaternion,
   transformVertices,
   unit,
@@ -860,6 +861,8 @@ function mountScene(
   const primary = buildGroup(step, faceMaterial, true, highlightStray ? strayMaterial : null)
   const size = bboxOfVertices(primary.raw).getSize(new Vector3())
   scene.add(primary.group)
+  // Stock faces for the seat: their planes are the exact section axes (`seatFromStockFaces`).
+  const stockFaces = seatFacesFromBrep(step.bodies.flatMap((body) => body.brep ?? []))
 
   const compareGeometries: ReturnType<typeof syncGeometries>[] = []
   let compareGroup: Group | null = null
@@ -976,8 +979,8 @@ function mountScene(
             })()
           : profile
             ? stepSeat
-              ? seatedFromSeat(primary.raw, stepSeat, seatProfile ?? profile)
-              : seatedStepProfile(primary.raw, seatProfile ?? profile)
+              ? seatedFromSeat(primary.raw, stepSeat, seatProfile ?? profile, stockFaces)
+              : seatedStepProfile(primary.raw, seatProfile ?? profile, stockFaces)
             : seatedPair(primary.raw, null, profile)
     const seatScale = new Vector3()
     // The seated member extent along X is the true member length (the raw bbox longest extent is a

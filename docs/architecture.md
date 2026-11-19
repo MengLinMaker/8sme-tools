@@ -405,6 +405,14 @@ Symptom: the 3-D STEP cut lines looked correct, but the STEP **IR** did not matc
   unconstrained/regularised). This removes the ~0.97° seating tilt without using hole centres.
   Re-run until the residual is negligible; if it cannot converge, the STEP is not a straight
   prismatic member.
+- **The seat itself comes from the stock faces, not the vertex cloud** (`seat.ts`
+  `stockFrameOf` / `seatFromStockFaces`). A stock face's normal *is* a section axis, and two
+  perpendicular normals span the cross, so `u × v` is the member direction. PCA over the meshed
+  vertices mixes in cut faces and uneven tessellation: on the real `UB250*31` (`test/fixtures/ub`)
+  it tilted the member 0.14°, which read as **12.8 mm of false depth** over 5.3 m and hid a real
+  hole-position match (`raw-step-holes` m137 canary). The stock-face seat reproduces the raw
+  `5309 × 252 × 146` bbox exactly. Apply it only as a **de-tilt**: a frame more than 10° from the
+  heuristic seat means a cut face was mistaken for stock, so the heuristic seat is kept.
 - **One transform per face:** `faceStation(face, point, …)` is the inverse of `placeNcFace` and is
   the only station formula. Holes, slots and cut segments all call it; never duplicate the
   half-span/across-sign maths in a second path.

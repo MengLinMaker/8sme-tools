@@ -37,5 +37,8 @@ export const nw31Top = (...segments: string[]): string => fixture('nw31-top', ..
 export const hexModuleFrames = (...segments: string[]): string =>
   fixture('hex-module-frames', ...segments)
 
+/** Rolled I-section reference part — a `UB250*31` with its real STEP (`M_12`). */
+export const ubSection = (...segments: string[]): string => fixture('ub', ...segments)
+
 /** Circular hollow section (CHS) reference part — a 508.0 OD × 9.5 wall leg. */
 export const chsLeg = (...segments: string[]): string => fixture('chs', ...segments)

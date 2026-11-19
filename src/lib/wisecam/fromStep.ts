@@ -7,6 +7,7 @@ import {
   type SectionSeat,
   seatedFromSeat,
   seatedStepProfile,
+  seatFacesFromBrep,
   transformVertices,
 } from '@/lib/step/seat'
 import { unrolledLayout } from './layout'
@@ -279,9 +280,11 @@ export function seatedStepGeometry(
   section: [number, number][],
   seat?: SectionSeat | null,
 ): SeatedStepGeometry {
+  // Stock faces carry the section axes exactly; the vertex cloud only approximates them.
+  const stockFaces = seatFacesFromBrep(meshed.bodies.flatMap((body) => body.brep ?? []))
   const seated = seat
-    ? seatedFromSeat(meshed.vertices, seat, section)
-    : seatedStepProfile(meshed.vertices, section)
+    ? seatedFromSeat(meshed.vertices, seat, section, stockFaces)
+    : seatedStepProfile(meshed.vertices, section, stockFaces)
   const quaternion = new Quaternion()
   const position = new Vector3()
   const scale = new Vector3()

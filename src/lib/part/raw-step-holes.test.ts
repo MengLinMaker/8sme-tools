@@ -37,10 +37,10 @@ describe('raw STEP hole centres', () => {
       expect(Math.abs((raw[index] as number) - (expected[index] as number))).toBeLessThan(0.5)
   }, 120_000)
 
-  // Known failure / canary: m137's STEP hole centres translate in the cross-section along the
-  // member (it is not a straight prismatic extrusion). If this ever passes, the STEP is nominal
-  // and the straight-section IR assumption is safe again.
-  it.fails('m137: raw STEP hole centres stay at the NC cross-section position', async () => {
+  // Was a canary: m137's STEP hole centres used to translate across the section along the member.
+  // That was the PCA seat tilting the member, not the STEP — with the stock-face seat the holes
+  // land on the NC cross positions to 0.005 mm, so the straight-section IR assumption holds.
+  it('m137: raw STEP hole centres stay at the NC cross-section position', async () => {
     const ncText = readFileSync(fixture('part-ir', 'm137.nc1'), 'utf8')
     const header = parseDstv(ncText).header
     const section = partSectionForCode(header.profile, header.dimensions)
