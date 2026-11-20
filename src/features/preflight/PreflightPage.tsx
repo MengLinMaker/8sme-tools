@@ -277,7 +277,8 @@ const SECTION_TRUST_SCORE = 0.9
  * spare width and its pills wrap inside it, so fixes changing the badges never move the columns
  * beside it. Everything else hugs its content — those values are short and stable (marks and
  * assemblies are fixed the moment the job is read; qty/mass/size only fill in once), so a column
- * grows by a character or two at most and never reflows on every render.
+ * grows by a character or two at most and never reflows on every render. ASSY is dropped entirely
+ * when the job carries no assemblies, so a plain part-only job has no empty column.
  */
 const PART_COLUMNS: {
   labelKey: string
@@ -3228,6 +3229,14 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     }
     return [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
   }, [sortedParts])
+  /** The parts-table columns, minus ASSY when the job carries no assembly at all. */
+  const partColumns = useMemo(
+    () =>
+      assemblyOptions.length > 0
+        ? PART_COLUMNS
+        : PART_COLUMNS.filter((column) => column.key !== 'assembly'),
+    [assemblyOptions.length],
+  )
   /** The sorted parts narrowed by the tokenised search (status words + free text). */
   const searchedParts = useMemo(
     () => filterParts(sortedParts, markQuery, partFilterContext),
@@ -4635,18 +4644,23 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                       sortKey="profile"
                       sort={profileSort}
                       onSort={sortProfiles}
+                      width="w-full"
                     />
                     <SortHead
                       label={t('preflight.profiles.marks')}
                       sortKey="marks"
                       sort={profileSort}
                       onSort={sortProfiles}
+                      align="right"
+                      width="w-px"
                     />
                     <SortHead
                       label={t('preflight.profiles.pieces')}
                       sortKey="pieces"
                       sort={profileSort}
                       onSort={sortProfiles}
+                      align="right"
+                      width="w-px"
                     />
                     <SortHead
                       label={t('preflight.profiles.totalLength')}
@@ -4654,6 +4668,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                       sort={profileSort}
                       onSort={sortProfiles}
                       align="right"
+                      width="w-px"
                     />
                     <SortHead
                       label={t('preflight.profiles.totalMass')}
@@ -4661,6 +4676,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                       sort={profileSort}
                       onSort={sortProfiles}
                       align="right"
+                      width="w-px"
                     />
                   </TableRow>
                 </TableHeader>
@@ -4681,9 +4697,9 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                       }}
                     >
                       <TableCell className="font-mono text-xs">{group.profile}</TableCell>
-                      <TableCell>{group.markCount}</TableCell>
-                      <TableCell>{group.pieces}</TableCell>
-                      <TableCell className="text-right font-mono text-xs">
+                      <TableCell className="text-right tabular-nums">{group.markCount}</TableCell>
+                      <TableCell className="text-right tabular-nums">{group.pieces}</TableCell>
+                      <TableCell className="whitespace-nowrap text-right font-mono text-xs">
                         {group.lengthMm > 0 ? (
                           `${(group.lengthMm / 1000).toFixed(1)} m`
                         ) : (
@@ -4692,7 +4708,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                           </span>
                         )}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-xs">
+                      <TableCell className="whitespace-nowrap text-right font-mono text-xs">
                         {group.massKg > 0 ? (
                           formatMass(group.massKg, i18n.language)
                         ) : (
@@ -4895,7 +4911,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                         aria-label={t('preflight.parts.selectAll')}
                       />
                     </TableHead>
-                    {PART_COLUMNS.map((column) => (
+                    {partColumns.map((column) => (
                       <SortHead
                         key={column.key}
                         label={t(column.labelKey)}
@@ -4912,7 +4928,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                   {visibleParts.length === 0 && (
                     <TableRow className="hover:bg-transparent">
                       <TableCell
-                        colSpan={PART_COLUMNS.length + 1}
+                        colSpan={partColumns.length + 1}
                         className="text-center text-sm text-muted-foreground"
                       >
                         {assemblyFilter && !markQuery.trim()
@@ -5048,42 +5064,44 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                             )}
                           </div>
                         </TableCell>
-                        <TableCell className="text-right text-xs">
-                          {part.assemblies && part.assemblies.length > 0 ? (
-                            <div className="flex flex-wrap justify-end gap-1">
-                              {part.assemblies.map((usage) => (
-                                <button
-                                  key={usage.assembly}
-                                  type="button"
-                                  aria-pressed={assemblyFilter === usage.assembly}
-                                  title={t('preflight.qty.assemblyTitle', {
-                                    assembly: usage.assembly,
-                                    qty: usage.qtyPerAssembly,
-                                    count: usage.assemblyQty,
-                                    total: usage.total,
-                                  })}
-                                  onClick={(event) => {
-                                    event.stopPropagation()
-                                    setAssemblyFilter((current) =>
-                                      current === usage.assembly ? null : usage.assembly,
-                                    )
-                                  }}
-                                  className={cn(
-                                    'cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                                    assemblyFilter === usage.assembly &&
-                                      'ring-2 ring-ring ring-offset-1 ring-offset-card',
-                                  )}
-                                >
-                                  <Badge variant="muted" className="font-mono">
-                                    {usage.assembly}
-                                  </Badge>
-                                </button>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
+                        {assemblyOptions.length > 0 && (
+                          <TableCell className="text-right text-xs">
+                            {part.assemblies && part.assemblies.length > 0 ? (
+                              <div className="flex flex-wrap justify-end gap-1">
+                                {part.assemblies.map((usage) => (
+                                  <button
+                                    key={usage.assembly}
+                                    type="button"
+                                    aria-pressed={assemblyFilter === usage.assembly}
+                                    title={t('preflight.qty.assemblyTitle', {
+                                      assembly: usage.assembly,
+                                      qty: usage.qtyPerAssembly,
+                                      count: usage.assemblyQty,
+                                      total: usage.total,
+                                    })}
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      setAssemblyFilter((current) =>
+                                        current === usage.assembly ? null : usage.assembly,
+                                      )
+                                    }}
+                                    className={cn(
+                                      'cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                      assemblyFilter === usage.assembly &&
+                                        'ring-2 ring-ring ring-offset-1 ring-offset-card',
+                                    )}
+                                  >
+                                    <Badge variant="muted" className="font-mono">
+                                      {usage.assembly}
+                                    </Badge>
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
+                        )}
                         <TableCell
                           className={cn(
                             'whitespace-nowrap text-right tabular-nums',
