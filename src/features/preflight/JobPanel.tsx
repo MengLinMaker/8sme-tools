@@ -1,8 +1,9 @@
-import { ChevronRight, Folder, Trash2 } from 'lucide-react'
+import { ChevronRight, Folder, Settings2, Trash2 } from 'lucide-react'
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -167,6 +168,7 @@ export function JobPanel({
   onAdd,
   onError,
   onDelete,
+  onNameRules,
 }: {
   sourceName: string
   entries: ZipEntry[]
@@ -177,6 +179,8 @@ export function JobPanel({
   onAdd: (bundle: InputBundle) => void
   onError?: (message: string) => void
   onDelete: (paths: string[]) => void
+  /** Opens the job's filename name rules (mark/quantity/section extraction). */
+  onNameRules: () => void
 }) {
   const { t } = useTranslation()
   // Collapsed by default: the header already says which job is loaded and how big it is.
@@ -296,6 +300,10 @@ export function JobPanel({
             <span className="truncate font-mono text-base font-semibold">{sourceName}</span>
           </CardTitle>
         </button>
+        <Button variant="outline" size="sm" onClick={onNameRules}>
+          <Settings2 className="size-3.5" />
+          {t('preflight.nameRules.open')}
+        </Button>
       </CardHeader>
       {open && (
         <CardContent className="flex flex-col gap-3">

@@ -42,5 +42,24 @@ export const UB_SECTIONS: RolledSection[] = [
 ]
 
 export function getUb(designation: string): RolledSection | undefined {
-  return UB_SECTIONS.find((section) => section.designation === designation)
+  const exact = UB_SECTIONS.find((section) => section.designation === designation)
+  if (exact) return exact
+  // Callouts are often rounded (`200UB25` for `200UB25.4`). Match the nominal depth, then take
+  // the closest mass in that depth group — the same rule the filename parser uses.
+  const match = /^([0-9]+)\s*UB\s*([0-9]+(?:\.[0-9]+)?)$/i.exec(designation)
+  if (!match) return undefined
+  const depth = Number(match[1])
+  const mass = Number(match[2])
+  let best: RolledSection | undefined
+  let bestDelta = Number.POSITIVE_INFINITY
+  for (const section of UB_SECTIONS) {
+    const nominal = Number(/^[0-9]+/.exec(section.designation)?.[0] ?? 0)
+    if (nominal !== depth) continue
+    const delta = Math.abs(section.mass - mass)
+    if (delta < bestDelta) {
+      bestDelta = delta
+      best = section
+    }
+  }
+  return best
 }

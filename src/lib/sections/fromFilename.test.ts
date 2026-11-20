@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { profileFromFilename } from './fromFilename'
+import { profileFromFilename, profileKey } from './fromFilename'
 import { partSectionForCode } from './stock'
 
 /**
@@ -37,5 +37,26 @@ describe('profile from filename', () => {
     for (const name of ['m117.stp', 'a1.stp', '12095, ITEM 1, 4 OFF[C].STEP']) {
       expect(profileFromFilename(name), name).toBeNull()
     }
+  })
+})
+
+describe('profile key', () => {
+  it('treats a rounded UB mass as the same section', () => {
+    expect(profileKey('200UB25')).toBe(profileKey('200UB25.4'))
+    expect(profileKey('150UB14')).toBe(profileKey('150UB14.0'))
+    expect(profileKey('310UB32')).toBe(profileKey('310UB32.0'))
+  })
+
+  it('normalises hollow and channel spellings', () => {
+    expect(profileKey('SHS75*75*6')).toBe(profileKey('SHS 75x75x6'))
+    expect(profileKey('SHS75*75*6.0')).toBe(profileKey('SHS 75x75x6'))
+    expect(profileKey('PFC250*90')).toBe(profileKey('PFC 250'))
+    expect(profileKey('EA200*200*20')).toBe(profileKey('EA 200x200x20'))
+  })
+
+  it('keeps genuinely different sections apart', () => {
+    expect(profileKey('200UB25')).not.toBe(profileKey('200UB30'))
+    expect(profileKey('SHS75*75*6')).not.toBe(profileKey('SHS89*89*5'))
+    expect(profileKey('PFC250*90')).not.toBe(profileKey('PFC150*75'))
   })
 })

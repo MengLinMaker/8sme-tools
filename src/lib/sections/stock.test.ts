@@ -5,6 +5,7 @@ import {
   partSectionForCode,
   resolveStockOutline,
   sectionDimensions,
+  sectionMassPerMetre,
   sectionThicknesses,
   stockOutlineForCode,
 } from './stock'
@@ -315,6 +316,25 @@ describe('hollow stock outline', () => {
       expect(section.points.length, `${code} corner arcs`).toBeGreaterThan(20)
       expect(section.holes?.length ?? 0, `${code} hollow void`).toBe(1)
     }
+  })
+})
+
+describe('rounded UB mass', () => {
+  it('resolves a rounded callout to the catalogue section', () => {
+    const rounded = partSectionForCode('200UB25', [])
+    const exact = partSectionForCode('200UB25.4', [])
+    expect(rounded).toBeTruthy()
+    expect(rounded?.points).toEqual(exact?.points)
+    expect(sectionMassPerMetre('200UB25', [])).toBeCloseTo(25.4, 3)
+  })
+
+  it('takes the nearest mass within the depth group', () => {
+    expect(sectionMassPerMetre('200UB18', [])).toBeCloseTo(18.2, 3)
+    expect(sectionMassPerMetre('310UB40', [])).toBeCloseTo(40.4, 3)
+  })
+
+  it('leaves an unknown depth unresolved', () => {
+    expect(partSectionForCode('999UB25', [])).toBeNull()
   })
 })
 

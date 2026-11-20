@@ -19,6 +19,11 @@ describe('aggregatePartList', () => {
     expect(assemblies.size).toBe(0)
   })
 
+  it('keys a row the same way a filename mark is keyed', () => {
+    const { expected } = aggregatePartList([row({ part: 'ITEM 35', qty: 9 })])
+    expect(expected.get('item35')).toMatchObject({ part: 'ITEM 35', qty: 9 })
+  })
+
   it('totals a part across assemblies and records each usage', () => {
     const { expected, assemblies } = aggregatePartList([
       row({ assembly: 'A1', assemblyQty: 2, qty: 1 }),

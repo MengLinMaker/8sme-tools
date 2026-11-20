@@ -60,6 +60,12 @@ import {
 import { listedProfile } from '@/lib/audit/partProfile'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
 import { assessRootFilletGeometry, type RootFilletIssue } from '@/lib/audit/rootFillet'
+import {
+  DEFAULT_STEP_NAME_RULES,
+  extractStepName,
+  normalizeStepNameRules,
+  type StepNameRules,
+} from '@/lib/audit/stepNames'
 import type { AuditResult, Finding, PartRecord, Severity, StepFile } from '@/lib/audit/types'
 import { assessUnclosedCutsGeometry, type UnclosedCutIssue } from '@/lib/audit/unclosedCuts'
 import { findWeldingEtchings, type WeldingEtchings } from '@/lib/audit/weldingEtchings'
@@ -108,6 +114,7 @@ import {
   putProjectFiles,
   removeProjectFiles,
   saveProjectBatches,
+  saveProjectStepNames,
   takeHandOffProject,
 } from '@/lib/projects/store'
 import type { PurchaseGroupInput } from '@/lib/purchasing/purchase'
@@ -116,7 +123,7 @@ import { readDroppedInput } from '@/lib/readInput'
 import { yieldToMain } from '@/lib/scheduler'
 import { CUT_FACES, FACE_DIRECTIONS, profileFamily } from '@/lib/sections/canonical'
 import type { SectionGuess } from '@/lib/sections/detect'
-import { profileFromFilename } from '@/lib/sections/fromFilename'
+import { profileKey } from '@/lib/sections/fromFilename'
 import { inferTee } from '@/lib/sections/infer'
 import {
   layoutDimensions,
@@ -133,9 +140,13 @@ import { stockFaceThicknesses } from '@/lib/step/cutEdges'
  * that reads as a millimetre-scale stock mismatch however well the part is seated. The filename
  * wins when it parses; detection keeps everything else (seat frame, score, outline).
  */
-function withFilenameProfile(guess: SectionGuess, stepPath: string | undefined): SectionGuess {
+function withFilenameProfile(
+  guess: SectionGuess,
+  stepPath: string | undefined,
+  rules: StepNameRules,
+): SectionGuess {
   if (!stepPath) return guess
-  const profile = profileFromFilename(stepPath)
+  const profile = extractStepName(stepPath, rules).section
   if (!profile) return guess
   // Keep the detected dims when the filename carries none: they include the corner radius measured
   // from the part, which the ghost needs (a rounded SHS drawn as a sharp box reads as wrong stock).
@@ -196,6 +207,7 @@ import { buildNcepFromNc } from '@/lib/wisecam/fromNc'
 import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
 import { JobPanel } from './JobPanel'
+import { NameRulesDialog } from './NameRulesDialog'
 import { NcLegend } from './NcLegend'
 import { createOrbitBus, requestLocation, requestView, type ViewPreset } from './orbitSync'
 import type { DiffStats } from './PartViewer'
@@ -690,6 +702,13 @@ export function PreflightPage({ projectId }: { projectId: string }) {
    * purchase lengths and the tracking sheet — multiply by it. Saved with the project.
    */
   const [batches, setBatches] = useState(1)
+  /**
+   * How this job's filenames are read into marks, quantities and sections. Kept in a ref as well:
+   * the audit runs from event handlers, and a rule change must apply to the very next drop.
+   */
+  const [stepNames, setStepNames] = useState<StepNameRules>(DEFAULT_STEP_NAME_RULES)
+  const stepNamesRef = useRef<StepNameRules>(DEFAULT_STEP_NAME_RULES)
+  const [nameRulesOpen, setNameRulesOpen] = useState(false)
   /** Marks ticked in the parts table for the selective PDF/STEP/NC export. */
   const [selectedMarks, setSelectedMarks] = useState<Set<string>>(new Set())
   /** True while an export is re-seating STEPs / re-emitting NCs in the OCC workers. */
@@ -764,7 +783,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     setAssemblyFilter(null)
     setAnalyzing(true)
     clearViewerModels()
-    setResult(auditEntries(input.sourceName, input.entries))
+    setResult(auditEntries(input.sourceName, input.entries, { stepNames: stepNamesRef.current }))
   }, [])
 
   /** A planning setting, so save it straight away — it is tiny and has no fix to commit. */
@@ -777,6 +796,26 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       )
     },
     [projectId],
+  )
+
+  /**
+   * Applies new filename rules to the loaded job: persist them with the project and re-audit at
+   * once, so the parts table reflects the changed grouping rather than yesterday's marks.
+   */
+  const changeStepNames = useCallback(
+    (next: StepNameRules) => {
+      const rules = normalizeStepNameRules(next)
+      stepNamesRef.current = rules
+      setStepNames(rules)
+      if (bundle) {
+        setAnalyzing(true)
+        setResult(auditEntries(bundle.sourceName, bundle.entries, { stepNames: rules }))
+      }
+      void saveProjectStepNames(projectId, rules).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
+    },
+    [bundle, projectId],
   )
 
   /**
@@ -805,7 +844,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       setNcOverrides((prev) => withoutKeys(prev, marks))
       setStepOverrides((prev) => withoutKeys(prev, marks))
       setResolvedFixes((prev) => withoutKeys(prev, marks))
-      setResult(auditEntries(bundle.sourceName, entries))
+      setResult(auditEntries(bundle.sourceName, entries, { stepNames: stepNamesRef.current }))
       // Only the dropped records are written, so adding a part to a big job stays cheap.
       void putProjectFiles(projectId, bundle.sourceName, input.entries).catch((err) =>
         setError(err instanceof Error ? err.message : String(err)),
@@ -886,7 +925,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         for (const mark of marks) next.delete(mark)
         return next.size === prev.size ? prev : next
       })
-      setResult(auditEntries(bundle.sourceName, entries))
+      setResult(auditEntries(bundle.sourceName, entries, { stepNames: stepNamesRef.current }))
       // Keep the saved copy in step: only the removed records are touched.
       void removeProjectFiles(projectId, [...drop]).catch((err) =>
         setError(err instanceof Error ? err.message : String(err)),
@@ -921,6 +960,9 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         if (cancelled) return
         openedProject.current = projectId
         setBatches(normalizeBatches(meta?.batches))
+        const rules = normalizeStepNameRules(meta?.stepNames)
+        stepNamesRef.current = rules
+        setStepNames(rules)
         handleBundle(opened)
         // The fixes travel with the project: NC edits (with their ops), STEP replacements, and the
         // resolved rows that keep their Undo available.
@@ -998,6 +1040,15 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     for (const entry of bundle?.entries ?? []) map.set(entry.path, entry.bytes)
     return map
   }, [bundle])
+
+  /** STEP names, in job order, for the name-rules preview. */
+  const stepPaths = useMemo(
+    () =>
+      (bundle?.entries ?? [])
+        .filter((entry) => /\.(stp|step)$/i.test(entry.path))
+        .map((entry) => entry.path),
+    [bundle],
+  )
 
   const [stock, setStock] = useState<StockOutline | null>(null)
   useEffect(() => {
@@ -1997,7 +2048,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
             }
             if (cancelled) return
             if (inspected.section) {
-              const guess = withFilenameProfile(inspected.section, part.step?.path)
+              const guess = withFilenameProfile(inspected.section, part.step?.path, stepNames)
               sections.set(part.mark, guess)
               setSectionGuesses(new Map(sections))
             }
@@ -2149,7 +2200,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       cancelled = true
       getStepWorkerPool().abort()
     }
-  }, [result, bytesByPath, stampOf])
+  }, [result, bytesByPath, stampOf, stepNames])
 
   /** Marks already fast-tracked for the viewer, so map updates don't re-fire the same work. */
   const fastTrackInFlight = useRef(new Set<string>())
@@ -2180,7 +2231,11 @@ export function PreflightPage({ projectId }: { projectId: string }) {
             })
             measure = inspected.measure
             if (inspected.section) {
-              const guess = withFilenameProfile(inspected.section as SectionGuess, part.step?.path)
+              const guess = withFilenameProfile(
+                inspected.section as SectionGuess,
+                part.step?.path,
+                stepNames,
+              )
               setSectionGuesses((prev) => new Map(prev).set(mark, guess))
             }
             if (measure) {
@@ -2245,7 +2300,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         }
       })()
     },
-    [bytesByPath, drawingMaterials, modelChecks, manufactureChecks],
+    [bytesByPath, drawingMaterials, modelChecks, manufactureChecks, stepNames],
   )
   useEffect(() => {
     if (!result || !viewing) return
@@ -2682,6 +2737,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     const map = new Map<
       string,
       {
+        /** The first spelling seen for this section, shown in the table. */
+        profile: string
         marks: Map<string, ProfileMarkRow>
         pieces: number
         lengthMm: number
@@ -2691,14 +2748,18 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       }
     >()
     for (const part of result.parts) {
-      const profile = sectionLabel(part)
-      const entry = map.get(profile) ?? {
+      const label = sectionLabel(part)
+      // `200UB25` and `200UB25.4` are the same stock, so they share one profile group.
+      const key = profileKey(label)
+      const entry = map.get(key) ?? {
+        profile: label,
         marks: new Map<string, ProfileMarkRow>(),
         pieces: 0,
         lengthMm: 0,
         massKg: 0,
         dims: [],
       }
+      if (entry.profile === '—' && label !== '—') entry.profile = label
       if (entry.dims.length === 0) {
         const dims = part.nc?.dimensions ?? sectionGuesses.get(part.mark)?.dims ?? []
         if (dims.length > 0) entry.dims = dims
@@ -2719,11 +2780,11 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       entry.pieces += qty
       if (length != null) entry.lengthMm += qty * length
       if (mass != null) entry.massKg += qty * mass
-      map.set(profile, entry)
+      map.set(key, entry)
     }
-    return [...map.entries()]
-      .map(([profile, entry]) => ({
-        profile,
+    return [...map.values()]
+      .map((entry) => ({
+        profile: entry.profile,
         marks: [...entry.marks.values()].sort((a, b) =>
           a.mark.localeCompare(b.mark, undefined, { numeric: true }),
         ),
@@ -2754,7 +2815,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         part.nc?.profile ?? listedProfile(part) ?? sectionGuesses.get(part.mark)?.code ?? ''
       const dims = part.nc?.dimensions ?? sectionGuesses.get(part.mark)?.dims ?? []
       const tee = code ? inferTee(code, dims) : null
-      const key = tee ? `tee:${tee.section.designation}` : `profile:${profile}`
+      const key = tee ? `tee:${tee.section.designation}` : `profile:${profileKey(profile)}`
       const massPerMetre = tee
         ? tee.section.mass
         : (part.nc?.weightPerMetre ??
@@ -4532,6 +4593,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           onAdd={addToBundle}
           onError={setError}
           onDelete={deleteEntries}
+          onNameRules={() => setNameRulesOpen(true)}
         />
       ) : (
         <DropZone onBundle={handleBundle} onError={setError} />
@@ -4549,7 +4611,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           <Stat label={t('preflight.stats.totalQty')} value={totalQty} />
           <Stat
             label={t('preflight.stats.totalLength')}
-            value={totalLengthMm > 0 ? `${(totalLengthMm / 1000).toFixed(1)} m` : '—'}
+            value={totalLengthMm > 0 ? (totalLengthMm / 1000).toFixed(1) : '—'}
             pending={analyzing && drawingChecking}
           />
           <Stat
@@ -5709,6 +5771,14 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       />
 
       <SectionLookupDialog open={sectionLookupOpen} onClose={() => setSectionLookupOpen(false)} />
+
+      <NameRulesDialog
+        open={nameRulesOpen}
+        onClose={() => setNameRulesOpen(false)}
+        rules={stepNames}
+        stepPaths={stepPaths}
+        onApply={changeStepNames}
+      />
 
       <BevelMenu
         open={bevelEdit !== null}

@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx'
 import type { ZipEntry } from '@/lib/zip'
 import { auditEntries, markFromFilename, quantityFromFilename } from './auditJob'
 
-function makeNc(mark: string, qty: number, length: number): string {
+function makeNc(mark: string, qty: number, length: number, profile = 'EA75*75*6'): string {
   return `ST
 ** ${mark}.nc1
   CO-7255
@@ -13,7 +13,7 @@ function makeNc(mark: string, qty: number, length: number): string {
   8
   C300
   ${qty}
-  EA75*75*6
+  ${profile}
   L
     ${length}
       75.00
@@ -45,6 +45,31 @@ function buildPartListZip(): Uint8Array {
   const row = (r: number, part: number, qty: number) =>
     `<row r="${r}">${sCell(`A${r}`, part)}${nCell(`B${r}`, qty)}${sCell(`C${r}`, 0)}${sCell(`D${r}`, 0)}${nCell(`E${r}`, 100)}${nCell(`F${r}`, 1)}</row>`
   const sheet = `<worksheet><sheetData>${hdr}${row(2, 6, 1)}${row(3, 7, 9)}${row(4, 8, 2)}</sheetData></worksheet>`
+  return zipSync({
+    'xl/sharedStrings.xml': strToU8(sst),
+    'xl/worksheets/sheet1.xml': strToU8(sheet),
+  })
+}
+
+/** A part list whose Part column writes the mark the way Tekla reports it: `ITEM 35`. */
+function buildItemPartListZip(): Uint8Array {
+  const shared = [
+    'Part',
+    'Qty',
+    'Profile',
+    'Grade',
+    'Length (mm)',
+    'Weight (kg)',
+    'ITEM 35',
+    'ITEM 36',
+  ]
+  const sst = `<sst>${shared.map((s) => `<si><t>${s}</t></si>`).join('')}</sst>`
+  const sCell = (ref: string, v: number) => `<c r="${ref}" t="s"><v>${v}</v></c>`
+  const nCell = (ref: string, v: number) => `<c r="${ref}"><v>${v}</v></c>`
+  const hdr = `<row r="1">${[0, 1, 2, 3, 4, 5].map((i, idx) => sCell(`${'ABCDEF'[idx]}1`, i)).join('')}</row>`
+  const row = (r: number, part: number, qty: number) =>
+    `<row r="${r}">${sCell(`A${r}`, part)}${nCell(`B${r}`, qty)}${sCell(`C${r}`, 0)}${sCell(`D${r}`, 0)}${nCell(`E${r}`, 100)}${nCell(`F${r}`, 1)}</row>`
+  const sheet = `<worksheet><sheetData>${hdr}${row(2, 6, 9)}${row(3, 7, 1)}</sheetData></worksheet>`
   return zipSync({
     'xl/sharedStrings.xml': strToU8(sst),
     'xl/worksheets/sheet1.xml': strToU8(sheet),
@@ -244,6 +269,80 @@ describe('auditEntries', () => {
       { path: 'STEP/12095, ITEM 7, SHS 75x75x6, 24 OFF[C].STEP', bytes: strToU8(VALID_STEP) },
     ])
     expect(result.parts[0]?.step?.quantity).toBe(24)
+  })
+
+  it('joins a part-list `ITEM 35` to a STEP named `item35`', () => {
+    const result = auditEntries('j12095.zip', [
+      { path: 'STEP/12095, ITEM 35, SHS 75x75x6, 9 OFF[C].STEP', bytes: strToU8(VALID_STEP) },
+      { path: 'part list.xlsx', bytes: buildItemPartListZip() },
+    ])
+    expect(result.parts[0]?.mark).toBe('item35')
+    expect(result.parts[0]?.step?.quantity).toBe(9)
+    expect(result.parts[0]?.expected?.qty).toBe(9)
+    expect(
+      result.findings.some((f) => f.code === 'PART_LIST_NO_FILES' && f.mark === 'item35'),
+    ).toBe(false)
+    // The list's ITEM 36 has no file, so it is still reported.
+    expect(
+      result.findings.some((f) => f.code === 'PART_LIST_NO_FILES' && f.mark === 'item36'),
+    ).toBe(true)
+  })
+
+  it('applies custom STEP name rules to mark and quantity', () => {
+    const result = auditEntries(
+      'job.zip',
+      [{ path: 'WALL-2_A17_SHS 75x75x6_3 OFF.step', bytes: strToU8(VALID_STEP) }],
+      { stepNames: { mark: 'WALL-\\d+_([A-Z]\\d+)_', quantity: '([0-9]+) OFF' } },
+    )
+    expect(result.parts[0]?.mark).toBe('a17')
+    expect(result.parts[0]?.step?.quantity).toBe(3)
+  })
+
+  it('falls back to the built-in name when a custom rule misses', () => {
+    const result = auditEntries(
+      'job.zip',
+      [{ path: 'b1.nc1', bytes: strToU8(makeNc('b1', 1, 100)) }],
+      {
+        stepNames: { mark: '^ITEM-([0-9]+)$' },
+      },
+    )
+    expect(result.parts[0]?.mark).toBe('b1')
+  })
+
+  it('treats underscores as separators when enabled', () => {
+    const result = auditEntries(
+      'job.zip',
+      [{ path: 'ITEM_36_SHS_75x75x6_4_OFF.step', bytes: strToU8(VALID_STEP) }],
+      { stepNames: { underscoreSeparator: true } },
+    )
+    expect(result.parts[0]?.mark).toBe('item36')
+    expect(result.parts[0]?.step?.quantity).toBe(4)
+  })
+
+  it('accepts a rounded UB mass in the profile cross-check', () => {
+    const partList = (profile: string) => {
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(
+        workbook,
+        XLSX.utils.aoa_to_sheet([
+          ['Part', 'Qty', 'Profile', 'Grade', 'Length (mm)', 'Weight (kg)'],
+          ['u1', 1, profile, 'C300', 1000, 1],
+        ]),
+        'Part List',
+      )
+      return new Uint8Array(XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }))
+    }
+    const audit = (listed: string) =>
+      auditEntries('job.zip', [
+        { path: 'u1.nc1', bytes: strToU8(makeNc('u1', 1, 1000, '200UB25.4')) },
+        { path: 'part list.xlsx', bytes: partList(listed) },
+      ])
+
+    // `200UB25` is the rounded callout for the same 200UB25.4 section.
+    expect(audit('200UB25').findings.some((f) => f.code === 'PROFILE_MISMATCH')).toBe(false)
+    expect(audit('200UB25.4').findings.some((f) => f.code === 'PROFILE_MISMATCH')).toBe(false)
+    // A different mass is still a different section.
+    expect(audit('200UB30').findings.some((f) => f.code === 'PROFILE_MISMATCH')).toBe(true)
   })
 
   it('reads a macro-enabled .xlsm part list', () => {

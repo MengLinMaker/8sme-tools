@@ -19,9 +19,12 @@ export interface FilenameProfile {
   dims: number[]
 }
 
-const FAMILY = /\b(SHS|RHS|EA|UA|PFC|TFC|UB|UC|TFB|CHS)\s*([0-9][0-9xX×*.\s-]*)/i
+// `_` is accepted as a separator too: some exports write `SHS_75x75x6` instead of `SHS 75x75x6`.
+// A plain `\b` would not fire before `SHS` in `_SHS`, because `_` is a word character.
+const FAMILY =
+  /(?:^|[^A-Za-z0-9])(SHS|RHS|EA|UA|PFC|TFC|UB|UC|TFB|CHS)[\s_]*([0-9][0-9xX×*.\s_-]*)/i
 /** `200UB25` puts the depth first — the family token comes after the number. */
-const DEPTH_FIRST = /\b([0-9]{2,3})\s*(UB|UC|TFB)\s*([0-9]+(?:\.[0-9]+)?)/i
+const DEPTH_FIRST = /(?:^|[^A-Za-z0-9])([0-9]{2,3})[\s_]*(UB|UC|TFB)[\s_]*([0-9]+(?:\.[0-9]+)?)/i
 
 /** Numeric tokens of a callout: `SHS 75x75x6` → `[75, 75, 6]`. */
 function numbersOf(text: string): number[] {
@@ -50,8 +53,14 @@ function resolveRolled(
   return best.designation
 }
 
-export function profileFromFilename(path: string): FilenameProfile | null {
-  const base = (path.split(/[\\/]/).pop() ?? path).replace(/\[[^\]]*\]/g, ' ')
+/**
+ * Resolves a section callout (`SHS 75x75x6`, `200UB25`, `PFC_250`) against the catalogue.
+ *
+ * Split out from the filename scanner so a custom extraction rule can capture the callout from
+ * anywhere in a filename and still go through the one catalogue lookup.
+ */
+export function profileFromCallout(callout: string): FilenameProfile | null {
+  const base = callout.replace(/\[[^\]]*\]/g, ' ')
   const depthFirst = DEPTH_FIRST.exec(base)
   if (depthFirst) {
     const depth = Number(depthFirst[1])
@@ -98,4 +107,22 @@ export function profileFromFilename(path: string): FilenameProfile | null {
   if (!code) return null
   // Only trust a code the catalogue can actually build a section from.
   return partSectionForCode(code, []) ? { code, dims: [] } : null
+}
+
+/** The profile callout out of a Tekla filename. Bracketed suffixes (`[C]`) are ignored. */
+export function profileFromFilename(path: string): FilenameProfile | null {
+  return profileFromCallout(path.split(/[\\/]/).pop() ?? path)
+}
+
+/**
+ * A comparison key for a section callout.
+ *
+ * The same section is written several ways across an export: a UB mass is often rounded
+ * (`200UB25` for `200UB25.4`), hollows vary between `SHS75*75*6` and `SHS 75x75x6`, and a PFC
+ * between `PFC250*90` and `PFC 250`. Resolving through the catalogue makes those one key while
+ * keeping genuinely different sections apart.
+ */
+export function profileKey(profile: string): string {
+  const parsed = profileFromCallout(profile)
+  return (parsed?.code ?? profile).replace(/\s+/g, '').toUpperCase()
 }

@@ -2,9 +2,18 @@ import { parseNcFile } from '@/lib/parsers/nc'
 import { parsePdfFile } from '@/lib/parsers/pdf'
 import { parseStepFile } from '@/lib/parsers/step'
 import { parsePartList } from '@/lib/parsers/xlsx'
+import { profileKey } from '@/lib/sections/fromFilename'
 import type { ZipEntry } from '@/lib/zip'
 import { aggregatePartList } from './partList'
+import { extractStepName, markKey, normalizeStepNameRules, type StepNameRules } from './stepNames'
 import type { AuditResult, AuditSummary, Finding, PartListRow, PartRecord, Severity } from './types'
+
+export { markFromFilename, quantityFromFilename } from './stepNames'
+
+/** A job's optional overrides for reading part names out of filenames. */
+export interface AuditOptions {
+  stepNames?: Partial<StepNameRules>
+}
 
 const LENGTH_TOLERANCE_ABS = 50
 const LENGTH_TOLERANCE_REL = 0.02
@@ -33,39 +42,6 @@ function classify(path: string): Kind {
   return 'other'
 }
 
-export function markFromFilename(path: string): string {
-  // Hidden/system names (`._M-1.nc1`, `.M-1.nc1`) carry a leading dot that is not part of the mark.
-  const base = baseName(path)
-    .replace(/\.[^.]+$/, '')
-    .replace(/^[^A-Za-z0-9]+/, '')
-  // Tekla STEP exports are comma-separated: `12095, ITEM 1, PFC 250, 1 OFF[C].STEP`. The leading
-  // project number is shared by every part, so the mark is the `ITEM <n>` token, not `12095,`.
-  const item = base.match(/\bitem\s*([0-9]+[A-Za-z]?)\b/i)
-  if (item) return `item${item[1]}`.toLowerCase()
-  // Otherwise the whole first token is the mark; descriptions after it are not
-  // (`TR9-1  Shaft - UC (0).pdf`). Suffixes are part of the mark: `TR9-1` and `TR9-2` differ.
-  const token = base.split(/\s+/)[0]
-  return (token || base).toLowerCase()
-}
-
-/** Filenames cannot carry `/`, so Tekla substitutes `_`; the mark is still the same part. */
-export function normalizeMark(mark: string): string {
-  return mark.toLowerCase().replace(/[/_]/g, '')
-}
-
-/**
- * Pieces declared in a Tekla export filename: `<integer> OFF`, e.g.
- * `12095, ITEM 35, SHS 75x75x6, 24 OFF[C].STEP` → 24. Strict on purpose — only a whole number
- * directly followed by `OFF` counts, so a bare number in a mark (`TR9-1`) is never a quantity.
- * STEP content carries no quantity, so this is what a STEP-only article has to go on.
- */
-export function quantityFromFilename(path: string): number | null {
-  const match = baseName(path).match(/(?:^|[^0-9])([0-9]{1,4})\s*off\b/i)
-  if (!match) return null
-  const quantity = Number(match[1])
-  return Number.isInteger(quantity) && quantity > 0 ? quantity : null
-}
-
 const decoder = new TextDecoder('utf-8')
 function decodeText(bytes: Uint8Array): string {
   return decoder.decode(bytes)
@@ -81,20 +57,27 @@ function bytesKey(bytes: Uint8Array): string {
   return `${bytes.length}:${hash >>> 0}`
 }
 
-export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResult {
+export function auditEntries(
+  sourceName: string,
+  entries: ZipEntry[],
+  options?: AuditOptions,
+): AuditResult {
   const findings: Finding[] = []
   const parts = new Map<string, PartRecord>()
   const counts = { nc: 0, step: 0, pdf: 0 }
+  const rules = normalizeStepNameRules(options?.stepNames)
   /** Plain part lists (one row per mark) and assembly part lists are kept apart. */
   let plainPartList: PartListRow[] = []
   const assemblyPartList: PartListRow[] = []
   const seenPartLists = new Set<string>()
 
   const getPart = (mark: string): PartRecord => {
-    let part = parts.get(mark)
+    // Group by comparison key, not the literal spelling: `ITEM 35` and `item35` are one part.
+    const key = markKey(mark)
+    let part = parts.get(key)
     if (!part) {
       part = { mark }
-      parts.set(mark, part)
+      parts.set(key, part)
     }
     return part
   }
@@ -131,8 +114,8 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
       continue
     }
 
-    const mark = markFromFilename(entry.path)
-    const part = getPart(mark)
+    const name = extractStepName(entry.path, rules)
+    const part = getPart(name.mark)
 
     if (kind === 'nc') {
       counts.nc++
@@ -141,7 +124,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
     } else if (kind === 'step') {
       counts.step++
       const step = parseStepFile(entry.path, decodeText(entry.bytes))
-      step.quantity = quantityFromFilename(entry.path)
+      step.quantity = name.quantity
       part.step ??= step
     } else {
       counts.pdf++
@@ -156,9 +139,9 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
   const { expected, assemblies } = aggregatePartList(partList)
 
   for (const part of parts.values()) {
-    const exp = expected.get(part.mark)
+    const exp = expected.get(markKey(part.mark))
     if (exp) part.expected = exp
-    const usage = assemblies.get(part.mark)
+    const usage = assemblies.get(markKey(part.mark))
     if (usage) part.assemblies = usage
 
     // A mark with neither an NC nor a STEP is almost certainly not a laser part
@@ -184,7 +167,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
           params: { file: baseName(part.nc.path), problems: part.nc.problems.join('; ') },
         })
       }
-      if (part.nc.mark && normalizeMark(part.nc.mark) !== normalizeMark(part.mark)) {
+      if (part.nc.mark && markKey(part.nc.mark) !== markKey(part.mark)) {
         findings.push({
           severity: 'warning',
           code: 'NC_MARK_MISMATCH',
@@ -250,7 +233,7 @@ export function auditEntries(sourceName: string, entries: ZipEntry[]): AuditResu
       if (
         part.nc.profile &&
         exp.profile &&
-        part.nc.profile.toLowerCase() !== exp.profile.toLowerCase()
+        profileKey(part.nc.profile) !== profileKey(exp.profile)
       ) {
         findings.push({
           severity: 'warning',

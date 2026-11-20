@@ -1,4 +1,5 @@
 import type { PartListRow } from './schemas'
+import { markKey } from './stepNames'
 import type { AssemblyUsage } from './types'
 
 export interface AggregatedPartList {
@@ -18,7 +19,7 @@ export function aggregatePartList(rows: PartListRow[]): AggregatedPartList {
   for (const row of rows) {
     const part = row.part.trim()
     if (!part) continue
-    const key = part.toLowerCase()
+    const key = markKey(part)
     const group = groups.get(key)
     if (group) group.push(row)
     else groups.set(key, [row])

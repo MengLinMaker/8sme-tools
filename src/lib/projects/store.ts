@@ -1,3 +1,5 @@
+import type { StepNameRules } from '@/lib/audit/stepNames'
+import { normalizeStepNameRules } from '@/lib/audit/stepNames'
 import type { InputBundle } from '@/lib/readInput'
 import type { ZipEntry } from '@/lib/zip'
 import {
@@ -33,6 +35,8 @@ export interface ProjectMeta {
   size: number
   /** How many copies (batches) of the job are being made; planning quantities multiply by this. */
   batches?: number
+  /** Per-job filename rules for reading a STEP name into mark/quantity/section. */
+  stepNames?: StepNameRules
 }
 
 /** A batch count is a positive whole number; anything else means one batch. */
@@ -166,6 +170,8 @@ export async function putProjectFiles(
     size,
     // A file write must not reset how many batches the operator set.
     ...(existing?.batches != null ? { batches: existing.batches } : {}),
+    // Nor the job's filename rules — they are what keeps its parts grouped.
+    ...(existing?.stepNames != null ? { stepNames: existing.stepNames } : {}),
   }
   const tx = db.transaction([META_STORE, FILE_STORE], 'readwrite')
   tx.objectStore(META_STORE).put(meta)
@@ -192,6 +198,24 @@ export async function saveProjectBatches(id: string, batches: number): Promise<P
   const meta = await getProjectMeta(id)
   if (!meta) return null
   const next: ProjectMeta = { ...meta, batches: normalizeBatches(batches) }
+  const db = await openDatabase()
+  const tx = db.transaction(META_STORE, 'readwrite')
+  tx.objectStore(META_STORE).put(next)
+  await finished(tx)
+  return next
+}
+
+/**
+ * Saves the job's filename name rules. Like the batch count, this is a small meta write: changing
+ * how a name is read is a planning decision, not a new save, so `savedAt` is left alone.
+ */
+export async function saveProjectStepNames(
+  id: string,
+  stepNames: Partial<StepNameRules> | null,
+): Promise<ProjectMeta | null> {
+  const meta = await getProjectMeta(id)
+  if (!meta) return null
+  const next: ProjectMeta = { ...meta, stepNames: normalizeStepNameRules(stepNames) }
   const db = await openDatabase()
   const tx = db.transaction(META_STORE, 'readwrite')
   tx.objectStore(META_STORE).put(next)
