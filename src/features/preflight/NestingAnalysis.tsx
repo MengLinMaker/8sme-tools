@@ -74,6 +74,8 @@ export function NestingAnalysis({
   const [error, setError] = useState<string | null>(null)
   const [onlyProblems, setOnlyProblems] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [previewQuery, setPreviewQuery] = useState('')
+  const [onlyUnmatched, setOnlyUnmatched] = useState(false)
 
   const ingest = async (bundle: InputBundle) => {
     const entries = bundle.entries.filter((entry) => NEST_FILE.test(entry.path))
@@ -116,6 +118,18 @@ export function NestingAnalysis({
     () => new Map(summary.names.map((row) => [row.name, row])),
     [summary.names],
   )
+  const previewRows = useMemo(() => {
+    const query = previewQuery.trim().toLowerCase()
+    return matcher.rows.filter((row) => {
+      if (onlyUnmatched && row.matched) return false
+      if (!query) return true
+      return (
+        row.name.toLowerCase().includes(query) ||
+        (row.key ?? '').toLowerCase().includes(query) ||
+        (row.projectMark ?? '').toLowerCase().includes(query)
+      )
+    })
+  }, [matcher.rows, previewQuery, onlyUnmatched])
   const coverage = useMemo(() => {
     const rows: CoverageRow[] = parts.map((part) => {
       const matched = matcher.rows.filter((row) => row.matched && row.projectMark === part.mark)
@@ -210,7 +224,7 @@ export function NestingAnalysis({
               <Stat label={t('preflight.nestingCoverage.over')} value={overMarks} />
             </div>
 
-            <details className="rounded-lg border border-border px-3 py-2">
+            <details open className="rounded-lg border border-border px-3 py-2">
               <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
                 {t('preflight.nestingCoverage.rule')}
               </summary>
@@ -238,6 +252,64 @@ export function NestingAnalysis({
                 {t('preflight.nestingCoverage.ruleHint')}
               </p>
               {matcher.error && <p className="mt-1 text-xs text-red-400">{matcher.error}</p>}
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium">
+                  {t('preflight.nestingCoverage.preview')}
+                </span>
+                <input
+                  value={previewQuery}
+                  onChange={(event) => setPreviewQuery(event.target.value)}
+                  placeholder={t('preflight.nestingCoverage.filterPlaceholder')}
+                  className="h-8 min-w-48 flex-1 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+                />
+                <Toggle pressed={onlyUnmatched} onPressedChange={setOnlyUnmatched}>
+                  {t('preflight.nestingCoverage.onlyUnmatched')}
+                </Toggle>
+                <span className="text-xs text-muted-foreground">
+                  {previewRows.length}/{matcher.rows.length}
+                </span>
+              </div>
+
+              <Table containerClassName="mt-2 max-h-[35vh] overflow-auto">
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>{t('preflight.nestingCoverage.asWritten')}</TableHead>
+                    <TableHead>{t('preflight.nestingCoverage.keyColumn')}</TableHead>
+                    <TableHead>{t('preflight.nestingCoverage.matchColumn')}</TableHead>
+                    <TableHead className="w-px text-right">
+                      {t('preflight.nestingCoverage.quantity')}
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {previewRows.map((row) => (
+                    <TableRow key={row.name}>
+                      <TableCell className="font-mono text-xs">{row.name}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {row.key ?? '—'}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {row.matched ? (
+                          <span className="text-emerald-400">{row.projectMark}</span>
+                        ) : (
+                          <span className="text-amber-400">
+                            {t('preflight.nestingCoverage.noMatch')}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatNumber(namesByName.get(row.name)?.nested ?? 0, 0)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {previewRows.length === 0 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t('preflight.nestingCoverage.previewEmpty')}
+                </p>
+              )}
             </details>
 
             <div className="flex flex-wrap items-center justify-between gap-2">
