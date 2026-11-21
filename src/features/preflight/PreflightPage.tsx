@@ -48,6 +48,7 @@ import { findingOpKey, ncOpForFinding } from '@/lib/audit/fixOps'
 import { AUTO_FIX_CODES, type FixTier, fixTierForCode } from '@/lib/audit/fixTier'
 import { assessManufacturability } from '@/lib/audit/manufacturability'
 import { MASS_BAND_CLASS, MASS_RED_KG, MASS_YELLOW_KG, massBand } from '@/lib/audit/mass'
+import { isNestFile, withoutNestFiles } from '@/lib/audit/nestFiles'
 import {
   filterParts,
   type PartFilterContext,
@@ -681,6 +682,7 @@ function stockThicknessesFor(
 /** Columns of the profiles rollup that can carry the table's sort. */
 type ProfileSortKey = 'profile' | 'marks' | 'pieces' | 'length' | 'mass'
 
+/** The preflight project holds job files only; nestings are counted in the separate tab. */
 export function PreflightPage({ projectId }: { projectId: string }) {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
@@ -770,21 +772,29 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     prebootStepWorkers()
   }, [])
 
-  const handleBundle = useCallback((input: InputBundle) => {
-    setError(null)
-    setBundle(input)
-    setViewing(null)
-    setStepOverrides(new Map())
-    setNcOverrides(new Map())
-    setSelectedMarks(new Set())
-    selectAnchor.current = null
-    setMarkQuery('')
-    setProfileQuery('')
-    setAssemblyFilter(null)
-    setAnalyzing(true)
-    clearViewerModels()
-    setResult(auditEntries(input.sourceName, input.entries, { stepNames: stepNamesRef.current }))
-  }, [])
+  const handleBundle = useCallback(
+    (input: InputBundle) => {
+      const entries = withoutNestFiles(input.entries)
+      if (entries.length === 0) {
+        setError(t('dropzone.nestTab'))
+        return
+      }
+      setError(null)
+      setBundle({ ...input, entries })
+      setViewing(null)
+      setStepOverrides(new Map())
+      setNcOverrides(new Map())
+      setSelectedMarks(new Set())
+      selectAnchor.current = null
+      setMarkQuery('')
+      setProfileQuery('')
+      setAssemblyFilter(null)
+      setAnalyzing(true)
+      clearViewerModels()
+      setResult(auditEntries(input.sourceName, entries, { stepNames: stepNamesRef.current }))
+    },
+    [t],
+  )
 
   /** A planning setting, so save it straight away — it is tiny and has no fix to commit. */
   const changeBatches = useCallback(
@@ -825,11 +835,16 @@ export function PreflightPage({ projectId }: { projectId: string }) {
    */
   const addToBundle = useCallback(
     (input: InputBundle) => {
+      const incoming = withoutNestFiles(input.entries)
+      if (incoming.length === 0) {
+        setError(t('dropzone.nestTab'))
+        return
+      }
       if (!bundle) {
         handleBundle(input)
         return
       }
-      const added = new Map(input.entries.map((entry) => [entry.path, entry]))
+      const added = new Map(incoming.map((entry) => [entry.path, entry]))
       if (added.size === 0) return
       const replaced = bundle.entries.filter((entry) => added.has(entry.path))
       const entries = [
@@ -846,11 +861,11 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       setResolvedFixes((prev) => withoutKeys(prev, marks))
       setResult(auditEntries(bundle.sourceName, entries, { stepNames: stepNamesRef.current }))
       // Only the dropped records are written, so adding a part to a big job stays cheap.
-      void putProjectFiles(projectId, bundle.sourceName, input.entries).catch((err) =>
+      void putProjectFiles(projectId, bundle.sourceName, incoming).catch((err) =>
         setError(err instanceof Error ? err.message : String(err)),
       )
     },
-    [bundle, handleBundle, projectId],
+    [bundle, handleBundle, projectId, t],
   )
 
   /**
@@ -963,6 +978,14 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         const rules = normalizeStepNameRules(meta?.stepNames)
         stepNamesRef.current = rules
         setStepNames(rules)
+        // Nestings belong to the separate counting tab; drop any that earlier builds saved.
+        const storedNests = opened.entries.filter((entry) => isNestFile(entry.path))
+        if (storedNests.length > 0) {
+          void removeProjectFiles(
+            projectId,
+            storedNests.map((entry) => entry.path),
+          ).catch((err) => setError(err instanceof Error ? err.message : String(err)))
+        }
         handleBundle(opened)
         // The fixes travel with the project: NC edits (with their ops), STEP replacements, and the
         // resolved rows that keep their Undo available.

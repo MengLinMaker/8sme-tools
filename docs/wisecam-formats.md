@@ -274,7 +274,9 @@ imported you must change the format (STEP/NCEXA), not the NC bytes.
    NC1 they are the explicit vertex bevel columns; in NCEXA they need the bevel machine mode /
    `machinetype=bevel` and `B`-axis toolpath.
 5. **Quantity** is not in STEP (WiseCAM drops it). It lives in NC1 `ST`, NCEXA
-   `Part.TotalCount`/`Result.PartInfo`, or the `.xlsx` part list.
+   `Part.TotalCount`/`Result.PartInfo`, or the `.xlsx` part list. A nest result's nested
+   quantity is `Σ Result.PartInfo × Result.params.Count`; `pnpm nest-check` verifies it —
+   see **`docs/ncexa-nest-check.md`**.
 6. **Marking/etch** is DSTV `SI` (NC1) or layer 6 打标 (NCEXA); in STEP it must be modelled as
    thin geometry.
 

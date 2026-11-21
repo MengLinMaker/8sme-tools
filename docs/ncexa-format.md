@@ -126,9 +126,13 @@ part* (`docs/wisecam-debugging.md` §9) and will re-compute the toolpath itself.
   contains `cadpart`.
 - **Part** = one physical piece.
 - **BaseZone** = the base/reference zone (references the "base" adobe `idref=94`).
-- **Result** = a finished nest; `PartInfo=(partId,count)…` is the **quantity** payload
-  (what STEP loses), and `ResultName` is human-readable (`…300x90 D8 T16 L10500 R0`).
-  The `_0.svg` alongside it holds the placed instances.
+- **Result** = a finished nest. `PartInfo=(partId,count)…` is the quantity **on one stock
+  bar**, and `Count=` inside `params` is **how many bars** of that layout run. Nested
+  quantity is `Σ(PartInfo count × Count)`; `Part.NestedCount` equals that sum and
+  `Part.TotalCount` is the required quantity. The `count="2"` XML attribute is *not* a
+  quantity multiplier. The `_0.svg` alongside it holds one placed `cadpart` per piece on a
+  bar (never multiplied by `Count`) — verified on all 43 J12095 beam nestings. See
+  **`docs/ncexa-nest-check.md`** for the full model and the checker.
 - `params` throughout is a flat `key=value;` string (not nested XML).
 - **Stance likely lives on `Part`:** `RotateStyle` / `RotateAngle` / `Invert` match WiseCAM's
   **截面工艺** — *旋转截面* (rotate section; auto 90°/45°, or custom for special sections)
@@ -296,6 +300,9 @@ GlobalParam={Cad={OpfExtendMetaData=[[machinetype=straight;]],nMajorAxis=1,nMino
    the nest layout.
 5. (Optional) Parse `CNC/Plate0-1.zua` + `Plate0-Truncate.zua` for WiseCAM's **own**
    reference toolpath — useful to sanity-check our reconstructed cut paths (`B` = rotation).
+6. For quantities, parse `Results` + the `<id>_0.svg` placements — implemented in
+   `src/lib/wisecam/ncexParse.ts` and checked by `pnpm nest-check`
+   (**`docs/ncexa-nest-check.md`**).
 
 ## 9. How we'd generate it (unverified)
 

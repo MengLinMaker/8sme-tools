@@ -119,6 +119,11 @@ maps DSTV faces to machine roles + enforces the cut-side rules.
 ## Toolchain
 
 - `pnpm nc-to-step -i <nc1>` rebuilds STEP from NC (`tools/nc-to-step.mjs`; see `docs/nc-to-step.md`).
+- `pnpm nest-check -i <ncexa|dir> [--job <job.ncexa>]` verifies a WiseCAM nesting's
+  quantities (nested vs `TotalCount`, results vs results SVG, duplicates); see
+  `docs/ncexa-nest-check.md`. In the app, the **Nesting counts** tab counts the pieces under
+  each `Part.Name` as written; it does not match names to the project, and preflight does not
+  store `.ncexa` files.
 - pnpm + Vite + React + TanStack Router + PWA; Tailwind + shadcn-style UI; Biome; Vitest.
 - CAD via `replicad` / `replicad-opencascadejs` (lazy-loaded ~23 MB WASM). Engraving font:
   **Liberation Sans** (SIL OFL) at `public/fonts/`.

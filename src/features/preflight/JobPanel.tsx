@@ -28,6 +28,8 @@ const KIND_LABEL: Record<string, string> = {
   xlsx: 'XLSX',
   xlsm: 'XLSX',
   xls: 'XLSX',
+  ncexa: 'NCEXA',
+  ncex: 'NCEX',
   zip: 'ZIP',
   rar: 'RAR',
 }

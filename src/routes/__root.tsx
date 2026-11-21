@@ -11,7 +11,10 @@ export const Route = createRootRoute({
 })
 
 // The hub lives behind the app title, so it doesn't need its own tab.
-const NAV = [{ to: '/preflight', key: 'common.nav.preflight' }] as const
+const NAV = [
+  { to: '/preflight', key: 'common.nav.preflight' },
+  { to: '/nest', key: 'common.nav.nest' },
+] as const
 
 /**
  * Build version under the title. The dot is the permanent freshness indicator: green while this

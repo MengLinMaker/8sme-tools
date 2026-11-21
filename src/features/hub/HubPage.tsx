@@ -17,6 +17,12 @@ const TOOLS: Tool[] = [
     descriptionKey: 'hub.tools.preflight.description',
     status: 'ready',
   },
+  {
+    to: '/nest',
+    titleKey: 'hub.tools.nest.title',
+    descriptionKey: 'hub.tools.nest.description',
+    status: 'ready',
+  },
 ]
 
 export function HubPage() {

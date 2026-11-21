@@ -3,6 +3,7 @@ export const en = {
     appName: '8SME Tools',
     nav: {
       preflight: 'Preflight',
+      nest: 'Nesting counts',
     },
     language: {
       label: 'Language',
@@ -75,11 +76,54 @@ export const en = {
         description:
           'Drop a job .zip / .rar and validate NC, STEP and PDF files: openability, quantities, and cross-checks against the part list.',
       },
+      nest: {
+        title: 'Nesting Counts',
+        description:
+          'Drop WiseCAM .ncexa nestings and count the pieces under each part name. Names are reported as extracted; no project matching.',
+      },
     },
     status: {
       ready: 'ready',
       planned: 'planned',
     },
+  },
+  nest: {
+    title: 'Nesting counts',
+    subtitle:
+      'Drop WiseCAM .ncexa nestings to count the pieces under each part name WiseCAM stored. Names are shown as extracted; no project matching is attempted.',
+    dropTitle: 'Drop nesting .ncexa files or a folder',
+    chooseFiles: 'Choose .ncexa files',
+    reading: 'Reading nestings…',
+    empty: 'No .ncexa/.ncex files found in that drop.',
+    clear: 'Clear',
+    highlightedNested: '{{count}} nested',
+    summary: {
+      packages: 'Packages',
+      results: 'Results',
+      pieces: 'Pieces',
+      names: 'Names',
+      unnamed: 'Unnamed parts',
+    },
+    files: {
+      title: 'Files',
+      selected: '{{selected}} of {{total}} selected',
+      all: 'All',
+      none: 'None',
+      selectHint: 'Tick at least one nesting to count.',
+      expand: 'Expand {{name}}',
+      collapse: 'Collapse {{name}}',
+    },
+    names: {
+      title: 'Parts',
+      empty: 'No part names were found in these packages.',
+      name: 'Name',
+      nested: 'Nested',
+      packages: 'Nestings',
+      written: 'As written',
+    },
+    noResults: '{{count}} package(s) have no nest results (CAD-only exports).',
+    unnamedHint: '{{count}} part(s) have no Name and are counted separately.',
+    findings: 'Findings',
   },
   dropzone: {
     aria: 'Project input drop zone',
@@ -89,6 +133,8 @@ export const en = {
     chooseFolder: 'Choose folder',
     addTitle: 'Drop files or a folder to add them to this job',
     noFiles: 'No readable NC / STEP / PDF / part-list files found.',
+    nestTab:
+      'Nestings (.ncexa) belong in the Nesting counts tab — they are not stored in the project.',
     unreadable:
       "Couldn't read the dropped item. If it is still inside a .zip, extract it first — or drop the .zip itself. You can also use Choose folder.",
   },
@@ -654,6 +700,7 @@ export const zh = {
     appName: '8SME 工具',
     nav: {
       preflight: '预检',
+      nest: '套料计数',
     },
     language: {
       label: '语言',
@@ -724,11 +771,54 @@ export const zh = {
         description:
           '拖入作业 .zip / .rar，校验 NC、STEP 与 PDF 文件：可打开性、数量，并与零件清单交叉核对。',
       },
+      nest: {
+        title: '套料计数',
+        description:
+          '拖入 WiseCAM .ncexa 套料文件，按零件名统计数量。只报告提取到的名称，不进行项目匹配。',
+      },
     },
     status: {
       ready: '可用',
       planned: '计划中',
     },
+  },
+  nest: {
+    title: '套料计数',
+    subtitle:
+      '拖入 WiseCAM .ncexa 套料文件，按每个零件中 WiseCAM 保存的名称统计件数。名称按提取结果显示，不进行项目匹配。',
+    dropTitle: '拖入 .ncexa 套料文件或文件夹',
+    chooseFiles: '选择 .ncexa 文件',
+    reading: '正在读取套料…',
+    empty: '拖入的内容中没有 .ncexa/.ncex 文件。',
+    clear: '清除',
+    highlightedNested: '已排 {{count}} 件',
+    summary: {
+      packages: '套料包',
+      results: '结果',
+      pieces: '件数',
+      names: '名称数',
+      unnamed: '无名称零件',
+    },
+    files: {
+      title: '文件',
+      selected: '已选 {{selected}} / {{total}}',
+      all: '全选',
+      none: '全不选',
+      selectHint: '至少勾选一个套料包再统计。',
+      expand: '展开 {{name}}',
+      collapse: '折叠 {{name}}',
+    },
+    names: {
+      title: '零件',
+      empty: '这些套料包中没有零件名称。',
+      name: '名称',
+      nested: '已排',
+      packages: '套料包',
+      written: '原始写法',
+    },
+    noResults: '{{count}} 个套料包没有套料结果（仅 CAD 导出）。',
+    unnamedHint: '{{count}} 个零件没有 Name，已单独统计。',
+    findings: '问题',
   },
   dropzone: {
     aria: '项目输入拖放区',
@@ -738,6 +828,7 @@ export const zh = {
     chooseFolder: '选择文件夹',
     addTitle: '拖入文件或文件夹以添加到当前作业',
     noFiles: '未找到可读取的 NC / STEP / PDF / 零件清单文件。',
+    nestTab: '.ncexa 套料文件请使用“套料计数”标签页——它们不会保存到项目中。',
     unreadable:
       '无法读取拖入的项目。若它仍在 .zip 压缩包内，请先解压，或直接拖入 .zip 文件。也可以点击“选择文件夹”。',
   },

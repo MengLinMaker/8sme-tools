@@ -22,9 +22,20 @@ export interface DropZoneProps {
   title?: string
   /** One-line version, for a page that already has a job loaded. */
   compact?: boolean
+  /** File-picker filter (default: job archives). Drag/drop is never filtered. */
+  accept?: string
+  /** Label for the choose-file button (default: the archive label). */
+  chooseLabel?: string
 }
 
-export function DropZone({ onBundle, onError, title, compact }: DropZoneProps) {
+export function DropZone({
+  onBundle,
+  onError,
+  title,
+  compact,
+  accept,
+  chooseLabel,
+}: DropZoneProps) {
   const { t } = useTranslation()
   const [dragging, setDragging] = useState(false)
   const [reading, setReading] = useState(false)
@@ -89,7 +100,7 @@ export function DropZone({ onBundle, onError, title, compact }: DropZoneProps) {
         disabled={reading}
         onClick={() => inputRef.current?.click()}
       >
-        {t('dropzone.chooseZip')}
+        {chooseLabel ?? t('dropzone.chooseZip')}
       </Button>
       <Button
         type="button"
@@ -139,7 +150,7 @@ export function DropZone({ onBundle, onError, title, compact }: DropZoneProps) {
       <input
         ref={inputRef}
         type="file"
-        accept=".zip,.rar"
+        accept={accept ?? '.zip,.rar'}
         hidden
         onChange={(event) => {
           void ingest(() => readFiles(Array.from(event.target.files ?? [])))
