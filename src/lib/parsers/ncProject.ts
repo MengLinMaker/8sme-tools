@@ -13,6 +13,7 @@
  * `normal` for orienting bevel spurs.
  */
 
+import { type Oklch, oklchToHex } from '@/lib/colour'
 import { profileFamily } from '@/lib/sections/canonical'
 import {
   type Axis,
@@ -45,10 +46,28 @@ import {
 
 export type Vec3 = [number, number, number]
 
-/** One colour per distinct cut thickness (indexed by thickness order within a part). */
-export const THICKNESS_COLORS = [
-  0x3ddc84, 0x38bdf8, 0xf59e0b, 0xa78bfa, 0xf87171, 0x22d3ee, 0xfacc15,
-] as const
+/**
+ * One colour per distinct cut thickness (indexed by thickness order within a part), authored in
+ * OKLCH so the hues carry the same perceptual weight.
+ *
+ * The first two are the Nesting counts highlight pair — green, then purple. Copying those hex
+ * tokens made the purple read far dimmer than the green (violet-500 is much darker), so both hold
+ * the *same* lightness and chroma and differ only in hue. The cut lines are unlit, so a colour's
+ * lightness is exactly its on-screen brightness: matching it is what makes them stand out equally
+ * from the grey STEP shell. Everything that colours a cut by thickness (NC and STEP projected
+ * lines, the NCEP IR faces, hole rings and the legend) reads this one palette.
+ */
+const CUT_COLOURS: readonly Oklch[] = [
+  [0.7729, 0.1535, 163.22], // green — the Nesting counts primary highlight
+  [0.7729, 0.1535, 305], // purple — the secondary highlight, same weight as the green
+  [0.7686, 0.1647, 70.08], // amber
+  [0.7253, 0.1752, 349.76], // pink
+  [0.7106, 0.1661, 22.22], // red
+  [0.7971, 0.1339, 211.53], // cyan
+  [0.8606, 0.1731, 91.94], // yellow
+]
+
+export const THICKNESS_COLORS: readonly number[] = CUT_COLOURS.map(oklchToHex)
 
 /** Fixed colours for the non-cut profiles (etch / weld markings). */
 export const ETCH_COLOR = 0xf5f5f5
