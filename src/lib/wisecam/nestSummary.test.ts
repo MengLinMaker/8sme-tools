@@ -62,8 +62,18 @@ describe('summarizeNests', () => {
       ),
     ])
     expect(summary.names).toEqual([
-      { name: 'M_29', nested: 6, files: ['b.ncexa'] },
-      { name: 'M_29 QIE', nested: 6, files: ['a.ncexa'] },
+      {
+        name: 'M_29',
+        nested: 6,
+        files: ['b.ncexa'],
+        sources: [{ file: 'b.ncexa', quantity: 6 }],
+      },
+      {
+        name: 'M_29 QIE',
+        nested: 6,
+        files: ['a.ncexa'],
+        sources: [{ file: 'a.ncexa', quantity: 6 }],
+      },
     ])
     expect(summary.totals).toMatchObject({
       packages: 2,
@@ -103,10 +113,50 @@ describe('summarizeNests', () => {
       ),
     ])
     expect(summary.names).toEqual([
-      { name: 'M_29', nested: 6, files: ['project.ncexa'] },
-      { name: 'M_29 QIE', nested: 0, files: ['beam.ncexa'] },
+      {
+        name: 'M_29',
+        nested: 6,
+        files: ['project.ncexa'],
+        sources: [{ file: 'project.ncexa', quantity: 6 }],
+      },
+      {
+        name: 'M_29 QIE',
+        nested: 0,
+        files: ['beam.ncexa'],
+        sources: [],
+      },
     ])
     expect(summary.findings.map((finding) => finding.code)).toContain('duplicate-result')
+  })
+
+  it('breaks a part total down by each nesting that contributed', () => {
+    const summary = summarizeNests([
+      loaded(
+        'first.ncexa',
+        packageBytes(
+          [{ id: 'p1', name: 'M_40' }],
+          [{ id: 'r1', copies: 2, partInfo: [['p1', 1]] }],
+        ),
+      ),
+      loaded(
+        'second.ncexa',
+        packageBytes(
+          [{ id: 'p2', name: 'M_40' }],
+          [{ id: 'r2', copies: 3, partInfo: [['p2', 1]] }],
+        ),
+      ),
+    ])
+    expect(summary.names).toEqual([
+      {
+        name: 'M_40',
+        nested: 5,
+        files: ['first.ncexa', 'second.ncexa'],
+        sources: [
+          { file: 'second.ncexa', quantity: 3 },
+          { file: 'first.ncexa', quantity: 2 },
+        ],
+      },
+    ])
   })
 
   it('lists extracted names even when a CAD-only package has no results', () => {
@@ -114,7 +164,7 @@ describe('summarizeNests', () => {
       loaded('part.ncexa', packageBytes([{ id: 'p1', name: 'M_29' }], [])),
     ])
     expect(summary.totals.packagesWithoutResults).toBe(1)
-    expect(summary.names).toEqual([{ name: 'M_29', nested: 0, files: ['part.ncexa'] }])
+    expect(summary.names).toEqual([{ name: 'M_29', nested: 0, files: ['part.ncexa'], sources: [] }])
     expect(summary.totals.names).toBe(1)
   })
 })

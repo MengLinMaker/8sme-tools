@@ -15,8 +15,10 @@ export interface NestNameRow {
   name: string
   /** Pieces produced under this name, deduped across packages. */
   nested: number
-  /** Nesting files that contributed pieces. */
+  /** Nesting files that contain the name (even if they contribute 0). */
   files: string[]
+  /** Quantity contributed by each nesting file. */
+  sources: { file: string; quantity: number }[]
 }
 
 export interface NestSummary {
@@ -30,6 +32,10 @@ export interface NestSummary {
     unnamed: number
     packagesWithoutResults: number
   }
+}
+
+function baseName(path: string): string {
+  return path.split('/').pop() ?? path
 }
 
 export function summarizeNests(files: { file: string; package: NcexPackage }[]): NestSummary {
@@ -53,7 +59,23 @@ export function summarizeNests(files: { file: string; package: NcexPackage }[]):
     return mark ? { mark, key: mark } : null
   }
   const report = checkNestSet(files, null, { resolveMark })
-  const nestedByName = new Map(report.aggregate.map((row) => [row.mark, row.nested]))
+  const sourcesByName = new Map<string, Map<string, number>>()
+  const seenResults = new Set<string>()
+  for (const entry of files) {
+    const partsById = new Map(entry.package.parts.map((part) => [part.idref, part]))
+    for (const result of entry.package.results) {
+      if (seenResults.has(result.idref)) continue
+      seenResults.add(result.idref)
+      for (const placement of result.partInfo) {
+        const name = partsById.get(placement.partId)?.name?.trim()
+        const quantity = placement.count * result.copies
+        if (!name || quantity <= 0) continue
+        const byFile = sourcesByName.get(name) ?? new Map<string, number>()
+        byFile.set(entry.file, (byFile.get(entry.file) ?? 0) + quantity)
+        sourcesByName.set(name, byFile)
+      }
+    }
+  }
   const filesByName = new Map<string, Set<string>>()
   let unnamed = 0
   for (const entry of files) {
@@ -63,9 +85,9 @@ export function summarizeNests(files: { file: string; package: NcexPackage }[]):
         unnamed++
         continue
       }
-      const sources = filesByName.get(name) ?? new Set<string>()
-      sources.add(entry.file)
-      filesByName.set(name, sources)
+      const containing = filesByName.get(name) ?? new Set<string>()
+      containing.add(entry.file)
+      filesByName.set(name, containing)
     }
   }
   for (const row of report.aggregate) {
@@ -74,11 +96,21 @@ export function summarizeNests(files: { file: string; package: NcexPackage }[]):
   }
 
   const names: NestNameRow[] = [...filesByName]
-    .map(([name, sources]) => ({
-      name,
-      nested: nestedByName.get(name) ?? 0,
-      files: [...sources],
-    }))
+    .map(([name, containing]) => {
+      const sources = [...(sourcesByName.get(name) ?? [])]
+        .map(([file, quantity]) => ({ file, quantity }))
+        .sort(
+          (a, b) =>
+            b.quantity - a.quantity ||
+            baseName(a.file).localeCompare(baseName(b.file), undefined, { numeric: true }),
+        )
+      return {
+        name,
+        nested: sources.reduce((total, source) => total + source.quantity, 0),
+        files: [...containing],
+        sources,
+      }
+    })
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
 
   const findings = report.findings.filter(

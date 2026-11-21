@@ -1,5 +1,5 @@
 import { Check, ChevronRight, Minus, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DropZone } from '@/components/DropZone'
 import { Badge } from '@/components/ui/badge'
@@ -17,7 +17,13 @@ import { summarizeNests } from '@/lib/wisecam/nestSummary'
 
 type NestSortKey = 'name' | 'nested' | 'packages'
 const EMPTY_FILES: Set<string> = new Set()
-/** Direct hover / folder hover: strong green fill with a thick ring. */
+/**
+ * Direct hover / folder hover: strong green fill with a thick ring.
+ *
+ * These two colours are the source of the 3D cut palette: the first and second cut thicknesses in
+ * the Preflight viewer reuse this green/purple pair, authored in OKLCH at one lightness and chroma
+ * (`CUT_COLOURS` in `lib/parsers/ncProject.ts`) so neither hue reads dimmer than the other.
+ */
 const PRIMARY_ROW = 'bg-emerald-400/35 ring-2 ring-emerald-300'
 /** Matched from the other panel: a distinct violet, one ring, lower fill. */
 const SECONDARY_ROW = 'bg-violet-500/25 ring-1 ring-violet-300/70'
@@ -294,6 +300,7 @@ export function NestPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sort, setSort] = useState<ColumnSort<NestSortKey>>({ key: 'name', dir: 1 })
+  const [expandedParts, setExpandedParts] = useState<Set<string>>(new Set())
   const [hoveredFiles, setHoveredFiles] = useState<Set<string>>(new Set())
   const [hoveredPart, setHoveredPart] = useState<string | null>(null)
 
@@ -394,9 +401,18 @@ export function NestPage() {
   }
   const selectAll = () => setSelected(new Set(packages.map((pkg) => pkg.file)))
   const selectNone = () => setSelected(new Set())
+  const toggleExpanded = (name: string) => {
+    setExpandedParts((current) => {
+      const next = new Set(current)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
   const clear = () => {
     setPackages([])
     setSelected(new Set())
+    setExpandedParts(new Set())
     setError(null)
   }
 
@@ -570,24 +586,86 @@ export function NestPage() {
                           const highlighted =
                             hoveredFiles.size > 0 &&
                             row.files.some((file) => hoveredFiles.has(file))
+                          const expanded = expandedParts.has(row.name)
                           return (
-                            <TableRow
-                              key={row.name}
-                              onMouseEnter={() => setHoveredPart(row.name)}
-                              onMouseLeave={() => setHoveredPart(null)}
-                              className={cn(
-                                'transition-colors',
-                                highlighted && SECONDARY_TABLE_ROW,
+                            <Fragment key={row.name}>
+                              <TableRow
+                                onMouseEnter={() => setHoveredPart(row.name)}
+                                onMouseLeave={() => setHoveredPart(null)}
+                                className={cn(
+                                  'transition-colors',
+                                  highlighted && SECONDARY_TABLE_ROW,
+                                )}
+                              >
+                                <TableCell>
+                                  <div className="flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleExpanded(row.name)}
+                                      aria-expanded={expanded}
+                                      aria-label={t(
+                                        expanded
+                                          ? 'nest.names.hideSources'
+                                          : 'nest.names.showSources',
+                                        { name: row.name },
+                                      )}
+                                      className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                                    >
+                                      <ChevronRight
+                                        className={cn(
+                                          'size-3.5 transition-transform',
+                                          expanded && 'rotate-90',
+                                        )}
+                                      />
+                                    </button>
+                                    <span className="font-mono text-xs">{row.name}</span>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {formatNumber(row.nested, 0)}
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {row.sources.length}
+                                </TableCell>
+                              </TableRow>
+                              {expanded && (
+                                <TableRow
+                                  className="hover:bg-transparent"
+                                  onMouseEnter={() => setHoveredPart(row.name)}
+                                  onMouseLeave={() => setHoveredPart(null)}
+                                >
+                                  <TableCell colSpan={3} className="bg-muted/20 p-0">
+                                    <div className="flex flex-col gap-1 px-8 py-2 text-xs">
+                                      <span className="font-medium text-muted-foreground">
+                                        {t('nest.names.sources')}
+                                      </span>
+                                      {row.sources.length === 0 ? (
+                                        <span className="text-muted-foreground">
+                                          {t('nest.names.noSources')}
+                                        </span>
+                                      ) : (
+                                        row.sources.map((source) => (
+                                          <div
+                                            key={source.file}
+                                            className="flex items-center justify-between gap-4"
+                                          >
+                                            <span
+                                              className="min-w-0 truncate font-mono"
+                                              title={source.file}
+                                            >
+                                              {baseName(source.file)}
+                                            </span>
+                                            <span className="shrink-0 tabular-nums">
+                                              {formatNumber(source.quantity, 0)}
+                                            </span>
+                                          </div>
+                                        ))
+                                      )}
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
                               )}
-                            >
-                              <TableCell className="font-mono text-xs">{row.name}</TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {formatNumber(row.nested, 0)}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {row.files.length}
-                              </TableCell>
-                            </TableRow>
+                            </Fragment>
                           )
                         })}
                       </TableBody>
