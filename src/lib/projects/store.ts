@@ -1,6 +1,7 @@
 import type { StepNameRules } from '@/lib/audit/stepNames'
 import { normalizeStepNameRules } from '@/lib/audit/stepNames'
 import type { InputBundle } from '@/lib/readInput'
+import type { NestNameRule } from '@/lib/wisecam/nestNameRule'
 import type { ZipEntry } from '@/lib/zip'
 import {
   EDIT_STORE,
@@ -37,6 +38,8 @@ export interface ProjectMeta {
   batches?: number
   /** Per-job filename rules for reading a STEP name into mark/quantity/section. */
   stepNames?: StepNameRules
+  /** Per-job rule for extracting project marks from WiseCAM nesting part names. */
+  nestNameRule?: NestNameRule
 }
 
 /** A batch count is a positive whole number; anything else means one batch. */
@@ -172,6 +175,8 @@ export async function putProjectFiles(
     ...(existing?.batches != null ? { batches: existing.batches } : {}),
     // Nor the job's filename rules — they are what keeps its parts grouped.
     ...(existing?.stepNames != null ? { stepNames: existing.stepNames } : {}),
+    // Nor the nesting name rule.
+    ...(existing?.nestNameRule != null ? { nestNameRule: existing.nestNameRule } : {}),
   }
   const tx = db.transaction([META_STORE, FILE_STORE], 'readwrite')
   tx.objectStore(META_STORE).put(meta)
@@ -216,6 +221,21 @@ export async function saveProjectStepNames(
   const meta = await getProjectMeta(id)
   if (!meta) return null
   const next: ProjectMeta = { ...meta, stepNames: normalizeStepNameRules(stepNames) }
+  const db = await openDatabase()
+  const tx = db.transaction(META_STORE, 'readwrite')
+  tx.objectStore(META_STORE).put(next)
+  await finished(tx)
+  return next
+}
+
+/** Saves the nesting name rule. Another small meta write; the project's files are untouched. */
+export async function saveProjectNestNameRule(
+  id: string,
+  rule: NestNameRule,
+): Promise<ProjectMeta | null> {
+  const meta = await getProjectMeta(id)
+  if (!meta) return null
+  const next: ProjectMeta = { ...meta, nestNameRule: rule }
   const db = await openDatabase()
   const tx = db.transaction(META_STORE, 'readwrite')
   tx.objectStore(META_STORE).put(next)

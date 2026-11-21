@@ -115,6 +115,7 @@ import {
   putProjectFiles,
   removeProjectFiles,
   saveProjectBatches,
+  saveProjectNestNameRule,
   saveProjectStepNames,
   takeHandOffProject,
 } from '@/lib/projects/store'
@@ -205,11 +206,13 @@ import {
 } from '@/lib/step/viewerModel'
 import { cn } from '@/lib/utils'
 import { buildNcepFromNc } from '@/lib/wisecam/fromNc'
+import { DEFAULT_NEST_NAME_RULE, type NestNameRule } from '@/lib/wisecam/nestNameRule'
 import { flattenZipEntries } from '@/lib/zip'
 import { DrawingViewer } from './DrawingViewer'
 import { JobPanel } from './JobPanel'
 import { NameRulesDialog } from './NameRulesDialog'
 import { NcLegend } from './NcLegend'
+import { NestingAnalysis } from './NestingAnalysis'
 import { createOrbitBus, requestLocation, requestView, type ViewPreset } from './orbitSync'
 import type { DiffStats } from './PartViewer'
 import {
@@ -710,6 +713,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
    */
   const [stepNames, setStepNames] = useState<StepNameRules>(DEFAULT_STEP_NAME_RULES)
   const stepNamesRef = useRef<StepNameRules>(DEFAULT_STEP_NAME_RULES)
+  const [nestNameRule, setNestNameRule] = useState<NestNameRule>(DEFAULT_NEST_NAME_RULE)
   const [nameRulesOpen, setNameRulesOpen] = useState(false)
   /** Marks ticked in the parts table for the selective PDF/STEP/NC export. */
   const [selectedMarks, setSelectedMarks] = useState<Set<string>>(new Set())
@@ -826,6 +830,17 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       )
     },
     [bundle, projectId],
+  )
+
+  /** Persist the nesting name rule; changing it only affects the coverage card. */
+  const changeNestNameRule = useCallback(
+    (rule: NestNameRule) => {
+      setNestNameRule(rule)
+      void saveProjectNestNameRule(projectId, rule).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
+    },
+    [projectId],
   )
 
   /**
@@ -978,6 +993,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         const rules = normalizeStepNameRules(meta?.stepNames)
         stepNamesRef.current = rules
         setStepNames(rules)
+        setNestNameRule(meta?.nestNameRule ?? DEFAULT_NEST_NAME_RULE)
         // Nestings belong to the separate counting tab; drop any that earlier builds saved.
         const storedNests = opened.entries.filter((entry) => isNestFile(entry.path))
         if (storedNests.length > 0) {
@@ -2667,6 +2683,16 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       part.step?.quantity ??
       1,
     [drawingMaterials],
+  )
+
+  /** Required quantities for the nesting coverage card, including the batch multiplier. */
+  const projectNestParts = useMemo(
+    () =>
+      result?.parts.map((part) => ({
+        mark: part.mark,
+        required: partQty(part) * batches,
+      })) ?? [],
+    [result, partQty, batches],
   )
 
   /**
@@ -5292,6 +5318,14 @@ export function PreflightPage({ projectId }: { projectId: string }) {
             </CardContent>
           )}
         </Card>
+      )}
+
+      {result && result.parts.length > 0 && (
+        <NestingAnalysis
+          parts={projectNestParts}
+          rule={nestNameRule}
+          onRuleChange={changeNestNameRule}
+        />
       )}
 
       <Dialog
