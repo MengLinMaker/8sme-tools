@@ -54,20 +54,23 @@ than once on a bar (e.g. `(1522490,1)(1522490,1)`); those entries add up.
 - Warns when a package has no `<Result>` at all (a CAD-only part export).
 - Shows duplicate/conflicting result findings and parser problems.
 
-No project is loaded and no matching is attempted. Preflight deliberately does **not** store
-`.ncexa` files: drop a folder that also contains them into preflight and they are skipped.
+Preflight stores `.ncexa` files in the project JOB list now, so the **Nesting coverage** card can
+read them after reopening. Re-dropping a file/folder with matching paths replaces those entries.
+A future pass can store a stripped-down summary instead of the raw package.
 
-### Name matching prototype
+### Name matching
 
-The Parts card includes a lab below the counts. Paste project marks (one per line) and tune two
-regexes:
+The **Nesting coverage** card under preflight Parts uses a rule with two regexes:
 
 - **Clean** — global regex; removes `Modified`, `QIE`/`WELD`, or job-specific noise.
 - **Extract** — first non-empty capture group is the key (`ITEM 35` → `item35`, `M_29` → `m-29`).
 
 Keys are lower-cased and `_`/`-` are unified. Matching is exact after that; anything else is
 listed as unmatched, and ambiguous names (two spellings collapsing to one key) are flagged. No
-fuzzy matching is applied.
+fuzzy matching is applied. A live preview (filterable by raw name/key/mark) shows exactly how
+each name resolves; the rule is saved with the project.
+
+The standalone Nesting counts tab keeps the same matcher as a paste-marks lab, below the counts.
 
 ## CLI (optional matching)
 

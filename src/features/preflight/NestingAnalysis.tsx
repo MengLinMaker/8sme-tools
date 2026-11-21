@@ -1,7 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { DropZone } from '@/components/DropZone'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -14,11 +12,10 @@ import {
 import { Toggle } from '@/components/ui/toggle'
 import { NEST_FILE } from '@/lib/audit/nestFiles'
 import { formatNumber } from '@/lib/format'
-import type { InputBundle } from '@/lib/readInput'
-import { yieldToMain } from '@/lib/scheduler'
 import { type NcexPackage, parseNexPackage } from '@/lib/wisecam/ncexParse'
 import { matchNestNames, type NestNameRule } from '@/lib/wisecam/nestNameRule'
 import { summarizeNests } from '@/lib/wisecam/nestSummary'
+import type { ZipEntry } from '@/lib/zip'
 
 export interface ProjectPartQuantity {
   mark: string
@@ -43,6 +40,10 @@ function baseName(path: string): string {
   return path.split('/').pop() ?? path
 }
 
+function looseKey(value: string): string {
+  return value.toLowerCase().replace(/[\s_/,.-]+/g, '')
+}
+
 function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-lg border border-border px-3 py-2">
@@ -55,53 +56,35 @@ function Stat({ label, value }: { label: string; value: number }) {
 /**
  * Nesting coverage for the preflight Parts quantities.
  *
- * The Parts card is the quantity truth; this panel extracts `Part.Name` from dropped `.ncexa`
- * files with the editable rule and compares the matched totals. Files are held in memory only —
- * they never enter the project store.
+ * The Parts card is the quantity truth; nestings live in the project's JOB file list. This panel
+ * extracts `Part.Name` from those `.ncexa` entries with the editable rule and compares the matched
+ * totals.
  */
 export function NestingAnalysis({
   parts,
   rule,
   onRuleChange,
+  entries,
 }: {
   parts: ProjectPartQuantity[]
   rule: NestNameRule
   onRuleChange: (rule: NestNameRule) => void
+  entries: ZipEntry[]
 }) {
   const { t } = useTranslation()
-  const [packages, setPackages] = useState<LoadedPackage[]>([])
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [onlyProblems, setOnlyProblems] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [previewQuery, setPreviewQuery] = useState('')
   const [onlyUnmatched, setOnlyUnmatched] = useState(false)
 
-  const ingest = async (bundle: InputBundle) => {
-    const entries = bundle.entries.filter((entry) => NEST_FILE.test(entry.path))
-    if (entries.length === 0) {
-      setError(t('nest.empty'))
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      const loaded: LoadedPackage[] = []
-      for (const entry of entries) {
-        loaded.push({ file: entry.path, package: parseNexPackage(entry.bytes) })
-        await yieldToMain()
-      }
-      setPackages((current) => {
-        const byPath = new Map(current.map((pkg) => [pkg.file, pkg]))
-        for (const pkg of loaded) byPath.set(pkg.file, pkg)
-        return [...byPath.values()].sort((a, b) => a.file.localeCompare(b.file))
-      })
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setBusy(false)
-    }
-  }
+  const packages = useMemo<LoadedPackage[]>(
+    () =>
+      entries
+        .filter((entry) => NEST_FILE.test(entry.path))
+        .map((entry) => ({ file: entry.path, package: parseNexPackage(entry.bytes) }))
+        .sort((a, b) => a.file.localeCompare(b.file)),
+    [entries],
+  )
 
   const summary = useMemo(() => summarizeNests(packages), [packages])
   const matcher = useMemo(
@@ -163,6 +146,13 @@ export function NestingAnalysis({
   }, [parts, matcher.rows, namesByName])
 
   const unmatched = matcher.rows.filter((row) => !row.matched)
+  const missingRows = matcher.missingProjectMarks.map((mark) => {
+    const key = looseKey(mark)
+    return {
+      mark,
+      candidates: unmatched.filter((row) => looseKey(row.name).includes(key)),
+    }
+  })
   const visible = onlyProblems
     ? coverage.filter((row) => row.missing > 0 || row.over > 0)
     : coverage
@@ -184,34 +174,8 @@ export function NestingAnalysis({
           <CardTitle>{t('preflight.nestingCoverage.title')}</CardTitle>
           <span className="text-sm font-normal text-muted-foreground">({packages.length})</span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            setPackages([])
-            setExpanded(new Set())
-            setError(null)
-          }}
-        >
-          {t('nest.clear')}
-        </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <DropZone
-          compact
-          title={t('preflight.nestingCoverage.dropTitle')}
-          onBundle={(bundle) => void ingest(bundle)}
-          onError={setError}
-          accept=".ncexa,.ncex"
-          chooseLabel={t('nest.chooseFiles')}
-        />
-        {busy && (
-          <p role="status" className="text-sm text-muted-foreground">
-            {t('nest.reading')}
-          </p>
-        )}
-        {error && <p className="text-sm text-red-400">{error}</p>}
-
         {packages.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('preflight.nestingCoverage.empty')}</p>
         ) : (
@@ -437,24 +401,32 @@ export function NestingAnalysis({
                 ))}
               </div>
             )}
-            {matcher.ambiguous.length > 0 && (
-              <div className="flex flex-col gap-1 text-xs text-amber-400">
-                <span className="font-medium">
-                  {t('preflight.nestingCoverage.ambiguous', { count: matcher.ambiguous.length })}
+            {missingRows.length > 0 && (
+              <div className="flex flex-col gap-1 text-xs">
+                <span className="font-medium text-muted-foreground">
+                  {t('preflight.nestingCoverage.missingList', { count: missingRows.length })}
                 </span>
-                {matcher.ambiguous.map((row) => (
-                  <span key={row.key}>
-                    {row.key}: {row.names.join(' · ')}
-                  </span>
+                {missingRows.map((row) => (
+                  <div key={row.mark} className="flex flex-wrap items-baseline gap-1.5">
+                    <span className="font-mono text-amber-400">{row.mark}</span>
+                    {row.candidates.length === 0 ? (
+                      <span className="text-muted-foreground">
+                        {t('preflight.nestingCoverage.notInNestings')}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        {row.candidates
+                          .map((candidate) => {
+                            const files = namesByName.get(candidate.name)?.files ?? []
+                            const where = files.map(baseName).join(', ')
+                            return `${candidate.name}${where ? ` (${where})` : ''}`
+                          })
+                          .join(' · ')}
+                      </span>
+                    )}
+                  </div>
                 ))}
               </div>
-            )}
-            {matcher.missingProjectMarks.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                {t('preflight.nestingCoverage.missingMarks', {
-                  count: matcher.missingProjectMarks.length,
-                })}
-              </p>
             )}
           </>
         )}

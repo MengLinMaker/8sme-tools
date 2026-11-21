@@ -15,7 +15,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { withoutNestFiles } from '@/lib/audit/nestFiles'
 import { formatBytes } from '@/lib/format'
 import {
   deleteProject,
@@ -133,19 +132,13 @@ export function ProjectsPage() {
   const startProject = useCallback(
     async (bundle: InputBundle) => {
       setError(null)
-      const entries = withoutNestFiles(bundle.entries)
-      if (entries.length === 0) {
-        setError(t('dropzone.nestTab'))
-        return
-      }
       setSaving(true)
       try {
-        const job = { ...bundle, entries }
-        const id = projectIdFor(entries)
-        await putProjectFiles(id, job.sourceName, entries)
+        const id = projectIdFor(bundle.entries)
+        await putProjectFiles(id, bundle.sourceName, bundle.entries)
         void requestPersistentStorage()
         // Hand the parsed bundle straight to the project page; it only reads IndexedDB on reload.
-        handOffProject(id, job)
+        handOffProject(id, bundle)
         await navigate({ to: '/preflight/$projectId', params: { projectId: id } })
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
@@ -153,7 +146,7 @@ export function ProjectsPage() {
         setSaving(false)
       }
     },
-    [navigate, t],
+    [navigate],
   )
 
   const openProject = useCallback(

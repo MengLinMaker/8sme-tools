@@ -310,7 +310,14 @@ export function JobPanel({
       {open && (
         <CardContent className="flex flex-col gap-3">
           <BatchInput value={batches} onChange={onBatchesChange} />
-          <DropZone compact title={t('dropzone.addTitle')} onBundle={onAdd} onError={onError} />
+          <DropZone
+            compact
+            title={t('dropzone.addTitle')}
+            onBundle={onAdd}
+            onError={onError}
+            accept=".zip,.rar,.nc1,.nc,.stp,.step,.pdf,.xlsx,.xls,.ncexa,.ncex"
+            chooseLabel={t('dropzone.chooseFiles')}
+          />
           <Table containerClassName="max-h-[50vh] overflow-auto">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
