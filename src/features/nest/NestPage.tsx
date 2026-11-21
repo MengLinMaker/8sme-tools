@@ -14,6 +14,7 @@ import { yieldToMain } from '@/lib/scheduler'
 import { cn } from '@/lib/utils'
 import { type NcexPackage, parseNexPackage } from '@/lib/wisecam/ncexParse'
 import { summarizeNests } from '@/lib/wisecam/nestSummary'
+import { NestMatchPrototype } from './NestMatchPrototype'
 
 type NestSortKey = 'name' | 'nested' | 'packages'
 const EMPTY_FILES: Set<string> = new Set()
@@ -336,6 +337,16 @@ export function NestPage() {
   }
 
   const tree = useMemo(() => buildTree(packages), [packages])
+  const allNames = useMemo(() => {
+    const names = new Set<string>()
+    for (const pkg of packages) {
+      for (const part of pkg.package.parts) {
+        const name = part.name?.trim()
+        if (name) names.add(name)
+      }
+    }
+    return [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+  }, [packages])
   const selectedPackages = useMemo(
     () => packages.filter((pkg) => selected.has(pkg.file)),
     [packages, selected],
@@ -696,6 +707,7 @@ export function NestPage() {
               </CardContent>
             </Card>
           </div>
+          <NestMatchPrototype names={allNames} />
         </div>
       )}
     </div>

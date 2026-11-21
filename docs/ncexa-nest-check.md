@@ -57,6 +57,18 @@ than once on a bar (e.g. `(1522490,1)(1522490,1)`); those entries add up.
 No project is loaded and no matching is attempted. Preflight deliberately does **not** store
 `.ncexa` files: drop a folder that also contains them into preflight and they are skipped.
 
+### Name matching prototype
+
+The Parts card includes a lab below the counts. Paste project marks (one per line) and tune two
+regexes:
+
+- **Clean** — global regex; removes `Modified`, `QIE`/`WELD`, or job-specific noise.
+- **Extract** — first non-empty capture group is the key (`ITEM 35` → `item35`, `M_29` → `m-29`).
+
+Keys are lower-cased and `_`/`-` are unified. Matching is exact after that; anything else is
+listed as unmatched, and ambiguous names (two spellings collapsing to one key) are flagged. No
+fuzzy matching is applied.
+
 ## CLI (optional matching)
 
 The CLI can still compare a package with its own declared `TotalCount`, or a folder against a
