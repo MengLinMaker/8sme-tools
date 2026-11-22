@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -77,14 +77,13 @@ export function NestingAnalysis({
   entries: ZipEntry[]
 }) {
   const { t } = useTranslation()
-  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [selection, setSelection] = useState<Set<string> | null>(null)
   const [hoveredFiles, setHoveredFiles] = useState<Set<string>>(new Set())
   const [hoveredMark, setHoveredMark] = useState<string | null>(null)
   const [onlyProblems, setOnlyProblems] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [previewQuery, setPreviewQuery] = useState('')
   const [onlyUnmatched, setOnlyUnmatched] = useState(false)
-  const knownFiles = useRef<Set<string>>(new Set())
 
   const packages = useMemo<LoadedPackage[]>(
     () =>
@@ -95,17 +94,7 @@ export function NestingAnalysis({
     [entries],
   )
   const paths = useMemo(() => packages.map((pkg) => pkg.file), [packages])
-
-  useEffect(() => {
-    const present = new Set(paths)
-    setSelected((current) => {
-      const next = new Set([...current].filter((path) => present.has(path)))
-      // New files start selected; existing choices are preserved on re-drop/add.
-      for (const path of present) if (!knownFiles.current.has(path)) next.add(path)
-      return next
-    })
-    knownFiles.current = present
-  }, [paths])
+  const selected = useMemo(() => selection ?? new Set(paths), [selection, paths])
 
   const selectedPackages = useMemo(
     () => packages.filter((pkg) => selected.has(pkg.file)),
@@ -189,8 +178,8 @@ export function NestingAnalysis({
   const overMarks = coverage.filter((row) => row.over > 0).length
 
   const toggle = (pathsToToggle: string[], allSelected: boolean) => {
-    setSelected((current) => {
-      const next = new Set(current)
+    setSelection((current) => {
+      const next = new Set(current ?? paths)
       for (const path of pathsToToggle) {
         if (allSelected) next.delete(path)
         else next.add(path)
@@ -208,35 +197,33 @@ export function NestingAnalysis({
   }
 
   return (
-    <Card>
-      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <CardTitle>{t('preflight.nestingCoverage.title')}</CardTitle>
-          <span className="text-sm font-normal text-muted-foreground">
-            {t('preflight.nestingCoverage.selected', {
-              selected: selectedPackages.length,
-              total: packages.length,
-            })}
-          </span>
-        </div>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {packages.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('preflight.nestingCoverage.empty')}</p>
-        ) : (
-          <div className="grid gap-4 lg:grid-cols-[minmax(15rem,0.65fr)_minmax(0,1.35fr)]">
-            <div className="flex flex-col gap-2 rounded-lg border border-border p-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-medium">{t('preflight.nestingCoverage.files')}</span>
-                <div className="flex items-center gap-1">
-                  <Button variant="ghost" size="sm" onClick={() => setSelected(new Set(paths))}>
-                    {t('preflight.nestingCoverage.all')}
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
-                    {t('preflight.nestingCoverage.none')}
-                  </Button>
-                </div>
+    <section className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-base font-semibold">{t('preflight.nestingCoverage.title')}</h2>
+        <span className="text-sm font-normal text-muted-foreground">
+          {t('preflight.nestingCoverage.selected', {
+            selected: selectedPackages.length,
+            total: packages.length,
+          })}
+        </span>
+      </div>
+      {packages.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{t('preflight.nestingCoverage.empty')}</p>
+      ) : (
+        <div className="flex flex-row items-start gap-4">
+          <Card className="w-2/5 min-w-[12rem] shrink-0">
+            <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
+              <CardTitle>{t('preflight.nestingCoverage.files')}</CardTitle>
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="sm" onClick={() => setSelection(new Set(paths))}>
+                  {t('preflight.nestingCoverage.all')}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setSelection(new Set())}>
+                  {t('preflight.nestingCoverage.none')}
+                </Button>
               </div>
+            </CardHeader>
+            <CardContent>
               <div className="max-h-[45vh] overflow-auto">
                 <NestingFileTree
                   paths={paths}
@@ -247,9 +234,14 @@ export function NestingAnalysis({
                   onHoverFiles={(files) => setHoveredFiles(new Set(files))}
                 />
               </div>
-            </div>
+            </CardContent>
+          </Card>
 
-            <div className="flex min-w-0 flex-col gap-4">
+          <Card className="min-w-0 flex-1">
+            <CardHeader>
+              <CardTitle>{t('preflight.nestingCoverage.marks')}</CardTitle>
+            </CardHeader>
+            <CardContent className="flex min-w-0 flex-col gap-4">
               {selectedPackages.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   {t('preflight.nestingCoverage.selectHint')}
@@ -270,7 +262,7 @@ export function NestingAnalysis({
                     <Stat label={t('preflight.nestingCoverage.over')} value={overMarks} />
                   </div>
 
-                  <details open className="rounded-lg border border-border px-3 py-2">
+                  <details className="rounded-lg border border-border px-3 py-2">
                     <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
                       {t('preflight.nestingCoverage.rule')}
                     </summary>
@@ -536,10 +528,10 @@ export function NestingAnalysis({
                   )}
                 </>
               )}
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </section>
   )
 }
