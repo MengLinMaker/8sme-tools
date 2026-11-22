@@ -210,8 +210,8 @@ export function NestingAnalysis({
       {packages.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('preflight.nestingCoverage.empty')}</p>
       ) : (
-        <div className="flex flex-row items-start gap-4">
-          <Card className="w-2/5 min-w-[12rem] shrink-0">
+        <div className="flex h-screen flex-row items-stretch gap-4">
+          <Card className="flex h-full min-h-0 w-2/5 min-w-[12rem] shrink-0 flex-col">
             <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
               <CardTitle>{t('preflight.nestingCoverage.files')}</CardTitle>
               <div className="flex items-center gap-1">
@@ -223,8 +223,8 @@ export function NestingAnalysis({
                 </Button>
               </div>
             </CardHeader>
-            <CardContent>
-              <div className="max-h-[45vh] overflow-auto">
+            <CardContent className="min-h-0 flex-1 overflow-hidden">
+              <div className="h-full overflow-auto">
                 <NestingFileTree
                   paths={paths}
                   selected={selected}
@@ -237,11 +237,11 @@ export function NestingAnalysis({
             </CardContent>
           </Card>
 
-          <Card className="min-w-0 flex-1">
+          <Card className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
             <CardHeader>
               <CardTitle>{t('preflight.nestingCoverage.marks')}</CardTitle>
             </CardHeader>
-            <CardContent className="flex min-w-0 flex-col gap-4">
+            <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-auto">
               {selectedPackages.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   {t('preflight.nestingCoverage.selectHint')}
