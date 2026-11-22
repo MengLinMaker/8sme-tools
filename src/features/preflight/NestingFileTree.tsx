@@ -107,20 +107,57 @@ function TreeCheckbox({
   )
 }
 
+function CutInput({
+  file,
+  planned,
+  cut,
+  onChange,
+}: {
+  file: string
+  planned: number
+  cut: number
+  onChange: (file: string, value: number) => void
+}) {
+  if (planned <= 0) return null
+  return (
+    <span className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+      <input
+        type="number"
+        min={0}
+        step={1}
+        value={cut}
+        onChange={(event) => {
+          const value = Number(event.target.value)
+          onChange(file, Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0)
+        }}
+        aria-label={`Cut count for ${baseName(file)}`}
+        className="h-5 w-10 rounded border border-input bg-transparent px-1 text-right tabular-nums text-foreground outline-none focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-ring"
+      />
+      <span>/{planned}</span>
+    </span>
+  )
+}
+
 function FolderRows({
   folder,
   selected,
   primaryFiles,
   secondaryFiles,
+  plannedByFile,
+  cutByFile,
   onToggle,
   onHoverFiles,
+  onCutChange,
 }: {
   folder: TreeFolder
   selected: Set<string>
   primaryFiles: Set<string>
   secondaryFiles: Set<string>
+  plannedByFile: Map<string, number>
+  cutByFile: Map<string, number>
   onToggle: (paths: string[], allSelected: boolean) => void
   onHoverFiles: (files: string[]) => void
+  onCutChange: (file: string, value: number) => void
 }) {
   const { t } = useTranslation()
   const [collapsed, setCollapsed] = useState(false)
@@ -190,8 +227,11 @@ function FolderRows({
               selected={selected}
               primaryFiles={primaryFiles}
               secondaryFiles={secondaryFiles}
+              plannedByFile={plannedByFile}
+              cutByFile={cutByFile}
               onToggle={onToggle}
               onHoverFiles={onHoverFiles}
+              onCutChange={onCutChange}
             />
           ))}
           {files.map((file) => {
@@ -215,9 +255,15 @@ function FolderRows({
                   label={file.path}
                   onChange={() => onToggle([file.path], selected.has(file.path))}
                 />
-                <span className="min-w-0 truncate font-mono" title={file.path}>
+                <span className="min-w-0 flex-1 truncate font-mono" title={file.path}>
                   {baseName(file.path)}
                 </span>
+                <CutInput
+                  file={file.path}
+                  planned={plannedByFile.get(file.path) ?? 0}
+                  cut={cutByFile.get(file.path) ?? 0}
+                  onChange={onCutChange}
+                />
               </li>
             )
           })}
@@ -232,15 +278,21 @@ export function NestingFileTree({
   selected,
   primaryFiles,
   secondaryFiles,
+  plannedByFile,
+  cutByFile,
   onToggle,
   onHoverFiles,
+  onCutChange,
 }: {
   paths: string[]
   selected: Set<string>
   primaryFiles: Set<string>
   secondaryFiles: Set<string>
+  plannedByFile: Map<string, number>
+  cutByFile: Map<string, number>
   onToggle: (paths: string[], allSelected: boolean) => void
   onHoverFiles: (files: string[]) => void
+  onCutChange: (file: string, value: number) => void
 }) {
   const tree = buildTree(paths)
   return (
@@ -252,8 +304,11 @@ export function NestingFileTree({
           selected={selected}
           primaryFiles={primaryFiles}
           secondaryFiles={secondaryFiles}
+          plannedByFile={plannedByFile}
+          cutByFile={cutByFile}
           onToggle={onToggle}
           onHoverFiles={onHoverFiles}
+          onCutChange={onCutChange}
         />
       ))}
       {tree.files.map((file) => {
@@ -277,9 +332,15 @@ export function NestingFileTree({
               label={file.path}
               onChange={() => onToggle([file.path], selected.has(file.path))}
             />
-            <span className="min-w-0 truncate font-mono" title={file.path}>
+            <span className="min-w-0 flex-1 truncate font-mono" title={file.path}>
               {baseName(file.path)}
             </span>
+            <CutInput
+              file={file.path}
+              planned={plannedByFile.get(file.path) ?? 0}
+              cut={cutByFile.get(file.path) ?? 0}
+              onChange={onCutChange}
+            />
           </li>
         )
       })}

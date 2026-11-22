@@ -65,14 +65,16 @@ describe('summarizeNests', () => {
       {
         name: 'M_29',
         nested: 6,
+        cut: 6,
         files: ['b.ncexa'],
-        sources: [{ file: 'b.ncexa', quantity: 6 }],
+        sources: [{ file: 'b.ncexa', quantity: 6, cut: 6 }],
       },
       {
         name: 'M_29 QIE',
         nested: 6,
+        cut: 6,
         files: ['a.ncexa'],
-        sources: [{ file: 'a.ncexa', quantity: 6 }],
+        sources: [{ file: 'a.ncexa', quantity: 6, cut: 6 }],
       },
     ])
     expect(summary.totals).toMatchObject({
@@ -116,12 +118,14 @@ describe('summarizeNests', () => {
       {
         name: 'M_29',
         nested: 6,
+        cut: 6,
         files: ['project.ncexa'],
-        sources: [{ file: 'project.ncexa', quantity: 6 }],
+        sources: [{ file: 'project.ncexa', quantity: 6, cut: 6 }],
       },
       {
         name: 'M_29 QIE',
         nested: 0,
+        cut: 0,
         files: ['beam.ncexa'],
         sources: [],
       },
@@ -150,13 +154,30 @@ describe('summarizeNests', () => {
       {
         name: 'M_40',
         nested: 5,
+        cut: 5,
         files: ['first.ncexa', 'second.ncexa'],
         sources: [
-          { file: 'second.ncexa', quantity: 3 },
-          { file: 'first.ncexa', quantity: 2 },
+          { file: 'second.ncexa', quantity: 3, cut: 3 },
+          { file: 'first.ncexa', quantity: 2, cut: 2 },
         ],
       },
     ])
+  })
+
+  it('scales planned pieces by the per-file cut count', () => {
+    const pkg = packageBytes(
+      [{ id: 'p1', name: 'M_40' }],
+      [{ id: 'r1', copies: 6, partInfo: [['p1', 1]] }],
+    )
+    const two = summarizeNests([loaded('beam.ncexa', pkg)], { 'beam.ncexa': 2 })
+    expect(two.names[0]).toMatchObject({
+      nested: 6,
+      cut: 2,
+      sources: [{ file: 'beam.ncexa', quantity: 6, cut: 2 }],
+    })
+    const eight = summarizeNests([loaded('beam.ncexa', pkg)], { 'beam.ncexa': 8 })
+    expect(eight.names[0]).toMatchObject({ nested: 6, cut: 8 })
+    expect(eight.totals).toMatchObject({ pieces: 6, cutPieces: 8 })
   })
 
   it('lists extracted names even when a CAD-only package has no results', () => {
@@ -164,7 +185,9 @@ describe('summarizeNests', () => {
       loaded('part.ncexa', packageBytes([{ id: 'p1', name: 'M_29' }], [])),
     ])
     expect(summary.totals.packagesWithoutResults).toBe(1)
-    expect(summary.names).toEqual([{ name: 'M_29', nested: 0, files: ['part.ncexa'], sources: [] }])
+    expect(summary.names).toEqual([
+      { name: 'M_29', nested: 0, cut: 0, files: ['part.ncexa'], sources: [] },
+    ])
     expect(summary.totals.names).toBe(1)
   })
 })

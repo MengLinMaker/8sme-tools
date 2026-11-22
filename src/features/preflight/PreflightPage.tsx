@@ -114,6 +114,7 @@ import {
   putProjectFiles,
   removeProjectFiles,
   saveProjectBatches,
+  saveProjectNestCuts,
   saveProjectNestNameRule,
   saveProjectStepNames,
   takeHandOffProject,
@@ -713,6 +714,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   const [stepNames, setStepNames] = useState<StepNameRules>(DEFAULT_STEP_NAME_RULES)
   const stepNamesRef = useRef<StepNameRules>(DEFAULT_STEP_NAME_RULES)
   const [nestNameRule, setNestNameRule] = useState<NestNameRule>(DEFAULT_NEST_NAME_RULE)
+  const [nestCuts, setNestCuts] = useState<Record<string, number>>({})
   const [nameRulesOpen, setNameRulesOpen] = useState(false)
   /** Marks ticked in the parts table for the selective PDF/STEP/NC export. */
   const [selectedMarks, setSelectedMarks] = useState<Set<string>>(new Set())
@@ -828,6 +830,17 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     (rule: NestNameRule) => {
       setNestNameRule(rule)
       void saveProjectNestNameRule(projectId, rule).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
+    },
+    [projectId],
+  )
+
+  /** Persist the per-file cut counts; they only affect the nesting coverage. */
+  const changeNestCuts = useCallback(
+    (cuts: Record<string, number>) => {
+      setNestCuts(cuts)
+      void saveProjectNestCuts(projectId, cuts).catch((err) =>
         setError(err instanceof Error ? err.message : String(err)),
       )
     },
@@ -980,6 +993,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         stepNamesRef.current = rules
         setStepNames(rules)
         setNestNameRule(meta?.nestNameRule ?? DEFAULT_NEST_NAME_RULE)
+        setNestCuts(meta?.nestCuts ?? {})
         handleBundle(opened)
         // The fixes travel with the project: NC edits (with their ops), STEP replacements, and the
         // resolved rows that keep their Undo available.
@@ -5303,6 +5317,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           parts={projectNestParts}
           rule={nestNameRule}
           onRuleChange={changeNestNameRule}
+          cuts={nestCuts}
+          onCutsChange={changeNestCuts}
           entries={bundle?.entries ?? []}
         />
       )}

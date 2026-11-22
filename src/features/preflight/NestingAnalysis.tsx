@@ -37,9 +37,9 @@ interface CoverageRow {
   mark: string
   required: number
   nested: number
-  missing: number
-  over: number
-  sources: { file: string; quantity: number }[]
+  cut: number
+  diff: number
+  sources: { file: string; quantity: number; cut: number }[]
 }
 
 function baseName(path: string): string {
@@ -69,11 +69,15 @@ export function NestingAnalysis({
   parts,
   rule,
   onRuleChange,
+  cuts,
+  onCutsChange,
   entries,
 }: {
   parts: ProjectPartQuantity[]
   rule: NestNameRule
   onRuleChange: (rule: NestNameRule) => void
+  cuts: Record<string, number>
+  onCutsChange: (cuts: Record<string, number>) => void
   entries: ZipEntry[]
 }) {
   const { t } = useTranslation()
@@ -95,12 +99,29 @@ export function NestingAnalysis({
   )
   const paths = useMemo(() => packages.map((pkg) => pkg.file), [packages])
   const selected = useMemo(() => selection ?? new Set(paths), [selection, paths])
+  const plannedByFile = useMemo(
+    () =>
+      new Map(
+        packages.map((pkg) => [
+          pkg.file,
+          pkg.package.results.reduce((total, result) => total + result.copies, 0),
+        ]),
+      ),
+    [packages],
+  )
+  const cutByFile = useMemo(
+    () => new Map(paths.map((path) => [path, cuts[path] ?? plannedByFile.get(path) ?? 0])),
+    [paths, cuts, plannedByFile],
+  )
 
   const selectedPackages = useMemo(
     () => packages.filter((pkg) => selected.has(pkg.file)),
     [packages, selected],
   )
-  const summary = useMemo(() => summarizeNests(selectedPackages), [selectedPackages])
+  const summary = useMemo(
+    () => summarizeNests(selectedPackages, cutByFile),
+    [selectedPackages, cutByFile],
+  )
   const matcher = useMemo(
     () =>
       matchNestNames(
@@ -131,13 +152,19 @@ export function NestingAnalysis({
     const rows: CoverageRow[] = parts.map((part) => {
       const matched = matcher.rows.filter((row) => row.matched && row.projectMark === part.mark)
       let nested = 0
-      const sources = new Map<string, number>()
+      let cut = 0
+      const sources = new Map<string, { quantity: number; cut: number }>()
       for (const match of matched) {
         const name = namesByName.get(match.name)
         if (!name) continue
         nested += name.nested
+        cut += name.cut
         for (const source of name.sources) {
-          sources.set(source.file, (sources.get(source.file) ?? 0) + source.quantity)
+          const previous = sources.get(source.file) ?? { quantity: 0, cut: 0 }
+          sources.set(source.file, {
+            quantity: previous.quantity + source.quantity,
+            cut: previous.cut + source.cut,
+          })
         }
       }
       const required = Math.max(0, part.required)
@@ -145,10 +172,10 @@ export function NestingAnalysis({
         mark: part.mark,
         required,
         nested,
-        missing: Math.max(0, required - nested),
-        over: Math.max(0, nested - required),
+        cut,
+        diff: cut - required,
         sources: [...sources]
-          .map(([file, quantity]) => ({ file, quantity }))
+          .map(([file, source]) => ({ file, quantity: source.quantity, cut: source.cut }))
           .sort(
             (a, b) =>
               b.quantity - a.quantity ||
@@ -171,11 +198,8 @@ export function NestingAnalysis({
   const secondaryFiles = hoveredRow
     ? new Set(hoveredRow.sources.map((source) => source.file))
     : EMPTY
-  const visible = onlyProblems
-    ? coverage.filter((row) => row.missing > 0 || row.over > 0)
-    : coverage
-  const missingMarks = coverage.filter((row) => row.missing > 0).length
-  const overMarks = coverage.filter((row) => row.over > 0).length
+  const visible = onlyProblems ? coverage.filter((row) => row.diff !== 0) : coverage
+  const diffMarks = coverage.filter((row) => row.diff !== 0).length
 
   const toggle = (pathsToToggle: string[], allSelected: boolean) => {
     setSelection((current) => {
@@ -194,6 +218,9 @@ export function NestingAnalysis({
       else next.add(mark)
       return next
     })
+  }
+  const changeFileCut = (file: string, value: number) => {
+    onCutsChange({ ...cuts, [file]: value })
   }
 
   return (
@@ -230,8 +257,11 @@ export function NestingAnalysis({
                   selected={selected}
                   primaryFiles={hoveredFiles}
                   secondaryFiles={secondaryFiles}
+                  plannedByFile={plannedByFile}
+                  cutByFile={cutByFile}
                   onToggle={toggle}
                   onHoverFiles={(files) => setHoveredFiles(new Set(files))}
+                  onCutChange={changeFileCut}
                 />
               </div>
             </CardContent>
@@ -257,9 +287,12 @@ export function NestingAnalysis({
                       label={t('preflight.nestingCoverage.pieces')}
                       value={summary.totals.pieces}
                     />
+                    <Stat
+                      label={t('preflight.nestingCoverage.cutPieces')}
+                      value={summary.totals.cutPieces}
+                    />
                     <Stat label={t('preflight.nestingCoverage.matched')} value={matcher.matched} />
-                    <Stat label={t('preflight.nestingCoverage.missing')} value={missingMarks} />
-                    <Stat label={t('preflight.nestingCoverage.over')} value={overMarks} />
+                    <Stat label={t('preflight.nestingCoverage.diffMarks')} value={diffMarks} />
                   </div>
 
                   <details className="rounded-lg border border-border px-3 py-2">
@@ -372,10 +405,10 @@ export function NestingAnalysis({
                           {t('preflight.nestingCoverage.nested')}
                         </TableHead>
                         <TableHead className="w-px text-right">
-                          {t('preflight.nestingCoverage.missingQty')}
+                          {t('preflight.nestingCoverage.cutQty')}
                         </TableHead>
                         <TableHead className="w-px text-right">
-                          {t('preflight.nestingCoverage.overQty')}
+                          {t('preflight.nestingCoverage.diff')}
                         </TableHead>
                       </TableRow>
                     </TableHeader>
@@ -423,23 +456,21 @@ export function NestingAnalysis({
                               <TableCell className="text-right tabular-nums">
                                 {formatNumber(row.nested, 0)}
                               </TableCell>
-                              <TableCell
-                                className={
-                                  row.missing > 0
-                                    ? 'text-right font-semibold tabular-nums text-amber-400'
-                                    : 'text-right tabular-nums text-muted-foreground'
-                                }
-                              >
-                                {row.missing > 0 ? formatNumber(row.missing, 0) : '—'}
+                              <TableCell className="text-right tabular-nums">
+                                {formatNumber(row.cut, 0)}
                               </TableCell>
                               <TableCell
                                 className={
-                                  row.over > 0
-                                    ? 'text-right font-semibold tabular-nums text-red-400'
-                                    : 'text-right tabular-nums text-muted-foreground'
+                                  row.diff < 0
+                                    ? 'text-right font-semibold tabular-nums text-amber-400'
+                                    : row.diff > 0
+                                      ? 'text-right font-semibold tabular-nums text-red-400'
+                                      : 'text-right tabular-nums text-muted-foreground'
                                 }
                               >
-                                {row.over > 0 ? `+${formatNumber(row.over, 0)}` : '—'}
+                                {row.diff === 0
+                                  ? '—'
+                                  : `${row.diff > 0 ? '+' : ''}${formatNumber(row.diff, 0)}`}
                               </TableCell>
                             </TableRow>
                             {isExpanded && (
@@ -469,8 +500,12 @@ export function NestingAnalysis({
                                           >
                                             {baseName(source.file)}
                                           </span>
-                                          <span className="shrink-0 tabular-nums">
-                                            {formatNumber(source.quantity, 0)}
+                                          <span
+                                            className="shrink-0 tabular-nums"
+                                            title={t('preflight.nestingCoverage.plannedCut')}
+                                          >
+                                            {formatNumber(source.quantity, 0)} /{' '}
+                                            {formatNumber(source.cut, 0)}
                                           </span>
                                         </div>
                                       ))

@@ -40,6 +40,8 @@ export interface ProjectMeta {
   stepNames?: StepNameRules
   /** Per-job rule for extracting project marks from WiseCAM nesting part names. */
   nestNameRule?: NestNameRule
+  /** Per-file cut count (stock bars actually cut) for the nesting coverage. */
+  nestCuts?: Record<string, number>
 }
 
 /** A batch count is a positive whole number; anything else means one batch. */
@@ -177,6 +179,8 @@ export async function putProjectFiles(
     ...(existing?.stepNames != null ? { stepNames: existing.stepNames } : {}),
     // Nor the nesting name rule.
     ...(existing?.nestNameRule != null ? { nestNameRule: existing.nestNameRule } : {}),
+    // Nor per-file cut counts.
+    ...(existing?.nestCuts != null ? { nestCuts: existing.nestCuts } : {}),
   }
   const tx = db.transaction([META_STORE, FILE_STORE], 'readwrite')
   tx.objectStore(META_STORE).put(meta)
@@ -236,6 +240,21 @@ export async function saveProjectNestNameRule(
   const meta = await getProjectMeta(id)
   if (!meta) return null
   const next: ProjectMeta = { ...meta, nestNameRule: rule }
+  const db = await openDatabase()
+  const tx = db.transaction(META_STORE, 'readwrite')
+  tx.objectStore(META_STORE).put(next)
+  await finished(tx)
+  return next
+}
+
+/** Saves the per-file nesting cut counts. */
+export async function saveProjectNestCuts(
+  id: string,
+  cuts: Record<string, number>,
+): Promise<ProjectMeta | null> {
+  const meta = await getProjectMeta(id)
+  if (!meta) return null
+  const next: ProjectMeta = { ...meta, nestCuts: cuts }
   const db = await openDatabase()
   const tx = db.transaction(META_STORE, 'readwrite')
   tx.objectStore(META_STORE).put(next)

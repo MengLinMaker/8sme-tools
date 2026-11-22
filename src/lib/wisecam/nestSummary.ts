@@ -13,12 +13,14 @@ import { checkNestSet, type NestFinding } from './nestCheck'
 export interface NestNameRow {
   /** Raw `Part.Name` spelling (trimmed). */
   name: string
-  /** Pieces produced under this name, deduped across packages. */
+  /** Planned pieces under this name, deduped across packages. */
   nested: number
+  /** Actually cut pieces, from the per-file cut counts (defaults to planned). */
+  cut: number
   /** Nesting files that contain the name (even if they contribute 0). */
   files: string[]
-  /** Quantity contributed by each nesting file. */
-  sources: { file: string; quantity: number }[]
+  /** Planned and cut quantity contributed by each nesting file. */
+  sources: { file: string; quantity: number; cut: number }[]
 }
 
 export interface NestSummary {
@@ -28,6 +30,7 @@ export interface NestSummary {
     packages: number
     results: number
     pieces: number
+    cutPieces: number
     names: number
     unnamed: number
     packagesWithoutResults: number
@@ -38,7 +41,10 @@ function baseName(path: string): string {
   return path.split('/').pop() ?? path
 }
 
-export function summarizeNests(files: { file: string; package: NcexPackage }[]): NestSummary {
+export function summarizeNests(
+  files: { file: string; package: NcexPackage }[],
+  cutByFile?: Map<string, number> | Record<string, number>,
+): NestSummary {
   if (files.length === 0) {
     return {
       names: [],
@@ -47,6 +53,7 @@ export function summarizeNests(files: { file: string; package: NcexPackage }[]):
         packages: 0,
         results: 0,
         pieces: 0,
+        cutPieces: 0,
         names: 0,
         unnamed: 0,
         packagesWithoutResults: 0,
@@ -58,20 +65,38 @@ export function summarizeNests(files: { file: string; package: NcexPackage }[]):
     const mark = (name ?? '').trim()
     return mark ? { mark, key: mark } : null
   }
+  const cutMap =
+    cutByFile instanceof Map
+      ? cutByFile
+      : cutByFile
+        ? new Map(Object.entries(cutByFile))
+        : new Map<string, number>()
   const report = checkNestSet(files, null, { resolveMark })
-  const sourcesByName = new Map<string, Map<string, number>>()
+  const sourcesByName = new Map<string, Map<string, { quantity: number; cut: number }>>()
   const seenResults = new Set<string>()
   for (const entry of files) {
     const partsById = new Map(entry.package.parts.map((part) => [part.idref, part]))
-    for (const result of entry.package.results) {
-      if (seenResults.has(result.idref)) continue
+    const uniqueResults = entry.package.results.filter((result) => {
+      if (seenResults.has(result.idref)) return false
       seenResults.add(result.idref)
+      return true
+    })
+    // A file's cut count is in stock bars; scale its results proportionally when it has more
+    // than one result. Most exports have one.
+    const plannedBars = uniqueResults.reduce((total, result) => total + result.copies, 0)
+    const cutBars = Math.max(0, cutMap.get(entry.file) ?? plannedBars)
+    const factor = plannedBars > 0 ? cutBars / plannedBars : 0
+    for (const result of uniqueResults) {
       for (const placement of result.partInfo) {
         const name = partsById.get(placement.partId)?.name?.trim()
         const quantity = placement.count * result.copies
         if (!name || quantity <= 0) continue
-        const byFile = sourcesByName.get(name) ?? new Map<string, number>()
-        byFile.set(entry.file, (byFile.get(entry.file) ?? 0) + quantity)
+        const byFile = sourcesByName.get(name) ?? new Map()
+        const previous = byFile.get(entry.file) ?? { quantity: 0, cut: 0 }
+        byFile.set(entry.file, {
+          quantity: previous.quantity + quantity,
+          cut: previous.cut + quantity * factor,
+        })
         sourcesByName.set(name, byFile)
       }
     }
@@ -98,7 +123,7 @@ export function summarizeNests(files: { file: string; package: NcexPackage }[]):
   const names: NestNameRow[] = [...filesByName]
     .map(([name, containing]) => {
       const sources = [...(sourcesByName.get(name) ?? [])]
-        .map(([file, quantity]) => ({ file, quantity }))
+        .map(([file, source]) => ({ file, quantity: source.quantity, cut: source.cut }))
         .sort(
           (a, b) =>
             b.quantity - a.quantity ||
@@ -107,6 +132,7 @@ export function summarizeNests(files: { file: string; package: NcexPackage }[]):
       return {
         name,
         nested: sources.reduce((total, source) => total + source.quantity, 0),
+        cut: sources.reduce((total, source) => total + source.cut, 0),
         files: [...containing],
         sources,
       }
@@ -127,6 +153,7 @@ export function summarizeNests(files: { file: string; package: NcexPackage }[]):
       packages: files.length,
       results: report.summary.distinctResults,
       pieces: names.reduce((total, row) => total + row.nested, 0),
+      cutPieces: names.reduce((total, row) => total + row.cut, 0),
       names: names.length,
       unnamed,
       packagesWithoutResults: files.filter((entry) => entry.package.results.length === 0).length,
