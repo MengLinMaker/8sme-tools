@@ -210,7 +210,7 @@ export function NestingAnalysis({
       {packages.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('preflight.nestingCoverage.empty')}</p>
       ) : (
-        <div className="flex h-screen flex-row items-stretch gap-4">
+        <div className="flex h-dvh flex-row items-stretch gap-4">
           <Card className="flex h-full min-h-0 w-2/5 min-w-[12rem] shrink-0 flex-col">
             <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
               <CardTitle>{t('preflight.nestingCoverage.files')}</CardTitle>
