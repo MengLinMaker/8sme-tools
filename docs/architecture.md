@@ -2,7 +2,9 @@
 
 Decision log for how we compute and render the **overcut / undercut** overlay: comparing the
 manufactured (NC-reconstructed) solid against the STEP ideal. Read with `AGENTS.md`; the raw NC
-facts live in `docs/nc1-dstv-format.md` and `docs/canonical-orientation.md`.
+facts live in `docs/nc1-dstv-format.md` and `docs/canonical-orientation.md`. Adjacent decisions on
+the same job data are recorded here too — §18 explains why nesting cut progress cannot be derived
+from `.ncexa` and must stay manual.
 
 Status labels: **adopted** · **prototype** · **rejected** · **abandoned** · **open**.
 
@@ -689,3 +691,52 @@ B-Rep feature/datum matching. Measured on 8 real parts:
 - A flat is a *run*, an arc is not: sampled fillet/circle chords must not be read as stock planes.
 - ICP's residual is translation-invariant along matched planes — never let a local stage decide a
   pose on its own.
+
+## 18. Nesting cut progress — the plan is not the log
+
+Status: **adopted**. Read before changing the `cut / planned` control in the Nesting coverage card
+(`NestingFileTree.tsx`, `nestSummary.ts`, `nestCuts`).
+
+**Question.** The per-file `14/14` is a typed `cut / planned` pair. Can it become a read-only
+progress readout (1 of 2 bars cut → `1/2`)?
+
+**Answer: no — no file the app reads records how many bars were cut.** Evidence from 129 real
+`.ncexa`/`.ncex` packages on disk (Nov 2026):
+
+- `<Result params>` carries `Utilization / Count / PartInfo / HeadLength / TailLength /
+  ResultName`, and — only in the newer **straight** kernel (`identifier 2.0.0.0`,
+  `cnc_laserzua 6.956.20.0`) — `Processed=0`. 21 results across 8 packages carry it; **every value
+  is `0`**. The **bevel** kernel (`2.0.0.1`, `6.953.9.3`) omits the key entirely.
+- `NW30 TOP.ncexa` (project export, *not* used for CAM): 11 results / 15 bars, `Processed=0` on
+  all. Its per-beam CAM exports (`排样1–11`) carry **no** `Processed`; the `Nesting/` per-beam set
+  carries `Processed=0`.
+- Other candidates are all dead ends: `Result count="2"` is constant (not a quantity),
+  `BaseZone count="0"`, `Part.TotalCount`/`NestedCount` are required/nested (plan, not cut), the
+  CNC side (`PlateN.xml`) only has `from`/`count` (toolpath segments) and `IsCutPoint`,
+  `PlateN-1.zua` is pure toolpath, and `CustomizeData.xml` is empty.
+
+**Where the truth lives: NcStudio counts on the controller, not in the exchange file**
+(`docs/manuals/weihong-fa30a-zh-r20260430.md`):
+
+| mechanism | manual | record |
+|---|---|---|
+| 灵活加工 加工次数 | §3.6.1 | how many times to run one toolpath |
+| 批量加工 queue | §3.6.2 | per-drawing 次数 + state; saved as `TaskListInfo.tld` in `<install>\Tocs\MultiTask`; **重置** clears to 等待加工; **另存为** exports it |
+| 循环加工 完成次数 | §3.6.3 | completed cycles |
+| 运行报告 | §3.7.2 | per item 循环加工次数, exportable as PDF |
+| 日志 | §3.8 | `NcStudio_xxxx.log` run history |
+
+So `j12095` can be cut more times than it is nested: the operator re-runs a per-beam drawing
+(加工次数 / 循环加工), and only the controller sees it. The `.ncexa` stays the plan.
+
+**Consequences (do not re-litigate):**
+
+- **Keep the manual cut amount.** The typed `cut / planned` is the only record the app can hold;
+  it is a log of reality, not a derived readout. Removing it or freezing it read-only loses the
+  only signal.
+- **Do not read `Processed` as progress.** `0` is indistinguishable from "never marked", and no
+  real export has ever shown `1`.
+- **Future source:** import `TaskListInfo.tld` (needs one sample to reverse-engineer) or a run
+  report PDF. Note the `.tld` is a single, overwritten file for the *current* queue, so history
+  beyond the current batch has to come from the reports/logs.
+- See `docs/ncexa-nest-check.md` for the quantity model (`PartInfo × Count`, deduped results).

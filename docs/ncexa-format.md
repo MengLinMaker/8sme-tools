@@ -133,6 +133,10 @@ part* (`docs/wisecam-debugging.md` §9) and will re-compute the toolpath itself.
   quantity multiplier. The `_0.svg` alongside it holds one placed `cadpart` per piece on a
   bar (never multiplied by `Count`) — verified on all 43 J12095 beam nestings. See
   **`docs/ncexa-nest-check.md`** for the full model and the checker.
+  **No cut progress:** the straight kernel (`2.0.0.0`) writes `Processed=0` on every result
+  (never observed non-zero); the bevel kernel omits it. The file is the plan, not the log —
+  NcStudio keeps run counts on the controller (`TaskListInfo.tld`, 运行报告). Decision:
+  **`docs/architecture.md` §18**.
 - `params` throughout is a flat `key=value;` string (not nested XML).
 - **Stance likely lives on `Part`:** `RotateStyle` / `RotateAngle` / `Invert` match WiseCAM's
   **截面工艺** — *旋转截面* (rotate section; auto 90°/45°, or custom for special sections)
