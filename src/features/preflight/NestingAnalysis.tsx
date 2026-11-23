@@ -13,7 +13,7 @@ import {
 import { Toggle } from '@/components/ui/toggle'
 import { NEST_FILE } from '@/lib/audit/nestFiles'
 import { formatNumber } from '@/lib/format'
-import { type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
+import { profileKey } from '@/lib/sections/fromFilename'
 import { cn } from '@/lib/utils'
 import { type NcexPackage, parseNexPackage } from '@/lib/wisecam/ncexParse'
 import { matchNestNames, type NestNameRule } from '@/lib/wisecam/nestNameRule'
@@ -53,38 +53,6 @@ function baseName(path: string): string {
 
 function looseKey(value: string): string {
   return value.toLowerCase().replace(/[\s_/,.-]+/g, '')
-}
-
-function labelFamily(label: string): ProfileFamily | null {
-  return /^ANGLE/i.test(label.trim()) ? 'angle' : profileFamily(label)
-}
-
-function labelNumbers(label: string): number[] {
-  return (label.match(/[0-9]+(?:\.[0-9]+)?/g) ?? []).map(Number)
-}
-
-/**
- * Does a project part belong to a nesting profile?
- *
- * Nesting profiles are export folder labels (`RHS 150x100 T9`, `PFC 150`, `UB 200x29 BT`,
- * `ANGLE 75x75`); parts carry NC/catalogue codes (`RHS150*100*9.0`, `150PFC`, `200UB29.8`,
- * `EA75*75*6`). They never spell the same section the same way, so compare the family and the
- * first nominal numbers (depth/legs + mass for rolled, depth for channel/round) with a 1 mm
- * tolerance — the same nominal size in a different spelling is one profile. A label no family
- * claims (`Mixed`, `Unknown`, `—`) is not scoped, so the table still has something to show.
- */
-function matchesProfile(profile: string, section: string): boolean {
-  const family = labelFamily(profile)
-  if (!family || family !== labelFamily(section)) return family == null
-  const expected = labelNumbers(profile)
-  const actual = labelNumbers(section)
-  const count = family === 'channel' || family === 'round' ? 1 : 2
-  const shared = Math.min(count, expected.length, actual.length)
-  if (shared === 0) return true
-  for (let index = 0; index < shared; index++) {
-    if (Math.abs((expected[index] ?? 0) - (actual[index] ?? 0)) > 1) return false
-  }
-  return true
 }
 
 function Stat({ label, value }: { label: string; value: number }) {
@@ -161,14 +129,6 @@ export function NestingAnalysis({
   )
   const visiblePaths = useMemo(() => scopedPackages.map((pkg) => pkg.file), [scopedPackages])
   const selected = useMemo(() => selection ?? new Set(paths), [selection, paths])
-  /** The marks side is scoped to the same profile as the tree. */
-  const scopedParts = useMemo(
-    () =>
-      activeProfile === 'all'
-        ? parts
-        : parts.filter((part) => matchesProfile(activeProfile, part.profile)),
-    [activeProfile, parts],
-  )
   const plannedByFile = useMemo(
     () =>
       new Map(
@@ -192,14 +152,32 @@ export function NestingAnalysis({
     () => summarizeNests(selectedPackages, cutByFile),
     [selectedPackages, cutByFile],
   )
+  /**
+   * The marks side follows the profile filter. The nesting folder label is not reliable (NW30's
+   * `PFC 150` holds PFC100*50 nests), so attribute parts by the marks the filtered nestings
+   * actually match, then include every part of those sections — that keeps the section's missing
+   * marks in the table instead of hiding them.
+   */
+  const profileParts = useMemo(() => {
+    if (activeProfile === 'all') return parts
+    const base = matchNestNames(
+      summary.names.map((row) => row.name),
+      parts.map((part) => part.mark),
+      rule,
+    )
+    const covered = new Set(base.rows.filter((row) => row.matched).map((row) => row.projectMark))
+    const keys = new Set<string>([profileKey(activeProfile)])
+    for (const part of parts) if (covered.has(part.mark)) keys.add(profileKey(part.profile))
+    return parts.filter((part) => covered.has(part.mark) || keys.has(profileKey(part.profile)))
+  }, [activeProfile, parts, summary.names, rule])
   const matcher = useMemo(
     () =>
       matchNestNames(
         summary.names.map((row) => row.name),
-        scopedParts.map((part) => part.mark),
+        profileParts.map((part) => part.mark),
         rule,
       ),
-    [summary.names, scopedParts, rule],
+    [summary.names, profileParts, rule],
   )
   const namesByName = useMemo(
     () => new Map(summary.names.map((row) => [row.name, row])),
@@ -219,7 +197,7 @@ export function NestingAnalysis({
   }, [matcher.rows, previewQuery, onlyUnmatched])
 
   const coverage = useMemo(() => {
-    const rows: CoverageRow[] = scopedParts.map((part) => {
+    const rows: CoverageRow[] = profileParts.map((part) => {
       const matched = matcher.rows.filter((row) => row.matched && row.projectMark === part.mark)
       let nested = 0
       let cut = 0
@@ -254,7 +232,7 @@ export function NestingAnalysis({
       }
     })
     return rows.sort((a, b) => a.mark.localeCompare(b.mark, undefined, { numeric: true }))
-  }, [scopedParts, matcher.rows, namesByName])
+  }, [profileParts, matcher.rows, namesByName])
 
   const unmatched = matcher.rows.filter((row) => !row.matched)
   const missingRows = matcher.missingProjectMarks.map((mark) => {
@@ -345,7 +323,7 @@ export function NestingAnalysis({
                 value={activeProfile}
                 onChange={(event) => setProfileFilter(event.target.value)}
                 aria-label={t('preflight.nestingCoverage.profileFilter')}
-                className="h-8 w-full max-w-xs rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+                className="h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option value="all">
                   {t('preflight.nestingCoverage.allProfiles', { count: profiles.length })}
