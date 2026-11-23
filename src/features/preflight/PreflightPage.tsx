@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import {
   type CSSProperties,
+  Fragment,
   lazy,
   type ReactNode,
   Suspense,
@@ -59,6 +60,7 @@ import {
 } from '@/lib/audit/partFilter'
 import { listedProfile } from '@/lib/audit/partProfile'
 import { type PartSortKey, sortParts } from '@/lib/audit/partSort'
+import { isRejectedSection, stockSectionLabel } from '@/lib/audit/rejectedSection'
 import { assessRootFilletGeometry, type RootFilletIssue } from '@/lib/audit/rootFillet'
 import {
   DEFAULT_STEP_NAME_RULES,
@@ -2677,16 +2679,6 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     [drawingMaterials],
   )
 
-  /** Required quantities for the nesting coverage card, including the batch multiplier. */
-  const projectNestParts = useMemo(
-    () =>
-      result?.parts.map((part) => ({
-        mark: part.mark,
-        required: partQty(part) * batches,
-      })) ?? [],
-    [result, partQty, batches],
-  )
-
   /**
    * The part's length (mm): drawing is ground truth, then the part list, then the NC, and finally
    * the STEP bounding box's longest extent — so a STEP-only job still reports a length.
@@ -2701,24 +2693,53 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     [drawingMaterials, stepLengths],
   )
 
+  /**
+   * Parts whose section is not a stock section (see {@link isRejectedSection}): `BT…` tee codes
+   * and anything no section family claims. A parent-UB label such as `200UB29.8 (T)` is kept.
+   * Rejected parts stay in the parts table under a collapsed **Rejected** heading, but are
+   * excluded from the job totals, profile rollup, purchase plan and nesting coverage.
+   */
+  const rejectedMarks = useMemo(() => {
+    const marks = new Set<string>()
+    for (const part of result?.parts ?? []) {
+      const profile = listedProfile(part)
+      const label = profile ?? sectionGuesses.get(part.mark)?.label ?? '—'
+      if (isRejectedSection({ profile, label })) marks.add(part.mark)
+    }
+    return marks
+  }, [result, sectionGuesses])
+  /** The parts the job is actually planned from (everything the table does not reject). */
+  const activeParts = useMemo(
+    () => (result?.parts ?? []).filter((part) => !rejectedMarks.has(part.mark)),
+    [result, rejectedMarks],
+  )
+
+  /** Required quantities for the nesting coverage card, including the batch multiplier. */
+  const projectNestParts = useMemo(
+    () =>
+      activeParts.map((part) => ({
+        mark: part.mark,
+        required: partQty(part) * batches,
+      })),
+    [activeParts, partQty, batches],
+  )
+
   /** Total pieces across the job (drawing qty is ground truth, then part list, then NC). */
   const totalQty = useMemo(() => {
-    if (!result) return 0
     let total = 0
-    for (const part of result.parts) total += partQty(part) * batches
+    for (const part of activeParts) total += partQty(part) * batches
     return total
-  }, [result, partQty, batches])
+  }, [activeParts, partQty, batches])
 
   /** Cumulative cut length in mm (qty × length per mark, drawing length is ground truth). */
   const totalLengthMm = useMemo(() => {
-    if (!result) return 0
     let total = 0
-    for (const part of result.parts) {
+    for (const part of activeParts) {
       const length = partLength(part)
       if (length != null) total += partQty(part) * batches * length
     }
     return total
-  }, [result, partLength, partQty, batches])
+  }, [activeParts, partLength, partQty, batches])
 
   /**
    * Per-piece mass (kg) for display. The drawing / part-list WEIGHT is ground truth. When neither
@@ -2756,25 +2777,23 @@ export function PreflightPage({ projectId }: { projectId: string }) {
    */
   const sectionLabel = useCallback(
     (part: PartRecord): string =>
-      // NC / part-list code → section read from STEP geometry.
-      listedProfile(part) ?? sectionGuesses.get(part.mark)?.label ?? '—',
+      // NC / part-list code → section read from STEP geometry. A `(T)` label reads as its parent UB.
+      stockSectionLabel(listedProfile(part) ?? sectionGuesses.get(part.mark)?.label ?? '—'),
     [sectionGuesses],
   )
 
   /** Total mass (kg) across the job — the pickup load (qty × per-piece mass). */
   const totalMassKg = useMemo(() => {
-    if (!result) return 0
     let total = 0
-    for (const part of result.parts) {
+    for (const part of activeParts) {
       const mass = pieceMass(part)
       if (mass != null) total += partQty(part) * batches * mass
     }
     return total
-  }, [result, pieceMass, partQty, batches])
+  }, [activeParts, pieceMass, partQty, batches])
 
   /** Per-profile rollup: pieces, cumulative length and mass, so stock/pickup can be planned. */
   const profileGroups = useMemo(() => {
-    if (!result) return []
     const map = new Map<
       string,
       {
@@ -2788,7 +2807,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         dims: number[]
       }
     >()
-    for (const part of result.parts) {
+    for (const part of activeParts) {
       const label = sectionLabel(part)
       // `200UB25` and `200UB25.4` are the same stock, so they share one profile group.
       const key = profileKey(label)
@@ -2836,17 +2855,15 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         dims: entry.dims,
       }))
       .sort((a, b) => b.lengthMm - a.lengthMm || b.pieces - a.pieces)
-  }, [result, pieceMass, sectionLabel, partQty, partLength, sectionGuesses, batches])
+  }, [activeParts, pieceMass, sectionLabel, partQty, partLength, sectionGuesses, batches])
 
   /**
-   * Purchase groups for the stock calculator. A T is bought as its parent UB (one beam gives two
-   * T bars), so all T profiles that resolve to the same UB are nested together; every other
-   * profile is nested on its own. Quantities carry the job's batch multiplier.
+   * Purchase groups for the stock calculator. Rejected T aliases are already filtered out of
+   * `activeParts`, so each group is a stock profile; quantities carry the job's batch multiplier.
    */
   const purchaseGroups = useMemo(() => {
-    if (!result) return []
     const map = new Map<string, PurchaseGroupInput>()
-    for (const part of result.parts) {
+    for (const part of activeParts) {
       const length = partLength(part)
       const quantity = partQty(part) * batches
       if (length == null || length <= 0 || quantity <= 0) continue
@@ -2886,7 +2903,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     const totalLength = (group: PurchaseGroupInput) =>
       group.pieces.reduce((sum, piece) => sum + piece.lengthMm * piece.quantity, 0)
     return [...map.values()].sort((a, b) => totalLength(b) - totalLength(a))
-  }, [result, partLength, partQty, sectionLabel, sectionGuesses, batches])
+  }, [activeParts, partLength, partQty, sectionLabel, sectionGuesses, batches])
 
   /**
    * One status pill per distinct *active* finding code, so the parts table carries its own triage.
@@ -3214,6 +3231,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   // and parts collapse like an accordion.
   const [profilesOpen, setProfilesOpen] = useState(true)
   const [partsOpen, setPartsOpen] = useState(true)
+  /** Rejected parts stay in the table but collapsed by default, so they don't clutter triage. */
+  const [rejectedOpen, setRejectedOpen] = useState(false)
   /** Free-text filter on the profiles card: a profile designation or a mark inside it. */
   const [profileQuery, setProfileQuery] = useState('')
   /** Profiles open sorted longest-first, the order the stock plan cares about. */
@@ -3431,8 +3450,20 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       )
     }
     if (fixFilter) parts = parts.filter((part) => fixTiersByMark.get(part.mark)?.has(fixFilter))
-    return parts
-  }, [searchedParts, assemblyFilter, fixFilter, fixTiersByMark])
+    // Rejected parts always sit at the bottom, under their own heading, whatever the sort.
+    const active = parts.filter((part) => !rejectedMarks.has(part.mark))
+    const rejected = parts.filter((part) => rejectedMarks.has(part.mark))
+    return [...active, ...rejected]
+  }, [searchedParts, assemblyFilter, fixFilter, fixTiersByMark, rejectedMarks])
+  /** Visible parts that are planned from, and the rejected ones shown in the collapsed group. */
+  const visibleActiveParts = useMemo(
+    () => visibleParts.filter((part) => !rejectedMarks.has(part.mark)),
+    [visibleParts, rejectedMarks],
+  )
+  const visibleRejectedParts = useMemo(
+    () => visibleParts.filter((part) => rejectedMarks.has(part.mark)),
+    [visibleParts, rejectedMarks],
+  )
   const parsedPartQuery = useMemo(() => parsePartQuery(markQuery), [markQuery])
   /** Status chips are single-select; "all" is the absence of a status word. */
   const activeStatus = parsedPartQuery.statuses.length === 1 ? parsedPartQuery.statuses[0] : null
@@ -3484,19 +3515,20 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   )
 
   const allVisibleSelected =
-    visibleParts.length > 0 && visibleParts.every((part) => selectedMarks.has(part.mark))
+    visibleActiveParts.length > 0 &&
+    visibleActiveParts.every((part) => selectedMarks.has(part.mark))
 
   const toggleAllVisible = useCallback(() => {
     setSelectedMarks((prev) => {
       const next = new Set(prev)
-      const everySelected = visibleParts.every((part) => prev.has(part.mark))
-      for (const part of visibleParts) {
+      const everySelected = visibleActiveParts.every((part) => prev.has(part.mark))
+      for (const part of visibleActiveParts) {
         if (everySelected) next.delete(part.mark)
         else next.add(part.mark)
       }
       return next
     })
-  }, [visibleParts])
+  }, [visibleActiveParts])
 
   /** The parts in table order that have something to show in the viewer — the next/prev ring. */
   const viewableParts = useMemo(
@@ -4847,8 +4879,9 @@ export function PreflightPage({ projectId }: { projectId: string }) {
               <CardTitle className="flex flex-wrap items-center gap-2">
                 {t('preflight.parts.title')}
                 <span className="text-sm font-normal text-muted-foreground">
-                  ({visibleParts.length}
-                  {sortedParts.length !== visibleParts.length ? `/${sortedParts.length}` : ''})
+                  ({visibleActiveParts.length}
+                  {activeParts.length !== visibleActiveParts.length ? `/${activeParts.length}` : ''}
+                  )
                 </span>
                 {drawingChecking && (
                   <span className="text-xs font-normal text-muted-foreground">
@@ -5062,247 +5095,277 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                     const section = sectionLabel(part)
                     const sizeCheck = modelChecks.get(part.mark)
                     const sizeFails = failsSize(sizeCheck)
+                    const rejected = rejectedMarks.has(part.mark)
+                    const firstRejected = rejected && part.mark === visibleRejectedParts[0]?.mark
                     return (
-                      <TableRow
-                        key={part.mark}
-                        tabIndex={0}
-                        onClick={() => openPart(part)}
-                        onMouseEnter={() => prefetchPart(part)}
-                        onFocus={() => prefetchPart(part)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault()
-                            openPart(part)
-                          }
-                        }}
-                        className="cursor-pointer outline-none focus-visible:bg-accent/60"
-                      >
-                        <TableCell className="w-8 p-0">
-                          <label
-                            className="flex cursor-pointer items-center justify-center py-2"
-                            onClick={(event) => event.stopPropagation()}
-                            onKeyDown={(event) => event.stopPropagation()}
+                      <Fragment key={part.mark}>
+                        {firstRejected && (
+                          <TableRow className="hover:bg-transparent">
+                            <TableCell colSpan={partColumns.length + 1} className="p-0">
+                              <button
+                                type="button"
+                                onClick={() => setRejectedOpen((open) => !open)}
+                                aria-expanded={rejectedOpen}
+                                className="flex w-full items-center gap-2 bg-muted/50 px-2 py-1.5 text-left text-xs font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                              >
+                                <ChevronDown
+                                  className={cn(
+                                    'size-3.5 shrink-0 transition-transform',
+                                    !rejectedOpen && '-rotate-90',
+                                  )}
+                                />
+                                {t('preflight.parts.rejected', {
+                                  count: visibleRejectedParts.length,
+                                })}
+                                <span className="font-normal opacity-70">
+                                  {t('preflight.parts.rejectedHint')}
+                                </span>
+                              </button>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        {(!rejected || rejectedOpen) && (
+                          <TableRow
+                            tabIndex={0}
+                            onClick={() => openPart(part)}
+                            onMouseEnter={() => prefetchPart(part)}
+                            onFocus={() => prefetchPart(part)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                openPart(part)
+                              }
+                            }}
+                            className="cursor-pointer outline-none focus-visible:bg-accent/60"
                           >
-                            <input
-                              type="checkbox"
-                              checked={selectedMarks.has(part.mark)}
-                              readOnly
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                toggleMark(part.mark, event.shiftKey)
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === ' ' || event.key === 'Enter') {
-                                  event.stopPropagation()
-                                }
-                              }}
-                              aria-label={part.mark}
-                            />
-                          </label>
-                        </TableCell>
-                        <TableCell className="whitespace-nowrap font-mono text-xs">
-                          {/* A span so the row spotlight can fade the sticky cell's
+                            <TableCell className="w-8 p-0">
+                              <label
+                                className="flex cursor-pointer items-center justify-center py-2"
+                                onClick={(event) => event.stopPropagation()}
+                                onKeyDown={(event) => event.stopPropagation()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedMarks.has(part.mark)}
+                                  readOnly
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    toggleMark(part.mark, event.shiftKey)
+                                  }}
+                                  onKeyDown={(event) => {
+                                    if (event.key === ' ' || event.key === 'Enter') {
+                                      event.stopPropagation()
+                                    }
+                                  }}
+                                  aria-label={part.mark}
+                                />
+                              </label>
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap font-mono text-xs">
+                              {/* A span so the row spotlight can fade the sticky cell's
                               contents without fading its opaque background. */}
-                          <span>{part.mark}</span>
-                        </TableCell>
-                        <TableCell className="text-left">
-                          <div className="flex flex-wrap gap-1">
-                            {/* A weld etching is a marker, not a problem: an otherwise clean part
+                              <span>{part.mark}</span>
+                            </TableCell>
+                            <TableCell className="text-left">
+                              <div className="flex flex-wrap gap-1">
+                                {/* A weld etching is a marker, not a problem: an otherwise clean part
                                 is still OK, and the OK filter must keep finding it. */}
-                            {pills.length === 0 && (
-                              <FilterPill
-                                token="ok"
-                                active={isFilterTokenActive('ok')}
-                                title={t('preflight.status.ok')}
-                                onToggle={toggleFilterToken}
-                              >
-                                <Badge variant="success">{t('preflight.status.ok')}</Badge>
-                              </FilterPill>
-                            )}
-                            {pills.map((pill) => {
-                              const tier = fixTier(part, pill.finding)
-                              return (
-                                <FilterPill
-                                  key={pill.code}
-                                  token={pill.code}
-                                  active={isFilterTokenActive(pill.code)}
-                                  title={
-                                    findingText(pill.finding) +
-                                    (tier === 'auto'
-                                      ? ` · ${t('preflight.status.autoFix')}`
-                                      : tier === 'manual'
-                                        ? ` · ${t('preflight.status.fixIndividually')}`
-                                        : '')
-                                  }
-                                  onToggle={toggleFilterToken}
-                                >
-                                  <Badge
-                                    variant={SEVERITY_VARIANT[pill.severity]}
-                                    className="gap-1 font-mono"
+                                {pills.length === 0 && (
+                                  <FilterPill
+                                    token="ok"
+                                    active={isFilterTokenActive('ok')}
+                                    title={t('preflight.status.ok')}
+                                    onToggle={toggleFilterToken}
                                   >
-                                    {tier === 'auto' && (
-                                      <Wand className="size-3 shrink-0" aria-hidden />
-                                    )}
-                                    {tier === 'manual' && (
-                                      <Wrench className="size-3 shrink-0" aria-hidden />
-                                    )}
-                                    {pill.code}
-                                    {pill.count > 1 && ` ×${pill.count}`}
-                                  </Badge>
-                                </FilterPill>
-                              )
-                            })}
-                            {/* Weld etchings are info, not a problem: last, after the findings. */}
-                            {weld && (
+                                    <Badge variant="success">{t('preflight.status.ok')}</Badge>
+                                  </FilterPill>
+                                )}
+                                {pills.map((pill) => {
+                                  const tier = fixTier(part, pill.finding)
+                                  return (
+                                    <FilterPill
+                                      key={pill.code}
+                                      token={pill.code}
+                                      active={isFilterTokenActive(pill.code)}
+                                      title={
+                                        findingText(pill.finding) +
+                                        (tier === 'auto'
+                                          ? ` · ${t('preflight.status.autoFix')}`
+                                          : tier === 'manual'
+                                            ? ` · ${t('preflight.status.fixIndividually')}`
+                                            : '')
+                                      }
+                                      onToggle={toggleFilterToken}
+                                    >
+                                      <Badge
+                                        variant={SEVERITY_VARIANT[pill.severity]}
+                                        className="gap-1 font-mono"
+                                      >
+                                        {tier === 'auto' && (
+                                          <Wand className="size-3 shrink-0" aria-hidden />
+                                        )}
+                                        {tier === 'manual' && (
+                                          <Wrench className="size-3 shrink-0" aria-hidden />
+                                        )}
+                                        {pill.code}
+                                        {pill.count > 1 && ` ×${pill.count}`}
+                                      </Badge>
+                                    </FilterPill>
+                                  )
+                                })}
+                                {/* Weld etchings are info, not a problem: last, after the findings. */}
+                                {weld && (
+                                  <FilterPill
+                                    token="weld"
+                                    active={isFilterTokenActive('weld')}
+                                    title={weldEtchingsTitle(t, weld)}
+                                    onToggle={toggleFilterToken}
+                                  >
+                                    <Badge variant="info" className="gap-1 font-mono">
+                                      {t('preflight.status.weld')}
+                                    </Badge>
+                                  </FilterPill>
+                                )}
+                              </div>
+                            </TableCell>
+                            {assemblyOptions.length > 0 && (
+                              <TableCell className="text-right text-xs">
+                                {part.assemblies && part.assemblies.length > 0 ? (
+                                  <div className="flex flex-wrap justify-end gap-1">
+                                    {part.assemblies.map((usage) => (
+                                      <button
+                                        key={usage.assembly}
+                                        type="button"
+                                        aria-pressed={assemblyFilter === usage.assembly}
+                                        title={t('preflight.qty.assemblyTitle', {
+                                          assembly: usage.assembly,
+                                          qty: usage.qtyPerAssembly,
+                                          count: usage.assemblyQty,
+                                          total: usage.total,
+                                        })}
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          setAssemblyFilter((current) =>
+                                            current === usage.assembly ? null : usage.assembly,
+                                          )
+                                        }}
+                                        className={cn(
+                                          'cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                          assemblyFilter === usage.assembly &&
+                                            'ring-2 ring-ring ring-offset-1 ring-offset-card',
+                                        )}
+                                      >
+                                        <Badge variant="muted" className="font-mono">
+                                          {usage.assembly}
+                                        </Badge>
+                                      </button>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
+                              </TableCell>
+                            )}
+                            <TableCell
+                              className={cn(
+                                'whitespace-nowrap text-right tabular-nums',
+                                !assemblyUsage &&
+                                  qtyMismatch &&
+                                  'font-semibold text-destructive-foreground',
+                              )}
+                              title={
+                                assemblyUsage
+                                  ? t('preflight.qty.assemblyTitle', {
+                                      assembly: assemblyUsage.assembly,
+                                      qty: assemblyUsage.qtyPerAssembly,
+                                      count: assemblyUsage.assemblyQty,
+                                      total: assemblyUsage.total,
+                                    })
+                                  : !qtyKnown
+                                    ? t('preflight.qty.unknownTitle')
+                                    : qtyMismatch
+                                      ? t('preflight.qty.mismatchTitle', { nc: ncQty, pdf: pdfQty })
+                                      : qtyFallback
+                                        ? t('preflight.qty.fallbackTitle')
+                                        : stepQtyFallback
+                                          ? t('preflight.qty.stepFallbackTitle')
+                                          : undefined
+                              }
+                            >
+                              {assemblyUsage?.total ?? pdfQty ?? ncQty ?? stepQty ?? '?'}
+                              {!assemblyUsage && qtyMismatch && (
+                                <span className="ml-1 text-xs">≠ {ncQty}</span>
+                              )}
+                              {!assemblyUsage && qtyFallback && (
+                                <span className="ml-1 text-xs text-muted-foreground">(NC)</span>
+                              )}
+                            </TableCell>
+                            <TableCell
+                              className={cn(
+                                'whitespace-nowrap text-right font-mono text-xs tabular-nums',
+                                band && MASS_BAND_CLASS[band],
+                              )}
+                              title={
+                                band === 'red'
+                                  ? t('preflight.mass.heavy', { kg: MASS_RED_KG })
+                                  : band === 'yellow'
+                                    ? t('preflight.mass.medium', { kg: MASS_YELLOW_KG })
+                                    : undefined
+                              }
+                            >
+                              {mass != null ? mass.toFixed(1) : '—'}
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap text-right font-mono text-xs">
                               <FilterPill
-                                token="weld"
-                                active={isFilterTokenActive('weld')}
-                                title={weldEtchingsTitle(t, weld)}
+                                token={section}
+                                active={isFilterTokenActive(section)}
+                                title={t('preflight.columns.profile')}
                                 onToggle={toggleFilterToken}
                               >
-                                <Badge variant="info" className="gap-1 font-mono">
-                                  {t('preflight.status.weld')}
+                                <Badge variant="muted" className="font-mono">
+                                  {section}
                                 </Badge>
                               </FilterPill>
-                            )}
-                          </div>
-                        </TableCell>
-                        {assemblyOptions.length > 0 && (
-                          <TableCell className="text-right text-xs">
-                            {part.assemblies && part.assemblies.length > 0 ? (
-                              <div className="flex flex-wrap justify-end gap-1">
-                                {part.assemblies.map((usage) => (
-                                  <button
-                                    key={usage.assembly}
-                                    type="button"
-                                    aria-pressed={assemblyFilter === usage.assembly}
-                                    title={t('preflight.qty.assemblyTitle', {
-                                      assembly: usage.assembly,
-                                      qty: usage.qtyPerAssembly,
-                                      count: usage.assemblyQty,
-                                      total: usage.total,
-                                    })}
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      setAssemblyFilter((current) =>
-                                        current === usage.assembly ? null : usage.assembly,
-                                      )
-                                    }}
-                                    className={cn(
-                                      'cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                                      assemblyFilter === usage.assembly &&
-                                        'ring-2 ring-ring ring-offset-1 ring-offset-card',
-                                    )}
-                                  >
-                                    <Badge variant="muted" className="font-mono">
-                                      {usage.assembly}
-                                    </Badge>
-                                  </button>
-                                ))}
-                              </div>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </TableCell>
-                        )}
-                        <TableCell
-                          className={cn(
-                            'whitespace-nowrap text-right tabular-nums',
-                            !assemblyUsage &&
-                              qtyMismatch &&
-                              'font-semibold text-destructive-foreground',
-                          )}
-                          title={
-                            assemblyUsage
-                              ? t('preflight.qty.assemblyTitle', {
-                                  assembly: assemblyUsage.assembly,
-                                  qty: assemblyUsage.qtyPerAssembly,
-                                  count: assemblyUsage.assemblyQty,
-                                  total: assemblyUsage.total,
-                                })
-                              : !qtyKnown
-                                ? t('preflight.qty.unknownTitle')
-                                : qtyMismatch
-                                  ? t('preflight.qty.mismatchTitle', { nc: ncQty, pdf: pdfQty })
-                                  : qtyFallback
-                                    ? t('preflight.qty.fallbackTitle')
-                                    : stepQtyFallback
-                                      ? t('preflight.qty.stepFallbackTitle')
-                                      : undefined
-                          }
-                        >
-                          {assemblyUsage?.total ?? pdfQty ?? ncQty ?? stepQty ?? '?'}
-                          {!assemblyUsage && qtyMismatch && (
-                            <span className="ml-1 text-xs">≠ {ncQty}</span>
-                          )}
-                          {!assemblyUsage && qtyFallback && (
-                            <span className="ml-1 text-xs text-muted-foreground">(NC)</span>
-                          )}
-                        </TableCell>
-                        <TableCell
-                          className={cn(
-                            'whitespace-nowrap text-right font-mono text-xs tabular-nums',
-                            band && MASS_BAND_CLASS[band],
-                          )}
-                          title={
-                            band === 'red'
-                              ? t('preflight.mass.heavy', { kg: MASS_RED_KG })
-                              : band === 'yellow'
-                                ? t('preflight.mass.medium', { kg: MASS_YELLOW_KG })
-                                : undefined
-                          }
-                        >
-                          {mass != null ? mass.toFixed(1) : '—'}
-                        </TableCell>
-                        <TableCell className="whitespace-nowrap text-right font-mono text-xs">
-                          <FilterPill
-                            token={section}
-                            active={isFilterTokenActive(section)}
-                            title={t('preflight.columns.profile')}
-                            onToggle={toggleFilterToken}
-                          >
-                            <Badge variant="muted" className="font-mono">
-                              {section}
-                            </Badge>
-                          </FilterPill>
-                        </TableCell>
-                        <TableCell className="whitespace-nowrap text-right text-xs">
-                          {overrideFor(part) ? (
-                            <Badge variant="success">
-                              {overrideFor(part)?.kind
-                                ? t(`common.fix.${overrideFor(part)?.kind}`)
-                                : ''}
-                            </Badge>
-                          ) : sizeCheck ? (
-                            <span
-                              // On a mismatch the colour moves to the failing dimension, so the
-                              // rest of the triple fades back and the wrong number stands out.
-                              className={cn(
-                                'inline-flex flex-col items-end leading-tight',
-                                !sizeFails && sizeCheckTone(sizeCheck),
-                              )}
-                              title={sizeCheckTitle(t, sizeCheck)}
-                            >
-                              {sizeSegments(t, sizeCheck).map((segment) => (
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap text-right text-xs">
+                              {overrideFor(part) ? (
+                                <Badge variant="success">
+                                  {overrideFor(part)?.kind
+                                    ? t(`common.fix.${overrideFor(part)?.kind}`)
+                                    : ''}
+                                </Badge>
+                              ) : sizeCheck ? (
                                 <span
-                                  key={segment.dim}
-                                  className={
-                                    sizeFails
-                                      ? segment.bad
-                                        ? 'font-semibold text-amber-400'
-                                        : 'text-muted-foreground'
-                                      : undefined
-                                  }
+                                  // On a mismatch the colour moves to the failing dimension, so the
+                                  // rest of the triple fades back and the wrong number stands out.
+                                  className={cn(
+                                    'inline-flex flex-col items-end leading-tight',
+                                    !sizeFails && sizeCheckTone(sizeCheck),
+                                  )}
+                                  title={sizeCheckTitle(t, sizeCheck)}
                                 >
-                                  {segment.text}
+                                  {sizeSegments(t, sizeCheck).map((segment) => (
+                                    <span
+                                      key={segment.dim}
+                                      className={
+                                        sizeFails
+                                          ? segment.bad
+                                            ? 'font-semibold text-amber-400'
+                                            : 'text-muted-foreground'
+                                          : undefined
+                                      }
+                                    >
+                                      {segment.text}
+                                    </span>
+                                  ))}
                                 </span>
-                              ))}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
+                              ) : (
+                                <span className="text-muted-foreground">—</span>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </Fragment>
                     )
                   })}
                 </TableBody>
