@@ -2714,16 +2714,6 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     [result, rejectedMarks],
   )
 
-  /** Required quantities for the nesting coverage card, including the batch multiplier. */
-  const projectNestParts = useMemo(
-    () =>
-      activeParts.map((part) => ({
-        mark: part.mark,
-        required: partQty(part) * batches,
-      })),
-    [activeParts, partQty, batches],
-  )
-
   /** Total pieces across the job (drawing qty is ground truth, then part list, then NC). */
   const totalQty = useMemo(() => {
     let total = 0
@@ -2780,6 +2770,17 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       // NC / part-list code → section read from STEP geometry. A `(T)` label reads as its parent UB.
       stockSectionLabel(listedProfile(part) ?? sectionGuesses.get(part.mark)?.label ?? '—'),
     [sectionGuesses],
+  )
+
+  /** Required quantities for the nesting coverage card, including the batch multiplier. */
+  const projectNestParts = useMemo(
+    () =>
+      activeParts.map((part) => ({
+        mark: part.mark,
+        required: partQty(part) * batches,
+        profile: sectionLabel(part),
+      })),
+    [activeParts, partQty, batches, sectionLabel],
   )
 
   /** Total mass (kg) across the job — the pickup load (qty × per-piece mass). */

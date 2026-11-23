@@ -107,6 +107,11 @@ function TreeCheckbox({
   )
 }
 
+/**
+ * Bars actually cut, typed by the operator. The `.ncexa` has no cut-progress field, and NcStudio
+ * keeps its counts on the controller (`TaskListInfo.tld` / run report), so this is the only
+ * record the app can hold — see `docs/architecture.md` §18.
+ */
 function CutInput({
   file,
   planned,
@@ -180,8 +185,8 @@ function FolderRows({
         onMouseEnter={() => onHoverFiles(folder.descendants)}
         onMouseLeave={() => onHoverFiles([])}
         className={cn(
-          'm-0 flex min-w-0 items-center gap-1.5 rounded border-0 p-0 px-1 py-0.5 text-xs transition-colors',
-          secondary && 'bg-violet-500/25 ring-1 ring-violet-300/70',
+          'm-0 flex w-full min-w-0 items-center gap-1.5 rounded border-0 p-0 px-1 py-0.5 text-xs transition-colors',
+          secondary && 'bg-violet-500/25 ring-1 ring-inset ring-violet-300/70',
           !secondary && 'hover:bg-accent/50',
         )}
       >
@@ -244,8 +249,8 @@ function FolderRows({
                 onMouseLeave={() => onHoverFiles([])}
                 className={cn(
                   'flex items-center gap-1.5 rounded px-1 py-0.5 text-xs transition-colors',
-                  primary && 'bg-emerald-400/35 ring-2 ring-emerald-300',
-                  isSecondary && 'bg-violet-500/25 ring-1 ring-violet-300/70',
+                  primary && 'bg-emerald-400/35 ring-2 ring-inset ring-emerald-300',
+                  isSecondary && 'bg-violet-500/25 ring-1 ring-inset ring-violet-300/70',
                   !primary && !isSecondary && 'hover:bg-accent/50',
                 )}
               >
@@ -321,8 +326,8 @@ export function NestingFileTree({
             onMouseLeave={() => onHoverFiles([])}
             className={cn(
               'flex items-center gap-1.5 rounded px-1 py-0.5 text-xs transition-colors',
-              primary && 'bg-emerald-400/35 ring-2 ring-emerald-300',
-              isSecondary && 'bg-violet-500/25 ring-1 ring-violet-300/70',
+              primary && 'bg-emerald-400/35 ring-2 ring-inset ring-emerald-300',
+              isSecondary && 'bg-violet-500/25 ring-1 ring-inset ring-violet-300/70',
               !primary && !isSecondary && 'hover:bg-accent/50',
             )}
           >

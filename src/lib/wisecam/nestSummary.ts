@@ -15,7 +15,10 @@ export interface NestNameRow {
   name: string
   /** Planned pieces under this name, deduped across packages. */
   nested: number
-  /** Actually cut pieces, from the per-file cut counts (defaults to planned). */
+  /**
+   * Actually cut pieces, from the per-file cut counts (defaults to planned). These are
+   * operator-entered: `.ncexa` carries no cut state — see `docs/architecture.md` §18.
+   */
   cut: number
   /** Nesting files that contain the name (even if they contribute 0). */
   files: string[]

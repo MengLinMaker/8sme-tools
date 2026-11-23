@@ -13,6 +13,7 @@ import {
 import { Toggle } from '@/components/ui/toggle'
 import { NEST_FILE } from '@/lib/audit/nestFiles'
 import { formatNumber } from '@/lib/format'
+import { type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
 import { cn } from '@/lib/utils'
 import { type NcexPackage, parseNexPackage } from '@/lib/wisecam/ncexParse'
 import { matchNestNames, type NestNameRule } from '@/lib/wisecam/nestNameRule'
@@ -27,6 +28,8 @@ const EMPTY: Set<string> = new Set()
 export interface ProjectPartQuantity {
   mark: string
   required: number
+  /** The part's section label (parts-table PROFILE), used to scope the profile filter. */
+  profile: string
 }
 
 interface LoadedPackage {
@@ -52,9 +55,41 @@ function looseKey(value: string): string {
   return value.toLowerCase().replace(/[\s_/,.-]+/g, '')
 }
 
+function labelFamily(label: string): ProfileFamily | null {
+  return /^ANGLE/i.test(label.trim()) ? 'angle' : profileFamily(label)
+}
+
+function labelNumbers(label: string): number[] {
+  return (label.match(/[0-9]+(?:\.[0-9]+)?/g) ?? []).map(Number)
+}
+
+/**
+ * Does a project part belong to a nesting profile?
+ *
+ * Nesting profiles are export folder labels (`RHS 150x100 T9`, `PFC 150`, `UB 200x29 BT`,
+ * `ANGLE 75x75`); parts carry NC/catalogue codes (`RHS150*100*9.0`, `150PFC`, `200UB29.8`,
+ * `EA75*75*6`). They never spell the same section the same way, so compare the family and the
+ * first nominal numbers (depth/legs + mass for rolled, depth for channel/round) with a 1 mm
+ * tolerance — the same nominal size in a different spelling is one profile. A label no family
+ * claims (`Mixed`, `Unknown`, `—`) is not scoped, so the table still has something to show.
+ */
+function matchesProfile(profile: string, section: string): boolean {
+  const family = labelFamily(profile)
+  if (!family || family !== labelFamily(section)) return family == null
+  const expected = labelNumbers(profile)
+  const actual = labelNumbers(section)
+  const count = family === 'channel' || family === 'round' ? 1 : 2
+  const shared = Math.min(count, expected.length, actual.length)
+  if (shared === 0) return true
+  for (let index = 0; index < shared; index++) {
+    if (Math.abs((expected[index] ?? 0) - (actual[index] ?? 0)) > 1) return false
+  }
+  return true
+}
+
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-lg border border-border px-3 py-2">
+    <div className="min-w-32 rounded-lg border border-border px-3 py-2">
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="text-xl font-semibold">{formatNumber(value, 0)}</div>
     </div>
@@ -118,14 +153,22 @@ export function NestingAnalysis({
   const activeProfile = profiles.some((entry) => entry.profile === profileFilter)
     ? profileFilter
     : 'all'
-  const visiblePaths = useMemo(
+  /** The profile filter scopes both columns: the file tree and the marks coverage. */
+  const scopedPackages = useMemo(
+    () =>
+      activeProfile === 'all' ? packages : packages.filter((pkg) => pkg.profile === activeProfile),
+    [activeProfile, packages],
+  )
+  const visiblePaths = useMemo(() => scopedPackages.map((pkg) => pkg.file), [scopedPackages])
+  const selected = useMemo(() => selection ?? new Set(paths), [selection, paths])
+  /** The marks side is scoped to the same profile as the tree. */
+  const scopedParts = useMemo(
     () =>
       activeProfile === 'all'
-        ? paths
-        : packages.filter((pkg) => pkg.profile === activeProfile).map((pkg) => pkg.file),
-    [activeProfile, packages, paths],
+        ? parts
+        : parts.filter((part) => matchesProfile(activeProfile, part.profile)),
+    [activeProfile, parts],
   )
-  const selected = useMemo(() => selection ?? new Set(paths), [selection, paths])
   const plannedByFile = useMemo(
     () =>
       new Map(
@@ -142,8 +185,8 @@ export function NestingAnalysis({
   )
 
   const selectedPackages = useMemo(
-    () => packages.filter((pkg) => selected.has(pkg.file)),
-    [packages, selected],
+    () => scopedPackages.filter((pkg) => selected.has(pkg.file)),
+    [scopedPackages, selected],
   )
   const summary = useMemo(
     () => summarizeNests(selectedPackages, cutByFile),
@@ -153,10 +196,10 @@ export function NestingAnalysis({
     () =>
       matchNestNames(
         summary.names.map((row) => row.name),
-        parts.map((part) => part.mark),
+        scopedParts.map((part) => part.mark),
         rule,
       ),
-    [summary.names, parts, rule],
+    [summary.names, scopedParts, rule],
   )
   const namesByName = useMemo(
     () => new Map(summary.names.map((row) => [row.name, row])),
@@ -176,7 +219,7 @@ export function NestingAnalysis({
   }, [matcher.rows, previewQuery, onlyUnmatched])
 
   const coverage = useMemo(() => {
-    const rows: CoverageRow[] = parts.map((part) => {
+    const rows: CoverageRow[] = scopedParts.map((part) => {
       const matched = matcher.rows.filter((row) => row.matched && row.projectMark === part.mark)
       let nested = 0
       let cut = 0
@@ -211,7 +254,7 @@ export function NestingAnalysis({
       }
     })
     return rows.sort((a, b) => a.mark.localeCompare(b.mark, undefined, { numeric: true }))
-  }, [parts, matcher.rows, namesByName])
+  }, [scopedParts, matcher.rows, namesByName])
 
   const unmatched = matcher.rows.filter((row) => !row.matched)
   const missingRows = matcher.missingProjectMarks.map((mark) => {
@@ -257,15 +300,15 @@ export function NestingAnalysis({
         <span className="text-sm font-normal text-muted-foreground">
           {t('preflight.nestingCoverage.selected', {
             selected: selectedPackages.length,
-            total: packages.length,
+            total: scopedPackages.length,
           })}
         </span>
       </div>
       {packages.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('preflight.nestingCoverage.empty')}</p>
       ) : (
-        <div className="flex h-dvh flex-row items-stretch gap-4">
-          <Card className="flex h-full min-h-0 w-2/5 min-w-[12rem] shrink-0 flex-col">
+        <div className="flex h-dvh flex-row items-stretch">
+          <Card className="flex h-full min-h-0 w-2/5 min-w-[12rem] shrink-0 flex-col rounded-r-none border-r-0">
             <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
               <CardTitle>{t('preflight.nestingCoverage.files')}</CardTitle>
               <div className="flex items-center gap-1">
@@ -297,12 +340,12 @@ export function NestingAnalysis({
                 </Button>
               </div>
             </CardHeader>
-            <CardContent className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+            <CardContent className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden pr-3">
               <select
                 value={activeProfile}
                 onChange={(event) => setProfileFilter(event.target.value)}
                 aria-label={t('preflight.nestingCoverage.profileFilter')}
-                className="h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+                className="h-8 w-full max-w-xs rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option value="all">
                   {t('preflight.nestingCoverage.allProfiles', { count: profiles.length })}
@@ -329,18 +372,18 @@ export function NestingAnalysis({
             </CardContent>
           </Card>
 
-          <Card className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+          <Card className="flex h-full min-h-0 min-w-0 flex-1 flex-col rounded-l-none border-l-0">
             <CardHeader>
               <CardTitle>{t('preflight.nestingCoverage.marks')}</CardTitle>
             </CardHeader>
-            <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-auto">
+            <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-auto pl-3">
               {selectedPackages.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   {t('preflight.nestingCoverage.selectHint')}
                 </p>
               ) : (
                 <>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                  <div className="flex flex-wrap gap-2">
                     <Stat
                       label={t('preflight.nestingCoverage.files')}
                       value={selectedPackages.length}
@@ -357,7 +400,7 @@ export function NestingAnalysis({
                     <Stat label={t('preflight.nestingCoverage.diffMarks')} value={diffMarks} />
                   </div>
 
-                  <details className="rounded-lg border border-border px-3 py-2">
+                  <details className="max-w-3xl rounded-lg border border-border px-3 py-2">
                     <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
                       {t('preflight.nestingCoverage.rule')}
                     </summary>
