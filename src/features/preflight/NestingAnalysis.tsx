@@ -16,6 +16,7 @@ import { formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { type NcexPackage, parseNexPackage } from '@/lib/wisecam/ncexParse'
 import { matchNestNames, type NestNameRule } from '@/lib/wisecam/nestNameRule'
+import { nestProfile } from '@/lib/wisecam/nestProfile'
 import { summarizeNests } from '@/lib/wisecam/nestSummary'
 import type { ZipEntry } from '@/lib/zip'
 import { NestingFileTree } from './NestingFileTree'
@@ -31,6 +32,7 @@ export interface ProjectPartQuantity {
 interface LoadedPackage {
   file: string
   package: NcexPackage
+  profile: string
 }
 
 interface CoverageRow {
@@ -88,16 +90,41 @@ export function NestingAnalysis({
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [previewQuery, setPreviewQuery] = useState('')
   const [onlyUnmatched, setOnlyUnmatched] = useState(false)
+  const [profileFilter, setProfileFilter] = useState('all')
 
   const packages = useMemo<LoadedPackage[]>(
     () =>
       entries
         .filter((entry) => NEST_FILE.test(entry.path))
-        .map((entry) => ({ file: entry.path, package: parseNexPackage(entry.bytes) }))
+        .map((entry) => {
+          const pkg = parseNexPackage(entry.bytes)
+          return {
+            file: entry.path,
+            package: pkg,
+            profile: nestProfile(entry.path, pkg),
+          }
+        })
         .sort((a, b) => a.file.localeCompare(b.file)),
     [entries],
   )
   const paths = useMemo(() => packages.map((pkg) => pkg.file), [packages])
+  const profiles = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const pkg of packages) counts.set(pkg.profile, (counts.get(pkg.profile) ?? 0) + 1)
+    return [...counts]
+      .map(([profile, count]) => ({ profile, count }))
+      .sort((a, b) => a.profile.localeCompare(b.profile, undefined, { numeric: true }))
+  }, [packages])
+  const activeProfile = profiles.some((entry) => entry.profile === profileFilter)
+    ? profileFilter
+    : 'all'
+  const visiblePaths = useMemo(
+    () =>
+      activeProfile === 'all'
+        ? paths
+        : packages.filter((pkg) => pkg.profile === activeProfile).map((pkg) => pkg.file),
+    [activeProfile, packages, paths],
+  )
   const selected = useMemo(() => selection ?? new Set(paths), [selection, paths])
   const plannedByFile = useMemo(
     () =>
@@ -242,18 +269,53 @@ export function NestingAnalysis({
             <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
               <CardTitle>{t('preflight.nestingCoverage.files')}</CardTitle>
               <div className="flex items-center gap-1">
-                <Button variant="ghost" size="sm" onClick={() => setSelection(new Set(paths))}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setSelection((current) => {
+                      const next = new Set(current ?? paths)
+                      for (const path of visiblePaths) next.add(path)
+                      return next
+                    })
+                  }
+                >
                   {t('preflight.nestingCoverage.all')}
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => setSelection(new Set())}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setSelection((current) => {
+                      const next = new Set(current ?? paths)
+                      for (const path of visiblePaths) next.delete(path)
+                      return next
+                    })
+                  }
+                >
                   {t('preflight.nestingCoverage.none')}
                 </Button>
               </div>
             </CardHeader>
-            <CardContent className="min-h-0 flex-1 overflow-hidden">
-              <div className="h-full overflow-auto">
+            <CardContent className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+              <select
+                value={activeProfile}
+                onChange={(event) => setProfileFilter(event.target.value)}
+                aria-label={t('preflight.nestingCoverage.profileFilter')}
+                className="h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="all">
+                  {t('preflight.nestingCoverage.allProfiles', { count: profiles.length })}
+                </option>
+                {profiles.map((entry) => (
+                  <option key={entry.profile} value={entry.profile}>
+                    {entry.profile} ({entry.count})
+                  </option>
+                ))}
+              </select>
+              <div className="min-h-0 flex-1 overflow-auto">
                 <NestingFileTree
-                  paths={paths}
+                  paths={visiblePaths}
                   selected={selected}
                   primaryFiles={hoveredFiles}
                   secondaryFiles={secondaryFiles}

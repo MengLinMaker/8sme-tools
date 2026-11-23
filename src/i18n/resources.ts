@@ -104,6 +104,8 @@ export const en = {
     nestingCoverage: {
       title: 'Nesting coverage',
       selected: '{{selected}} of {{total}} selected',
+      profileFilter: 'Filter by profile',
+      allProfiles: 'All profiles ({{count}})',
       all: 'All',
       none: 'None',
       selectHint: 'Tick at least one nesting to include it in the coverage.',
@@ -801,6 +803,8 @@ export const zh = {
     nestingCoverage: {
       title: '套料覆盖',
       selected: '已选 {{selected}} / {{total}}',
+      profileFilter: '按型材筛选',
+      allProfiles: '全部型材（{{count}}）',
       all: '全选',
       none: '全不选',
       selectHint: '至少勾选一个套料文件再统计覆盖。',
