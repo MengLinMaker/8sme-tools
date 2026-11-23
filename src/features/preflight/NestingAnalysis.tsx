@@ -521,45 +521,49 @@ export function NestingAnalysis({
                   </Table>
 
                   {unmatched.length > 0 && (
-                    <div className="flex flex-col gap-1 text-xs text-amber-400">
-                      <span className="font-medium">
+                    <details className="text-xs text-amber-400">
+                      <summary className="cursor-pointer font-medium">
                         {t('preflight.nestingCoverage.unmatched', { count: unmatched.length })}
-                      </span>
-                      {unmatched.map((row) => (
-                        <span key={row.name}>
-                          {row.name} ({formatNumber(namesByName.get(row.name)?.nested ?? 0, 0)})
-                        </span>
-                      ))}
-                    </div>
+                      </summary>
+                      <div className="mt-1 flex flex-col gap-1">
+                        {unmatched.map((row) => (
+                          <span key={row.name}>
+                            {row.name} ({formatNumber(namesByName.get(row.name)?.nested ?? 0, 0)})
+                          </span>
+                        ))}
+                      </div>
+                    </details>
                   )}
                   {missingRows.length > 0 && (
-                    <div className="flex flex-col gap-1 text-xs">
-                      <span className="font-medium text-muted-foreground">
+                    <details className="text-xs">
+                      <summary className="cursor-pointer font-medium text-muted-foreground">
                         {t('preflight.nestingCoverage.missingList', {
                           count: missingRows.length,
                         })}
-                      </span>
-                      {missingRows.map((row) => (
-                        <div key={row.mark} className="flex flex-wrap items-baseline gap-1.5">
-                          <span className="font-mono text-amber-400">{row.mark}</span>
-                          {row.candidates.length === 0 ? (
-                            <span className="text-muted-foreground">
-                              {t('preflight.nestingCoverage.notInNestings')}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">
-                              {row.candidates
-                                .map((candidate) => {
-                                  const files = namesByName.get(candidate.name)?.files ?? []
-                                  const where = files.map(baseName).join(', ')
-                                  return `${candidate.name}${where ? ` (${where})` : ''}`
-                                })
-                                .join(' · ')}
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                      </summary>
+                      <div className="mt-1 flex flex-col gap-1">
+                        {missingRows.map((row) => (
+                          <div key={row.mark} className="flex flex-wrap items-baseline gap-1.5">
+                            <span className="font-mono text-amber-400">{row.mark}</span>
+                            {row.candidates.length === 0 ? (
+                              <span className="text-muted-foreground">
+                                {t('preflight.nestingCoverage.notInNestings')}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">
+                                {row.candidates
+                                  .map((candidate) => {
+                                    const files = namesByName.get(candidate.name)?.files ?? []
+                                    const where = files.map(baseName).join(', ')
+                                    return `${candidate.name}${where ? ` (${where})` : ''}`
+                                  })
+                                  .join(' · ')}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
                   )}
                 </>
               )}
