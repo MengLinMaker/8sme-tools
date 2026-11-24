@@ -70,7 +70,7 @@ interface SectionData {
   parts: ProjectPartQuantity[]
   matcher: NestNameMatchSummary
   coverage: CoverageRow[]
-  abnormalities: number
+  issues: number
 }
 
 function baseName(path: string): string {
@@ -238,9 +238,7 @@ function SectionOverview({
             {t('preflight.nestingCoverage.cutPieces')}
           </TableHead>
           <TableHead className="w-px text-right">{t('preflight.nestingCoverage.marks')}</TableHead>
-          <TableHead className="w-px text-right">
-            {t('preflight.nestingCoverage.abnormalities')}
-          </TableHead>
+          <TableHead className="w-px text-right">{t('preflight.nestingCoverage.issues')}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -280,10 +278,10 @@ function SectionOverview({
               <TableCell
                 className={cn(
                   'text-right font-semibold tabular-nums',
-                  section.abnormalities > 0 ? 'text-amber-400' : 'text-muted-foreground',
+                  section.issues > 0 ? 'text-amber-400' : 'text-muted-foreground',
                 )}
               >
-                {formatNumber(section.abnormalities, 0)}
+                {formatNumber(section.issues, 0)}
               </TableCell>
             </TableRow>
           )
@@ -783,8 +781,7 @@ export function NestingAnalysis({
         parts: sectionParts,
         matcher,
         coverage,
-        abnormalities:
-          coverage.reduce((total, row) => total + Math.abs(row.diff), 0) + unmatchedPieces,
+        issues: coverage.reduce((total, row) => total + Math.abs(row.diff), 0) + unmatchedPieces,
       }
     })
   }, [profiles, packages, parts, selected, cutByFile, rule])
