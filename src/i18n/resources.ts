@@ -103,7 +103,6 @@ export const en = {
     },
     nestingCoverage: {
       title: 'Nesting coverage',
-      sections: 'Sections',
       section: 'Section',
       sectionsHint: 'Open a section to compare its nestings with the parts.',
       prevSection: 'Previous section',
@@ -807,9 +806,10 @@ export const zh = {
     },
     nestingCoverage: {
       title: '套料覆盖',
-      sections: '型材汇总',
       section: '型材',
       sectionsHint: '展开型材以比较其套料与零件数量。',
+      prevSection: '上一个型材',
+      nextSection: '下一个型材',
       selected: '已选 {{selected}} / {{total}}',
       all: '全选',
       none: '全不选',

@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Settings2 } from 'lucide-react'
 import { Fragment, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -535,6 +535,8 @@ export function NestingAnalysis({
   const { t } = useTranslation()
   const [selection, setSelection] = useState<Set<string> | null>(null)
   const [openProfile, setOpenProfile] = useState<string | null>(null)
+  const [cardOpen, setCardOpen] = useState(true)
+  const [ruleOpen, setRuleOpen] = useState(false)
   const [previewQuery, setPreviewQuery] = useState('')
   const [onlyUnmatched, setOnlyUnmatched] = useState(false)
 
@@ -685,127 +687,148 @@ export function NestingAnalysis({
     <section>
       <Card>
         <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
-          <div className="flex flex-col gap-1">
-            <CardTitle>{t('preflight.nestingCoverage.title')}</CardTitle>
-            <p className="text-sm font-normal text-muted-foreground">
-              {t('preflight.nestingCoverage.sectionsHint')}
-            </p>
-          </div>
-          {packages.length > 0 && (
-            <span className="text-sm font-normal text-muted-foreground">
-              {t('preflight.nestingCoverage.selected', {
-                selected: allSelectedPackages.length,
-                total: packages.length,
-              })}
-            </span>
-          )}
+          <button
+            type="button"
+            onClick={() => setCardOpen((current) => !current)}
+            aria-expanded={cardOpen}
+            className="flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ChevronRight
+              className={cn(
+                'size-4 shrink-0 text-muted-foreground transition-transform',
+                cardOpen && 'rotate-90',
+              )}
+            />
+            <CardTitle className="flex flex-wrap items-center gap-2">
+              <span className="text-base font-semibold">
+                {t('preflight.nestingCoverage.title')}
+              </span>
+              {packages.length > 0 && (
+                <span className="text-sm font-normal text-muted-foreground">
+                  {t('preflight.nestingCoverage.selected', {
+                    selected: allSelectedPackages.length,
+                    total: packages.length,
+                  })}
+                </span>
+              )}
+            </CardTitle>
+          </button>
+          <Button variant="outline" size="sm" onClick={() => setRuleOpen(true)}>
+            <Settings2 className="size-3.5" />
+            {t('preflight.nestingCoverage.rule')}
+          </Button>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {packages.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t('preflight.nestingCoverage.empty')}</p>
-          ) : (
-            <>
-              <details className="max-w-3xl rounded-lg border border-border px-3 py-2">
-                <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-                  {t('preflight.nestingCoverage.rule')}
-                </summary>
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                    {t('preflight.nestingCoverage.clean')}
-                    <input
-                      value={rule.clean}
-                      onChange={(event) => onRuleChange({ ...rule, clean: event.target.value })}
-                      spellCheck={false}
-                      className="h-9 rounded-md border border-input bg-transparent px-2 font-mono text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                    {t('preflight.nestingCoverage.extract')}
-                    <input
-                      value={rule.extract}
-                      onChange={(event) => onRuleChange({ ...rule, extract: event.target.value })}
-                      spellCheck={false}
-                      className="h-9 rounded-md border border-input bg-transparent px-2 font-mono text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
-                    />
-                  </label>
-                </div>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {t('preflight.nestingCoverage.ruleHint')}
+        {cardOpen && (
+          <CardContent className="flex flex-col gap-3">
+            {packages.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {t('preflight.nestingCoverage.empty')}
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  {t('preflight.nestingCoverage.sectionsHint')}
                 </p>
-                {allMatcher.error && (
-                  <p className="mt-1 text-xs text-red-400">{allMatcher.error}</p>
-                )}
-
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-medium">
-                    {t('preflight.nestingCoverage.preview')}
-                  </span>
-                  <input
-                    value={previewQuery}
-                    onChange={(event) => setPreviewQuery(event.target.value)}
-                    placeholder={t('preflight.nestingCoverage.filterPlaceholder')}
-                    className="h-8 min-w-48 flex-1 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                  <Toggle pressed={onlyUnmatched} onPressedChange={setOnlyUnmatched}>
-                    {t('preflight.nestingCoverage.onlyUnmatched')}
-                  </Toggle>
-                  <span className="text-xs text-muted-foreground">
-                    {previewRows.length}/{allMatcher.rows.length}
-                  </span>
-                </div>
-
-                <Table containerClassName="mt-2 max-h-[35vh] overflow-auto">
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead>{t('preflight.nestingCoverage.asWritten')}</TableHead>
-                      <TableHead>{t('preflight.nestingCoverage.keyColumn')}</TableHead>
-                      <TableHead>{t('preflight.nestingCoverage.matchColumn')}</TableHead>
-                      <TableHead className="w-px text-right">
-                        {t('preflight.nestingCoverage.quantity')}
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {previewRows.map((row) => (
-                      <TableRow key={row.name}>
-                        <TableCell className="font-mono text-xs">{row.name}</TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">
-                          {row.key ?? '—'}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          {row.matched ? (
-                            <span className="text-emerald-400">{row.projectMark}</span>
-                          ) : (
-                            <span className="text-amber-400">
-                              {t('preflight.nestingCoverage.noMatch')}
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatNumber(allNamesByName.get(row.name)?.nested ?? 0, 0)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                {previewRows.length === 0 && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t('preflight.nestingCoverage.previewEmpty')}
-                  </p>
-                )}
-              </details>
-
-              <SectionOverview
-                sections={sections}
-                openProfile={openProfile}
-                onToggle={(profile) =>
-                  setOpenProfile((current) => (current === profile ? null : profile))
-                }
-              />
-            </>
-          )}
-        </CardContent>
+                <SectionOverview
+                  sections={sections}
+                  openProfile={openProfile}
+                  onToggle={(profile) =>
+                    setOpenProfile((current) => (current === profile ? null : profile))
+                  }
+                />
+              </>
+            )}
+          </CardContent>
+        )}
       </Card>
+
+      <Dialog
+        open={ruleOpen}
+        onClose={() => setRuleOpen(false)}
+        title={t('preflight.nestingCoverage.rule')}
+        className="max-w-3xl"
+      >
+        <div className="flex flex-col gap-3 p-5">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              {t('preflight.nestingCoverage.clean')}
+              <input
+                value={rule.clean}
+                onChange={(event) => onRuleChange({ ...rule, clean: event.target.value })}
+                spellCheck={false}
+                className="h-9 rounded-md border border-input bg-transparent px-2 font-mono text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+              {t('preflight.nestingCoverage.extract')}
+              <input
+                value={rule.extract}
+                onChange={(event) => onRuleChange({ ...rule, extract: event.target.value })}
+                spellCheck={false}
+                className="h-9 rounded-md border border-input bg-transparent px-2 font-mono text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </label>
+          </div>
+          <p className="text-xs text-muted-foreground">{t('preflight.nestingCoverage.ruleHint')}</p>
+          {allMatcher.error && <p className="text-xs text-red-400">{allMatcher.error}</p>}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium">{t('preflight.nestingCoverage.preview')}</span>
+            <input
+              value={previewQuery}
+              onChange={(event) => setPreviewQuery(event.target.value)}
+              placeholder={t('preflight.nestingCoverage.filterPlaceholder')}
+              className="h-8 min-w-48 flex-1 rounded-md border border-input bg-transparent px-2 text-xs text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <Toggle pressed={onlyUnmatched} onPressedChange={setOnlyUnmatched}>
+              {t('preflight.nestingCoverage.onlyUnmatched')}
+            </Toggle>
+            <span className="text-xs text-muted-foreground">
+              {previewRows.length}/{allMatcher.rows.length}
+            </span>
+          </div>
+
+          <Table containerClassName="max-h-[45vh] overflow-auto">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>{t('preflight.nestingCoverage.asWritten')}</TableHead>
+                <TableHead>{t('preflight.nestingCoverage.keyColumn')}</TableHead>
+                <TableHead>{t('preflight.nestingCoverage.matchColumn')}</TableHead>
+                <TableHead className="w-px text-right">
+                  {t('preflight.nestingCoverage.quantity')}
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {previewRows.map((row) => (
+                <TableRow key={row.name}>
+                  <TableCell className="font-mono text-xs">{row.name}</TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
+                    {row.key ?? '—'}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {row.matched ? (
+                      <span className="text-emerald-400">{row.projectMark}</span>
+                    ) : (
+                      <span className="text-amber-400">
+                        {t('preflight.nestingCoverage.noMatch')}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatNumber(allNamesByName.get(row.name)?.nested ?? 0, 0)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {previewRows.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              {t('preflight.nestingCoverage.previewEmpty')}
+            </p>
+          )}
+        </div>
+      </Dialog>
 
       <Dialog
         open={openSection !== null}
