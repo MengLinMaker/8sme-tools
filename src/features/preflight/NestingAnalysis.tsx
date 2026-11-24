@@ -62,7 +62,7 @@ interface SectionData {
   parts: ProjectPartQuantity[]
   matcher: NestNameMatchSummary
   coverage: CoverageRow[]
-  diffMarks: number
+  abnormalities: number
 }
 
 function baseName(path: string): string {
@@ -71,15 +71,6 @@ function baseName(path: string): string {
 
 function looseKey(value: string): string {
   return value.toLowerCase().replace(/[\s_/,.-]+/g, '')
-}
-
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="min-w-32 rounded-lg border border-border px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="text-xl font-semibold">{formatNumber(value, 0)}</div>
-    </div>
-  )
 }
 
 /** Required vs nested/cut per project mark, for one section's parts. */
@@ -153,7 +144,7 @@ function SectionOverview({
           </TableHead>
           <TableHead className="w-px text-right">{t('preflight.nestingCoverage.marks')}</TableHead>
           <TableHead className="w-px text-right">
-            {t('preflight.nestingCoverage.diffMarks')}
+            {t('preflight.nestingCoverage.abnormalities')}
           </TableHead>
         </TableRow>
       </TableHeader>
@@ -203,10 +194,10 @@ function SectionOverview({
               <TableCell
                 className={cn(
                   'text-right font-semibold tabular-nums',
-                  section.diffMarks > 0 ? 'text-amber-400' : 'text-muted-foreground',
+                  section.abnormalities > 0 ? 'text-amber-400' : 'text-muted-foreground',
                 )}
               >
-                {formatNumber(section.diffMarks, 0)}
+                {formatNumber(section.abnormalities, 0)}
               </TableCell>
             </TableRow>
           )
@@ -279,16 +270,6 @@ function SectionView({
               {t('preflight.nestingCoverage.none')}
             </Button>
           </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2 py-3">
-          <Stat label={t('preflight.nestingCoverage.files')} value={data.selectedPackages.length} />
-          <Stat label={t('preflight.nestingCoverage.pieces')} value={data.summary.totals.pieces} />
-          <Stat
-            label={t('preflight.nestingCoverage.cutPieces')}
-            value={data.summary.totals.cutPieces}
-          />
-          <Stat label={t('preflight.nestingCoverage.matched')} value={data.matcher.matched} />
-          <Stat label={t('preflight.nestingCoverage.diffMarks')} value={data.diffMarks} />
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
           <NestingFileTree
@@ -603,7 +584,7 @@ export function NestingAnalysis({
         parts: sectionParts,
         matcher,
         coverage,
-        diffMarks: coverage.filter((row) => row.diff !== 0).length,
+        abnormalities: coverage.reduce((total, row) => total + Math.abs(row.diff), 0),
       }
     })
   }, [profiles, packages, parts, selected, cutByFile, rule])
