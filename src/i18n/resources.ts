@@ -106,6 +106,8 @@ export const en = {
       sections: 'Sections',
       section: 'Section',
       sectionsHint: 'Open a section to compare its nestings with the parts.',
+      prevSection: 'Previous section',
+      nextSection: 'Next section',
       selected: '{{selected}} of {{total}} selected',
       all: 'All',
       none: 'None',
