@@ -550,18 +550,35 @@ function SectionView({
               </Table>
 
               {unmatched.length > 0 && (
-                <details className="text-xs text-amber-400">
-                  <summary className="cursor-pointer font-medium">
+                <div className="flex flex-col gap-2">
+                  <h4 className="text-xs font-semibold text-amber-400">
                     {t('preflight.nestingCoverage.unmatched', { count: unmatched.length })}
-                  </summary>
-                  <div className="mt-1 flex flex-col gap-1">
-                    {unmatched.map((row) => (
-                      <span key={row.name}>
-                        {row.name} ({formatNumber(namesByName.get(row.name)?.nested ?? 0, 0)})
-                      </span>
-                    ))}
-                  </div>
-                </details>
+                  </h4>
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>{t('preflight.nestingCoverage.asWritten')}</TableHead>
+                        <TableHead>{t('preflight.nestingCoverage.keyColumn')}</TableHead>
+                        <TableHead className="w-px text-right">
+                          {t('preflight.nestingCoverage.nested')}
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {unmatched.map((row) => (
+                        <TableRow key={row.name}>
+                          <TableCell className="font-mono text-xs">{row.name}</TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">
+                            {row.key ?? '—'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatNumber(namesByName.get(row.name)?.nested ?? 0, 0)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               )}
               {missingRows.length > 0 && (
                 <details className="text-xs">
@@ -765,6 +782,10 @@ export function NestingAnalysis({
         rule,
       )
       const coverage = buildCoverage(sectionParts, matcher, summary)
+      const namesByName = new Map(summary.names.map((row) => [row.name, row]))
+      const unmatchedPieces = matcher.rows
+        .filter((row) => !row.matched)
+        .reduce((total, row) => total + (namesByName.get(row.name)?.nested ?? 0), 0)
       return {
         profile,
         packages: sectionPackages,
@@ -773,7 +794,8 @@ export function NestingAnalysis({
         parts: sectionParts,
         matcher,
         coverage,
-        abnormalities: coverage.reduce((total, row) => total + Math.abs(row.diff), 0),
+        abnormalities:
+          coverage.reduce((total, row) => total + Math.abs(row.diff), 0) + unmatchedPieces,
       }
     })
   }, [profiles, packages, parts, selected, cutByFile, rule])
