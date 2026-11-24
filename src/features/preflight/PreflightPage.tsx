@@ -3273,7 +3273,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
 
   // Collapsible sections — long jobs push the tables far down, so profiles
   // and parts collapse like an accordion.
-  const [profilesOpen, setProfilesOpen] = useState(true)
+  const profilesOpen = !collapsedCards.profiles
   const partsOpen = !collapsedCards.parts
   /** Rejected parts stay in the table but collapsed by default, so they don't clutter triage. */
   const [rejectedOpen, setRejectedOpen] = useState(false)
@@ -4748,7 +4748,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
           <button
             type="button"
-            onClick={() => setProfilesOpen((open) => !open)}
+            onClick={() => changeCardCollapsed('profiles', profilesOpen)}
             aria-expanded={profilesOpen}
             className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
