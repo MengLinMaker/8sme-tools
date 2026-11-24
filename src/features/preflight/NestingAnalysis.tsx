@@ -68,6 +68,8 @@ interface SectionData {
   selectedPackages: LoadedPackage[]
   summary: NestSummary
   parts: ProjectPartQuantity[]
+  /** Required pieces across the section's marks. */
+  required: number
   matcher: NestNameMatchSummary
   coverage: CoverageRow[]
   issues: number
@@ -243,6 +245,7 @@ function SectionOverview({
       </TableHeader>
       <TableBody>
         {sections.map((section) => {
+          const pieceDiff = section.summary.totals.pieces - section.required
           return (
             <TableRow
               key={section.profile}
@@ -268,6 +271,12 @@ function SectionOverview({
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatNumber(section.summary.totals.pieces, 0)}
+                {pieceDiff !== 0 && (
+                  <span className="ml-1 text-[10px] font-semibold text-amber-400">
+                    ({pieceDiff > 0 ? '+' : ''}
+                    {formatNumber(pieceDiff, 0)})
+                  </span>
+                )}
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatNumber(section.summary.totals.cutPieces, 0)}
@@ -779,6 +788,7 @@ export function NestingAnalysis({
         selectedPackages,
         summary,
         parts: sectionParts,
+        required: sectionParts.reduce((total, part) => total + Math.max(0, part.required), 0),
         matcher,
         coverage,
         issues: coverage.reduce((total, row) => total + Math.abs(row.diff), 0) + unmatchedPieces,
