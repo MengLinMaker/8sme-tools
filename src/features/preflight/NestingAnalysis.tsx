@@ -246,6 +246,7 @@ function SectionOverview({
       <TableBody>
         {sections.map((section) => {
           const pieceDiff = section.summary.totals.pieces - section.required
+          const cutDiff = section.summary.totals.cutPieces - section.required
           return (
             <TableRow
               key={section.profile}
@@ -272,7 +273,7 @@ function SectionOverview({
               <TableCell className="text-right tabular-nums">
                 {formatNumber(section.summary.totals.pieces, 0)}
                 {pieceDiff !== 0 && (
-                  <span className="ml-1 text-[10px] font-semibold text-amber-400">
+                  <span className="ml-1 font-semibold text-amber-400">
                     ({pieceDiff > 0 ? '+' : ''}
                     {formatNumber(pieceDiff, 0)})
                   </span>
@@ -280,6 +281,12 @@ function SectionOverview({
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatNumber(section.summary.totals.cutPieces, 0)}
+                {cutDiff !== 0 && (
+                  <span className="ml-1 font-semibold text-amber-400">
+                    ({cutDiff > 0 ? '+' : ''}
+                    {formatNumber(cutDiff, 0)})
+                  </span>
+                )}
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatNumber(section.coverage.length, 0)}
