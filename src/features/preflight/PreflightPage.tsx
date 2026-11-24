@@ -2818,12 +2818,16 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   /** Required quantities for the nesting coverage card, including the batch multiplier. */
   const projectNestParts = useMemo(
     () =>
-      activeParts.map((part) => ({
-        mark: part.mark,
-        required: partQty(part) * batches,
-        profile: sectionLabel(part),
-      })),
-    [activeParts, partQty, batches, sectionLabel],
+      activeParts.map((part) => {
+        const length = partLength(part)
+        return {
+          mark: part.mark,
+          required: partQty(part) * batches,
+          lengthMm: length != null ? partQty(part) * batches * length : 0,
+          profile: sectionLabel(part),
+        }
+      }),
+    [activeParts, partQty, partLength, batches, sectionLabel],
   )
 
   /** Total mass (kg) across the job — the pickup load (qty × per-piece mass). */

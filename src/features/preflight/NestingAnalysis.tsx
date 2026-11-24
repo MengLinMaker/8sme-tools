@@ -35,6 +35,8 @@ const EMPTY: Set<string> = new Set()
 export interface ProjectPartQuantity {
   mark: string
   required: number
+  /** Total cut length in mm for the mark's required pieces. */
+  lengthMm: number
   /** The part's section label (parts-table PROFILE), used to scope a section. */
   profile: string
 }
@@ -70,6 +72,8 @@ interface SectionData {
   parts: ProjectPartQuantity[]
   /** Required pieces across the section's marks. */
   required: number
+  /** Total cut length across the section's marks, for ordering like the Profiles card. */
+  lengthMm: number
   matcher: NestNameMatchSummary
   coverage: CoverageRow[]
   issues: number
@@ -804,46 +808,60 @@ export function NestingAnalysis({
    * in the table.
    */
   const sections = useMemo<SectionData[]>(() => {
-    return profiles.map(({ profile }) => {
-      const sectionPackages = packages.filter((pkg) => pkg.profile === profile)
-      const selectedPackages = sectionPackages.filter((pkg) => selected.has(pkg.file))
-      const summary = summarizeNests(selectedPackages, cutByFile)
-      // Attribute the section's parts from every file in it, so deselecting a file does not
-      // change which marks the section covers (only their nested/cut quantities).
-      const sectionSummary = summarizeNests(sectionPackages)
-      const base = matchNestNames(
-        sectionSummary.names.map((row) => row.name),
-        parts.map((part) => part.mark),
-        rule,
-      )
-      const covered = new Set(base.rows.filter((row) => row.matched).map((row) => row.projectMark))
-      const keys = new Set<string>([profileKey(profile)])
-      for (const part of parts) if (covered.has(part.mark)) keys.add(profileKey(part.profile))
-      const sectionParts = parts.filter(
-        (part) => covered.has(part.mark) || keys.has(profileKey(part.profile)),
-      )
-      const matcher = matchNestNames(
-        summary.names.map((row) => row.name),
-        sectionParts.map((part) => part.mark),
-        rule,
-      )
-      const coverage = buildCoverage(sectionParts, matcher, summary)
-      const namesByName = new Map(summary.names.map((row) => [row.name, row]))
-      const unmatchedPieces = matcher.rows
-        .filter((row) => !row.matched)
-        .reduce((total, row) => total + (namesByName.get(row.name)?.nested ?? 0), 0)
-      return {
-        profile,
-        packages: sectionPackages,
-        selectedPackages,
-        summary,
-        parts: sectionParts,
-        required: sectionParts.reduce((total, part) => total + Math.max(0, part.required), 0),
-        matcher,
-        coverage,
-        issues: coverage.reduce((total, row) => total + Math.abs(row.diff), 0) + unmatchedPieces,
-      }
-    })
+    return (
+      profiles
+        .map(({ profile }) => {
+          const sectionPackages = packages.filter((pkg) => pkg.profile === profile)
+          const selectedPackages = sectionPackages.filter((pkg) => selected.has(pkg.file))
+          const summary = summarizeNests(selectedPackages, cutByFile)
+          // Attribute the section's parts from every file in it, so deselecting a file does not
+          // change which marks the section covers (only their nested/cut quantities).
+          const sectionSummary = summarizeNests(sectionPackages)
+          const base = matchNestNames(
+            sectionSummary.names.map((row) => row.name),
+            parts.map((part) => part.mark),
+            rule,
+          )
+          const covered = new Set(
+            base.rows.filter((row) => row.matched).map((row) => row.projectMark),
+          )
+          const keys = new Set<string>([profileKey(profile)])
+          for (const part of parts) if (covered.has(part.mark)) keys.add(profileKey(part.profile))
+          const sectionParts = parts.filter(
+            (part) => covered.has(part.mark) || keys.has(profileKey(part.profile)),
+          )
+          const matcher = matchNestNames(
+            summary.names.map((row) => row.name),
+            sectionParts.map((part) => part.mark),
+            rule,
+          )
+          const coverage = buildCoverage(sectionParts, matcher, summary)
+          const namesByName = new Map(summary.names.map((row) => [row.name, row]))
+          const unmatchedPieces = matcher.rows
+            .filter((row) => !row.matched)
+            .reduce((total, row) => total + (namesByName.get(row.name)?.nested ?? 0), 0)
+          return {
+            profile,
+            packages: sectionPackages,
+            selectedPackages,
+            summary,
+            parts: sectionParts,
+            required: sectionParts.reduce((total, part) => total + Math.max(0, part.required), 0),
+            lengthMm: sectionParts.reduce((total, part) => total + part.lengthMm, 0),
+            matcher,
+            coverage,
+            issues:
+              coverage.reduce((total, row) => total + Math.abs(row.diff), 0) + unmatchedPieces,
+          }
+        })
+        // Same order as the Profiles card by default: longest total first, then piece count.
+        .sort(
+          (a, b) =>
+            b.lengthMm - a.lengthMm ||
+            b.summary.totals.pieces - a.summary.totals.pieces ||
+            a.profile.localeCompare(b.profile, undefined, { numeric: true }),
+        )
+    )
   }, [profiles, packages, parts, selected, cutByFile, rule])
 
   const openSection = openProfile
