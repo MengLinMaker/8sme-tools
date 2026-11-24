@@ -169,9 +169,6 @@ function FolderRows({
   const state = matchCount(folder, selected)
   const checked = state.total > 0 && state.count === state.total
   const indeterminate = state.count > 0 && state.count < state.total
-  const secondary =
-    folder.descendants.some((path) => primaryFiles.has(path)) ||
-    folder.descendants.some((path) => secondaryFiles.has(path))
   const hasChildren = folder.folders.length > 0 || folder.files.length > 0
   const toggleCollapsed = () => setCollapsed((current) => !current)
   const folders = folder.folders
@@ -184,11 +181,7 @@ function FolderRows({
       <fieldset
         onMouseEnter={() => onHoverFiles(folder.descendants)}
         onMouseLeave={() => onHoverFiles([])}
-        className={cn(
-          'm-0 flex w-full min-w-0 items-center gap-1.5 rounded border-0 p-0 px-1 py-0.5 text-xs transition-colors',
-          secondary && 'bg-violet-500/25 ring-1 ring-inset ring-violet-300/70',
-          !secondary && 'hover:bg-accent/50',
-        )}
+        className="m-0 flex w-full min-w-0 items-center gap-1.5 rounded border-0 p-0 px-1 py-0.5 text-xs transition-colors"
       >
         <TreeCheckbox
           checked={checked}
