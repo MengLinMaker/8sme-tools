@@ -368,7 +368,7 @@ function SectionView({
 
   return (
     <div className="flex h-full min-h-0 flex-row items-stretch">
-      <div className="flex min-h-0 w-2/5 min-w-[12rem] shrink-0 flex-col border-r border-border pr-4">
+      <div className="flex min-h-0 w-2/5 min-w-[12rem] shrink-0 flex-col border-r border-border py-4 pl-4 pr-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold">{t('preflight.nestingCoverage.files')}</h3>
           <div className="flex items-center gap-1">
@@ -420,7 +420,7 @@ function SectionView({
         </div>
       </div>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col pl-4">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col py-4 pl-4 pr-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold">{t('preflight.nestingCoverage.marks')}</h3>
           <Toggle pressed={onlyProblems} onPressedChange={setOnlyProblems}>
@@ -1093,7 +1093,7 @@ export function NestingAnalysis({
         }
       >
         {openSection && (
-          <div className="h-full min-h-0 p-4">
+          <div className="h-full min-h-0">
             <SectionView
               key={openSection.profile}
               data={openSection}
