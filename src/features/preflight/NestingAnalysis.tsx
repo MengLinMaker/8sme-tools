@@ -23,7 +23,7 @@ import {
   type NestNameMatchSummary,
   type NestNameRule,
 } from '@/lib/wisecam/nestNameRule'
-import { nestProfile } from '@/lib/wisecam/nestProfile'
+import { MIXED_PROFILE, nestProfile, UNKNOWN_PROFILE } from '@/lib/wisecam/nestProfile'
 import { type NestSummary, summarizeNests } from '@/lib/wisecam/nestSummary'
 import type { ZipEntry } from '@/lib/zip'
 import { NestingFileTree } from './NestingFileTree'
@@ -42,6 +42,13 @@ interface LoadedPackage {
   file: string
   package: NcexPackage
   profile: string
+}
+
+/** A package before its section is resolved from the parts it nests. */
+interface RawPackage {
+  file: string
+  package: NcexPackage
+  rawProfile: string
 }
 
 interface CoverageRow {
@@ -71,6 +78,33 @@ function baseName(path: string): string {
 
 function looseKey(value: string): string {
   return value.toLowerCase().replace(/[\s_/,.-]+/g, '')
+}
+
+/** The part names a nesting actually places (its results), not its whole part library. */
+function nestedPartNames(pkg: NcexPackage): string[] {
+  const partsById = new Map(pkg.parts.map((part) => [part.idref, part]))
+  const names = new Set<string>()
+  for (const result of pkg.results) {
+    for (const placement of result.partInfo) {
+      const name = partsById.get(placement.partId)?.name?.trim()
+      if (name) names.add(name)
+    }
+  }
+  return [...names]
+}
+
+/** The section key with the most matched marks in a nesting. */
+function dominantKey(counts: Map<string, number> | undefined): string | null {
+  if (!counts) return null
+  let best: string | null = null
+  let bestCount = 0
+  for (const [key, count] of counts) {
+    if (count > bestCount) {
+      best = key
+      bestCount = count
+    }
+  }
+  return best
 }
 
 /** Required vs nested/cut per project mark, for one section's parts. */
@@ -506,7 +540,7 @@ export function NestingAnalysis({
   const [previewQuery, setPreviewQuery] = useState('')
   const [onlyUnmatched, setOnlyUnmatched] = useState(false)
 
-  const packages = useMemo<LoadedPackage[]>(
+  const rawPackages = useMemo<RawPackage[]>(
     () =>
       entries
         .filter((entry) => NEST_FILE.test(entry.path))
@@ -515,11 +549,65 @@ export function NestingAnalysis({
           return {
             file: entry.path,
             package: pkg,
-            profile: nestProfile(entry.path, pkg),
+            rawProfile: nestProfile(entry.path, pkg),
           }
         })
         .sort((a, b) => a.file.localeCompare(b.file)),
     [entries],
+  )
+  /**
+   * Section keys each nesting actually covers, resolved through the project marks. This is what
+   * lets an Unknown package (`NW30 TOP.ncexa`, `新建文件夹/…`) join the section it nests instead
+   * of showing as Unknown.
+   */
+  const packageSections = useMemo(() => {
+    const keyByMark = new Map(parts.map((part) => [part.mark, profileKey(part.profile)]))
+    const marks = parts.map((part) => part.mark)
+    const map = new Map<string, Map<string, number>>()
+    for (const pkg of rawPackages) {
+      const counts = new Map<string, number>()
+      for (const row of matchNestNames(nestedPartNames(pkg.package), marks, rule).rows) {
+        if (!row.matched || !row.projectMark) continue
+        const key = keyByMark.get(row.projectMark)
+        if (key) counts.set(key, (counts.get(key) ?? 0) + 1)
+      }
+      map.set(pkg.file, counts)
+    }
+    return map
+  }, [rawPackages, parts, rule])
+  /** Section key -> the folder label of a known section that nests it (`RHS 150x100 T9`). */
+  const labelByKey = useMemo(() => {
+    const labels = new Map<string, string>()
+    for (const pkg of rawPackages) {
+      if (pkg.rawProfile === UNKNOWN_PROFILE || pkg.rawProfile === MIXED_PROFILE) continue
+      const key = dominantKey(packageSections.get(pkg.file))
+      if (key && !labels.has(key)) labels.set(key, pkg.rawProfile)
+    }
+    return labels
+  }, [rawPackages, packageSections])
+  /** Fallback label (the parts-table section) when no folder names the section. */
+  const sectionLabelByKey = useMemo(() => {
+    const labels = new Map<string, string>()
+    for (const part of parts) {
+      if (!part.profile || part.profile === '—') continue
+      const key = profileKey(part.profile)
+      if (!labels.has(key)) labels.set(key, part.profile)
+    }
+    return labels
+  }, [parts])
+  const packages = useMemo<LoadedPackage[]>(
+    () =>
+      rawPackages.map((pkg) => {
+        let profile = pkg.rawProfile
+        if (profile === UNKNOWN_PROFILE) {
+          const key = dominantKey(packageSections.get(pkg.file))
+          if (key) {
+            profile = labelByKey.get(key) ?? sectionLabelByKey.get(key) ?? profile
+          }
+        }
+        return { file: pkg.file, package: pkg.package, profile }
+      }),
+    [rawPackages, packageSections, labelByKey, sectionLabelByKey],
   )
   const paths = useMemo(() => packages.map((pkg) => pkg.file), [packages])
   const profiles = useMemo(() => {
