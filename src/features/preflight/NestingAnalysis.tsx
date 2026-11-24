@@ -615,6 +615,8 @@ export function NestingAnalysis({
   onRuleChange,
   cuts,
   onCutsChange,
+  selection,
+  onSelectionChange,
   entries,
 }: {
   parts: ProjectPartQuantity[]
@@ -622,10 +624,12 @@ export function NestingAnalysis({
   onRuleChange: (rule: NestNameRule) => void
   cuts: Record<string, number>
   onCutsChange: (cuts: Record<string, number>) => void
+  /** Ticked nesting files; `null` means all of them. */
+  selection: string[] | null
+  onSelectionChange: (files: string[] | null) => void
   entries: ZipEntry[]
 }) {
   const { t } = useTranslation()
-  const [selection, setSelection] = useState<Set<string> | null>(null)
   const [openProfile, setOpenProfile] = useState<string | null>(null)
   const [cardOpen, setCardOpen] = useState(true)
   const [ruleOpen, setRuleOpen] = useState(false)
@@ -710,7 +714,11 @@ export function NestingAnalysis({
       .map(([profile, count]) => ({ profile, count }))
       .sort((a, b) => a.profile.localeCompare(b.profile, undefined, { numeric: true }))
   }, [packages])
-  const selected = useMemo(() => selection ?? new Set(paths), [selection, paths])
+  const pathSet = useMemo(() => new Set(paths), [paths])
+  const selected = useMemo(
+    () => (selection ? new Set(selection.filter((path) => pathSet.has(path))) : new Set(paths)),
+    [selection, paths, pathSet],
+  )
   const plannedByFile = useMemo(
     () =>
       new Map(
@@ -817,14 +825,12 @@ export function NestingAnalysis({
   }, [allMatcher.rows, previewQuery, onlyUnmatched])
 
   const toggle = (pathsToToggle: string[], allSelected: boolean) => {
-    setSelection((current) => {
-      const next = new Set(current ?? paths)
-      for (const path of pathsToToggle) {
-        if (allSelected) next.delete(path)
-        else next.add(path)
-      }
-      return next
-    })
+    const next = new Set(selected)
+    for (const path of pathsToToggle) {
+      if (allSelected) next.delete(path)
+      else next.add(path)
+    }
+    onSelectionChange(next.size === paths.length ? null : [...next])
   }
   const changeFileCut = (file: string, value: number) => {
     onCutsChange({ ...cuts, [file]: value })

@@ -40,6 +40,8 @@ export interface ProjectMeta {
   stepNames?: StepNameRules
   /** Per-job rule for extracting project marks from WiseCAM nesting part names. */
   nestNameRule?: NestNameRule
+  /** Ticked nesting files; absent means every file is ticked. */
+  nestSelection?: string[]
   /** Per-file cut count (stock bars actually cut) for the nesting coverage. */
   nestCuts?: Record<string, number>
 }
@@ -179,6 +181,8 @@ export async function putProjectFiles(
     ...(existing?.stepNames != null ? { stepNames: existing.stepNames } : {}),
     // Nor the nesting name rule.
     ...(existing?.nestNameRule != null ? { nestNameRule: existing.nestNameRule } : {}),
+    // Nor which nesting files are ticked.
+    ...(existing?.nestSelection != null ? { nestSelection: existing.nestSelection } : {}),
     // Nor per-file cut counts.
     ...(existing?.nestCuts != null ? { nestCuts: existing.nestCuts } : {}),
   }
@@ -255,6 +259,23 @@ export async function saveProjectNestCuts(
   const meta = await getProjectMeta(id)
   if (!meta) return null
   const next: ProjectMeta = { ...meta, nestCuts: cuts }
+  const db = await openDatabase()
+  const tx = db.transaction(META_STORE, 'readwrite')
+  tx.objectStore(META_STORE).put(next)
+  await finished(tx)
+  return next
+}
+
+/** Saves which nesting files are ticked; `null` means all of them. */
+export async function saveProjectNestSelection(
+  id: string,
+  files: string[] | null,
+): Promise<ProjectMeta | null> {
+  const meta = await getProjectMeta(id)
+  if (!meta) return null
+  const next: ProjectMeta = { ...meta }
+  if (files === null) delete next.nestSelection
+  else next.nestSelection = files
   const db = await openDatabase()
   const tx = db.transaction(META_STORE, 'readwrite')
   tx.objectStore(META_STORE).put(next)

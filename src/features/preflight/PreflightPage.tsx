@@ -118,6 +118,7 @@ import {
   saveProjectBatches,
   saveProjectNestCuts,
   saveProjectNestNameRule,
+  saveProjectNestSelection,
   saveProjectStepNames,
   takeHandOffProject,
 } from '@/lib/projects/store'
@@ -717,6 +718,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   const stepNamesRef = useRef<StepNameRules>(DEFAULT_STEP_NAME_RULES)
   const [nestNameRule, setNestNameRule] = useState<NestNameRule>(DEFAULT_NEST_NAME_RULE)
   const [nestCuts, setNestCuts] = useState<Record<string, number>>({})
+  const [nestSelection, setNestSelection] = useState<string[] | null>(null)
   const [nameRulesOpen, setNameRulesOpen] = useState(false)
   /** Marks ticked in the parts table for the selective PDF/STEP/NC export. */
   const [selectedMarks, setSelectedMarks] = useState<Set<string>>(new Set())
@@ -843,6 +845,17 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     (cuts: Record<string, number>) => {
       setNestCuts(cuts)
       void saveProjectNestCuts(projectId, cuts).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
+    },
+    [projectId],
+  )
+
+  /** Persist which nesting files are ticked; `null` means all of them. */
+  const changeNestSelection = useCallback(
+    (files: string[] | null) => {
+      setNestSelection(files)
+      void saveProjectNestSelection(projectId, files).catch((err) =>
         setError(err instanceof Error ? err.message : String(err)),
       )
     },
@@ -996,6 +1009,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         setStepNames(rules)
         setNestNameRule(meta?.nestNameRule ?? DEFAULT_NEST_NAME_RULE)
         setNestCuts(meta?.nestCuts ?? {})
+        setNestSelection(meta?.nestSelection ?? null)
         handleBundle(opened)
         // The fixes travel with the project: NC edits (with their ops), STEP replacements, and the
         // resolved rows that keep their Undo available.
@@ -5383,6 +5397,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           onRuleChange={changeNestNameRule}
           cuts={nestCuts}
           onCutsChange={changeNestCuts}
+          selection={nestSelection}
+          onSelectionChange={changeNestSelection}
           entries={bundle?.entries ?? []}
         />
       )}
