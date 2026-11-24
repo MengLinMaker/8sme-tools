@@ -342,10 +342,15 @@ function SectionView({
       candidates: unmatched.filter((row) => looseKey(row.name).includes(key)),
     }
   })
-  const hoveredRow = hoveredMark ? data.coverage.find((row) => row.mark === hoveredMark) : undefined
-  const secondaryFiles = hoveredRow
-    ? new Set(hoveredRow.sources.map((source) => source.file))
-    : EMPTY
+  const hoveredCoverage = hoveredMark
+    ? data.coverage.find((row) => row.mark === hoveredMark)
+    : undefined
+  const hoveredName = !hoveredCoverage && hoveredMark ? namesByName.get(hoveredMark) : undefined
+  const secondaryFiles = hoveredCoverage
+    ? new Set(hoveredCoverage.sources.map((source) => source.file))
+    : hoveredName
+      ? new Set(hoveredName.sources.map((source) => source.file))
+      : EMPTY
   const visible = onlyProblems ? data.coverage.filter((row) => row.diff !== 0) : data.coverage
   const stockLengths = useMemo(
     () => stockLengthRows(data.selectedPackages),
@@ -561,24 +566,37 @@ function SectionView({
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
                         <TableHead>{t('preflight.nestingCoverage.asWritten')}</TableHead>
-                        <TableHead>{t('preflight.nestingCoverage.keyColumn')}</TableHead>
                         <TableHead className="w-px text-right">
                           {t('preflight.nestingCoverage.nested')}
+                        </TableHead>
+                        <TableHead className="w-px text-right">
+                          {t('preflight.nestingCoverage.cutQty')}
                         </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {unmatched.map((row) => (
-                        <TableRow key={row.name}>
-                          <TableCell className="font-mono text-xs">{row.name}</TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground">
-                            {row.key ?? '—'}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {formatNumber(namesByName.get(row.name)?.nested ?? 0, 0)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {unmatched.map((row) => {
+                        const name = namesByName.get(row.name)
+                        const highlighted =
+                          hoveredFiles.size > 0 &&
+                          (name?.sources.some((source) => hoveredFiles.has(source.file)) ?? false)
+                        return (
+                          <TableRow
+                            key={row.name}
+                            onMouseEnter={() => setHoveredMark(row.name)}
+                            onMouseLeave={() => setHoveredMark(null)}
+                            className={cn('transition-colors', highlighted && SECONDARY_TABLE_ROW)}
+                          >
+                            <TableCell className="font-mono text-xs">{row.name}</TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {formatNumber(name?.nested ?? 0, 0)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {formatNumber(name?.cut ?? 0, 0)}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
                     </TableBody>
                   </Table>
                 </div>
