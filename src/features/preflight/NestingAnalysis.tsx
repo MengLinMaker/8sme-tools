@@ -90,6 +90,24 @@ function isMachineNesting(pkg: NcexPackage): boolean {
   return pkg.results.length === 1
 }
 
+/** Stock bars per adobe length across the given nestings (results deduped). */
+function stockLengthRows(packages: LoadedPackage[]): { length: number | null; bars: number }[] {
+  const seen = new Set<string>()
+  const rows = new Map<number | null, number>()
+  for (const pkg of packages) {
+    const lengths = new Map(pkg.package.adobes.map((adobe) => [adobe.idref, adobe.length]))
+    for (const result of pkg.package.results) {
+      if (seen.has(result.idref)) continue
+      seen.add(result.idref)
+      const length = lengths.get(result.adobeId) ?? null
+      rows.set(length, (rows.get(length) ?? 0) + result.copies)
+    }
+  }
+  return [...rows]
+    .map(([length, bars]) => ({ length, bars }))
+    .sort((a, b) => (b.length ?? 0) - (a.length ?? 0))
+}
+
 /** The part names a nesting actually places (its results), not its whole part library. */
 function nestedPartNames(pkg: NcexPackage): string[] {
   const partsById = new Map(pkg.parts.map((part) => [part.idref, part]))
@@ -326,6 +344,10 @@ function SectionView({
     ? new Set(hoveredRow.sources.map((source) => source.file))
     : EMPTY
   const visible = onlyProblems ? data.coverage.filter((row) => row.diff !== 0) : data.coverage
+  const stockLengths = useMemo(
+    () => stockLengthRows(data.selectedPackages),
+    [data.selectedPackages],
+  )
 
   const toggleMark = (mark: string) => {
     setExpandedMarks((current) => {
@@ -350,6 +372,31 @@ function SectionView({
             </Button>
           </div>
         </div>
+        {stockLengths.length > 0 && (
+          <div className="flex flex-col gap-1.5 pb-3">
+            <span className="text-xs font-medium text-muted-foreground">
+              {t('preflight.nestingCoverage.stockLengths')}
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {stockLengths.map((row) => (
+                <span
+                  key={row.length ?? 'unknown'}
+                  className="rounded-md border border-border px-2 py-1 text-xs"
+                >
+                  <span className="font-medium">
+                    {row.length == null
+                      ? t('preflight.nestingCoverage.unknownLength')
+                      : `${formatNumber(row.length / 1000, 1)} m`}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {' · '}
+                    {formatNumber(row.bars, 0)} {t('preflight.nestingCoverage.bars')}
+                  </span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="min-h-0 flex-1 overflow-auto">
           <NestingFileTree
             paths={paths}
