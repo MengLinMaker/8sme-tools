@@ -664,6 +664,8 @@ export function NestingAnalysis({
   onSelectionChange,
   onlyProblems,
   onOnlyProblemsChange,
+  cardOpen,
+  onCardOpenChange,
   entries,
 }: {
   parts: ProjectPartQuantity[]
@@ -677,11 +679,12 @@ export function NestingAnalysis({
   /** Show only problem marks in the section dialog. */
   onlyProblems: boolean
   onOnlyProblemsChange: (value: boolean) => void
+  cardOpen: boolean
+  onCardOpenChange: (open: boolean) => void
   entries: ZipEntry[]
 }) {
   const { t } = useTranslation()
   const [openProfile, setOpenProfile] = useState<string | null>(null)
-  const [cardOpen, setCardOpen] = useState(true)
   const [ruleOpen, setRuleOpen] = useState(false)
   const [previewQuery, setPreviewQuery] = useState('')
   const [onlyUnmatched, setOnlyUnmatched] = useState(false)
@@ -914,7 +917,7 @@ export function NestingAnalysis({
         <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
           <button
             type="button"
-            onClick={() => setCardOpen((current) => !current)}
+            onClick={() => onCardOpenChange(!cardOpen)}
             aria-expanded={cardOpen}
             className="flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >

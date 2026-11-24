@@ -116,6 +116,7 @@ import {
   putProjectFiles,
   removeProjectFiles,
   saveProjectBatches,
+  saveProjectCollapsedCards,
   saveProjectNestCuts,
   saveProjectNestNameRule,
   saveProjectNestOnlyProblems,
@@ -721,6 +722,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   const [nestCuts, setNestCuts] = useState<Record<string, number>>({})
   const [nestSelection, setNestSelection] = useState<string[] | null>(null)
   const [nestOnlyProblems, setNestOnlyProblems] = useState(false)
+  const [collapsedCards, setCollapsedCards] = useState<Record<string, boolean>>({})
   const [nameRulesOpen, setNameRulesOpen] = useState(false)
   /** Marks ticked in the parts table for the selective PDF/STEP/NC export. */
   const [selectedMarks, setSelectedMarks] = useState<Set<string>>(new Set())
@@ -862,6 +864,18 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       )
     },
     [projectId],
+  )
+
+  /** Persist a card's collapsed state on the preflight page. */
+  const changeCardCollapsed = useCallback(
+    (card: string, collapsed: boolean) => {
+      const next = { ...collapsedCards, [card]: collapsed }
+      setCollapsedCards(next)
+      void saveProjectCollapsedCards(projectId, next).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
+    },
+    [collapsedCards, projectId],
   )
 
   /** Persist the "only problems" filter for the nesting section dialog. */
@@ -1024,6 +1038,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         setNestCuts(meta?.nestCuts ?? {})
         setNestSelection(meta?.nestSelection ?? null)
         setNestOnlyProblems(meta?.nestOnlyProblems ?? false)
+        setCollapsedCards(meta?.collapsedCards ?? {})
         handleBundle(opened)
         // The fixes travel with the project: NC edits (with their ops), STEP replacements, and the
         // resolved rows that keep their Undo available.
@@ -3259,7 +3274,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   // Collapsible sections — long jobs push the tables far down, so profiles
   // and parts collapse like an accordion.
   const [profilesOpen, setProfilesOpen] = useState(true)
-  const [partsOpen, setPartsOpen] = useState(true)
+  const partsOpen = !collapsedCards.parts
   /** Rejected parts stay in the table but collapsed by default, so they don't clutter triage. */
   const [rejectedOpen, setRejectedOpen] = useState(false)
   /** Free-text filter on the profiles card: a profile designation or a mark inside it. */
@@ -4696,6 +4711,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           onError={setError}
           onDelete={deleteEntries}
           onNameRules={() => setNameRulesOpen(true)}
+          open={collapsedCards.job === false}
+          onOpenChange={(open) => changeCardCollapsed('job', !open)}
         />
       ) : (
         <DropZone onBundle={handleBundle} onError={setError} />
@@ -4895,7 +4912,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between">
             <button
               type="button"
-              onClick={() => setPartsOpen((open) => !open)}
+              onClick={() => changeCardCollapsed('parts', partsOpen)}
               aria-expanded={partsOpen}
               className="flex items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
@@ -5415,6 +5432,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           onSelectionChange={changeNestSelection}
           onlyProblems={nestOnlyProblems}
           onOnlyProblemsChange={changeNestOnlyProblems}
+          cardOpen={!collapsedCards.nesting}
+          onCardOpenChange={(open) => changeCardCollapsed('nesting', !open)}
           entries={bundle?.entries ?? []}
         />
       )}

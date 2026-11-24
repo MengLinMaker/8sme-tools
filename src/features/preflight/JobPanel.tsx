@@ -171,6 +171,8 @@ export function JobPanel({
   onError,
   onDelete,
   onNameRules,
+  open,
+  onOpenChange,
 }: {
   sourceName: string
   entries: ZipEntry[]
@@ -183,10 +185,10 @@ export function JobPanel({
   onDelete: (paths: string[]) => void
   /** Opens the job's filename name rules (mark/quantity/section extraction). */
   onNameRules: () => void
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }) {
   const { t } = useTranslation()
-  // Collapsed by default: the header already says which job is loaded and how big it is.
-  const [open, setOpen] = useState(false)
   /** Folder paths the operator has expanded; empty means just the root's own files. */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const tree = useMemo(() => buildTree(entries), [entries])
@@ -285,7 +287,7 @@ export function JobPanel({
       <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
         <button
           type="button"
-          onClick={() => setOpen((current) => !current)}
+          onClick={() => onOpenChange(!open)}
           aria-expanded={open}
           className="flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >

@@ -46,6 +46,8 @@ export interface ProjectMeta {
   nestCuts?: Record<string, number>
   /** Show only problem marks in the nesting section dialog. */
   nestOnlyProblems?: boolean
+  /** Collapsed cards on preflight, by key (`job`, `parts`, `nesting`). */
+  collapsedCards?: Record<string, boolean>
 }
 
 /** A batch count is a positive whole number; anything else means one batch. */
@@ -189,6 +191,8 @@ export async function putProjectFiles(
     ...(existing?.nestCuts != null ? { nestCuts: existing.nestCuts } : {}),
     // Nor the "only problems" filter.
     ...(existing?.nestOnlyProblems != null ? { nestOnlyProblems: existing.nestOnlyProblems } : {}),
+    // Nor which cards are collapsed.
+    ...(existing?.collapsedCards != null ? { collapsedCards: existing.collapsedCards } : {}),
   }
   const tx = db.transaction([META_STORE, FILE_STORE], 'readwrite')
   tx.objectStore(META_STORE).put(meta)
@@ -280,6 +284,21 @@ export async function saveProjectNestSelection(
   const next: ProjectMeta = { ...meta }
   if (files === null) delete next.nestSelection
   else next.nestSelection = files
+  const db = await openDatabase()
+  const tx = db.transaction(META_STORE, 'readwrite')
+  tx.objectStore(META_STORE).put(next)
+  await finished(tx)
+  return next
+}
+
+/** Saves which preflight cards are collapsed. */
+export async function saveProjectCollapsedCards(
+  id: string,
+  collapsed: Record<string, boolean>,
+): Promise<ProjectMeta | null> {
+  const meta = await getProjectMeta(id)
+  if (!meta) return null
+  const next: ProjectMeta = { ...meta, collapsedCards: collapsed }
   const db = await openDatabase()
   const tx = db.transaction(META_STORE, 'readwrite')
   tx.objectStore(META_STORE).put(next)
