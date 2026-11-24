@@ -15,6 +15,7 @@ import {
 import { Toggle } from '@/components/ui/toggle'
 import { NEST_FILE } from '@/lib/audit/nestFiles'
 import { formatNumber } from '@/lib/format'
+import { type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
 import { profileKey } from '@/lib/sections/fromFilename'
 import { cn } from '@/lib/utils'
 import { type NcexPackage, parseNexPackage } from '@/lib/wisecam/ncexParse'
@@ -105,6 +106,41 @@ function dominantKey(counts: Map<string, number> | undefined): string | null {
     }
   }
   return best
+}
+
+function labelFamily(label: string): ProfileFamily | null {
+  return /^ANGLE/i.test(label.trim()) ? 'angle' : profileFamily(label)
+}
+
+function labelNumbers(label: string): number[] {
+  return (label.match(/[0-9]+(?:\.[0-9]+)?/g) ?? []).map(Number)
+}
+
+/**
+ * Resolve a folder label that has no placed parts (`RHS 150x100 T9`, `UB 200x29 BT`) to the real
+ * section label the parts use (`RHS150*100*9.0`, `200UB29.8`): exact key first, then family plus
+ * the first nominal numbers with a 1 mm tolerance.
+ */
+function matchSectionLabel(label: string, labels: Map<string, string>): string | null {
+  const exact = labels.get(profileKey(label))
+  if (exact) return exact
+  const family = labelFamily(label)
+  if (!family) return null
+  const expected = labelNumbers(label)
+  const count = family === 'channel' || family === 'round' ? 1 : 2
+  if (expected.length === 0) return null
+  for (const candidate of labels.values()) {
+    if (labelFamily(candidate) !== family) continue
+    const actual = labelNumbers(candidate)
+    const shared = Math.min(count, expected.length, actual.length)
+    if (shared === 0) continue
+    if (
+      expected.slice(0, shared).every((value, index) => Math.abs(value - (actual[index] ?? 0)) <= 1)
+    ) {
+      return candidate
+    }
+  }
+  return null
 }
 
 /** Required vs nested/cut per project mark, for one section's parts. */
@@ -598,13 +634,12 @@ export function NestingAnalysis({
   const packages = useMemo<LoadedPackage[]>(
     () =>
       rawPackages.map((pkg) => {
-        let profile = pkg.rawProfile
-        if (profile === UNKNOWN_PROFILE) {
-          const key = dominantKey(packageSections.get(pkg.file))
-          if (key) {
-            profile = labelByKey.get(key) ?? sectionLabelByKey.get(key) ?? profile
-          }
-        }
+        const key = dominantKey(packageSections.get(pkg.file))
+        // Always prefer the real section label the parts carry (`RHS150*100*9.0`,
+        // `200UB29.8`); the folder label is only a fallback when the parts name no section.
+        const profile = key
+          ? (sectionLabelByKey.get(key) ?? labelByKey.get(key) ?? pkg.rawProfile)
+          : (matchSectionLabel(pkg.rawProfile, sectionLabelByKey) ?? pkg.rawProfile)
         return { file: pkg.file, package: pkg.package, profile }
       }),
     [rawPackages, packageSections, labelByKey, sectionLabelByKey],
