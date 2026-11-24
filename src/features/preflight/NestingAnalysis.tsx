@@ -268,9 +268,9 @@ function SectionView({
 
   return (
     <div className="flex h-full min-h-0 flex-row items-stretch">
-      <Card className="flex h-full min-h-0 w-2/5 min-w-[12rem] shrink-0 flex-col rounded-r-none border-r-0">
-        <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
-          <CardTitle>{t('preflight.nestingCoverage.files')}</CardTitle>
+      <div className="flex min-h-0 w-2/5 min-w-[12rem] shrink-0 flex-col border-r border-border pr-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">{t('preflight.nestingCoverage.files')}</h3>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="sm" onClick={() => onToggle(paths, false)}>
               {t('preflight.nestingCoverage.all')}
@@ -279,61 +279,46 @@ function SectionView({
               {t('preflight.nestingCoverage.none')}
             </Button>
           </div>
-        </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden pr-3">
-          <div className="min-h-0 flex-1 overflow-auto">
-            <NestingFileTree
-              paths={paths}
-              selected={selected}
-              primaryFiles={hoveredFiles}
-              secondaryFiles={secondaryFiles}
-              plannedByFile={plannedByFile}
-              cutByFile={cutByFile}
-              onToggle={onToggle}
-              onHoverFiles={(files) => setHoveredFiles(new Set(files))}
-              onCutChange={onCutChange}
-            />
-          </div>
-        </CardContent>
-      </Card>
+        </div>
+        <div className="grid grid-cols-2 gap-2 py-3">
+          <Stat label={t('preflight.nestingCoverage.files')} value={data.selectedPackages.length} />
+          <Stat label={t('preflight.nestingCoverage.pieces')} value={data.summary.totals.pieces} />
+          <Stat
+            label={t('preflight.nestingCoverage.cutPieces')}
+            value={data.summary.totals.cutPieces}
+          />
+          <Stat label={t('preflight.nestingCoverage.matched')} value={data.matcher.matched} />
+          <Stat label={t('preflight.nestingCoverage.diffMarks')} value={data.diffMarks} />
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto">
+          <NestingFileTree
+            paths={paths}
+            selected={selected}
+            primaryFiles={hoveredFiles}
+            secondaryFiles={secondaryFiles}
+            plannedByFile={plannedByFile}
+            cutByFile={cutByFile}
+            onToggle={onToggle}
+            onHoverFiles={(files) => setHoveredFiles(new Set(files))}
+            onCutChange={onCutChange}
+          />
+        </div>
+      </div>
 
-      <Card className="flex h-full min-h-0 min-w-0 flex-1 flex-col rounded-l-none border-l-0">
-        <CardHeader>
-          <CardTitle>{t('preflight.nestingCoverage.marks')}</CardTitle>
-        </CardHeader>
-        <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-auto pl-3">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col pl-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">{t('preflight.nestingCoverage.marks')}</h3>
+          <Toggle pressed={onlyProblems} onPressedChange={setOnlyProblems}>
+            {t('preflight.nestingCoverage.onlyProblems')}
+          </Toggle>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto pt-3">
           {data.selectedPackages.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {t('preflight.nestingCoverage.selectHint')}
             </p>
           ) : (
             <>
-              <div className="flex flex-wrap gap-2">
-                <Stat
-                  label={t('preflight.nestingCoverage.files')}
-                  value={data.selectedPackages.length}
-                />
-                <Stat
-                  label={t('preflight.nestingCoverage.pieces')}
-                  value={data.summary.totals.pieces}
-                />
-                <Stat
-                  label={t('preflight.nestingCoverage.cutPieces')}
-                  value={data.summary.totals.cutPieces}
-                />
-                <Stat label={t('preflight.nestingCoverage.matched')} value={data.matcher.matched} />
-                <Stat label={t('preflight.nestingCoverage.diffMarks')} value={data.diffMarks} />
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-muted-foreground">
-                  {t('preflight.nestingCoverage.hint')}
-                </p>
-                <Toggle pressed={onlyProblems} onPressedChange={setOnlyProblems}>
-                  {t('preflight.nestingCoverage.onlyProblems')}
-                </Toggle>
-              </div>
-
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
@@ -504,8 +489,8 @@ function SectionView({
               )}
             </>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   )
 }
