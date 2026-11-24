@@ -273,7 +273,12 @@ function SectionOverview({
               <TableCell className="text-right tabular-nums">
                 {formatNumber(section.summary.totals.pieces, 0)}
                 {pieceDiff !== 0 && (
-                  <span className="ml-1 font-semibold text-amber-400">
+                  <span
+                    className={cn(
+                      'ml-1 font-semibold',
+                      pieceDiff < 0 ? 'text-amber-400' : 'text-red-400',
+                    )}
+                  >
                     ({pieceDiff > 0 ? '+' : ''}
                     {formatNumber(pieceDiff, 0)})
                   </span>
@@ -282,7 +287,12 @@ function SectionOverview({
               <TableCell className="text-right tabular-nums">
                 {formatNumber(section.summary.totals.cutPieces, 0)}
                 {cutDiff !== 0 && (
-                  <span className="ml-1 font-semibold text-amber-400">
+                  <span
+                    className={cn(
+                      'ml-1 font-semibold',
+                      cutDiff < 0 ? 'text-amber-400' : 'text-red-400',
+                    )}
+                  >
                     ({cutDiff > 0 ? '+' : ''}
                     {formatNumber(cutDiff, 0)})
                   </span>
