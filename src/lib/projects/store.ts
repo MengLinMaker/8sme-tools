@@ -44,6 +44,8 @@ export interface ProjectMeta {
   nestSelection?: string[]
   /** Per-file cut count (stock bars actually cut) for the nesting coverage. */
   nestCuts?: Record<string, number>
+  /** Show only problem marks in the nesting section dialog. */
+  nestOnlyProblems?: boolean
 }
 
 /** A batch count is a positive whole number; anything else means one batch. */
@@ -185,6 +187,8 @@ export async function putProjectFiles(
     ...(existing?.nestSelection != null ? { nestSelection: existing.nestSelection } : {}),
     // Nor per-file cut counts.
     ...(existing?.nestCuts != null ? { nestCuts: existing.nestCuts } : {}),
+    // Nor the "only problems" filter.
+    ...(existing?.nestOnlyProblems != null ? { nestOnlyProblems: existing.nestOnlyProblems } : {}),
   }
   const tx = db.transaction([META_STORE, FILE_STORE], 'readwrite')
   tx.objectStore(META_STORE).put(meta)
@@ -276,6 +280,21 @@ export async function saveProjectNestSelection(
   const next: ProjectMeta = { ...meta }
   if (files === null) delete next.nestSelection
   else next.nestSelection = files
+  const db = await openDatabase()
+  const tx = db.transaction(META_STORE, 'readwrite')
+  tx.objectStore(META_STORE).put(next)
+  await finished(tx)
+  return next
+}
+
+/** Saves the "only problems" filter for the nesting section dialog. */
+export async function saveProjectNestOnlyProblems(
+  id: string,
+  onlyProblems: boolean,
+): Promise<ProjectMeta | null> {
+  const meta = await getProjectMeta(id)
+  if (!meta) return null
+  const next: ProjectMeta = { ...meta, nestOnlyProblems: onlyProblems }
   const db = await openDatabase()
   const tx = db.transaction(META_STORE, 'readwrite')
   tx.objectStore(META_STORE).put(next)

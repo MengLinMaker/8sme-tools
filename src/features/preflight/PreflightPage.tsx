@@ -118,6 +118,7 @@ import {
   saveProjectBatches,
   saveProjectNestCuts,
   saveProjectNestNameRule,
+  saveProjectNestOnlyProblems,
   saveProjectNestSelection,
   saveProjectStepNames,
   takeHandOffProject,
@@ -719,6 +720,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   const [nestNameRule, setNestNameRule] = useState<NestNameRule>(DEFAULT_NEST_NAME_RULE)
   const [nestCuts, setNestCuts] = useState<Record<string, number>>({})
   const [nestSelection, setNestSelection] = useState<string[] | null>(null)
+  const [nestOnlyProblems, setNestOnlyProblems] = useState(false)
   const [nameRulesOpen, setNameRulesOpen] = useState(false)
   /** Marks ticked in the parts table for the selective PDF/STEP/NC export. */
   const [selectedMarks, setSelectedMarks] = useState<Set<string>>(new Set())
@@ -856,6 +858,17 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     (files: string[] | null) => {
       setNestSelection(files)
       void saveProjectNestSelection(projectId, files).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      )
+    },
+    [projectId],
+  )
+
+  /** Persist the "only problems" filter for the nesting section dialog. */
+  const changeNestOnlyProblems = useCallback(
+    (value: boolean) => {
+      setNestOnlyProblems(value)
+      void saveProjectNestOnlyProblems(projectId, value).catch((err) =>
         setError(err instanceof Error ? err.message : String(err)),
       )
     },
@@ -1010,6 +1023,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         setNestNameRule(meta?.nestNameRule ?? DEFAULT_NEST_NAME_RULE)
         setNestCuts(meta?.nestCuts ?? {})
         setNestSelection(meta?.nestSelection ?? null)
+        setNestOnlyProblems(meta?.nestOnlyProblems ?? false)
         handleBundle(opened)
         // The fixes travel with the project: NC edits (with their ops), STEP replacements, and the
         // resolved rows that keep their Undo available.
@@ -5399,6 +5413,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           onCutsChange={changeNestCuts}
           selection={nestSelection}
           onSelectionChange={changeNestSelection}
+          onlyProblems={nestOnlyProblems}
+          onOnlyProblemsChange={changeNestOnlyProblems}
           entries={bundle?.entries ?? []}
         />
       )}

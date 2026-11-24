@@ -313,6 +313,8 @@ function SectionView({
   selected,
   plannedByFile,
   cutByFile,
+  onlyProblems,
+  onOnlyProblemsChange,
   onToggle,
   onCutChange,
 }: {
@@ -320,13 +322,14 @@ function SectionView({
   selected: Set<string>
   plannedByFile: Map<string, number>
   cutByFile: Map<string, number>
+  onlyProblems: boolean
+  onOnlyProblemsChange: (value: boolean) => void
   onToggle: (paths: string[], allSelected: boolean) => void
   onCutChange: (file: string, value: number) => void
 }) {
   const { t } = useTranslation()
   const [hoveredFiles, setHoveredFiles] = useState<Set<string>>(new Set())
   const [hoveredMark, setHoveredMark] = useState<string | null>(null)
-  const [onlyProblems, setOnlyProblems] = useState(false)
   const [expandedMarks, setExpandedMarks] = useState<Set<string>>(new Set())
 
   const paths = data.packages.map((pkg) => pkg.file)
@@ -351,7 +354,11 @@ function SectionView({
     : hoveredName
       ? new Set(hoveredName.sources.map((source) => source.file))
       : EMPTY
-  const visible = onlyProblems ? data.coverage.filter((row) => row.diff !== 0) : data.coverage
+  const visible = useMemo(() => {
+    const rows = onlyProblems ? data.coverage.filter((row) => row.diff !== 0) : data.coverage
+    // Stable sort: problem marks first, each group keeping the alphabetical order.
+    return [...rows].sort((a, b) => Number(b.diff !== 0) - Number(a.diff !== 0))
+  }, [data.coverage, onlyProblems])
   const stockLengths = useMemo(
     () => stockLengthRows(data.selectedPackages),
     [data.selectedPackages],
@@ -423,7 +430,7 @@ function SectionView({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col py-4 pl-4 pr-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold">{t('preflight.nestingCoverage.marks')}</h3>
-          <Toggle pressed={onlyProblems} onPressedChange={setOnlyProblems}>
+          <Toggle pressed={onlyProblems} onPressedChange={onOnlyProblemsChange}>
             {t('preflight.nestingCoverage.onlyProblems')}
           </Toggle>
         </div>
@@ -655,6 +662,8 @@ export function NestingAnalysis({
   onCutsChange,
   selection,
   onSelectionChange,
+  onlyProblems,
+  onOnlyProblemsChange,
   entries,
 }: {
   parts: ProjectPartQuantity[]
@@ -665,6 +674,9 @@ export function NestingAnalysis({
   /** Ticked nesting files; `null` means all of them. */
   selection: string[] | null
   onSelectionChange: (files: string[] | null) => void
+  /** Show only problem marks in the section dialog. */
+  onlyProblems: boolean
+  onOnlyProblemsChange: (value: boolean) => void
   entries: ZipEntry[]
 }) {
   const { t } = useTranslation()
@@ -1100,6 +1112,8 @@ export function NestingAnalysis({
               selected={selected}
               plannedByFile={plannedByFile}
               cutByFile={cutByFile}
+              onlyProblems={onlyProblems}
+              onOnlyProblemsChange={onOnlyProblemsChange}
               onToggle={toggle}
               onCutChange={changeFileCut}
             />
