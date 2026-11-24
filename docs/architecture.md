@@ -740,3 +740,42 @@ So `j12095` can be cut more times than it is nested: the operator re-runs a per-
   report PDF. Note the `.tld` is a single, overwritten file for the *current* queue, so history
   beyond the current batch has to come from the reports/logs.
 - See `docs/ncexa-nest-check.md` for the quantity model (`PartInfo × Count`, deduped results).
+
+## 19. Nesting coverage — sections, one-result nestings, persisted state
+
+Status: **adopted**. Files: `NestingAnalysis.tsx`, `NestingFileTree.tsx`, `nestProfile.ts`,
+`nestSummary.ts`, `lib/projects/store.ts`.
+
+**Vocabulary: section, not profile.** The UI says **Section** for a steel cross-section
+designation (`200UB29.8`, `RHS150*100*9.0`); "profile" is ambiguous (drawn shape vs manufacturing
+profile) and the code already says `section` (`sections/`, `sectionLabel`). The old Profiles card,
+parts column and settings now read Section(s). Chinese stays 型材.
+
+**One `<Result>` = one machine nesting.** A per-beam CAM nesting is structurally one stock-bar
+layout: exactly one `Result`. The WiseCAM project snapshot aggregates every layout (`NW30
+TOP.ncexa` has 11 Results, each also exported per beam), so packages whose `results.length !== 1`
+are not nestings and are excluded. Zero-result CAD/library exports are excluded too.
+
+**Quantity comes from the package, never the filename.** `plannedByFile = Σ Result.copies`;
+`summarizeNests` uses `PartInfo × Count`; duplicated results are counted once by `idref`. Real
+filenames can be stale (`…11x12.ncexa` with `Count=9`) and are ignored. The only filename quantity
+in the app is the STEP-only part fallback in the audit.
+
+**Section label is resolved from what the nesting places,** because the folder label is not
+reliable (`PFC 150` holds PFC100*50; root/`新建文件夹` packages are Unknown). Match the placed part
+names to project marks, take the dominant section key, and label it with the parts-table section
+code first, a known folder label second, and a family + nominal-number fallback last. The section's
+parts are then all parts of those section keys, so missing marks stay visible.
+
+**Persisted per project** (small meta writes, preserved by `putProjectFiles`):
+`nestSelection` (absent = all ticked; selecting everything stores `null` so later nestings stay
+ticked), `nestCuts`, `nestNameRule`, `nestOnlyProblems`, `collapsedCards` (Job/Sections/Parts/
+Nesting coverage). Stale selected paths are filtered against the current files.
+
+**UI rules.** One card: title + selected count, a **Name rule** button opening the matcher dialog,
+then the section table ordered like the Sections card (total length, then pieces). A row opens a
+fullscreen **dialog**, paged by `‹ ›` / arrow keys (fields keep their own arrows), not an inline
+expansion. Inside: statistics on the Nestings side, stock bars per adobe length, problem marks
+boosted to the top and always sorted first, green mark↔file hover linking, unmatched names in their
+own table, and `±` piece differences against required (amber short, red over). Issues =
+`Σ|cut − required|` plus unmatched nested pieces. The divider runs the full dialog height.
