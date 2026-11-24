@@ -29,7 +29,7 @@ import { type NestSummary, summarizeNests } from '@/lib/wisecam/nestSummary'
 import type { ZipEntry } from '@/lib/zip'
 import { NestingFileTree } from './NestingFileTree'
 
-const SECONDARY_TABLE_ROW = 'bg-violet-500/25 ring-1 ring-inset ring-violet-300/70'
+const SECONDARY_TABLE_ROW = 'bg-emerald-400/20 ring-1 ring-inset ring-emerald-300/70'
 const EMPTY: Set<string> = new Set()
 
 export interface ProjectPartQuantity {

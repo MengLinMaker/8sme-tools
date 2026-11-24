@@ -243,7 +243,7 @@ function FolderRows({
                 className={cn(
                   'flex items-center gap-1.5 rounded px-1 py-0.5 text-xs transition-colors',
                   primary && 'bg-emerald-400/35 ring-2 ring-inset ring-emerald-300',
-                  isSecondary && 'bg-violet-500/25 ring-1 ring-inset ring-violet-300/70',
+                  isSecondary && 'bg-emerald-400/35 ring-2 ring-inset ring-emerald-300',
                   !primary && !isSecondary && 'hover:bg-accent/50',
                 )}
               >
@@ -320,7 +320,7 @@ export function NestingFileTree({
             className={cn(
               'flex items-center gap-1.5 rounded px-1 py-0.5 text-xs transition-colors',
               primary && 'bg-emerald-400/35 ring-2 ring-inset ring-emerald-300',
-              isSecondary && 'bg-violet-500/25 ring-1 ring-inset ring-violet-300/70',
+              isSecondary && 'bg-emerald-400/35 ring-2 ring-inset ring-emerald-300',
               !primary && !isSecondary && 'hover:bg-accent/50',
             )}
           >
