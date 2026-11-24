@@ -221,11 +221,9 @@ function buildCoverage(
  */
 function SectionOverview({
   sections,
-  openProfile,
   onToggle,
 }: {
   sections: SectionData[]
-  openProfile: string | null
   onToggle: (profile: string) => void
 }) {
   const { t } = useTranslation()
@@ -247,12 +245,11 @@ function SectionOverview({
       </TableHeader>
       <TableBody>
         {sections.map((section) => {
-          const open = section.profile === openProfile
           return (
             <TableRow
               key={section.profile}
               onClick={() => onToggle(section.profile)}
-              className={cn('cursor-pointer', open && 'bg-muted/40')}
+              className="cursor-pointer"
             >
               <TableCell>
                 <button
@@ -261,18 +258,10 @@ function SectionOverview({
                     event.stopPropagation()
                     onToggle(section.profile)
                   }}
-                  aria-expanded={open}
-                  className="flex w-full items-center gap-1.5 text-left"
+                  aria-haspopup="dialog"
+                  className="w-full text-left font-medium"
                 >
-                  <span
-                    className={cn(
-                      'text-muted-foreground transition-transform',
-                      open && 'rotate-90',
-                    )}
-                  >
-                    ›
-                  </span>
-                  <span className="font-medium">{section.profile}</span>
+                  {section.profile}
                 </button>
               </TableCell>
               <TableCell className="text-right tabular-nums">
@@ -906,7 +895,6 @@ export function NestingAnalysis({
                 </p>
                 <SectionOverview
                   sections={sections}
-                  openProfile={openProfile}
                   onToggle={(profile) =>
                     setOpenProfile((current) => (current === profile ? null : profile))
                   }
