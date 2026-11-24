@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, Settings2 } from 'lucide-react'
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -831,6 +831,23 @@ export function NestingAnalysis({
     const next = sections[openIndex + offset]
     if (next) setOpenProfile(next.profile)
   }
+
+  // Left/right arrows page through sections while the dialog is open, unless a field is focused.
+  useEffect(() => {
+    if (!openSection) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+      const offset = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0
+      if (offset === 0) return
+      const next = sections[openIndex + offset]
+      if (!next) return
+      event.preventDefault()
+      setOpenProfile(next.profile)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [openSection, openIndex, sections])
 
   // The name rule is global; its preview shows every selected nesting name against every part.
   const allSelectedPackages = useMemo(
