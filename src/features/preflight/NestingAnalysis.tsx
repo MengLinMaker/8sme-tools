@@ -81,6 +81,15 @@ function looseKey(value: string): string {
   return value.toLowerCase().replace(/[\s_/,.-]+/g, '')
 }
 
+/**
+ * A machine nesting is structurally one stock-bar layout: exactly one `<Result>`. The WiseCAM
+ * project snapshot aggregates every layout (NW30 TOP.ncexa has 11 Results, each also exported per
+ * beam), so it is not a nesting file and must not be listed beside them.
+ */
+function isMachineNesting(pkg: NcexPackage): boolean {
+  return pkg.results.length === 1
+}
+
 /** The part names a nesting actually places (its results), not its whole part library. */
 function nestedPartNames(pkg: NcexPackage): string[] {
   const partsById = new Map(pkg.parts.map((part) => [part.idref, part]))
@@ -588,6 +597,8 @@ export function NestingAnalysis({
             rawProfile: nestProfile(entry.path, pkg),
           }
         })
+        // Only per-beam nestings: the project snapshot has one Result per layout.
+        .filter((pkg) => isMachineNesting(pkg.package))
         .sort((a, b) => a.file.localeCompare(b.file)),
     [entries],
   )
