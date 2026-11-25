@@ -2,7 +2,8 @@
 
 A curated set of marks that have **both** the DSTV `.nc1` and the Tekla `.stp`, chosen to
 cover every section family we cut and the awkward cut features: welding prep of every
-magnitude, curved cuts, notches, slots, hole-heavy parts, a mitre and a stub.
+magnitude, curved cuts, notches, slots, hole-heavy parts, a mitre and a stub — plus two
+**NC-only** cases for features no pair carries (bottom-face marking, a UC with angled cuts).
 
 **T (`BT…`) sections are excluded** — they are out of scope for this pack.
 
@@ -35,6 +36,20 @@ deltas are the most informative parts to diff.
 | `a1` | angle | EA75*75*6 | 4166 | 1 | 2 | 20.9 | 0 | 3 | 3 | 0 | 1.1 mm | 0.01% | angle; 2×20.9° welds; mitred end; 3 holes / 3 slots |
 | `a2` | angle | EA75*75*6 | 100 | 378 | 0 | 0 | 0 | 1 | 1 | 0 | 0.0 mm | 0.0% | angle, 100 mm stub, qty 378 |
 | `M/12` (file `M_12`) | UB/UC | UB250*31 | 5309 | 1 | 0 | 0 | 0 | 62 | 0 | 0 | 0.0 mm | 0.07% | UB250*31; 62 holes incl. overlapping pair |
+
+## NC-only cases (no Tekla STEP exists)
+
+Both come from jobs exported without STEP files, so they cannot be geometry-diffed against a
+reference — they exist to exercise the NC-side feature in the app and in `nc-to-step`.
+
+| file | profile | why |
+|---|---|---|
+| `test/fixtures/ncep/M-9.nc1` | UB310*32 | the only UB with **marking on the bottom**: 12 KO/PU marks, 6 on the `h` face (the WiseCAM h-mark drop case) |
+| `test/fixtures/part-ir/3uc-16.nc1` | UC310*118 | **angled end cuts**: flanges span 2192.8 mm against a 2491.8 mm member (18-point web silhouette, one weld prep) |
+
+`ub/` and `part-ir/` ship no UC STEP at all, and `M-9`'s job has no STEPs; the only STEP for a
+310UB is `~/Downloads/ncep-step-sections-20261110/M-3.stp`, which is **our own rebuild**, so
+diffing against it would be circular.
 
 ## Where the pair lives
 
@@ -80,13 +95,11 @@ ideal — red = overcut (scrap), blue = undercut.
 
 ## Gaps in the paired data
 
-- **No etch/marking data**: no paired fixture carries `SI` text or `KO`/`PU` scribe marks. The
-  only NC files with `KO`/`PU` are `test/fixtures/ncep/`, which has no STEP — so mark
-  production cannot be diffed from this pack. **NC-only bottom-marking examples**:
-  `test/fixtures/ncep/M-9.nc1` (UB310*32, three `KO`/`PU` pairs on `h` at along 26.1, 228.1,
-  1860.5) and `M-39.nc1` (UB410*60, one pair at 6233.45). They exercise the IR's separate
-  `rear` chart; locked by `src/lib/part/ub-bottom-marks.test.ts`. WiseCAM's NCEP export does
-  not machine the `h` copy (see `docs/ncep-format.md`), so this is the faithful pre-export
-  record.
+- **No etch/marking data in any pair**: no paired fixture carries `SI` text or `KO`/`PU` scribe
+  marks, so mark production cannot be geometry-diffed. The NC-only cases cover the marks instead:
+  `M-9` (UB310*32 — three `KO`/`PU` pairs on `h` at along 26.1, 228.1, 1860.5, the bottom-face
+  copy, locked by `src/lib/part/ub-bottom-marks.test.ts`) and `M-39` (UB410*60, UB bottom marks).
+  WiseCAM's NCEP export does not machine the `h` copy (see `docs/ncep-format.md`), so the IR's
+  separate `rear` chart is the faithful pre-export record.
 - **One size per family** except the hollows: a single UB (250UB31) and a single PFC section, so
   taper/mass-variant differences are not covered here.
