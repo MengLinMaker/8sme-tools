@@ -29,20 +29,38 @@ export function setOcWasmProvider(provider: () => Promise<ArrayBuffer | Uint8Arr
 }
 
 /**
- * The OCCT kernel reports STEP transfer progress on **stdout** ("Statistics on Transfer (Write)",
- * "Transferring Shape", "WorkSession : Sending all data", the asterisk banners). Emscripten forwards
- * stdout to `console.log`, so every export floods the browser console with the writer's internal
- * statistics — noise, not diagnostics (real failures arrive as thrown exceptions / `printErr`).
+ * The OCCT kernel writes everything it has to say — STEP transfer statistics, progress, asterisk
+ * banners, blank separators — to **stdout**, which Emscripten forwards to `console.log`. That is a
+ * kernel chatter channel, not app logging: every export buries the console in it, and routing it
+ * through one of our functions only makes it look like ours.
  *
- * Filtered at the module's own `print` hook, so it is silenced at the source rather than by
- * patching `console` for the whole app.
+ * So the module's `print` hook is silenced by default. Real failures arrive as thrown exceptions
+ * (the rebuild reports those) or on `printErr`, which is left alone. To read the kernel's own
+ * output when debugging, set `SME_OC_VERBOSE=1` (node/CLI) or
+ * `localStorage['sme:oc-verbose'] = '1'` (browser) before the kernel loads.
  */
-const OC_CHATTER =
-  /Statistics on Transfer|Transfer Mode = |Transferring Shape|WorkSession\s*:|Step File Name|^\s*\*+\s*$/
+let ocVerbose: boolean | undefined
+function ocPrintEnabled(): boolean {
+  if (ocVerbose !== undefined) return ocVerbose
+  let verbose = false
+  try {
+    const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+      ?.env?.SME_OC_VERBOSE
+    if (env && env !== '0') verbose = true
+  } catch {}
+  if (!verbose) {
+    try {
+      // Workers have no localStorage; `typeof` keeps that from throwing.
+      const storage = typeof localStorage === 'undefined' ? null : localStorage
+      if (storage?.getItem('sme:oc-verbose') === '1') verbose = true
+    } catch {}
+  }
+  ocVerbose = verbose
+  return verbose
+}
 
 function ocPrint(line: string): void {
-  if (OC_CHATTER.test(line)) return
-  console.log(line)
+  if (ocPrintEnabled()) console.log(line)
 }
 
 export async function ensureOc(): Promise<void> {
