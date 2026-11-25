@@ -222,6 +222,47 @@ describe('channel v to h projection', () => {
   })
 })
 
+describe('projectNc angle bevel end (EA75*75*6)', () => {
+  it('draws a full-wall prep on the outer skin at both member ends', () => {
+    const path = nw31Top('NC files', 'a1.nc1')
+    if (!existsSync(path)) return
+    const text = readFileSync(path, 'utf8')
+    const header = parseDstv(text).header
+    const geo = parseNcGeometry(text)
+    const section = outlinePoints(partSectionForCode(header.profile, header.dimensions)?.outline)
+    expect(section).toBeTruthy()
+    if (!section) return
+    const frame = resolveNcFaceFrame(section, geo, header.profile)
+    const toScene = (along: number, cross: [number, number]): Vec3 => [along, cross[0], cross[1]]
+    const normal = (face: NcFace): Vec3 => {
+      const n = faceNormal(frame, face, section)
+      return n.axis === 0 ? [0, n.sign, 0] : [0, 0, n.sign]
+    }
+    const out = projectNc(geo, { frame, section, toScene, normal })
+    const points: Vec3[] = []
+    for (const cut of out.cuts)
+      for (let i = 0; i + 2 < cut.points.length; i += 3)
+        points.push([
+          cut.points[i] as number,
+          cut.points[i + 1] as number,
+          cut.points[i + 2] as number,
+        ])
+    // a1's `u` face is the vertical leg (world y = −37.5 in this identity projection). Its start
+    // cut carries a full-wall −20.91° prep at along 0 and the end a full-wall +20° at 4105.6. An
+    // angle is one-sided, so both ends set the outer skin back: draw the line there, toward the
+    // material (start +wall·tan, end −wall·tan), exactly like the tube root-line shift.
+    const onU = points.filter((p) => Math.abs(p[1] + 37.5) < 0.01)
+    const wall = 6
+    const startShift = wall * Math.tan((20.91 * Math.PI) / 180)
+    const endShift = 4105.6 - wall * Math.tan((20 * Math.PI) / 180)
+    expect(onU.some((p) => Math.abs(p[0] - startShift) < 0.01)).toBe(true)
+    expect(onU.some((p) => Math.abs(p[0] - endShift) < 0.01)).toBe(true)
+    // The unbeveled `v` mitre stays where it was authored.
+    const onV = points.filter((p) => Math.abs(p[2] + 37.5) < 0.01)
+    expect(onV.some((p) => Math.abs(p[0]) < 0.01)).toBe(true)
+  })
+})
+
 describe('projectNc hollow bevel end (RHS150*100*9.0)', () => {
   it('draws a beveled end cut on the outer skin at the real cut edge', () => {
     const path = nw31Top('NC files', 'm172.nc1')

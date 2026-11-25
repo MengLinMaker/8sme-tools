@@ -476,6 +476,15 @@ If the background detector map has not populated yet, the STEP IR effect reads t
 directly from the STEP bytes (`detectStepSection`). It does **not** wait for NC or fall back to an
 NC section; that fallback is what made the STEP surface disappear ("No NC or STEP surface").
 
+### Manufactured pane: toolpath origin
+
+The manufactured model is built in the NC's authored frame (`along` starts at 0), then seated. The
+toolpath must map `along` by the seat's **translation** (`primary.group.position.x`), not by the
+seated mesh's `length/2`. A full-wall bevel sets the outer skin back ~1 mm (a1), so the mesh's first
+vertex is not at authored `along = 0`; centring on the mesh then slid the whole toolpath along the
+member and left the far-end lines off the solid. With the authored origin the cut lines land on the
+solid (mean < 0.1 mm), and the negative/far-side prep lines are shifted onto the outer skin.
+
 The STEP detector returns `dims: []` for PFC/RHS/SHS because the code alone carries the size.
 `unrolledLayout` still needs dimension fields, so `layoutDimensions(code, dims, section)` fills them
 from the catalogue/measured section before building the IR. Do not pass `guess.dims` straight to

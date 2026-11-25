@@ -490,17 +490,27 @@ export function projectNc(nc: NcGeometry, projection: NcProjection): NcLineSets 
     }
   }
 
-  const isTube = (frame.profile ? profileFamily(frame.profile) : null) === 'tube'
+  const family = frame.profile ? profileFamily(frame.profile) : null
+  const isTube = family === 'tube'
+  const isAngle = family === 'angle'
   // DSTV writes a beveled hollow end's `AK` line on the bevel **root** surface (the inner wall when
   // the prep opens outwards), so taken literally it sits ~wall·tan(prep) off the visible outer cut
   // edge. Draw it on the outer skin instead, where the laser exits: shift the root line along the
   // member by that amount. A positive prep is the rooted-in case; a negative prep is already on the
   // outer skin. Start and end cuts shift in opposite directions.
+  //
+  // An **angle** is a one-sided open section: a full-wall prep sets the outer skin back at both
+  // ends whatever its signed side (a1's 20° and −20.91° ends are both set back), so every drawn
+  // angle prep line moves to the outer skin.
   const midAlong = ncAlongMid(nc)
   const outerAlongShift = (face: NcFace, x0: number, x1: number, deg: number): number => {
-    if (projection.onSurface || !isTube || deg <= REGULAR_CUT_DEG) return 0
+    if (projection.onSurface) return 0
+    let magnitude = 0
+    if (isTube && deg > REGULAR_CUT_DEG) magnitude = deg
+    else if (isAngle && Math.abs(deg) > REGULAR_CUT_DEG) magnitude = Math.abs(deg)
+    else return 0
     const wall = faceThickness(frame, section, face)
-    const shift = wall * Math.tan((deg * Math.PI) / 180)
+    const shift = wall * Math.tan((magnitude * Math.PI) / 180)
     return (x0 + x1) / 2 < midAlong ? shift : -shift
   }
   // Draw the bevels the model will cut: out-of-range preps follow the policy (no 45° mitre drawn on

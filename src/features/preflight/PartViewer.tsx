@@ -1379,6 +1379,11 @@ function mountScene(
       // Cut lines live exactly on the stock surface (`OFF = 0`): the laser cuts the material, not
       // a plane floating above it. The line material uses a depth bias so it still beats the face.
       const OFF = 0
+      // The manufactured model is built in the NC's authored frame (0…L), then seated; map the
+      // NC's `along` by that authored origin, not the mesh bbox. A cut bevel can set the mesh's
+      // first vertex back ~1 mm (the a1 angle), and centring on the mesh (`length/2`) then shifted
+      // the whole toolpath along the member.
+      const alongOrigin = ncPrimary ? primary.group.position.x : -length / 2
       const toScene = (along: number, cross: [number, number], face: NcFace): Vec3 => {
         const n = faceNormal(frame, face, section)
         const local: [number, number] = [cross[0], cross[1]]
@@ -1388,7 +1393,7 @@ function mountScene(
         const snapped = snapToSectionSurface(section, local)
         local[0] = snapped[0]
         local[1] = snapped[1]
-        const x = along - length / 2
+        const x = along + alongOrigin
         return [
           x + local[0] * xAxis.x + local[1] * yAxis.x,
           local[0] * xAxis.y + local[1] * yAxis.y,

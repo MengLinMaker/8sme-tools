@@ -59,8 +59,9 @@ No provenance, confidence, source blobs or duplicate interpretations. Importers 
   dedupe overlapping corner segments. Through holes/slots keep only the **nearest outer-face rim**
   (the side the cut cylinder sits on), so STEP matches the single machined line the NC authors
   without depending on the NC. Closed rims are classified as holes/slots. Bevels are carried per
-  vertex; NC tube root-line bevels are shifted to the outer skin for display/diff only
-  (round-trip data stays authored).
+  vertex; NC tube and angle root-line bevels are shifted to the outer skin for display/diff only
+  (round-trip data stays authored). An angle is one-sided, so a full-wall prep sets the outer skin
+  back at both ends whatever its signed side; the drawn line shifts into the material at each end.
 - `src/lib/part/fromNcep.ts` — NCEP part SVG → PartIR (holes, truncates, marks, start/end).
 - `src/lib/part/toNcep.ts` — PartIR → NCEP part/package (shaped start/end derived from IR cuts).
 - `src/lib/part/toNcGeometry.ts` — PartIR → face-space NC geometry, the coordinate transform the 3D projector consumes.
