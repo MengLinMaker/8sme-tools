@@ -11,6 +11,7 @@ import { detectStepSection } from '@/lib/step/readSection'
 import { partIrFromNc } from './fromNc'
 import { partIrFromStepMesh } from './fromStep'
 import type { PartIr, UvPoint } from './ir'
+import { partIrSvg } from './svg'
 
 const require = createRequire(import.meta.url)
 setOcWasmUrl(require.resolve('replicad-opencascadejs/wasm'))
@@ -93,6 +94,29 @@ describe('angle Surface IR — one continuous prism-section strip', () => {
       [0, 4105.59],
       [75, 4130.7],
     ])
+  })
+
+  it.skipIf(!existsSync(a1nc))('a1: the NC IR stays faithful to the authored end line', () => {
+    const ir = partIrFromNc(readFileSync(a1nc, 'utf8'))
+    if (!ir) throw new Error('no IR')
+    // a1's beveled `u` end is authored on the root/inner line at along 4105.6. The real STEP
+    // geometry meets the outer skin ~2 mm earlier, so the STEP IR draws there — but the IR is the
+    // faithful canonical record of the NC and must not be offset to hide that (NC/STEP) difference.
+    const u = ir.features.find(
+      (feature) =>
+        feature.kind === 'cut' &&
+        feature.shape.form === 'polyline' &&
+        feature.shape.points.some(([station]) => station < -1),
+    )
+    if (u?.shape.form !== 'polyline') throw new Error('no u cut')
+    const alongs = u.shape.points.map(([, along]) => along)
+    expect(alongs.some((along) => Math.abs(along - 4105.6) < 0.01)).toBe(true)
+    expect(alongs.some((along) => Math.abs(along) < 0.01)).toBe(true)
+
+    // The view renders the authored value, not an outer-skin shift.
+    const svg = partIrSvg(ir, { orientation: 'raw' })
+    expect(svg).toContain(',4105.600')
+    expect(svg).not.toContain(',4103.416')
   })
 
   it.skipIf(!existsSync(a1stp))(
