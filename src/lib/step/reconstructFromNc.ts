@@ -27,6 +27,7 @@ import { stripStraySolids } from './clean'
 import type { MeasurableShape } from './measure'
 import { ensureOc } from './occInit'
 import { type SabreFailure, sabreSamples } from './sabre'
+import { sectionSketch } from './sectionBrep'
 
 /**
  * EXPERIMENTAL / standalone: rebuild a prismatic part's solid from its DSTV `.nc1`.
@@ -346,35 +347,6 @@ export interface ReconstructOptions {
   sabre?: boolean
   /** Tuning/debug: sabre probe tessellation resolution. */
   sabreMesh?: { tolerance?: number; angularTolerance?: number }
-}
-
-/**
- * Fitted radius for each edge's destination vertex, or 0 when the three points are straight or
- * the circle is implausibly large. Section builders sample rounded corners into ~7 points; this
- * keeps them as arcs in the STEP instead of chords.
- */
-function sectionArcRadii(points: Pt[], maxRadius: number): number[] {
-  const n = points.length
-  const radii = new Array<number>(n).fill(0)
-  for (let i = 0; i < n; i++) {
-    const a = points[(i - 1 + n) % n]
-    const b = points[i]
-    const c = points[(i + 1) % n]
-    if (!a || !b || !c) continue
-    const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]))
-    if (Math.abs(d) < 1e-9) continue
-    const aa = a[0] ** 2 + a[1] ** 2
-    const bb = b[0] ** 2 + b[1] ** 2
-    const cc = c[0] ** 2 + c[1] ** 2
-    const cx = (aa * (b[1] - c[1]) + bb * (c[1] - a[1]) + cc * (a[1] - b[1])) / d
-    const cy = (aa * (c[0] - b[0]) + bb * (a[0] - c[0]) + cc * (b[0] - a[0])) / d
-    const radius = Math.hypot(b[0] - cx, b[1] - cy)
-    if (!(radius > 0.1 && radius <= maxRadius)) continue
-    // Match the sagitta direction used by `poly` with the contour's turn direction.
-    const cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
-    radii[(i - 1 + n) % n] = cross >= 0 ? radius : -radius
-  }
-  return radii
 }
 
 export async function reconstructStepFromNc(
@@ -801,12 +773,13 @@ export async function reconstructSolidFromNc(
     return cuts
   }
   // Pure stock: cross-section in the (width=Y, depth=Z) plane, extruded along the member (X).
-  // The section builders return sampled points; passing fitted radii keeps root fillets/corner
-  // arcs as real arcs instead of chords, which matters for WiseCAM's standard-section matcher.
-  const sectionRadiusLimit = Math.max(1, header.dimensions[4] ?? 0) * 1.5
-  let solid = poly(section.points, sectionArcRadii(section.points, sectionRadiusLimit))
-    .sketchOnPlane('YZ')
+  // `sectionSketch` builds every stock contour from real primitives — outer outline and inner void
+  // both — so rounded corners are cylindrical faces, not chord chains, which is what WiseCAM's
+  // standard-section matcher needs.
+  let solid = (await sectionSketch(section.points))
+    ?.sketchOnPlane('YZ')
     .extrude(maxX + 20) as unknown as SolidOps
+  if (!solid) return null
   const emit = async (name: string, shape: unknown): Promise<void> => {
     if (!options.onSolid) return
     try {
@@ -816,11 +789,14 @@ export async function reconstructSolidFromNc(
   }
   await emit('00-stock', solid)
 
-  // Holes in the section (hollow RHS/SHS/CHS) are through-cuts too.
+  // Holes in the section (hollow RHS/SHS/CHS) are through-cuts too. Their voids are built the same
+  // way, so a hollow's inner corners are arcs as well — a faceted void is what stopped WiseCAM
+  // recognising a rebuilt RHS/SHS as a standard section.
   for (const hole of section.holes ?? []) {
-    const cut = poly(hole)
-      .sketchOnPlane('YZ')
+    const cut = (await sectionSketch(hole))
+      ?.sketchOnPlane('YZ')
       .extrude(maxX + 20) as unknown as SolidOps
+    if (!cut) continue
     solid = solid.cut(cut)
   }
 

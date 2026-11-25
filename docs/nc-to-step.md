@@ -70,22 +70,35 @@ section designation string.
 
 ## Stock section arcs (implemented)
 
-The section builders return sampled points for rounded corners. `reconstructFromNc` previously
-drew those points with `lineTo`, so UB root fillets became **chords** in the manufactured STEP.
-WiseCAM's section matcher accepted the faceted section as "custom".
+The section builders (`src/lib/sections/stock.ts`) return a **sampled polyline**: every rounded
+corner is ~6 chords. Drawing that polyline into the extruded stock gives a faceted section, and
+WiseCAM reads it as a **custom** profile instead of the standard RHS/SHS/UB it is. An earlier fix
+fitted a radius per sampled vertex (`sectionArcRadii`), which helped UB root fillets but left two
+problems: a corner became a *chain* of small arcs, and the inner void of a hollow was still drawn
+as a chorded polygon (so a rebuilt RHS had 4 outer cylinders and a 28-sided hole).
 
-`sectionArcRadii` now fits a radius to each sampled section vertex and `poly` uses
-`sagittaArcTo`, so root fillets and corner arcs remain **real arcs**. This is applied to every
-manufactured NC→STEP rebuild and is the fix that made the UB STEP register as a standard section.
+`sectionPath` (`src/lib/sections/sectionPath.ts`) now decomposes the contour into **real
+primitives**: each run of co-circular samples collapses into **one circular arc**, and a full round
+contour (CHS, a bored circle, a round void) into **one circle**. `sectionSketch`
+(`src/lib/step/sectionBrep.ts`) draws that path, so an extruded stock has a single cylindrical
+brep face per corner — **outer outline and inner void alike** — and a CHS is a true cylinder.
 
-- PFC root fillets sit inside the channel cavity, which is why PFC STEPs already registered
-  correctly despite the same sampled-section path.
-- UB root fillets are on the outer I-section boundary, so chorded fillets changed the matched
-  profile.
-- Metadata/schema variants did not matter; the smooth stock section did.
+The merge is exact, not a smoothing pass: builder samples are exactly on their circle (they come
+from `cos`/`sin`, and the stance rotations are exact), so the co-circularity tolerance is 1e-6 mm.
+A run must also be a genuine sampled arc — at least three steps, a plausible radius, a sub-180°
+sweep, tangent continuity with its own chords, and **evenly spaced samples** (the builders walk an
+arc in equal angular steps; a circle fitted across a straight edge and the start of a corner has
+one huge step beside one tiny one). Without those tests a long flat face merges into a near-tangent
+"arc" of absurd radius. Sharp corners stay sharp.
 
-Regression test: `reconstructFromNc.test.ts` rebuilds `M_12` and asserts
-`detectStepSection` finds `250UB31.4` with score > 0.95.
+Regression: `sectionBrep.test.ts` round-trips each built stock through STEP and asserts the RHS has
+4 + 4 cylindrical corners of 22.5 / 13.5 mm (no planar facets on the corners), the CHS is one
+cylinder of the OD, and a UB keeps 4 cylindrical root fillets; `sectionPath.test.ts` covers the
+contour decomposition itself.
+
+This is applied to every manufactured NC→STEP rebuild. The `NCEP` cadgroup writer still uses the
+sampled points.
+
 
 ## Cutting through the root fillet (implemented)
 
