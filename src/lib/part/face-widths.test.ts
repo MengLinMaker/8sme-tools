@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { fixture } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
+import { outlinePoints, outlineVoids } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { meshStepFile } from '@/lib/step/mesh'
 import { setOcWasmUrl } from '@/lib/step/occInit'
@@ -25,8 +26,8 @@ describe('measured STEP face widths', () => {
           profile: header.profile,
           dimensions: header.dimensions,
           length: header.length,
-          section: section.points,
-          innerSection: section.holes?.[0],
+          section: outlinePoints(section?.outline),
+          innerSection: outlineVoids(section?.voidOutlines)?.[0],
           radius: header.dimensions[4] ?? 0,
         },
       )

@@ -12,6 +12,7 @@ import {
 } from '@/lib/parsers/ncFaces'
 import { arcSamples, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { profileFamily } from '@/lib/sections/canonical'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { meshStepFile } from './mesh'
 import { setOcWasmUrl } from './occInit'
@@ -55,7 +56,7 @@ describe('manufactured NC edge agreement', () => {
         const geo = parseNcGeometry(nc)
         const raw = partSectionForCode(header.profile, header.dimensions)
         if (!raw) return
-        const authored = ncAuthoredStancePoints(header.profile, raw.points)
+        const authored = ncAuthoredStancePoints(header.profile, outlinePoints(raw?.outline))
         const section = { ...raw, points: authored }
         const frame = resolveNcFaceFrame(section.points, geo, header.profile)
         const roll = family === 'channel' ? -90 : family === 'i' ? 90 : 0

@@ -4,6 +4,7 @@ import { nw31Top } from '@test/fixtures'
 import type { Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { meshStepFile } from './mesh'
 import { setOcWasmUrl } from './occInit'
@@ -155,7 +156,7 @@ function load(mark: string): {
   if (!section) return null
   const stpPath = `${STP_DIR}/${mark}.stp`
   return {
-    profile: section.points,
+    profile: outlinePoints(section?.outline),
     nc: readFileSync(ncPath, 'utf8'),
     stp: existsSync(stpPath) ? new Uint8Array(readFileSync(stpPath)) : undefined,
   }

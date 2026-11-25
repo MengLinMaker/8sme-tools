@@ -9,6 +9,7 @@ import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { cutThicknesses } from '@/lib/parsers/ncProject'
 import { CUT_FACES, faceRole, type ProfileFamily, profileFamily } from '@/lib/sections/canonical'
 import { detectOrientation } from '@/lib/sections/orient'
+import { outlinePoints, outlineVoids } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { brepCutSegments, type SeatedBrepFace, type Vec3 } from './cutEdges'
 import { meshStepFile } from './mesh'
@@ -103,13 +104,13 @@ async function run(mark: string, ncPath: string, stpPath: string): Promise<Pipel
   if (!section) throw new Error('no section')
   const family = profileFamily(header.profile)
   if (!family) throw new Error('no family')
-  const frame = resolveNcFaceFrame(section.points, geo, header.profile)
+  const frame = resolveNcFaceFrame(outlinePoints(section?.outline), geo, header.profile)
 
   const meshed = await meshStepFile(mark, new Uint8Array(readFileSync(stpPath)))
   const raw = meshed.vertices
-  const seat = seatQuaternion(raw, section.points)
+  const seat = seatQuaternion(raw, outlinePoints(section?.outline))
   const world = transform(raw, new Matrix4().makeRotationFromQuaternion(seat))
-  const orientation = detectOrientation(section.points, world, 1, 2, [0, 0, 0])
+  const orientation = detectOrientation(outlinePoints(section?.outline), world, 1, 2, [0, 0, 0])
   const eA = unit(1, 1)
   const eB = unit(2, 1)
   const table: [Vector3, Vector3][] = [
@@ -173,8 +174,8 @@ async function run(mark: string, ncPath: string, stpPath: string): Promise<Pipel
     })
     for (const cut of brepCutSegments(
       seated,
-      section.points,
-      section.holes ?? [],
+      outlinePoints(section?.outline),
+      outlineVoids(section?.voidOutlines) ?? [],
       xa,
       ya,
       [1, 0, 0],
@@ -189,7 +190,7 @@ async function run(mark: string, ncPath: string, stpPath: string): Promise<Pipel
   }
   return {
     cutThicknesses: [...found].sort((a, b) => a - b),
-    legend: cutThicknesses(frame, section.points, geo),
+    legend: cutThicknesses(frame, outlinePoints(section?.outline), geo),
     faces,
     bevelAngles: [...bevels].sort((a, b) => a - b),
     bevelSegments,

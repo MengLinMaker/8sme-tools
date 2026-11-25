@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fixture } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
+import { outlinePoints, outlineVoids } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { parseNcepPackage } from '@/lib/wisecam/ncepParse'
 import { partIrFromNcep } from './fromNcep'
@@ -25,8 +26,9 @@ describe('NCEP → PartIR', () => {
           profile: header.profile,
           dimensions: header.dimensions,
           length: header.length,
-          section: section.points,
-          innerSection: section.innerSection ?? section.holes?.[0],
+          section: outlinePoints(section?.outline),
+          innerSection:
+            outlinePoints(section?.innerOutline) ?? outlineVoids(section?.voidOutlines)?.[0],
           mark,
         })
         expect(part).not.toBeNull()

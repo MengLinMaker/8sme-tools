@@ -132,6 +132,7 @@ import { CUT_FACES, FACE_DIRECTIONS, profileFamily } from '@/lib/sections/canoni
 import type { SectionGuess } from '@/lib/sections/detect'
 import { profileKey } from '@/lib/sections/fromFilename'
 import { inferTee } from '@/lib/sections/infer'
+import { outlinePoints } from '@/lib/sections/outline'
 import {
   layoutDimensions,
   partSectionForCode,
@@ -1222,7 +1223,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   // on the real manufactured surface rather than the inflated ghost outline.
   const viewingNcSection = useMemo(() => {
     if (!viewing?.nc) return null
-    return partSectionForCode(viewing.nc.profile, viewing.nc.dimensions ?? [])?.points ?? null
+    const section = partSectionForCode(viewing.nc.profile, viewing.nc.dimensions ?? [])
+    return section ? outlinePoints(section.outline) : null
   }, [viewing])
   // STEP-only: the section **detector's** catalogue section is the canonical stance. The stock ghost
   // must always be canonical — it is the manufacturing benchmark — so a STEP-only part uses the
@@ -1247,8 +1249,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         ? layoutDimensions(
             stepIrProfile,
             stepIrGuess?.dims ?? [],
-            stepIrSection?.points ?? undefined,
-            stepIrSection?.holes,
+            stepIrSection ? outlinePoints(stepIrSection.outline) : undefined,
+            stepIrSection?.voidOutlines?.map((voidOutline) => outlinePoints(voidOutline)),
           )
         : [],
     [stepIrProfile, stepIrGuess, stepIrSection],
@@ -1257,8 +1259,10 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     const fromGuess = stepIrGuess?.dims?.[4]
     if (fromGuess != null && fromGuess > 0) return fromGuess
     const section = stepIrSection
-    const hole = section?.holes?.[0]
-    if (!section || !hole) return 0
+    const firstVoid = section?.voidOutlines?.[0]
+    if (!section || !firstVoid) return 0
+    const hole = outlinePoints(firstVoid)
+    const ring = outlinePoints(section.outline)
     const span = (points: [number, number][], axis: 0 | 1): number => {
       let min = Number.POSITIVE_INFINITY
       let max = Number.NEGATIVE_INFINITY
@@ -1268,20 +1272,24 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       }
       return max - min
     }
-    const wall = Math.min(
-      (span(section.points, 0) - span(hole, 0)) / 2,
-      (span(section.points, 1) - span(hole, 1)) / 2,
-    )
+    const wall = Math.min((span(ring, 0) - span(hole, 0)) / 2, (span(ring, 1) - span(hole, 1)) / 2)
     return wall > 0 ? 2.5 * wall : 0
   }, [stepIrGuess, stepIrSection])
 
   const stepFaceFrame = useMemo(
     () =>
-      stepIrProfile && stepIrSection ? frameForProfile(stepIrProfile, stepIrSection.points) : null,
+      stepIrProfile && stepIrSection
+        ? frameForProfile(stepIrProfile, outlinePoints(stepIrSection.outline))
+        : null,
     [stepIrProfile, stepIrSection],
   )
   const stepCutThicknesses = useMemo(
-    () => stockThicknessesFor(stepIrProfile, stepIrSection?.points ?? null, stepIrSection?.holes),
+    () =>
+      stockThicknessesFor(
+        stepIrProfile,
+        stepIrSection ? outlinePoints(stepIrSection.outline) : null,
+        stepIrSection?.voidOutlines?.map((voidOutline) => outlinePoints(voidOutline)),
+      ),
     [stepIrProfile, stepIrSection],
   )
   const stepCutEdgeOptions = useMemo(
@@ -1294,10 +1302,10 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   )
 
   const viewerStock = useMemo(() => {
-    if (!viewingStepSection || viewingStepSection.points.length < 3) return stock
+    if (!viewingStepSection) return stock
     return {
-      points: viewingStepSection.points,
-      holes: viewingStepSection.holes,
+      outline: viewingStepSection.outline,
+      voidOutlines: viewingStepSection.voidOutlines,
       label: stock?.label ?? 'section',
       mass: stock?.mass,
     }
@@ -1306,14 +1314,14 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   // the NC toolpath (only the manufactured pane projects the toolpath itself).
   const viewingNcFrame = useMemo(() => {
     if (!viewingNcGeom) return null
-    const section = viewingNcSection ?? (Array.isArray(stock?.points) ? stock.points : null)
+    const section = viewingNcSection ?? (stock?.outline ? outlinePoints(stock.outline) : null)
     if (!section) return null
     return resolveNcFaceFrame(section, viewingNcGeom, viewing?.nc?.profile)
   }, [viewingNcGeom, viewingNcSection, stock, viewing])
   // Cut thicknesses present in this part, for the profile legend (same colours the viewer uses).
   const viewingNcProfiles = useMemo(() => {
     if (!viewingNcGeom) return []
-    const section = viewingNcSection ?? stock?.points ?? null
+    const section = viewingNcSection ?? (stock?.outline ? outlinePoints(stock.outline) : null)
     if (!section) return []
     const frame = resolveNcFaceFrame(section, viewingNcGeom, viewing?.nc?.profile)
     return cutThicknesses(frame, section, viewingNcGeom)
@@ -1345,8 +1353,12 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     () =>
       stockThicknessesFor(
         viewingProfileCode,
-        viewingNcSection ?? viewingStepSection?.points ?? stock?.points ?? null,
-        viewingStepSection?.holes ?? stock?.holes,
+        viewingNcSection ??
+          (viewingStepSection ? outlinePoints(viewingStepSection.outline) : null) ??
+          (stock?.outline ? outlinePoints(stock.outline) : null),
+        viewingStepSection
+          ? viewingStepSection.voidOutlines?.map((voidOutline) => outlinePoints(voidOutline))
+          : stock?.voidOutlines?.map((voidOutline) => outlinePoints(voidOutline)),
       ),
     [viewingProfileCode, viewingNcSection, viewingStepSection, stock],
   )
@@ -1356,8 +1368,8 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   const viewingIrColorForFace = useMemo(() => {
     const section =
       viewingNcSection ??
-      viewingStepSection?.points ??
-      (Array.isArray(stock?.points) ? stock.points : null)
+      (viewingStepSection ? outlinePoints(viewingStepSection.outline) : null) ??
+      (stock?.outline ? outlinePoints(stock.outline) : null)
     if (!section || viewingCutThicknesses.length === 0) return undefined
     const frame =
       viewingNcFrame ?? (viewingProfileCode ? frameForProfile(viewingProfileCode, section) : null)
@@ -1439,13 +1451,16 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     }
 
     const ready =
-      stepIrProfile && stepIrSection && stepIrDims.length >= 2 && stepIrSection.points.length >= 3
+      stepIrProfile &&
+      stepIrSection &&
+      stepIrDims.length >= 2 &&
+      outlinePoints(stepIrSection.outline).length >= 3
     if (ready) {
       start(
         stepIrProfile,
         stepIrDims,
-        stepIrSection.points,
-        stepIrSection.holes?.[0],
+        outlinePoints(stepIrSection.outline),
+        stepIrSection.voidOutlines?.[0] ? outlinePoints(stepIrSection.voidOutlines[0]) : undefined,
         stepIrRadius,
         stepSeatForViewing,
       )
@@ -1461,17 +1476,22 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         if (cancelled || !guess) return
         const profile = stepIrProfile ?? guess.code
         const part = partSectionForCode(guess.code, guess.dims ?? [])
-        const section = part?.points ?? null
+        const section = part ? outlinePoints(part.outline) : null
         const dims =
           stepIrDims.length >= 2
             ? stepIrDims
-            : layoutDimensions(guess.code, guess.dims ?? [], part?.points, part?.holes)
+            : layoutDimensions(
+                guess.code,
+                guess.dims ?? [],
+                part ? outlinePoints(part.outline) : undefined,
+                part?.voidOutlines?.map((voidOutline) => outlinePoints(voidOutline)),
+              )
         if (!profile || !section || section.length < 3 || dims.length < 2) return
         start(
           profile,
           dims,
           section,
-          part?.holes?.[0],
+          part?.voidOutlines?.[0] ? outlinePoints(part.voidOutlines[0]) : undefined,
           stepIrRadius || guess.dims?.[4] || 0,
           stepSeatForViewing,
         )
@@ -1585,7 +1605,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   useEffect(() => {
     if (!manufactured || !stepBytes) return
     void diffForViewer(manufactured, stepBytes, {
-      profile: stock?.points,
+      profile: stock?.outline ? outlinePoints(stock.outline) : undefined,
       priority: PRIORITY_FOREGROUND,
     }).catch(() => {})
   }, [manufactured, stepBytes, stock])
@@ -1663,7 +1683,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   // side-by-side columns). Only the two stacked layouts are considered, so the choice is stable
   // while orbiting.
   const crossExtent = useMemo(() => {
-    const points = stock?.points
+    const points = stock?.outline ? outlinePoints(stock.outline) : null
     if (!points?.length) return null
     let minX = Number.POSITIVE_INFINITY
     let minY = Number.POSITIVE_INFINITY
@@ -1985,7 +2005,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           ? partSectionForCode(part.nc.profile, part.nc.dimensions ?? [])
           : null
         const unclosedIssues = assessUnclosedCutsGeometry(nc, {
-          section: section?.points,
+          section: outlinePoints(section?.outline),
           profile: part.nc?.profile,
         })
         if (unclosedIssues.length > 0) unclosed.set(part.mark, unclosedIssues)
@@ -1994,10 +2014,15 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           markUnchecked(part.mark, `unrecognised section ${profile}`, { profile })
           continue
         }
-        const failures = assessCutReachGeometry(nc, section.points, section.holes ?? [], {
-          toleranceMm: MACHINE.placementToleranceMm,
-          profile: part.nc?.profile,
-        }).filter(
+        const failures = assessCutReachGeometry(
+          nc,
+          outlinePoints(section.outline),
+          section.voidOutlines?.map((voidOutline) => outlinePoints(voidOutline)) ?? [],
+          {
+            toleranceMm: MACHINE.placementToleranceMm,
+            profile: part.nc?.profile,
+          },
+        ).filter(
           // Retired the 2D reach-depth finding: it reads a lengthwise pass (e.g. a tab edge
           // across the web) as a deep bore. Keep only the corner-placement risk; the 3D sabre
           // remains the real cut-depth check.
@@ -2005,7 +2030,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         )
         if (failures.length > 0) reach.set(part.mark, failures)
         const filletIssues = assessRootFilletGeometry(nc, {
-          section: section.points,
+          section: outlinePoints(section.outline),
           dimensions: part.nc?.dimensions ?? [],
           profile: part.nc?.profile,
         })
@@ -2417,14 +2442,19 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         : null
       if (!section) continue
       const ncText = new TextDecoder().decode(override.bytes)
-      const options = { section: section.points, profile: part.nc?.profile }
+      const options = { section: outlinePoints(section.outline), profile: part.nc?.profile }
       // All four checks run on one parse: each parses the whole NC on its own otherwise.
       const nc = parseNcGeometry(ncText)
       const value: NcRecheck = {
-        reach: assessCutReachGeometry(nc, section.points, section.holes ?? [], {
-          toleranceMm: MACHINE.placementToleranceMm,
-          profile: part.nc?.profile,
-        }).filter((failure) => failure.reason === 'corner'),
+        reach: assessCutReachGeometry(
+          nc,
+          outlinePoints(section.outline),
+          section.voidOutlines?.map((voidOutline) => outlinePoints(voidOutline)) ?? [],
+          {
+            toleranceMm: MACHINE.placementToleranceMm,
+            profile: part.nc?.profile,
+          },
+        ).filter((failure) => failure.reason === 'corner'),
         rootFillet: assessRootFilletGeometry(nc, {
           ...options,
           dimensions: part.nc?.dimensions ?? [],
@@ -3139,7 +3169,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     // A channel's NC `v` line is drawn on the web's outer (`h`) plane after a `web·tan(bevel)` shift;
     // findings built from the raw v contour need the same shift or the marker floats off the line.
     const family = viewingProfileCode ? profileFamily(viewingProfileCode) : null
-    const section = viewingNcSection ?? (Array.isArray(stock?.points) ? stock.points : null)
+    const section = viewingNcSection ?? (stock?.outline ? outlinePoints(stock.outline) : null)
     const channelProjection =
       family === 'channel' && viewingNcFrame && section && viewingNcGeom
         ? {
@@ -3662,10 +3692,11 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                 if (stepBytes) {
                   // The diff needs the same seating the viewer applies, so resolve the neighbour's
                   // section here (from its NC/part-list code — no PDF pass needed for a prefetch).
-                  const profile = partSectionForCode(
+                  const neighbourSection = partSectionForCode(
                     neighbour.expected?.profile ?? neighbour.nc?.profile ?? '',
                     neighbour.nc?.dimensions ?? [],
-                  )?.points
+                  )
+                  const profile = neighbourSection ? outlinePoints(neighbourSection.outline) : null
                   void diffForViewer(bytes, stepBytes, {
                     profile,
                     priority: PRIORITY_NEIGHBOR,
@@ -4043,7 +4074,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           const code =
             part.nc?.profile ?? listedProfile(part) ?? sectionGuesses.get(part.mark)?.code
           const dims = part.nc?.dimensions ?? sectionGuesses.get(part.mark)?.dims ?? []
-          const profile = code ? (partSectionForCode(code, dims)?.points ?? null) : null
+          const profile = code ? outlinePoints(partSectionForCode(code, dims)?.outline) : null
           if (profile) {
             try {
               const seated = await getStepWorkerPool().seat(featureBytes, profile, {
@@ -4519,7 +4550,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
       const code = part.nc?.profile ?? listedProfile(part) ?? sectionGuesses.get(part.mark)?.code
       if (!code) return null
       const dims = part.nc?.dimensions ?? sectionGuesses.get(part.mark)?.dims ?? []
-      return partSectionForCode(code, dims)?.points ?? null
+      return outlinePoints(partSectionForCode(code, dims)?.outline)
     },
     [sectionGuesses],
   )
@@ -5683,14 +5714,16 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                             highlightStray
                             smoothLines
                             alignReference={manufactured}
-                            seatProfile={stepIrSection?.points ?? null}
+                            seatProfile={
+                              stepIrSection ? outlinePoints(stepIrSection.outline) : null
+                            }
                             stepSeat={stepSeatForViewing}
                             focus={findingFocus}
                             // The STEP pane is STEP-only: no NC marks, section, frame or alignment
                             // reference. Its cut lines come from the STEP-derived IR options.
                             sabreFailures={viewerMarkers.failures}
                             ncMarks={null}
-                            ncSection={stepIrSection?.points ?? null}
+                            ncSection={stepIrSection ? outlinePoints(stepIrSection.outline) : null}
                             faceFrame={stepFaceFrame}
                             cutEdges={stepCutEdgeOptions}
                             visibleSpans={visibleSpans}

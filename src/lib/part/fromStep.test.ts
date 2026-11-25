@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { fixture, nw30Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
+import { outlinePoints, outlineVoids } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { meshStepFile } from '@/lib/step/mesh'
 import { setOcWasmUrl } from '@/lib/step/occInit'
@@ -56,8 +57,9 @@ describe('STEP → PartIR', () => {
         profile: header.profile,
         dimensions: header.dimensions,
         length: header.length,
-        section: section.points,
-        innerSection: section.innerSection ?? section.holes?.[0],
+        section: outlinePoints(section?.outline),
+        innerSection:
+          outlinePoints(section?.innerOutline) ?? outlineVoids(section?.voidOutlines)?.[0],
         radius: header.dimensions[4] ?? 0,
       })
       expect(stepIr).not.toBeNull()
@@ -131,8 +133,9 @@ describe('m71 strict STEP↔NC IR', () => {
         profile: header.profile,
         dimensions: header.dimensions,
         length: header.length,
-        section: section.points,
-        innerSection: section.innerSection ?? section.holes?.[0],
+        section: outlinePoints(section?.outline),
+        innerSection:
+          outlinePoints(section?.innerOutline) ?? outlineVoids(section?.voidOutlines)?.[0],
         radius: header.dimensions[4] ?? 0,
       })
       if (!stepIr) throw new Error('no STEP IR')
@@ -177,8 +180,8 @@ describe('m71 PFC end-cut continuity', () => {
         profile: header.profile,
         dimensions: header.dimensions,
         length: header.length,
-        section: section.points,
-        innerSection: section.holes?.[0],
+        section: outlinePoints(section?.outline),
+        innerSection: outlineVoids(section?.voidOutlines)?.[0],
         radius: header.dimensions[4] ?? 0,
       })
       if (!stepIr) throw new Error('no STEP IR')
@@ -228,8 +231,9 @@ describe('m71 STEP holes and slots match NC', () => {
         profile: header.profile,
         dimensions: header.dimensions,
         length: header.length,
-        section: section.points,
-        innerSection: section.innerSection ?? section.holes?.[0],
+        section: outlinePoints(section?.outline),
+        innerSection:
+          outlinePoints(section?.innerOutline) ?? outlineVoids(section?.voidOutlines)?.[0],
         radius: header.dimensions[4] ?? 0,
       })
       if (!stepIr) throw new Error('no STEP IR')
@@ -333,8 +337,8 @@ describe('STEP IR UV containment', () => {
             profile: header.profile,
             dimensions: header.dimensions,
             length: header.length,
-            section: section.points,
-            innerSection: section.holes?.[0],
+            section: outlinePoints(section?.outline),
+            innerSection: outlineVoids(section?.voidOutlines)?.[0],
             radius: header.dimensions[4] ?? 0,
           },
         )

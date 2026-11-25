@@ -7,6 +7,7 @@ import { parseDstv } from '@/lib/parsers/dstv'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { type NcGeometry, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { projectNc, type Vec3 } from '@/lib/parsers/ncProject'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { meshStepFile } from './mesh'
 import { setOcWasmUrl } from './occInit'
@@ -52,7 +53,7 @@ describe('edge diag', () => {
       }
       const section = partSectionForCode(header.profile, header.dimensions)
       if (!section) throw new Error('no section')
-      const frame = resolveNcFaceFrame(section.points, geo, header.profile)
+      const frame = resolveNcFaceFrame(outlinePoints(section?.outline), geo, header.profile)
 
       const step = await reconstructStepFromNc(ncText)
       if (!step) throw new Error('no build')
@@ -94,7 +95,7 @@ describe('edge diag', () => {
             notches: [],
             marks: [],
           },
-          { frame, section: section.points, toScene, normal },
+          { frame, section: outlinePoints(section?.outline), toScene, normal },
         )
         const pts: number[] = []
         for (const cut of single.cuts) pts.push(...cut.points)

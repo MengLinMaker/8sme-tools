@@ -8,6 +8,7 @@ import { faceNormal, type NcFaceFrame, resolveNcFaceFrame } from '@/lib/parsers/
 import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { projectNc } from '@/lib/parsers/ncProject'
 import { detectOrientation } from '@/lib/sections/orient'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import type { SeatedBrepFace, Vec3 } from './cutEdges'
 import { type FacePoint, type FaceSegment, projectCutEdgesToFaces } from './cutProjection'
@@ -76,11 +77,11 @@ async function project(mark: string, ncPath: string, stpPath: string) {
   const seated = transform(centred, new Matrix4().makeRotationFromQuaternion(toX))
   const roll = new Quaternion().setFromAxisAngle(
     unit(0, 1),
-    SEAT_ANGLES[detectOrientation(section.points, seated, 1, 2, [0, 0, 0])],
+    SEAT_ANGLES[detectOrientation(outlinePoints(section?.outline), seated, 1, 2, [0, 0, 0])],
   )
   const seat = new Quaternion().multiplyQuaternions(roll, toX)
   const world = transform(raw, new Matrix4().makeRotationFromQuaternion(seat))
-  const orientation = detectOrientation(section.points, world, 1, 2, [0, 0, 0])
+  const orientation = detectOrientation(outlinePoints(section?.outline), world, 1, 2, [0, 0, 0])
   const eA = unit(1, 1)
   const eB = unit(2, 1)
   const table: [Vector3, Vector3][] = [
@@ -127,10 +128,14 @@ async function project(mark: string, ncPath: string, stpPath: string) {
         })),
       }
     })
-  const frame: NcFaceFrame = resolveNcFaceFrame(section.points, geo, header.profile)
+  const frame: NcFaceFrame = resolveNcFaceFrame(
+    outlinePoints(section?.outline),
+    geo,
+    header.profile,
+  )
   const projected = projectCutEdgesToFaces(
     seatedFaces,
-    section.points,
+    outlinePoints(section?.outline),
     frame,
     [xAxis.x, xAxis.y, xAxis.z],
     [yAxis.x, yAxis.y, yAxis.z],
@@ -146,7 +151,7 @@ async function project(mark: string, ncPath: string, stpPath: string) {
     geo,
     minX,
     frame,
-    section: section.points,
+    section: outlinePoints(section?.outline),
     xAxis: [xAxis.x, xAxis.y, xAxis.z] as Vec3,
     yAxis: [yAxis.x, yAxis.y, yAxis.z] as Vec3,
     length: header.length,

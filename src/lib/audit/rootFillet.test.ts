@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { moveCutInNc } from '@/lib/parsers/ncEdit'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { assessRootFillet, rootFilletBands } from './rootFillet'
 
@@ -48,7 +49,7 @@ function flangeContour(y: number): string {
   ].join('\n')
 }
 
-const options = { section: SECTION.points, dimensions: DIMS, profile: PROFILE }
+const options = { section: outlinePoints(SECTION?.outline), dimensions: DIMS, profile: PROFILE }
 
 describe('rootFilletBands', () => {
   it('puts the web fillets between the flat web and each flange inner face', () => {
@@ -114,7 +115,7 @@ describe('assessRootFillet', () => {
     if (!pfc) return
     expect(
       assessRootFillet(nc(webContour(15)), {
-        section: pfc.points,
+        section: outlinePoints(pfc?.outline),
         dimensions: [100, 50, 6.7, 4.2, 8],
         profile: 'PFC100*50',
       }),

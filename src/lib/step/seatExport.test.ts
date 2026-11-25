@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 import { type AnyShape, draw, importSTEP } from 'replicad'
 import { Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { applyRigid, writeStep } from './occ'
 import { ensureOc, setOcWasmUrl } from './occInit'
@@ -23,8 +24,8 @@ async function extrudedSection(
 ): Promise<AnyShape> {
   const section = partSectionForCode(code, [])
   if (!section) throw new Error(`no outline for ${code}`)
-  let pen = draw(section.points[0] as [number, number])
-  for (const point of section.points.slice(1)) pen = pen.lineTo(point)
+  let pen = draw(outlinePoints(section?.outline)[0] as [number, number])
+  for (const point of outlinePoints(section?.outline).slice(1)) pen = pen.lineTo(point)
   let solid = pen.close().sketchOnPlane('XY').extrude(length) as unknown as TransformOps
   if (rotation[0]) solid = solid.rotate(rotation[0], [0, 0, 0], [1, 0, 0])
   if (rotation[1]) solid = solid.rotate(rotation[1], [0, 0, 0], [0, 1, 0])
@@ -40,7 +41,7 @@ async function extrudedSection(
 describe('seat STEP for export', () => {
   it('seats a rotated real part into the canonical frame', async () => {
     await ensureOc()
-    const profile = partSectionForCode('EA200*200*20', [])?.points
+    const profile = outlinePoints(partSectionForCode('EA200*200*20', [])?.outline)
     expect(profile).toBeDefined()
     if (!profile) return
 

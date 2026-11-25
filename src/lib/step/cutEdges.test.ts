@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CUT_FACES, faceNormalSigns, faceRole } from '@/lib/sections/canonical'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import {
   brepCutSegments,
@@ -108,7 +109,7 @@ describe('stockFaceThicknesses', () => {
       }
     }
     // Flange (6.7) and web (4.2) — a channel's underside toe/throat is not a cut face.
-    expect(stockFaceThicknesses(pfc.points, [], normals)).toEqual([4.2, 6.7])
+    expect(stockFaceThicknesses(outlinePoints(pfc?.outline), [], normals)).toEqual([4.2, 6.7])
   })
 })
 

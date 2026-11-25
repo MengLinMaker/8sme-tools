@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { hexModuleFrames } from '@test/fixtures'
 import { Matrix4, Quaternion, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { detectStepSection } from '@/lib/step/readSection'
 import {
@@ -269,7 +270,7 @@ describe('seat technique batches', () => {
         mark,
         vertices: mesh.vertices,
         faces: mesh.bodies.flatMap((body) => body.brep ?? []),
-        section: section.points,
+        section: outlinePoints(section?.outline),
         code: guess.code,
         seat: guess.seat ?? null,
       })
@@ -335,7 +336,7 @@ describe('seat technique batches', () => {
         mark,
         vertices: mesh.vertices,
         faces: mesh.bodies.flatMap((body) => body.brep ?? []),
-        section: section.points,
+        section: outlinePoints(section?.outline),
         code: guess.code,
         seat: guess.seat ?? null,
       }

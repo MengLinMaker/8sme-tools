@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { unrolledLayout } from '@/lib/wisecam/layout'
+import { outlinePoints, outlineVoids } from './outline'
 import {
   layoutDimensions,
   partSectionForCode,
@@ -43,14 +44,14 @@ describe('stockOutlineForCode', () => {
     it(`builds a usable outline for ${code}`, () => {
       const outline = stockOutlineForCode(code, dims)
       expect(outline).not.toBeNull()
-      expect(Array.isArray(outline?.points)).toBe(true)
-      expect(outline?.points.length ?? 0).toBeGreaterThanOrEqual(3)
-      for (const point of outline?.points ?? []) {
+      expect(Array.isArray(outlinePoints(outline?.outline))).toBe(true)
+      expect(outlinePoints(outline?.outline).length ?? 0).toBeGreaterThanOrEqual(3)
+      for (const point of outlinePoints(outline?.outline) ?? []) {
         expect(point).toHaveLength(2)
         expect(Number.isFinite(point[0])).toBe(true)
         expect(Number.isFinite(point[1])).toBe(true)
       }
-      const { width, height } = bbox(outline?.points ?? [])
+      const { width, height } = bbox(outlinePoints(outline?.outline) ?? [])
       expect(width).toBeGreaterThanOrEqual(size.w)
       expect(height).toBeGreaterThanOrEqual(size.h)
     })
@@ -66,10 +67,10 @@ describe('stockOutlineForCode', () => {
     // the beam rotated 90° from reality. Canonical H then puts the depth (359) horizontal and the
     // flange width (172) vertical.
     const dims = [359, 172, 13, 8, 11.4] // 360UB56.7
-    const part = bbox(partSectionForCode('UB360*57', dims)?.points ?? [])
+    const part = bbox(outlinePoints(partSectionForCode('UB360*57', dims)?.outline) ?? [])
     expect(part.width).toBeCloseTo(359, 0)
     expect(part.height).toBeCloseTo(172, 0)
-    const stock = bbox(stockOutlineForCode('UB360*57', dims)?.points ?? [])
+    const stock = bbox(outlinePoints(stockOutlineForCode('UB360*57', dims)?.outline) ?? [])
     expect(stock.width).toBeCloseTo(359, 0)
     expect(stock.height).toBeCloseTo(172, 0)
   })
@@ -80,26 +81,28 @@ describe('stockOutlineForCode', () => {
 
   it('makes RHS/SHS hollow with a single void', () => {
     const rhs = stockOutlineForCode('RHS150*100*9.0', [150, 100, 9, 9, 22.5])
-    expect(rhs?.holes).toHaveLength(1)
+    expect(outlineVoids(rhs?.voidOutlines)).toHaveLength(1)
     // Canonical stance: the longer side (150) runs horizontal.
-    const outer = bbox(rhs?.points ?? [])
+    const outer = bbox(outlinePoints(rhs?.outline) ?? [])
     expect(outer.width).toBeGreaterThanOrEqual(150)
     expect(outer.height).toBeGreaterThanOrEqual(100)
-    const inner = bbox(rhs?.holes?.[0] ?? [])
+    const inner = bbox(outlineVoids(rhs?.voidOutlines)?.[0] ?? [])
     expect(inner.width).toBeLessThanOrEqual(150 - 2 * 9) // void clear of the 9 mm wall
     expect(inner.height).toBeLessThanOrEqual(100 - 2 * 9)
 
     const shs = stockOutlineForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])
-    expect(shs?.holes).toHaveLength(1)
-    expect(bbox(shs?.holes?.[0] ?? []).width).toBeLessThanOrEqual(100 - 2 * 6)
+    expect(outlineVoids(shs?.voidOutlines)).toHaveLength(1)
+    expect(bbox(outlineVoids(shs?.voidOutlines)?.[0] ?? []).width).toBeLessThanOrEqual(100 - 2 * 6)
   })
 
   it('makes CHS hollow', () => {
-    expect(stockOutlineForCode('CHS114.3*5.4', [])?.holes).toHaveLength(1)
+    expect(outlineVoids(stockOutlineForCode('CHS114.3*5.4', [])?.voidOutlines)).toHaveLength(1)
   })
 
   it('builds an unequal-angle L', () => {
-    const { width, height } = bbox(stockOutlineForCode('UA100*75*6', [])?.points ?? [])
+    const { width, height } = bbox(
+      outlinePoints(stockOutlineForCode('UA100*75*6', [])?.outline) ?? [],
+    )
     expect(width).toBeGreaterThanOrEqual(100)
     expect(height).toBeGreaterThanOrEqual(75)
   })
@@ -109,7 +112,7 @@ describe('stockOutlineForCode', () => {
     // of each toe). Outer corners (legA, 0) and (0, legB) stay sharp; the inner corners
     // (legA, t) and (t, legB) are cut away by the toe radius.
     const t = 6
-    const points = stockOutlineForCode('EA75*75*6', [75, 75, 6, 6, 8])?.points ?? []
+    const points = outlinePoints(stockOutlineForCode('EA75*75*6', [75, 75, 6, 6, 8])?.outline) ?? []
     const maxX = Math.max(...points.map((p) => p[0]))
     const minX = Math.min(...points.map((p) => p[0]))
     const maxY = Math.max(...points.map((p) => p[1]))
@@ -124,11 +127,11 @@ describe('stockOutlineForCode', () => {
 
   it('models the toe radius on parts too, and falls back when the size is non-standard', () => {
     const part = partSectionForCode('EA75*75*6', [75, 75, 6, 6, 8])
-    expect(part?.points.length ?? 0).toBeGreaterThan(8)
+    expect(outlinePoints(part?.outline).length ?? 0).toBeGreaterThan(8)
 
     // EA70*70*6 is not in the AUS catalogue — still builds, from the NC dims, root radius only.
     const { width, height } = bbox(
-      stockOutlineForCode('EA70*70*6', [70, 70, 6, 6, 8])?.points ?? [],
+      outlinePoints(stockOutlineForCode('EA70*70*6', [70, 70, 6, 6, 8])?.outline) ?? [],
     )
     expect(width).toBeGreaterThanOrEqual(70)
     expect(height).toBeGreaterThanOrEqual(70)
@@ -136,14 +139,14 @@ describe('stockOutlineForCode', () => {
 
   it('handles a numeric-prefix channel designation', () => {
     const outline = stockOutlineForCode('150PFC', [150, 75, 8, 5])
-    const { width } = bbox(outline?.points ?? [])
+    const { width } = bbox(outlinePoints(outline?.outline) ?? [])
     expect(width).toBeGreaterThanOrEqual(150)
   })
 
   it('uses the standard PFC table for a short channel callout', () => {
     const pfc = stockOutlineForCode('150PFC', [150, 75, 9.5, 6.0])
     expect(pfc?.label).toBe('150 PFC stock')
-    const { width, height } = bbox(pfc?.points ?? [])
+    const { width, height } = bbox(outlinePoints(pfc?.outline) ?? [])
     expect(width).toBeGreaterThanOrEqual(150)
     expect(height).toBeGreaterThanOrEqual(75)
   })
@@ -152,13 +155,13 @@ describe('stockOutlineForCode', () => {
     // A tabulated PFC (r = 10) is drawn with its two inner root fillets; a sharp 8-point channel
     // would mean the radius was dropped.
     const pfc = stockOutlineForCode('150PFC', [150, 75, 9.5, 6.0])
-    expect(pfc?.points.length ?? 0).toBeGreaterThan(8)
+    expect(outlinePoints(pfc?.outline).length ?? 0).toBeGreaterThan(8)
   })
 
   it('builds a UC I-section from its designation', () => {
     const uc = stockOutlineForCode('310UC158', [311, 327, 25.0, 15.7])
     expect(uc?.label).toBe('310UC158 stock')
-    const { width, height } = bbox(uc?.points ?? [])
+    const { width, height } = bbox(outlinePoints(uc?.outline) ?? [])
     // Canonical H: depth (327) horizontal, flange width (311) vertical.
     expect(width).toBeGreaterThanOrEqual(327)
     expect(height).toBeGreaterThanOrEqual(311)
@@ -168,7 +171,7 @@ describe('stockOutlineForCode', () => {
     const tfb = stockOutlineForCode('125TFB', [65, 125, 8.5, 5.0])
     expect(tfb?.label).toBe('125 TFB stock')
     // Canonical H: depth (125) horizontal, flange width (65) vertical.
-    const { width } = bbox(tfb?.points ?? [])
+    const { width } = bbox(outlinePoints(tfb?.outline) ?? [])
     expect(width).toBeGreaterThanOrEqual(125)
   })
 
@@ -192,11 +195,13 @@ describe('stockOutlineForCode', () => {
   })
 
   it('draws the stock at the exact section size (no clearance offset)', () => {
-    const pfc = bbox(stockOutlineForCode('100PFC', [100, 50, 6.7, 4.2, 8])?.points ?? [])
+    const pfc = bbox(
+      outlinePoints(stockOutlineForCode('100PFC', [100, 50, 6.7, 4.2, 8])?.outline) ?? [],
+    )
     expect(pfc.width).toBeCloseTo(100, 1)
     expect(pfc.height).toBeCloseTo(50, 1)
 
-    const ua = bbox(stockOutlineForCode('UA100*75*6', [])?.points ?? [])
+    const ua = bbox(outlinePoints(stockOutlineForCode('UA100*75*6', [])?.outline) ?? [])
     expect(ua.width).toBeCloseTo(100, 1)
     expect(ua.height).toBeCloseTo(75, 1)
   })
@@ -216,14 +221,14 @@ describe('stockOutlineForCode', () => {
         code: 'EA80*80*8',
         outline: { points: real },
       })
-      expect(outline?.points).toBe(real)
+      expect(outlinePoints(outline?.outline)).toEqual(real)
       expect(outline?.label).toBe('EA80*80*8')
     })
 
     it('falls back to the catalogue outline when no real outline is given', async () => {
       const outline = await resolveStockOutline({ mark: 'x1' }, undefined, { code: '100 PFC' })
-      expect(outline?.points.length).toBeGreaterThan(3)
-      expect(bbox(outline?.points ?? []).width).toBeCloseTo(100, 0)
+      expect(outlinePoints(outline?.outline).length).toBeGreaterThan(3)
+      expect(bbox(outlinePoints(outline?.outline) ?? []).width).toBeCloseTo(100, 0)
     })
   })
 })
@@ -313,8 +318,8 @@ describe('hollow stock outline', () => {
       expect(section, `${code} section`).toBeTruthy()
       if (!section) continue
       // Corner arcs contribute many points; a sharp rectangle is four.
-      expect(section.points.length, `${code} corner arcs`).toBeGreaterThan(20)
-      expect(section.holes?.length ?? 0, `${code} hollow void`).toBe(1)
+      expect(outlinePoints(section?.outline).length, `${code} corner arcs`).toBeGreaterThan(20)
+      expect(outlineVoids(section?.voidOutlines)?.length ?? 0, `${code} hollow void`).toBe(1)
     }
   })
 })
@@ -324,7 +329,7 @@ describe('rounded UB mass', () => {
     const rounded = partSectionForCode('200UB25', [])
     const exact = partSectionForCode('200UB25.4', [])
     expect(rounded).toBeTruthy()
-    expect(rounded?.points).toEqual(exact?.points)
+    expect(outlinePoints(rounded?.outline)).toEqual(outlinePoints(exact?.outline))
     expect(sectionMassPerMetre('200UB25', [])).toBeCloseTo(25.4, 3)
   })
 
@@ -343,13 +348,13 @@ describe('hollow corner radius (AS/NZS 1163)', () => {
     const radiusOf = (code: string): number => {
       const section = partSectionForCode(code, [])
       expect(section, code).toBeTruthy()
-      const xs = (section?.points ?? []).map(([x]) => x)
-      const ys = (section?.points ?? []).map(([, y]) => y)
+      const xs = (outlinePoints(section?.outline) ?? []).map(([x]) => x)
+      const ys = (outlinePoints(section?.outline) ?? []).map(([, y]) => y)
       const width = Math.max(...xs) - Math.min(...xs)
       const height = Math.max(...ys) - Math.min(...ys)
       // A rounded rectangle's area is W·H − (4 − π)R².
       let twice = 0
-      const points = section?.points ?? []
+      const points = outlinePoints(section?.outline) ?? []
       for (let i = 0; i < points.length; i++) {
         const a = points[i] as [number, number]
         const b = points[(i + 1) % points.length] as [number, number]

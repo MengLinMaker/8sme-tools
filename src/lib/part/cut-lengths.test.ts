@@ -4,6 +4,7 @@ import { fixture } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { frameForProfile } from '@/lib/parsers/ncFaces'
+import { outlinePoints, outlineVoids } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { meshStepFile } from '@/lib/step/mesh'
 import { setOcWasmUrl } from '@/lib/step/occInit'
@@ -57,15 +58,15 @@ describe('STEP IR cut length preservation', () => {
         mark,
         new Uint8Array(readFileSync(fixture('part-ir', `${mark}.stp`))),
       )
-      const seated = seatedStepGeometry(meshed, section.points)
-      const frame = frameForProfile(header.profile, section.points)
+      const seated = seatedStepGeometry(meshed, outlinePoints(section?.outline))
+      const frame = frameForProfile(header.profile, outlinePoints(section?.outline))
       const ir = partIrFromStepMesh(meshed, {
         mark,
         profile: header.profile,
         dimensions: header.dimensions,
         length: header.length,
-        section: section.points,
-        innerSection: section.holes?.[0],
+        section: outlinePoints(section?.outline),
+        innerSection: outlineVoids(section?.voidOutlines)?.[0],
         radius: header.dimensions[4] ?? 0,
       })
       if (!ir) throw new Error('no IR')
@@ -73,8 +74,8 @@ describe('STEP IR cut length preservation', () => {
         seated,
         layout,
         frame,
-        section.points,
-        section.holes?.[0],
+        outlinePoints(section?.outline),
+        outlineVoids(section?.voidOutlines)?.[0],
         seated.alongOffset,
         false,
         header.profile,

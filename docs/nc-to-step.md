@@ -82,8 +82,14 @@ custom section: drawing the sampled points straight gave chorded corners, and th
 per-vertex radius fit (`sectionArcRadii`, now gone) still left a corner as a *chain* of small arcs
 and a hollow's void as a chorded 28-gon.
 
-A polyline is derived on demand (`outlinePoints`, 6 steps per arc / 48 for a circle) for the ghost,
-area, SVG and NCEP `cadgroup` consumers, so the primitives remain the single source of truth.
+The primitives are the **only** stored representation: `StockOutline` / `PartSection` carry
+`outline`, `voidOutlines` and `innerOutline` — there is no `points`/`holes` field to keep in sync.
+Consumers that need coordinates (three.js ghost, area, face frames, seating, SVG/NCEP) call
+`outlinePoints` locally, which tessellates the arcs on demand (6 steps per arc / 48 for a circle).
+
+The 3D **ghost** follows the same rule: `PartViewer` traces the contour into a three.js path with
+`lineTo` and `absarc`, so the preview's corners are circular too — the extrusion tessellates the
+arcs rather than inheriting a chord chain.
 
 The build itself runs in the **authored** stance (the cuts' across signs are authored-relative), so
 `reconstructFromNc` rotates the outline by the same turn `ncAuthoredStancePoints` applies to the

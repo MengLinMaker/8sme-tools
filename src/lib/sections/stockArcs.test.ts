@@ -83,15 +83,14 @@ describe('generated stock outlines carry real arcs', () => {
     expect(section?.outline.edges).toHaveLength(3)
   })
 
-  it('gives the ghost the same primitives and the historical polyline', () => {
+  it('gives the ghost the same generated primitives (no second representation)', () => {
     const stock = stockOutlineForCode('SHS75*75*6.0', [])
     expect(arcs(stock?.outline)).toHaveLength(4)
     expect(arcs(stock?.voidOutlines?.[0])).toHaveLength(4)
-    // Polyline form is derived (6 steps per corner → 4 arcs × 7 samples, less shared vertices).
-    expect(stock?.points.length).toBeGreaterThan(20)
-    expect(outlinePoints(stock?.outline ?? { start: [0, 0], edges: [] }).length).toBe(
-      stock?.points.length,
-    )
+    // The type carries primitives only; a polyline is a local tessellation, never stored.
+    expect(Object.keys(stock ?? {})).not.toContain('points')
+    expect(Object.keys(stock ?? {})).not.toContain('holes')
+    expect(outlinePoints(stock?.outline).length).toBeGreaterThan(20)
   })
 
   it('winds a void opposite to its outer outline', () => {

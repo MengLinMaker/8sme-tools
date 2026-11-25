@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { profileFromFilename, profileKey } from './fromFilename'
+import { outlinePoints } from './outline'
 import { partSectionForCode } from './stock'
 
 /**
@@ -29,7 +30,7 @@ describe('profile from filename', () => {
       const got = partSectionForCode(profile?.code ?? '', [])
       const want = partSectionForCode(expected, [])
       expect(want, `${expected} catalogue`).not.toBeNull()
-      expect(got?.points, `${name} section`).toEqual(want?.points)
+      expect(outlinePoints(got?.outline), `${name} section`).toEqual(outlinePoints(want?.outline))
     }
   })
 

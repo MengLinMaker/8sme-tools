@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { inferSectionFromCross } from './detect'
+import { outlinePoints, outlineVoids } from './outline'
 import { partSectionForCode } from './stock'
 
 /** Feeds a catalogue section's own outline back through the detector — a closed-loop check. */
@@ -7,7 +8,10 @@ function detect(code: string, dims: number[] = []) {
   const section = partSectionForCode(code, dims)
   expect(section, `no outline for ${code}`).not.toBeNull()
   if (!section) return null
-  return inferSectionFromCross({ outer: section.points, holes: section.holes })
+  return inferSectionFromCross({
+    outer: outlinePoints(section?.outline),
+    holes: outlineVoids(section?.voidOutlines),
+  })
 }
 
 describe('inferSectionFromCross', () => {
@@ -51,7 +55,7 @@ describe('inferSectionFromCross', () => {
     const section = partSectionForCode('BT', [134, 103.5, 9.6, 6.3, 8.9])
     expect(section).not.toBeNull()
     if (!section) return
-    const guess = inferSectionFromCross({ outer: section.points })
+    const guess = inferSectionFromCross({ outer: outlinePoints(section?.outline) })
     expect(guess?.family).toBe('tee')
     expect(guess?.label).toContain('200UB29.8')
   })

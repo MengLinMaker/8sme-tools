@@ -1,5 +1,6 @@
 import { strFromU8, unzipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { buildNcex, type NcexPart } from './ncex'
 
@@ -34,8 +35,8 @@ function pfcPart(): NcexPart {
     quantity: 1,
     thickness: 10,
     legThickness: 17.5,
-    section: section.points,
-    innerSection: section.innerSection,
+    section: outlinePoints(section?.outline),
+    innerSection: outlinePoints(section?.innerOutline),
     // A PFC's unrolled surface is web + two flange backs only: 380 + 100 + 100.
     unrolledPerimeter: 580,
     holes,

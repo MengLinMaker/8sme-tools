@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { faceHalf, faceSpanAxis, frameForProfile } from '@/lib/parsers/ncFaces'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { centeredStationFor, unrolledLayout } from '@/lib/wisecam/layout'
 
@@ -16,7 +17,7 @@ describe('per-face distance invariant', () => {
       const section = partSectionForCode(profile, [...dimensions])
       const layout = unrolledLayout(type, [...dimensions])
       if (!section || !layout) throw new Error('no section/layout')
-      const frame = frameForProfile(profile, section.points)
+      const frame = frameForProfile(profile, outlinePoints(section?.outline))
       for (const face of ['v', 'o', 'u', 'h'] as const) {
         const region = layout.faces[face]
         if (!region) continue

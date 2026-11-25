@@ -4,6 +4,7 @@ import { fixture, nw30Bottom, nw31Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { outlinePoints, outlineVoids } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import {
   assessCutReach,
@@ -129,8 +130,8 @@ describe('cutReach geometry', () => {
     if (!section) return
     const failures = assessCutReachGeometry(
       parseNcGeometry(rectNc(0)),
-      section.points,
-      section.holes ?? [],
+      outlinePoints(section?.outline),
+      outlineVoids(section?.voidOutlines) ?? [],
     )
     expect(failures).toEqual([])
   })
@@ -163,7 +164,11 @@ describe('cutReach on real parts', () => {
         const section = partSectionForCode(header.profile, header.dimensions)
         expect(section).not.toBeNull()
         if (!section) return
-        const failures = assessCutReachGeometry(nc, section.points, section.holes ?? [])
+        const failures = assessCutReachGeometry(
+          nc,
+          outlinePoints(section?.outline),
+          outlineVoids(section?.voidOutlines) ?? [],
+        )
         console.log(`${mark}: ${failures.length} failures`, failures.slice(0, 6))
         if (expectFlagged) expect(failures.length).toBeGreaterThan(0)
         else expect(failures).toEqual([])
@@ -183,11 +188,22 @@ describe('cutReach on real parts', () => {
       const section = partSectionForCode(header.profile, header.dimensions)
       expect(section).not.toBeNull()
       if (!section) return
-      expect(assessCutReachGeometry(nc, section.points, section.holes ?? [])).not.toEqual([])
       expect(
-        assessCutReachGeometry(nc, section.points, section.holes ?? [], {
-          profile: header.profile,
-        }),
+        assessCutReachGeometry(
+          nc,
+          outlinePoints(section?.outline),
+          outlineVoids(section?.voidOutlines) ?? [],
+        ),
+      ).not.toEqual([])
+      expect(
+        assessCutReachGeometry(
+          nc,
+          outlinePoints(section?.outline),
+          outlineVoids(section?.voidOutlines) ?? [],
+          {
+            profile: header.profile,
+          },
+        ),
       ).toEqual([])
     },
   )
@@ -206,10 +222,15 @@ describe('cutReach on real parts', () => {
         expect(section).not.toBeNull()
         if (!section) return
         expect(
-          assessCutReachGeometry(nc, section.points, section.holes ?? [], {
-            profile: header.profile,
-            toleranceMm: 1,
-          }),
+          assessCutReachGeometry(
+            nc,
+            outlinePoints(section?.outline),
+            outlineVoids(section?.voidOutlines) ?? [],
+            {
+              profile: header.profile,
+              toleranceMm: 1,
+            },
+          ),
         ).toEqual([])
       },
     )
@@ -227,10 +248,15 @@ describe('cutReach on real parts', () => {
       expect(section).not.toBeNull()
       if (!section) return
       expect(
-        assessCutReachGeometry(nc, section.points, section.holes ?? [], {
-          profile: header.profile,
-          toleranceMm: 1,
-        }),
+        assessCutReachGeometry(
+          nc,
+          outlinePoints(section?.outline),
+          outlineVoids(section?.voidOutlines) ?? [],
+          {
+            profile: header.profile,
+            toleranceMm: 1,
+          },
+        ),
       ).toEqual([])
     },
   )
@@ -248,10 +274,15 @@ describe('cutReach on real parts', () => {
       expect(section).not.toBeNull()
       if (!section) return
       expect(
-        assessCutReachGeometry(nc, section.points, section.holes ?? [], {
-          profile: header.profile,
-          toleranceMm: 1,
-        }),
+        assessCutReachGeometry(
+          nc,
+          outlinePoints(section?.outline),
+          outlineVoids(section?.voidOutlines) ?? [],
+          {
+            profile: header.profile,
+            toleranceMm: 1,
+          },
+        ),
       ).toEqual([])
     },
   )
@@ -270,11 +301,21 @@ describe('cutReach on real parts', () => {
       expect(section).not.toBeNull()
       if (!section) return
       expect(
-        assessCutReachGeometry(nc, section.points, section.holes ?? [], { toleranceMm: 0 }),
+        assessCutReachGeometry(
+          nc,
+          outlinePoints(section?.outline),
+          outlineVoids(section?.voidOutlines) ?? [],
+          { toleranceMm: 0 },
+        ),
       ).toEqual([])
-      const failures = assessCutReachGeometry(nc, section.points, section.holes ?? [], {
-        toleranceMm: 1,
-      })
+      const failures = assessCutReachGeometry(
+        nc,
+        outlinePoints(section?.outline),
+        outlineVoids(section?.voidOutlines) ?? [],
+        {
+          toleranceMm: 1,
+        },
+      )
       expect(failures.length).toBeGreaterThan(0)
       expect(failures.every((f) => f.reason === 'corner')).toBe(true)
     },

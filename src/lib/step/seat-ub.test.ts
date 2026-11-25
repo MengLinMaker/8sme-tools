@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { ubSection } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { meshStepFile } from './mesh'
 import { setOcWasmUrl } from './occInit'
@@ -37,8 +38,8 @@ describe('I-section stock seat', () => {
     const faces = mesh.bodies.flatMap((body) => body.brep ?? [])
     expect(faces.length).toBeGreaterThan(10)
 
-    const heuristic = seatedStepProfile(mesh.vertices, section.points)
-    const refined = seatedStepProfile(mesh.vertices, section.points, faces)
+    const heuristic = seatedStepProfile(mesh.vertices, outlinePoints(section?.outline))
+    const refined = seatedStepProfile(mesh.vertices, outlinePoints(section?.outline), faces)
     const before = seatedExtents(transformVertices(mesh.vertices, heuristic.primary))
     const after = seatedExtents(transformVertices(mesh.vertices, refined.primary))
 

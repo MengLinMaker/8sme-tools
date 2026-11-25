@@ -18,6 +18,7 @@ import { moveCutInNc } from '@/lib/parsers/ncEdit'
 import { faceNormal, placeNcFace, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { arcSamples, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { projectNc, type Vec3 } from '@/lib/parsers/ncProject'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { measureStep } from './measure'
 import { meshStepFile } from './mesh'
@@ -398,7 +399,7 @@ describe('reconstructFromNc — cut through the rolled root fillet (UC examples)
       expect(section).toBeTruthy()
       if (!section) return
       const issues = assessRootFillet(original, {
-        section: section.points,
+        section: outlinePoints(section?.outline),
         dimensions: header.dimensions,
         profile: header.profile,
       })
@@ -477,12 +478,12 @@ describe('reconstructFromNc — I-section NC projection lands on the manufacture
     expect(section).toBeTruthy()
     if (!section) return
     const geo = parseNcGeometry(nc)
-    const frame = resolveNcFaceFrame(section.points, geo, header.profile)
+    const frame = resolveNcFaceFrame(outlinePoints(section?.outline), geo, header.profile)
     const step = await reconstructStepFromNc(nc)
     expect(step).toBeTruthy()
     if (!step) return
     const mesh = await meshStepFile('proj', new TextEncoder().encode(step))
-    const pair = seatedPair(mesh.vertices, null, section.points, true)
+    const pair = seatedPair(mesh.vertices, null, outlinePoints(section?.outline), true)
     const seated = transformVertices(mesh.vertices, pair.primary)
     let minX = Number.POSITIVE_INFINITY
     let maxX = Number.NEGATIVE_INFINITY
@@ -493,7 +494,7 @@ describe('reconstructFromNc — I-section NC projection lands on the manufacture
     const length = maxX - minX
     const OFF = 0.4
     const toScene = (along: number, cross: [number, number], face: 'v' | 'o' | 'u' | 'h'): Vec3 => {
-      const n = faceNormal(frame, face, section.points)
+      const n = faceNormal(frame, face, outlinePoints(section?.outline))
       const local: [number, number] = [cross[0], cross[1]]
       local[n.axis] += n.sign * OFF
       return [
@@ -503,13 +504,16 @@ describe('reconstructFromNc — I-section NC projection lands on the manufacture
       ]
     }
     const normal = (face: 'v' | 'o' | 'u' | 'h'): Vec3 => {
-      const n = faceNormal(frame, face, section.points)
+      const n = faceNormal(frame, face, outlinePoints(section?.outline))
       const base = n.axis === 0 ? CANONICAL_X_AXIS : CANONICAL_Y_AXIS
       return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
     }
-    const pts = projectNc(geo, { frame, section: section.points, toScene, normal }).cuts.flatMap(
-      (cut) => cut.points,
-    )
+    const pts = projectNc(geo, {
+      frame,
+      section: outlinePoints(section?.outline),
+      toScene,
+      normal,
+    }).cuts.flatMap((cut) => cut.points)
     expect(pts.length).toBeGreaterThan(0)
     const stride = Math.max(3, Math.floor(seated.length / 3 / 4000) * 3)
     const distances: number[] = []
@@ -542,11 +546,11 @@ describe('reconstructFromNc — CUT_DEPTH markers follow the NC lines', () => {
     const section = partSectionForCode(header.profile ?? '', header.dimensions ?? [])
     if (!section) return
     const geo = parseNcGeometry(nc)
-    const frame = resolveNcFaceFrame(section.points, geo, header.profile)
+    const frame = resolveNcFaceFrame(outlinePoints(section?.outline), geo, header.profile)
     const length = header.length
     const OFF = 0.4
     const toScene = (along: number, cross: [number, number], face: 'v' | 'o' | 'u' | 'h'): Vec3 => {
-      const n = faceNormal(frame, face, section.points)
+      const n = faceNormal(frame, face, outlinePoints(section?.outline))
       const local: [number, number] = [cross[0], cross[1]]
       local[n.axis] += n.sign * OFF
       return [
@@ -556,13 +560,13 @@ describe('reconstructFromNc — CUT_DEPTH markers follow the NC lines', () => {
       ]
     }
     const normal = (face: 'v' | 'o' | 'u' | 'h'): Vec3 => {
-      const n = faceNormal(frame, face, section.points)
+      const n = faceNormal(frame, face, outlinePoints(section?.outline))
       const base = n.axis === 0 ? CANONICAL_X_AXIS : CANONICAL_Y_AXIS
       return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
     }
     const cutPoints = projectNc(geo, {
       frame,
-      section: section.points,
+      section: outlinePoints(section?.outline),
       toScene,
       normal,
     }).cuts.flatMap((cut) => {
@@ -619,13 +623,13 @@ describe('reconstructFromNc — I-section cut arc side (synthetic)', () => {
     expect(section).toBeTruthy()
     if (!section) return
     const geo = parseNcGeometry(nc)
-    const frame = resolveNcFaceFrame(section.points, geo, header.profile)
+    const frame = resolveNcFaceFrame(outlinePoints(section?.outline), geo, header.profile)
 
     const step = await reconstructStepFromNc(nc)
     expect(step).toBeTruthy()
     if (!step) return
     const mesh = await meshStepFile('ub-arc', new TextEncoder().encode(step))
-    const pair = seatedPair(mesh.vertices, null, section.points, true)
+    const pair = seatedPair(mesh.vertices, null, outlinePoints(section?.outline), true)
     const seated = transformVertices(mesh.vertices, pair.primary)
     let minX = Number.POSITIVE_INFINITY
     let maxX = Number.NEGATIVE_INFINITY
@@ -636,7 +640,7 @@ describe('reconstructFromNc — I-section cut arc side (synthetic)', () => {
     const length = maxX - minX
     const OFF = 0.4
     const toScene = (along: number, cross: [number, number], face: 'v' | 'o' | 'u' | 'h'): Vec3 => {
-      const n = faceNormal(frame, face, section.points)
+      const n = faceNormal(frame, face, outlinePoints(section?.outline))
       const local: [number, number] = [cross[0], cross[1]]
       local[n.axis] += n.sign * OFF
       return [
@@ -656,7 +660,7 @@ describe('reconstructFromNc — I-section cut arc side (synthetic)', () => {
       const p = contour.points[i] as [number, number]
       const q = contour.points[(i + 1) % contour.points.length] as [number, number]
       for (const [x, y] of arcSamples(p, q, arcRadius, 24)) {
-        const placed = placeNcFace(frame, 'v', x, y, section.points)
+        const placed = placeNcFace(frame, 'v', x, y, outlinePoints(section?.outline))
         expected.push(toScene(placed.along, placed.cross, 'v'))
       }
     }

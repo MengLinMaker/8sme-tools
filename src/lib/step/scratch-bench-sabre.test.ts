@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { assessCutReachGeometry } from '@/lib/audit/cutReach'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { outlinePoints, outlineVoids } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { type MeasurableShape, measureShape } from './measure'
 import { setOcWasmUrl } from './occInit'
@@ -64,7 +65,11 @@ describe.skipIf(!HAVE)('sabre cost benchmark', () => {
       const header = parseDstv(ncText).header
       const section = partSectionForCode(header.profile, header.dimensions)
       if (section)
-        assessCutReachGeometry(parseNcGeometry(ncText), section.points, section.holes ?? [])
+        assessCutReachGeometry(
+          parseNcGeometry(ncText),
+          outlinePoints(section?.outline),
+          outlineVoids(section?.voidOutlines) ?? [],
+        )
       const rMs = performance.now() - t
       reachMs += rMs
 

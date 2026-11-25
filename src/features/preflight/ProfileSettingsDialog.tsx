@@ -32,6 +32,7 @@ import {
 import { MACHINE } from '@/lib/machine/profile'
 import { profileFamily } from '@/lib/sections/canonical'
 import { CATALOGUE_SECTIONS } from '@/lib/sections/catalogue'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode, sectionDimensions, sectionThicknesses } from '@/lib/sections/stock'
 import { cn } from '@/lib/utils'
 
@@ -511,9 +512,10 @@ export function CutSettings({
   const thicknesses = useMemo(() => sectionThicknesses(profile, dims), [profile, dims])
   const section = useMemo(() => partSectionForCode(profile, dims), [profile, dims])
   const rotationRadiusMm = useMemo(() => {
-    if (!section || section.points.length === 0) return undefined
-    const xs = section.points.map(([x]) => x)
-    const ys = section.points.map(([, y]) => y)
+    const points = outlinePoints(section?.outline)
+    if (points.length === 0) return undefined
+    const xs = points.map(([x]) => x)
+    const ys = points.map(([, y]) => y)
     const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
     return span / 2
   }, [section])
@@ -878,7 +880,10 @@ export function SectionPreview({
   const { t } = useTranslation()
   const drawing = useMemo(() => {
     if (!section) return null
-    const rings = [section.points, ...(section.holes ?? [])]
+    const rings = [
+      outlinePoints(section.outline),
+      ...(section.voidOutlines ?? []).map((voidOutline) => outlinePoints(voidOutline)),
+    ]
     const transformed = rings.map((ring) => ring.map(([x, y]): [number, number] => [x, -y]))
     const points = transformed.flat()
     if (points.length === 0) return null

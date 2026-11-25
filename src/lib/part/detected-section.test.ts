@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fixture } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { setOcWasmUrl } from '@/lib/step/occInit'
 import { detectStepSection } from '@/lib/step/readSection'
@@ -37,7 +38,7 @@ describe('detected STEP section matches the theoretical spec', () => {
       const spec = partSectionForCode(guess.code, guess.dims ?? [])
       if (!spec) throw new Error('no spec section')
       const measuredExtents = extents(guess.outline.outer)
-      const specExtents = extents(spec.points)
+      const specExtents = extents(outlinePoints(spec?.outline))
       for (let index = 0; index < 2; index++) {
         expect(
           Math.abs((measuredExtents[index] as number) - (specExtents[index] as number)),
@@ -46,7 +47,7 @@ describe('detected STEP section matches the theoretical spec', () => {
       // Area includes the root/toe arc lengths, so it catches a wrong radius even when the
       // flange/web extents are nominal.
       const measuredArea = area(guess.outline.outer)
-      const specArea = area(spec.points)
+      const specArea = area(outlinePoints(spec?.outline))
       expect(Math.abs(measuredArea - specArea) / specArea).toBeLessThan(0.01)
     }, 120_000)
   }

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { hexModuleFrames } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { setOcWasmUrl } from '@/lib/step/occInit'
 import { detectStepSection } from '@/lib/step/readSection'
@@ -22,7 +23,7 @@ describe('measured hollow radius', () => {
 
     // The ghost's outline must use that radius, not the standard 2.5t.
     const section = partSectionForCode(guess?.code ?? '', guess?.dims ?? [])
-    const points = section?.points ?? []
+    const points = outlinePoints(section?.outline) ?? []
     const xs = points.map(([x]) => x)
     const ys = points.map(([, y]) => y)
     const width = Math.max(...xs) - Math.min(...xs)

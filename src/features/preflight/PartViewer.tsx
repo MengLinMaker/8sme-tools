@@ -68,6 +68,7 @@ import {
   type ProfileFamily,
   profileFamily,
 } from '@/lib/sections/canonical'
+import { type Outline, outlineFromPoints, outlinePoints } from '@/lib/sections/outline'
 import type { StockOutline } from '@/lib/sections/stock'
 import { type DiffPresence, probeDiffPresence } from '@/lib/step/booleanDiff'
 import { brepCutSegments, type SeatedBrepFace } from '@/lib/step/cutEdges'
@@ -550,10 +551,36 @@ export interface BeamOutline {
   length: number
 }
 
-/** Extrudes a section outline along a basis and returns a translucent overlay. */
+/**
+ * Draws a generated section contour into a three.js path: straight edges as `lineTo`, real arcs as
+ * `absarc` and a round contour as a full `absarc`. Extruding this keeps the ghost's corners
+ * circular — the extrusion tessellates the arcs, it does not inherit a chord chain.
+ */
+function traceOutline(path: Path, contour: Outline): void {
+  path.moveTo(contour.start[0], contour.start[1])
+  for (const edge of contour.edges) {
+    if (edge.kind === 'line') {
+      path.lineTo(edge.to[0], edge.to[1])
+    } else if (edge.kind === 'arc') {
+      path.absarc(
+        edge.center[0],
+        edge.center[1],
+        edge.radius,
+        edge.start,
+        edge.start + edge.sweep,
+        edge.sweep < 0,
+      )
+    } else {
+      path.absarc(edge.center[0], edge.center[1], edge.radius, 0, Math.PI * 2, !edge.ccw)
+    }
+  }
+  path.closePath()
+}
+
+/** Extrudes a generated section contour along a basis and returns a translucent overlay. */
 function extrudeOverlay(
-  profile: [number, number][],
-  holes: [number, number][][],
+  contour: Outline,
+  voids: Outline[],
   length: number,
   xAxis: Vector3,
   yAxis: Vector3,
@@ -561,20 +588,19 @@ function extrudeOverlay(
   color = GHOST_COLOR,
 ): Group {
   const shape = new Shape()
-  shape.moveTo(profile[0][0], profile[0][1])
-  for (let i = 1; i < profile.length; i++) shape.lineTo(profile[i][0], profile[i][1])
-  shape.closePath()
-  for (const hole of holes) {
-    if (hole.length < 3) continue
-    const path = new Path()
-    path.moveTo(hole[0][0], hole[0][1])
-    for (let i = 1; i < hole.length; i++) path.lineTo(hole[i][0], hole[i][1])
-    path.closePath()
-    shape.holes.push(path)
+  traceOutline(shape, contour)
+  for (const voidOutline of voids) {
+    const voidPath = new Path()
+    traceOutline(voidPath, voidOutline)
+    shape.holes.push(voidPath)
   }
 
   const zAxis = new Vector3().crossVectors(xAxis, yAxis)
-  const geometry = new ExtrudeGeometry(shape, { depth: length, bevelEnabled: false })
+  const geometry = new ExtrudeGeometry(shape, {
+    depth: length,
+    bevelEnabled: false,
+    curveSegments: 64,
+  })
   geometry.translate(0, 0, -length / 2)
   geometry.applyMatrix4(new Matrix4().makeBasis(xAxis, yAxis, zAxis))
 
@@ -745,13 +771,18 @@ function mountScene(
 
   // The NC section is the single reference when there is one: the STEP is registered to it, and the
   // ghost + projected cuts use it, so the STEP, the ghost and the NC lines all share one frame. The
-  // PDF/STEP-derived `stock.points` is only a fallback for a part with no NC.
+  // generated stock section is only a fallback for a part with no NC.
+  const stockPoints = outlinePoints(stock?.outline)
   const profile =
     Array.isArray(ncSection) && ncSection.length >= 3
       ? ncSection
-      : Array.isArray(stock?.points) && stock.points.length >= 3
-        ? stock.points
+      : stockPoints.length >= 3
+        ? stockPoints
         : undefined
+  // The ghost is extruded from the generated primitives (real arcs), not from a tessellation; a
+  // measured/NC-derived polygon falls back to a line outline.
+  const ghostOutline = stock?.outline ?? (profile ? outlineFromPoints(profile) : null)
+  const ghostVoids = stock?.voidOutlines ?? []
 
   const buildGroup = (
     meshed: MeshedStep,
@@ -1007,7 +1038,7 @@ function mountScene(
       const rotation = primary.group.quaternion
       const basisX: Vec3 = [xAxis.x, xAxis.y, xAxis.z]
       const basisY: Vec3 = [yAxis.x, yAxis.y, yAxis.z]
-      const holes = Array.isArray(stock?.holes) ? stock.holes : []
+      const holes = (stock?.voidOutlines ?? []).map((voidOutline) => outlinePoints(voidOutline))
       const family = cutEdges.profile ? profileFamily(cutEdges.profile) : null
       const frame = faceFrame ?? (nc ? resolveNcFaceFrame(ncSection ?? profile, nc) : null)
       // A STEP-only part has no NC frame, but the section + profile still define every face plane.
@@ -1324,8 +1355,8 @@ function mountScene(
     }
 
     const overlay = extrudeOverlay(
-      profile,
-      Array.isArray(stock?.holes) ? stock.holes : [],
+      ghostOutline ?? outlineFromPoints(profile ?? []),
+      ghostVoids,
       length,
       xAxis,
       yAxis,
@@ -1497,7 +1528,14 @@ function mountScene(
     }
   }
   if (beam && Array.isArray(beam.profile) && beam.profile.length >= 3 && beam.length > 0) {
-    const overlay = extrudeOverlay(beam.profile, [], beam.length, unit(0, 1), unit(1, 1), isOverlay)
+    const overlay = extrudeOverlay(
+      outlineFromPoints(beam.profile),
+      [],
+      beam.length,
+      unit(0, 1),
+      unit(1, 1),
+      isOverlay,
+    )
     scene.add(overlay)
     overlays.push(overlay)
 

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { frameForProfile, placeNcFace } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { meshStepFile } from '@/lib/step/mesh'
 import { setOcWasmUrl } from '@/lib/step/occInit'
@@ -26,7 +27,7 @@ describe('raw STEP hole centres', () => {
       'm137-raw',
       new Uint8Array(readFileSync(fixture('part-ir', 'm137.stp'))),
     )
-    const seated = seatedStepGeometry(meshed, section.points)
+    const seated = seatedStepGeometry(meshed, outlinePoints(section?.outline))
     const raw = seated.faces
       .filter((face) => face.cylinder && Math.abs(face.cylinder.radius - 7) < 0.5)
       .map((face) => dot(face.cylinder?.center as number[], seated.memberAxis) + seated.alongOffset)
@@ -46,12 +47,12 @@ describe('raw STEP hole centres', () => {
     const section = partSectionForCode(header.profile, header.dimensions)
     if (!section) throw new Error('no section')
     const geometry = parseNcGeometry(ncText)
-    const frame = frameForProfile(header.profile, section.points)
+    const frame = frameForProfile(header.profile, outlinePoints(section?.outline))
     const meshed = await meshStepFile(
       'm137-raw-cross',
       new Uint8Array(readFileSync(fixture('part-ir', 'm137.stp'))),
     )
-    const seated = seatedStepGeometry(meshed, section.points)
+    const seated = seatedStepGeometry(meshed, outlinePoints(section?.outline))
     const raw = seated.faces
       .filter((face) => face.cylinder && Math.abs(face.cylinder.radius - 7) < 0.5)
       .map((face) => {
@@ -62,7 +63,7 @@ describe('raw STEP hole centres', () => {
         }
       })
     for (const hole of geometry.holes) {
-      const placed = placeNcFace(frame, hole.face, hole.x, hole.y, section.points)
+      const placed = placeNcFace(frame, hole.face, hole.x, hole.y, outlinePoints(section?.outline))
       const nearest = raw.reduce((best, candidate) =>
         Math.abs(candidate.along - hole.x) < Math.abs(best.along - hole.x) ? candidate : best,
       )

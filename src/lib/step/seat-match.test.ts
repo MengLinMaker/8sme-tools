@@ -4,6 +4,7 @@ import { nw30Bottom, nw31Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { profileFamily } from '@/lib/sections/canonical'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { probeDiffPresence } from './booleanDiff'
 import { meshStepFile } from './mesh'
@@ -54,7 +55,9 @@ describe.skipIf(!existsSync(nw31Top('NC files', 'm117.nc1')))(
       it(`${mark}${expected ? '' : ' (diagnostic)'}`, async () => {
         const ncText = readFileSync(ncPath, 'utf8')
         const header = parseDstv(ncText).header
-        const section = partSectionForCode(header.profile, header.dimensions)?.points
+        const section = outlinePoints(
+          partSectionForCode(header.profile, header.dimensions)?.outline,
+        )
         expect(section, `${mark} section`).toBeTruthy()
         const built = await reconstructSolidFromNc(ncText)
         expect(built, `${mark} rebuild`).not.toBeNull()

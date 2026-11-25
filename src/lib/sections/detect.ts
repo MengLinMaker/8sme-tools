@@ -1,5 +1,6 @@
 import { angleDesignation, EQUAL_ANGLES, UNEQUAL_ANGLES } from './angle'
 import { snapChsOutsideDiameter } from './chs'
+import { outlinePoints } from './outline'
 import { PFC_SECTIONS } from './pfc'
 import { partSectionForCode, sectionMassPerMetre } from './stock'
 import { TFB_SECTIONS } from './tfb'
@@ -202,18 +203,24 @@ function makeCandidate(
 ): Candidate | null {
   const section = partSectionForCode(code, dims)
   if (!section) return null
-  const { minX, minY, maxX, maxY } = bbox(section.points)
+  const points = outlinePoints(section.outline)
+  const { minX, minY, maxX, maxY } = bbox(points)
   const size = [maxX - minX, maxY - minY] as [number, number]
   const extents: [number, number] = size[0] >= size[1] ? [size[0], size[1]] : [size[1], size[0]]
-  let area = polygonArea(section.points)
-  for (const hole of section.holes ?? []) area -= polygonArea(hole)
+  let area = polygonArea(points)
+  for (const voidOutline of section.voidOutlines ?? []) {
+    area -= polygonArea(outlinePoints(voidOutline))
+  }
   return {
     family,
     code,
     dims,
     label,
     mass,
-    cells: rasterize(section.points, section.holes ?? []),
+    cells: rasterize(
+      points,
+      (section.voidOutlines ?? []).map((voidOutline) => outlinePoints(voidOutline)),
+    ),
     extents,
     area,
   }

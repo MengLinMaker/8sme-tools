@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { fixture } from '@test/fixtures'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import { describe, it } from 'vitest'
+import { outlinePoints, outlineVoids } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { buildNcepFromNc } from './fromNc'
 import { buildNcex, type NcexPart } from './ncex'
@@ -112,8 +113,8 @@ function generatedPart(
     quantity: 2,
     thickness: dims[3] ?? 6,
     legThickness: dims[2] ?? 9,
-    section: section.points,
-    innerSection: section.holes?.[0],
+    section: outlinePoints(section?.outline),
+    innerSection: outlineVoids(section?.voidOutlines)?.[0],
     holes,
     ...extra,
   }

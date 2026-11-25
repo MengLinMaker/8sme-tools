@@ -4,6 +4,7 @@ import { nw31Top } from '@test/fixtures'
 import { Matrix4, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { measureStep } from './measure'
 import { meshStepFile } from './mesh'
@@ -99,7 +100,12 @@ describe('reconstructed bevel cuts', () => {
         // Same seat the viewer uses (NC primary, STEP registered to it), so the bevel normal's
         // sign is directly comparable with the real part's.
         const real = await meshStepFile(`${mark}·real`, new Uint8Array(readFileSync(stpPath)))
-        const seats = seatedPair(bevelMesh.vertices, real.vertices, section.points, true)
+        const seats = seatedPair(
+          bevelMesh.vertices,
+          real.vertices,
+          outlinePoints(section?.outline),
+          true,
+        )
         const builtYs = vBevelNormalYs(bevelMesh, seats.primary)
         const realYs = seats.compare ? vBevelNormalYs(real, seats.compare) : []
         expect(builtYs.length).toBeGreaterThan(0)

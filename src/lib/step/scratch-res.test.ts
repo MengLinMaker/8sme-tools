@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { setOcWasmUrl } from './occInit'
 import { detectStepSection } from './readSection'
@@ -43,7 +44,7 @@ describe('outline vs catalogue roll', () => {
       const bytes = new Uint8Array(readFileSync(`${DIR}/${f}`))
       const guess = await detectStepSection(bytes)
       if (!guess?.outline) continue
-      const cat = partSectionForCode(guess.code, guess.dims ?? [])?.points
+      const cat = outlinePoints(partSectionForCode(guess.code, guess.dims ?? [])?.outline)
       if (!cat) continue
       const outer = guess.outline.outer
       // centre both, then fine rotation sweep of outline -> catalogue

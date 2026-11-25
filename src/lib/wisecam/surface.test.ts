@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import type { SeatedBrepFace } from '@/lib/step/cutEdges'
 import { meshStepFile } from '@/lib/step/mesh'
@@ -98,10 +99,10 @@ describe('surface development', () => {
       if (!layout) throw new Error('no layout')
       const section = partSectionForCode(header.profile, header.dimensions)
       if (!section) throw new Error('no section')
-      const frame = resolveNcFaceFrame(section.points, geometry, header.profile)
+      const frame = resolveNcFaceFrame(outlinePoints(section?.outline), geometry, header.profile)
 
       const meshed = await meshStepFile('m117-surface', new Uint8Array(readFileSync(m117.stp)))
-      const seated = seatedStepProfile(meshed.vertices, section.points)
+      const seated = seatedStepProfile(meshed.vertices, outlinePoints(section?.outline))
       const quaternion = new Quaternion()
       const position = new Vector3()
       const scale = new Vector3()
@@ -140,7 +141,7 @@ describe('surface development', () => {
       const stepCuts = developStepCutEdges(
         {
           faces,
-          section: section.points,
+          section: outlinePoints(section?.outline),
           frame,
           layout,
           xAxis: [seated.xAxis.x, seated.xAxis.y, seated.xAxis.z],
@@ -157,7 +158,7 @@ describe('surface development', () => {
       // Scaffold STEP→NCEP path consumes the same surface development.
       const input = {
         faces,
-        section: section.points,
+        section: outlinePoints(section?.outline),
         frame,
         layout,
         xAxis: [seated.xAxis.x, seated.xAxis.y, seated.xAxis.z] as [number, number, number],
@@ -169,7 +170,7 @@ describe('surface development', () => {
         profile: header.profile,
         dimensions: header.dimensions,
         length: header.length,
-        section: section.points,
+        section: outlinePoints(section?.outline),
         radius: header.dimensions[4] ?? 0,
         alongOffset: -minX,
       }

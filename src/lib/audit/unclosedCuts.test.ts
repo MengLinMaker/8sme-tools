@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { nw30Bottom, nw31Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseNcFile } from '@/lib/parsers/nc'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { assessUnclosedCuts, TINY_CUT_MM } from './unclosedCuts'
 
@@ -142,7 +143,7 @@ describe('unclosedCuts on the real fixtures', () => {
           ? partSectionForCode(header.profile, header.dimensions ?? [])
           : null
         const issues = assessUnclosedCuts(text, {
-          section: section?.points,
+          section: outlinePoints(section?.outline),
           profile: header.profile,
         })
         expect(issues.map((issue) => `${issue.face}:${issue.params.reason}`)).toEqual([])

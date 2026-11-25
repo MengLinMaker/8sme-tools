@@ -108,10 +108,11 @@ export function outline(start: Pt): OutlineBuilder {
  * full circle) so existing consumers — ghost, area, NCEP — see exactly the section they saw before.
  */
 export function outlinePoints(
-  contour: Outline,
+  contour: Outline | null | undefined,
   arcSteps = ARC_STEPS,
   circleSteps = CIRCLE_STEPS,
 ): Pt[] {
+  if (!contour) return []
   const points: Pt[] = [contour.start]
   const push = (point: Pt) => {
     const last = points[points.length - 1]
@@ -136,6 +137,19 @@ export function outlinePoints(
   const last = points[points.length - 1]
   if (first && last && points.length > 1 && same(first, last, 1e-6)) points.pop()
   return points
+}
+
+/** Polyline form of each void contour (hollow sections). */
+export function outlineVoids(contours: Outline[] | undefined | null): Pt[][] {
+  return (contours ?? []).map((contour) => outlinePoints(contour))
+}
+
+/** A contour that is only straight edges — for a polygon measured from a STEP. */
+export function outlineFromPoints(points: Pt[]): Outline {
+  const first = points[0] ?? [0, 0]
+  let builder = outline(first)
+  for (const point of points.slice(1)) builder = builder.lineTo(point)
+  return builder.done()
 }
 
 /** Moves the whole contour. */

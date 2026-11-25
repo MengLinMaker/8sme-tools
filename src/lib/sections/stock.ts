@@ -5,6 +5,7 @@ import { inferTee } from './infer'
 import {
   type Outline,
   outline,
+  outlineFromPoints,
   outlinePoints,
   reverseOutline,
   rotateOutline,
@@ -41,14 +42,10 @@ import { getUc, getUcByDepth } from './uc'
  */
 
 export interface StockOutline {
-  /** the stock section as real primitives (lines and arcs), in mm (absent for a caller-supplied
-   * display-only outline) */
+  /** the stock section: lines and real arcs in mm (absent only for a caller-supplied display
+   * outline measured from a STEP, which is already a polyline) */
   outline?: Outline
-  /** closed cross-section outline in mm, centred on its bounding box (polyline form of `outline`) */
-  points: [number, number][]
-  /** inner voids for hollow sections (RHS/SHS/CHS), in mm */
-  holes?: [number, number][][]
-  /** the voids as real primitives, wound opposite to `outline` */
+  /** inner voids for hollow sections (RHS/SHS/CHS), wound opposite to `outline` */
   voidOutlines?: Outline[]
   /** human label, e.g. "PFC100*50 stock" */
   label: string
@@ -87,68 +84,6 @@ const INFLATE = 0
 
 function numbers(code: string): number[] {
   return (code.match(/\d+(?:\.\d+)?/g) ?? []).map(Number)
-}
-
-function signedArea(points: [number, number][]): number {
-  let twice = 0
-  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-    twice += points[j][0] * points[i][1] - points[i][0] * points[j][1]
-  }
-  return twice / 2
-}
-
-/** Intersection of two infinite lines (a→b and c→d), or null when parallel. */
-function lineIntersection(
-  a: [number, number],
-  b: [number, number],
-  c: [number, number],
-  d: [number, number],
-): [number, number] | null {
-  const rx = b[0] - a[0]
-  const ry = b[1] - a[1]
-  const sx = d[0] - c[0]
-  const sy = d[1] - c[1]
-  const denom = rx * sy - ry * sx
-  if (Math.abs(denom) < 1e-9) return null
-  const t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / denom
-  return [a[0] + t * rx, a[1] + t * ry]
-}
-
-/**
- * Offsets a closed outline outward by a **constant** `distance` — every face moves the same
- * amount along its normal (via mitered corners). A uniform scale would short-change the thin
- * axis of an elongated section (e.g. a PFC flange vs its depth), so the clearance must be a
- * true offset instead.
- */
-function inflate(points: [number, number][], distance: number): [number, number][] {
-  const n = points.length
-  if (n < 3) return points
-  const ccw = signedArea(points) >= 0 ? points : ([...points].reverse() as [number, number][])
-  const out: [number, number][] = []
-  for (let i = 0; i < n; i++) {
-    const prev = ccw[(i - 1 + n) % n]
-    const cur = ccw[i]
-    const next = ccw[(i + 1) % n]
-    // Unit edge vectors of the two edges meeting at `cur`.
-    const e0x = cur[0] - prev[0]
-    const e0y = cur[1] - prev[1]
-    const e1x = next[0] - cur[0]
-    const e1y = next[1] - cur[1]
-    const l0 = Math.hypot(e0x, e0y) || 1
-    const l1 = Math.hypot(e1x, e1y) || 1
-    // Exterior normals of a CCW polygon point to the right of each edge: (dy, -dx).
-    const n0: [number, number] = [e0y / l0, -e0x / l0]
-    const n1: [number, number] = [e1y / l1, -e1x / l1]
-    const a: [number, number] = [prev[0] + n0[0] * distance, prev[1] + n0[1] * distance]
-    const b: [number, number] = [cur[0] + n0[0] * distance, cur[1] + n0[1] * distance]
-    const c: [number, number] = [cur[0] + n1[0] * distance, cur[1] + n1[1] * distance]
-    const d: [number, number] = [next[0] + n1[0] * distance, next[1] + n1[1] * distance]
-    const hit = lineIntersection(a, b, c, d)
-    out.push(
-      hit ?? [cur[0] + ((n0[0] + n1[0]) / 2) * distance, cur[1] + ((n0[1] + n1[1]) / 2) * distance],
-    )
-  }
-  return out
 }
 
 /** Moves a generated outline to sit centred on its bounding box. */
@@ -472,7 +407,6 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
   const n = numbers(clean)
   let contour: Outline | null = null
   let voidOutlines: Outline[] = []
-  let hollow = false
   let label = `${clean} stock`
 
   switch (family) {
@@ -523,7 +457,6 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
         const rect = hollowRect(width, height, wall, radius, INFLATE)
         contour = rect.outline
         voidOutlines = rect.voidOutline ? [rect.voidOutline] : []
-        hollow = true
       } else if (height > 0 && width > 0) {
         contour = rectangleOutline(width, height)
       }
@@ -536,7 +469,6 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
         contour = circle(od + 2 * INFLATE)
         const id = od - 2 * wall - 2 * INFLATE
         if (wall > 0 && id > 0) voidOutlines = [reverseOutline(circle(id))]
-        hollow = true
       }
       break
     }
@@ -591,16 +523,9 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
   }
 
   if (!contour) return null
-  const points = outlinePoints(contour)
-  if (points.length < 3) return null
-  // The stock ghost is drawn at the section's exact size (INFLATE = 0) so it reads to scale.
+  if (outlinePoints(contour).length < 3) return null
   return {
     outline: contour,
-    points: hollow ? points : inflate(points, INFLATE),
-    holes:
-      voidOutlines.length > 0
-        ? voidOutlines.map((voidOutline) => outlinePoints(voidOutline))
-        : undefined,
     voidOutlines: voidOutlines.length > 0 ? voidOutlines : undefined,
     label,
     mass: sectionMassPerMetre(clean, dims) ?? undefined,
@@ -614,27 +539,14 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
 export interface PartSection {
   /** the section as real primitives — the source of truth for the STEP rebuild */
   outline: Outline
-  /** the section as a polyline (derived from `outline`) */
-  points: [number, number][]
-  /** hollow voids as real primitives, wound opposite to `outline` */
+  /** hollow voids, wound opposite to `outline` */
   voidOutlines?: Outline[]
-  /** hollow voids as polylines (derived) */
-  holes?: [number, number][][]
-  /** Inner/back contour for open sections (currently PFC), as primitives. */
+  /** inner/back contour for open sections (currently PFC) */
   innerOutline?: Outline
-  /** Inner/back contour as a polyline (derived); hollow voids use `holes`. */
-  innerSection?: [number, number][]
 }
 
 export function partSectionForCode(code: string, dims: number[]): PartSection | null {
-  const built = partOutlineForCode(code, dims)
-  if (!built) return null
-  return {
-    ...built,
-    points: outlinePoints(built.outline),
-    holes: built.voidOutlines?.map((voidOutline) => outlinePoints(voidOutline)),
-    innerSection: built.innerOutline ? outlinePoints(built.innerOutline) : undefined,
-  }
+  return partOutlineForCode(code, dims)
 }
 
 type PartOutline = Pick<PartSection, 'outline' | 'voidOutlines' | 'innerOutline'>
@@ -1065,8 +977,10 @@ export function sectionMassPerMetre(code: string, dims: number[]): number | null
     default: {
       const section = partSectionForCode(clean, dims)
       if (!section) return null
-      let area = polygonArea(section.points)
-      for (const hole of section.holes ?? []) area -= polygonArea(hole)
+      let area = polygonArea(outlinePoints(section.outline))
+      for (const voidOutline of section.voidOutlines ?? []) {
+        area -= polygonArea(outlinePoints(voidOutline))
+      }
       if (!(area > 0)) return null
       return area * STEEL_DENSITY * 1e-6
     }
@@ -1105,9 +1019,10 @@ export async function resolveStockOutline(
   // STEP-only: the section was inferred from geometry. Draw the real outline when we have it.
   if (!code) {
     if (fallback?.outline && fallback.outline.points.length >= 3) {
+      // Measured from the STEP, so it is already a polygon: keep it as a line outline.
       return {
-        points: fallback.outline.points,
-        holes: fallback.outline.holes,
+        outline: outlineFromPoints(fallback.outline.points),
+        voidOutlines: fallback.outline.holes?.map((hole) => outlineFromPoints(hole)),
         label: fallback.code || 'section',
         mass: fallback.mass ?? undefined,
       }

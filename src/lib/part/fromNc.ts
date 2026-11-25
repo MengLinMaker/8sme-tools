@@ -1,6 +1,7 @@
 import { parseDstv } from '@/lib/parsers/dstv'
 import { faceSpanAxis, ncAuthoredAcrossSign, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { type NcFace, parseNcGeometry, slotOffset } from '@/lib/parsers/ncGeometry'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { centeredStationFor, type UnrolledLayout, unrolledLayout } from '@/lib/wisecam/layout'
 import { developEndCut } from '@/lib/wisecam/surface'
@@ -30,8 +31,9 @@ export function partIrFromNc(ncText: string): PartIr | null {
   const header = file.header
   const geometry = parseNcGeometry(ncText)
   const section = partSectionForCode(header.profile, header.dimensions)
-  if (!section || section.points.length < 3) return null
-  const frame = resolveNcFaceFrame(section.points, geometry, header.profile)
+  const sectionPoints = outlinePoints(section?.outline)
+  if (!section || sectionPoints.length < 3) return null
+  const frame = resolveNcFaceFrame(sectionPoints, geometry, header.profile)
 
   const charts: PartChart[] = []
   const chartByFace = new Map<NcFace, PartChart>()
@@ -211,8 +213,12 @@ export function partIrFromNc(ncText: string): PartIr | null {
     profile: header.profile,
     profileType: header.profileType,
     dimensions: header.dimensions,
-    section: section.points,
-    innerSection: section.innerSection ?? section.holes?.[0],
+    section: sectionPoints,
+    innerSection: section.innerOutline
+      ? outlinePoints(section.innerOutline)
+      : section.voidOutlines?.[0]
+        ? outlinePoints(section.voidOutlines[0])
+        : undefined,
     length: header.length,
     quantity: header.quantity ?? 1,
     grade: header.grade,

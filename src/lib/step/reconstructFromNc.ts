@@ -22,7 +22,7 @@ import {
   selectWeldingPrep,
 } from '@/lib/parsers/weldingPrep'
 import { profileFamily } from '@/lib/sections/canonical'
-import { type Outline, rotateOutline } from '@/lib/sections/outline'
+import { type Outline, outlinePoints, rotateOutline } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stripStraySolids } from './clean'
 import type { MeasurableShape } from './measure'
@@ -371,13 +371,16 @@ export async function reconstructSolidFromNc(
   const header = parseDstv(ncText).header
   const geo = parseNcGeometry(ncText)
   const rawSection = partSectionForCode(header.profile, header.dimensions)
-  if (!rawSection || rawSection.points.length < 3) return null
+  const rawPoints = outlinePoints(rawSection?.outline)
+  if (!rawSection || rawPoints.length < 3) return null
   // The canonical PFC stance (`n`, flanges down) is a 90° rotation of the stance this rebuild's
   // axis logic assumes (web vertical). Build in that authored stance so the tested geometry math is
   // unchanged, then roll the finished solid back to canonical (see `canonicalSectionFlip`).
-  const authoredPoints = ncAuthoredStancePoints(header.profile, rawSection.points)
-  const canonicalSectionFlip = authoredPoints !== rawSection.points
-  const section = canonicalSectionFlip ? { ...rawSection, points: authoredPoints } : rawSection
+  const authoredPoints = ncAuthoredStancePoints(header.profile, rawPoints)
+  const canonicalSectionFlip = authoredPoints !== rawPoints
+  /** Section coordinates in the authored stance, for the frame/projection maths (the prisms
+   * themselves are sketched from the generated primitives). */
+  const sectionPoints = authoredPoints
   // The generated outline is in the canonical stance, and this build runs in the authored one (the
   // cuts' across signs are authored-relative), so rotate it the same way the sampled points are:
   // `ncAuthoredStancePoints` is a +90° turn for a channel and a −90° turn for an I-section. The
@@ -420,7 +423,7 @@ export async function reconstructSolidFromNc(
   // `v`/`h` faces share one cross-section axis, `o`/`u` the other; the shared frame resolves
   // which by matching a contour's across-extent to the section's two dimensions (the same rule
   // the viewer uses to project cuts onto the face the laser cuts).
-  const frame = resolveNcFaceFrame(section.points, geo, header.profile)
+  const frame = resolveNcFaceFrame(sectionPoints, geo, header.profile)
   // Out-of-range welding preps are handled by policy before any bevel/reach uses them.
   const bevelPolicy =
     options.bevelPolicy ??
@@ -459,7 +462,7 @@ export async function reconstructSolidFromNc(
     frame.axisOU = 0
     // `webHalf` was measured on the guessed width axis; re-measure it on the real one.
     let min = Number.POSITIVE_INFINITY
-    for (const p of section.points) {
+    for (const p of sectionPoints) {
       const value = Math.abs(p[0] ?? 0)
       if (value > 1e-6 && value < min) min = value
     }
@@ -515,7 +518,7 @@ export async function reconstructSolidFromNc(
     const tan = Math.tan((angle * Math.PI) / 180)
     const width = depth * tan
     const faceOut = facePlaneHalf(frame, face)
-    const faceSign = resolveFaceSign(frame, section.points, face)
+    const faceSign = resolveFaceSign(frame, sectionPoints, face)
     const nx = ccw ? -dy / length : dy / length
     const ny = ccw ? dx / length : -dx / length
     const n3: Vec3 = axis === 0 ? [nx, ny, 0] : [nx, 0, ny]
@@ -597,7 +600,7 @@ export async function reconstructSolidFromNc(
     const rootRadius = face === 'v' ? Math.max(0, header.dimensions[4] ?? 0) : 0
     const reach = wall + rootRadius + LASER_KERF
     const faceOut = facePlaneHalf(frame, face)
-    const faceSign = resolveFaceSign(frame, section.points, face)
+    const faceSign = resolveFaceSign(frame, sectionPoints, face)
     const half = halfOf(axis)
     const rect = poly([
       [endMinX - 2, -half - 2],
@@ -646,7 +649,7 @@ export async function reconstructSolidFromNc(
     const cornerRadius = Math.max(0, header.dimensions[4] ?? 0)
     const reach = wall + cornerRadius + CUT_MARGIN
     const faceOut = facePlaneHalf(frame, face)
-    const faceSign = resolveFaceSign(frame, section.points, face)
+    const faceSign = resolveFaceSign(frame, sectionPoints, face)
     const half = halfOf(axis)
     const low = endMinX - 2 - END_CUT_OVERRUN
     const high = endMaxX + 2 + END_CUT_OVERRUN
@@ -687,7 +690,7 @@ export async function reconstructSolidFromNc(
     const [, flange, tf, tw, r] = header.dimensions as [number, number, number, number, number]
     if (!(r > 0)) return []
     const faceOut = facePlaneHalf(frame, face)
-    const faceSign = resolveFaceSign(frame, section.points, face)
+    const faceSign = resolveFaceSign(frame, sectionPoints, face)
     const hb = flange / 2
     const bandLo = -hb + tw
     const bandHi = bandLo + r
@@ -730,7 +733,7 @@ export async function reconstructSolidFromNc(
     const axis = faceAxis(contour.face)
     const spanHalf = halfOf(axis)
     const faceOut = facePlaneHalf(frame, contour.face)
-    const faceSign = resolveFaceSign(frame, section.points, contour.face)
+    const faceSign = resolveFaceSign(frame, sectionPoints, contour.face)
     const web = header.dimensions[3] ?? 0
     if (!(web > 0)) return []
     const yOuter = faceSign * faceOut
@@ -789,7 +792,7 @@ export async function reconstructSolidFromNc(
   // `sectionSketch` draws the stock's generated primitives — outer outline and inner void both —
   // so rounded corners are real cylindrical faces, not chord chains, which is what WiseCAM's
   // standard-section matcher needs.
-  let solid = (await sectionSketch(authoredStance(section.outline)))
+  let solid = (await sectionSketch(authoredStance(rawSection.outline)))
     ?.sketchOnPlane('YZ')
     .extrude(maxX + 20) as unknown as SolidOps
   if (!solid) return null
@@ -805,7 +808,7 @@ export async function reconstructSolidFromNc(
   // Holes in the section (hollow RHS/SHS/CHS) are through-cuts too. Their voids come from the same
   // generated primitives, so a hollow's inner corners are arcs as well — a faceted void is what
   // stopped WiseCAM recognising a rebuilt RHS/SHS as a standard section.
-  for (const voidOutline of section.voidOutlines ?? []) {
+  for (const voidOutline of rawSection.voidOutlines ?? []) {
     const cut = (await sectionSketch(authoredStance(voidOutline)))
       ?.sketchOnPlane('YZ')
       .extrude(maxX + 20) as unknown as SolidOps
@@ -1165,7 +1168,7 @@ export async function reconstructSolidFromNc(
     // drill where section material actually reaches at this hole's position,
     // not where symmetry assumes it. Symmetric sections reach both sides, so
     // the pairing table stands for them.
-    const [lo, hi] = sectionSpanAt(section.points, axis, across * (h.y - half))
+    const [lo, hi] = sectionSpanAt(sectionPoints, axis, across * (h.y - half))
     const reached = sign > 0 ? hi >= faceOut - 2 : lo <= -faceOut + 2
     if (!reached) {
       const otherReached = sign > 0 ? lo <= -faceOut + 2 : hi >= faceOut - 2
@@ -1240,7 +1243,7 @@ export async function reconstructSolidFromNc(
     // canonical stance, so use the canonical section/frame here too: this is the same frame the
     // viewer projects the NC lines in, and avoids a family-specific sample-vs-solid across-sign
     // mismatch (a channel's `o`/`u` cuts used to be probed on the mirrored side).
-    const probeSection = rawSection.points
+    const probeSection = rawPoints
     const probeFrame = resolveNcFaceFrame(probeSection, geo, header.profile)
     const projection = {
       frame: probeFrame,

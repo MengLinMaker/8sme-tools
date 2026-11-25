@@ -5,6 +5,7 @@ import { assessRootFillet } from '@/lib/audit/rootFillet'
 import { assessUnclosedCutsGeometry } from '@/lib/audit/unclosedCuts'
 import { moveCutInNc, removeCutFromNc, setOutOfRangeBevelInNc } from '@/lib/parsers/ncEdit'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import type { Finding } from './schemas'
 
@@ -82,7 +83,7 @@ const STEEP_BEVEL = [
 describe('ncOpForFinding', () => {
   it('moves a root-fillet cut off the fillet so the check clears', () => {
     const before = ubNc(WEB_AT_FILLET)
-    const options = { section: SECTION.points, dimensions: DIMS, profile: PROFILE }
+    const options = { section: outlinePoints(SECTION?.outline), dimensions: DIMS, profile: PROFILE }
     const issue = assessRootFillet(before, options)[0]
     expect(issue?.code).toBe('CUT_ROOT_FILLET')
     if (!issue) return
@@ -107,7 +108,7 @@ describe('ncOpForFinding', () => {
 
   it('removes a stray cut-out so the check clears', () => {
     const before = pfcNc(TINY_NOTCH)
-    const options = { section: PFC_SECTION.points, profile: PFC }
+    const options = { section: outlinePoints(PFC_SECTION?.outline), profile: PFC }
     const issue = assessUnclosedCutsGeometry(parseNcGeometry(before), options)[0]
     expect(issue?.removal).not.toBeNull()
     if (!issue) return

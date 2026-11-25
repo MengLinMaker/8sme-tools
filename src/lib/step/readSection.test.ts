@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { chsLeg, hexModuleFrames, nw30Bottom, nw31Bottom, nw31Top } from '@test/fixtures'
 import { draw, importSTEP, makeBox } from 'replicad'
 import { describe, expect, it } from 'vitest'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { ensureOc, setOcWasmUrl } from './occInit'
 import { detectStepSection, inferStepSection, type SectionShape } from './readSection'
@@ -54,8 +55,8 @@ describe.skipIf(!HAVE)('readSection — detect the section from real STEP geomet
     const section = partSectionForCode('EA50*50*3', [])
     expect(section).not.toBeNull()
     if (!section) return
-    let pen = draw(section.points[0] as [number, number])
-    for (const point of section.points.slice(1)) pen = pen.lineTo(point)
+    let pen = draw(outlinePoints(section?.outline)[0] as [number, number])
+    for (const point of outlinePoints(section?.outline).slice(1)) pen = pen.lineTo(point)
     const bytes = new Uint8Array(
       await pen.close().sketchOnPlane('XY').extrude(20).blobSTEP().arrayBuffer(),
     )
@@ -83,8 +84,8 @@ describe.skipIf(!HAVE)('readSection — detect the section from real STEP geomet
     const section = partSectionForCode('EA200*200*20', [])
     expect(section).not.toBeNull()
     if (!section) return
-    let pen = draw(section.points[0] as [number, number])
-    for (const point of section.points.slice(1)) pen = pen.lineTo(point)
+    let pen = draw(outlinePoints(section?.outline)[0] as [number, number])
+    for (const point of outlinePoints(section?.outline).slice(1)) pen = pen.lineTo(point)
     type Rotatable = {
       rotate: (a: number, p: number[], d: number[]) => Rotatable
       blobSTEP: () => Blob
@@ -118,8 +119,8 @@ describe.skipIf(!HAVE)('readSection — detect the section from real STEP geomet
     const section = partSectionForCode('EA200*200*20', [])
     expect(section).not.toBeNull()
     if (!section) return
-    let pen = draw(section.points[0] as [number, number])
-    for (const point of section.points.slice(1)) pen = pen.lineTo(point)
+    let pen = draw(outlinePoints(section?.outline)[0] as [number, number])
+    for (const point of outlinePoints(section?.outline).slice(1)) pen = pen.lineTo(point)
     const solid = pen.close().sketchOnPlane('XY').extrude(200)
     // Notch a chunk out of the middle (through the web), leaving the ends full.
     const notch = makeBox([-300, -60, -40], [300, 60, 40])
@@ -151,8 +152,8 @@ describe.skipIf(!HAVE)('readSection — detect the section from real STEP geomet
     const section = partSectionForCode('EA200*200*20', [])
     expect(section).not.toBeNull()
     if (!section) return
-    let pen = draw(section.points[0] as [number, number])
-    for (const point of section.points.slice(1)) pen = pen.lineTo(point)
+    let pen = draw(outlinePoints(section?.outline)[0] as [number, number])
+    for (const point of outlinePoints(section?.outline).slice(1)) pen = pen.lineTo(point)
     type Rotatable = {
       rotate: (a: number, p: number[], d: number[]) => Rotatable
       blobSTEP: () => Blob

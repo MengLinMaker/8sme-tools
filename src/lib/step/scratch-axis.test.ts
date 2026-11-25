@@ -4,6 +4,7 @@ import { nw30Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { parseNcGeometry } from '@/lib/parsers/ncGeometry'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 
 const NW31 = nw31Top()
@@ -21,11 +22,11 @@ describe.skipIf(!HAVE)('axis assignment probe', () => {
       const geo = parseNcGeometry(nc)
       const section = partSectionForCode(header.profile, header.dimensions)
       const ex =
-        Math.max(...(section?.points.map((p) => p[0]) ?? [0])) -
-        Math.min(...(section?.points.map((p) => p[0]) ?? [0]))
+        Math.max(...(outlinePoints(section?.outline).map((p) => p[0]) ?? [0])) -
+        Math.min(...(outlinePoints(section?.outline).map((p) => p[0]) ?? [0]))
       const ey =
-        Math.max(...(section?.points.map((p) => p[1]) ?? [0])) -
-        Math.min(...(section?.points.map((p) => p[1]) ?? [0]))
+        Math.max(...(outlinePoints(section?.outline).map((p) => p[1]) ?? [0])) -
+        Math.min(...(outlinePoints(section?.outline).map((p) => p[1]) ?? [0]))
       const outer = geo.contours.filter((c) => c.kind === 'outer')
       const maxCoord = (c: (typeof outer)[number]) => Math.max(...c.points.map((p) => p[1]))
       const matchAxis = (yMax: number): Axis => (Math.abs(yMax - ex) <= Math.abs(yMax - ey) ? 0 : 1)

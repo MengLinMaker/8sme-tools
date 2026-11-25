@@ -2,6 +2,7 @@ import { parseDstv } from '@/lib/parsers/dstv'
 import { resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { faceThickness } from '@/lib/parsers/ncProject'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { unrolledLayout } from './layout'
 import { buildNcex, type NcexPalette, type NcexPart, ncexPartSvg } from './ncex'
@@ -50,15 +51,16 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
   })
   if (!layout) return null
   const section = partSectionForCode(header.profile, header.dimensions)
-  if (!section || section.points.length < 3) return null
+  const sectionPoints = outlinePoints(section?.outline)
+  if (!section || sectionPoints.length < 3) return null
 
   const geometry = parseNcGeometry(ncText)
-  const frame = resolveNcFaceFrame(section.points, geometry, header.profile)
+  const frame = resolveNcFaceFrame(sectionPoints, geometry, header.profile)
   const thicknessByFace = new Map<NcFace, number>()
   const thicknessForFace = (face: NcFace): number => {
     let thickness = thicknessByFace.get(face)
     if (thickness == null) {
-      thickness = faceThickness(frame, section.points, face)
+      thickness = faceThickness(frame, sectionPoints, face)
       thicknessByFace.set(face, thickness)
     }
     return thickness
@@ -83,8 +85,12 @@ export function partFromNc(ncText: string, options: FromNcOptions = {}): NcexPar
     // WiseCAM writes LegThickness=2 for hollow sections, not the wall thickness.
     legThickness: profileType === 'M' ? 2 : (legThickness ?? 0),
     grade: header.grade,
-    section: section.points,
-    innerSection: section.innerSection ?? section.holes?.[0],
+    section: sectionPoints,
+    innerSection: section.innerOutline
+      ? outlinePoints(section.innerOutline)
+      : section.voidOutlines?.[0]
+        ? outlinePoints(section.voidOutlines[0])
+        : undefined,
     holes: developed.holes,
     marks: developed.marks,
     cuts: developed.cuts,

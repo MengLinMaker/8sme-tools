@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { fixture, nw30Bottom, nw31Top } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { parseDstv } from './dstv'
 import {
@@ -130,7 +131,7 @@ describe('tube canonical stance (RHS150*100*9.0)', () => {
     const text = readFileSync(nw31Top('NC files', 'm150.nc1'), 'utf8')
     const header = parseDstv(text).header
     const geo = parseNcGeometry(text)
-    const section = partSectionForCode(header.profile, header.dimensions)?.points
+    const section = outlinePoints(partSectionForCode(header.profile, header.dimensions)?.outline)
     expect(section).toBeTruthy()
     if (!section) return
     // Tekla authors the tube long-side-vertical; our stance is long-side-horizontal.
@@ -228,7 +229,7 @@ describe('projectNc hollow bevel end (RHS150*100*9.0)', () => {
     const text = readFileSync(path, 'utf8')
     const header = parseDstv(text).header
     const geo = parseNcGeometry(text)
-    const section = partSectionForCode(header.profile, header.dimensions)?.points
+    const section = outlinePoints(partSectionForCode(header.profile, header.dimensions)?.outline)
     expect(section).toBeTruthy()
     if (!section) return
     const frame = resolveNcFaceFrame(section, geo, header.profile)
@@ -262,7 +263,8 @@ describe('projectNc hollow bevel end (RHS150*100*9.0)', () => {
 
 describe('snapToSectionSurface', () => {
   it('snaps a nominal top-face point past an SHS corner onto the rounded skin', () => {
-    const section = partSectionForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])?.points ?? []
+    const section =
+      outlinePoints(partSectionForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])?.outline) ?? []
     const flat = snapToSectionSurface(section, [0, 50])
     expect(flat).toEqual([0, 50])
     const corner = snapToSectionSurface(section, [48, 50])
@@ -274,7 +276,7 @@ describe('snapToSectionSurface', () => {
 
 describe('faceThickness', () => {
   const empty: NcGeometry = { contours: [], holes: [], notches: [], marks: [] }
-  const section = partSectionForCode('EA75*75*6', [75, 75, 6, 6, 8])?.points ?? []
+  const section = outlinePoints(partSectionForCode('EA75*75*6', [75, 75, 6, 6, 8])?.outline) ?? []
 
   it('takes an angle leg thickness from the section code', () => {
     const frame = resolveNcFaceFrame(section, empty, 'EA75*75*6')
@@ -292,7 +294,7 @@ describe('faceThickness', () => {
     const text = readFileSync(nw30Bottom('a2.nc1'), 'utf8')
     const header = parseDstv(text).header
     const geo = parseNcGeometry(text)
-    const points = partSectionForCode(header.profile, header.dimensions)?.points
+    const points = outlinePoints(partSectionForCode(header.profile, header.dimensions)?.outline)
     expect(points).toBeTruthy()
     if (!points) return
     const frame = resolveNcFaceFrame(points, geo, header.profile)
@@ -301,9 +303,11 @@ describe('faceThickness', () => {
 
   it('takes a hollow wall thickness from the section code', () => {
     // The outer outline alone can't reveal a hollow's wall — the callout names it.
-    const rhs = partSectionForCode('RHS150*100*9.0', [150, 100, 9, 9, 22.5])?.points ?? []
+    const rhs =
+      outlinePoints(partSectionForCode('RHS150*100*9.0', [150, 100, 9, 9, 22.5])?.outline) ?? []
     expect(faceThickness(resolveNcFaceFrame(rhs, empty, 'RHS150*100*9.0'), rhs, 'h')).toBe(9)
-    const shs = partSectionForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])?.points ?? []
+    const shs =
+      outlinePoints(partSectionForCode('SHS100*100*6.0', [100, 100, 6, 6, 15])?.outline) ?? []
     expect(faceThickness(resolveNcFaceFrame(shs, empty, 'SHS100*100*6.0'), shs, 'o')).toBe(6)
   })
 
@@ -315,7 +319,7 @@ describe('faceThickness', () => {
       const text = readFileSync(path, 'utf8')
       const header = parseDstv(text).header
       const geo = parseNcGeometry(text)
-      const points = partSectionForCode(header.profile, header.dimensions)?.points
+      const points = outlinePoints(partSectionForCode(header.profile, header.dimensions)?.outline)
       expect(points).toBeTruthy()
       if (!points) continue
       const frame = resolveNcFaceFrame(points, geo, header.profile)
@@ -331,7 +335,7 @@ describe('projectNc tube bevel direction', () => {
     const text = readFileSync(path, 'utf8')
     const header = parseDstv(text).header
     const geo = parseNcGeometry(text)
-    const section = partSectionForCode(header.profile, header.dimensions)?.points
+    const section = outlinePoints(partSectionForCode(header.profile, header.dimensions)?.outline)
     expect(section).toBeTruthy()
     if (!section) return
     const frame = resolveNcFaceFrame(section, geo, header.profile)
@@ -380,7 +384,7 @@ describe('projectNc tube rounded-corner cuts', () => {
     const text = readFileSync(path, 'utf8')
     const header = parseDstv(text).header
     const geo = parseNcGeometry(text)
-    const section = partSectionForCode(header.profile, header.dimensions)?.points
+    const section = outlinePoints(partSectionForCode(header.profile, header.dimensions)?.outline)
     expect(section).toBeTruthy()
     if (!section) return
     const frame = resolveNcFaceFrame(section, geo, header.profile)
@@ -586,7 +590,7 @@ describe('projectNc welding prep on real RHS parts', () => {
       const text = readFileSync(path, 'utf8')
       const header = parseDstv(text).header
       const geo = parseNcGeometry(text)
-      const section = partSectionForCode(header.profile, header.dimensions)?.points
+      const section = outlinePoints(partSectionForCode(header.profile, header.dimensions)?.outline)
       expect(section).toBeTruthy()
       if (!section) return
       const frame = resolveNcFaceFrame(section, geo, header.profile)
@@ -666,7 +670,8 @@ describe('I-section web face plane', () => {
   // Canonical H stance for a 200UB29.8: depth 207 along the section x, flange width 134 along y,
   // web thickness 6.3. The web's `v`/`h` faces are interior — their plane is the web half-thickness,
   // not the flange-width edge.
-  const section = partSectionForCode('200UB29.8', [207, 134, 9.6, 6.3])?.points ?? []
+  const section =
+    outlinePoints(partSectionForCode('200UB29.8', [207, 134, 9.6, 6.3])?.outline) ?? []
   const nc: NcGeometry = {
     contours: [
       {

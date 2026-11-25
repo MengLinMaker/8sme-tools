@@ -8,6 +8,7 @@ import { faceNormal, type NcFaceFrame, resolveNcFaceFrame } from '@/lib/parsers/
 import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import { projectNc } from '@/lib/parsers/ncProject'
 import { detectOrientation } from '@/lib/sections/orient'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { distanceToOutline, type Vec3 } from './cutEdges'
 import { meshStepFile } from './mesh'
@@ -84,11 +85,11 @@ async function ncToStepGap(
   const seated = transform(centred, new Matrix4().makeRotationFromQuaternion(toX))
   const roll = new Quaternion().setFromAxisAngle(
     unit(0, 1),
-    SEAT_ANGLES[detectOrientation(section.points, seated, 1, 2, [0, 0, 0])],
+    SEAT_ANGLES[detectOrientation(outlinePoints(section?.outline), seated, 1, 2, [0, 0, 0])],
   )
   const seat = new Quaternion().multiplyQuaternions(roll, toX)
   const world = transform(raw, new Matrix4().makeRotationFromQuaternion(seat))
-  const orientation = detectOrientation(section.points, world, 1, 2, [0, 0, 0])
+  const orientation = detectOrientation(outlinePoints(section?.outline), world, 1, 2, [0, 0, 0])
   const eA = unit(1, 1)
   const eB = unit(2, 1)
   const table: [Vector3, Vector3][] = [
@@ -120,7 +121,11 @@ async function ncToStepGap(
   const member: Vec3 = [1, 0, 0]
 
   // NC contours → 3D through the shared face frame.
-  const frame: NcFaceFrame = resolveNcFaceFrame(section.points, geo, header.profile)
+  const frame: NcFaceFrame = resolveNcFaceFrame(
+    outlinePoints(section?.outline),
+    geo,
+    header.profile,
+  )
   const length = size.getComponent(longAxis)
   const toScene = (along: number, cross: [number, number], _face: NcFace): Vec3 => {
     const x = along - length / 2
@@ -131,11 +136,16 @@ async function ncToStepGap(
     ]
   }
   const normal = (face: NcFace): Vec3 => {
-    const n = faceNormal(frame, face, section.points)
+    const n = faceNormal(frame, face, outlinePoints(section?.outline))
     const base = n.axis === 0 ? xAxis : yAxis
     return [base.x * n.sign, base.y * n.sign, base.z * n.sign]
   }
-  const projected = projectNc(geo, { frame, section: section.points, toScene, normal })
+  const projected = projectNc(geo, {
+    frame,
+    section: outlinePoints(section?.outline),
+    toScene,
+    normal,
+  })
   const ncSegs: [Vec3, Vec3][] = []
   for (const cut of projected.cuts) {
     const pts = cut.points
@@ -158,7 +168,7 @@ async function ncToStepGap(
         dot([samples[i], samples[i + 1], samples[i + 2]] as Vec3, ya),
       ]
       total++
-      if (distanceToOutline(section.points, cross) <= 2.5) on++
+      if (distanceToOutline(outlinePoints(section?.outline), cross) <= 2.5) on++
     }
     return total > 0 && on / total >= 0.7
   }

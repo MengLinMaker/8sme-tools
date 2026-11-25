@@ -4,6 +4,7 @@ import { hexModuleFrames, ubSection } from '@test/fixtures'
 import { Matrix4, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { detectStepSection } from '@/lib/step/readSection'
 import { seatedFromSeat, seatedStepProfile } from '@/lib/step/seat'
@@ -170,10 +171,10 @@ async function loadPart(mark: string, bytes: Uint8Array, ncText?: string): Promi
   if (!section) return null
   const mesh = await meshStepFile(mark, bytes)
   const faces = mesh.bodies.flatMap((body) => body.brep ?? [])
-  const catalogue = sectionFlats(section.points)
+  const catalogue = sectionFlats(outlinePoints(section?.outline))
   const base = guess.seat
-    ? seatedFromSeat(mesh.vertices, guess.seat, section.points).primary
-    : seatedStepProfile(mesh.vertices, section.points).primary
+    ? seatedFromSeat(mesh.vertices, guess.seat, outlinePoints(section?.outline)).primary
+    : seatedStepProfile(mesh.vertices, outlinePoints(section?.outline)).primary
   const reference = ransacSectionPose(catalogue, faces, mesh.vertices, base, 0.1)
   if (!reference) return null
   return { mark, vertices: mesh.vertices, faces, catalogue, reference: reference.matrix }

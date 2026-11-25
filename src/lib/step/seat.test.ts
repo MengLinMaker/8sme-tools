@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 import { draw } from 'replicad'
 import { Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { meshStepFile } from './mesh'
 import { ensureOc, setOcWasmUrl } from './occInit'
@@ -54,8 +55,8 @@ async function extrudeSection(
 ): Promise<Uint8Array> {
   const section = partSectionForCode(code, [])
   if (!section) throw new Error(`no outline for ${code}`)
-  let pen = draw(section.points[0] as [number, number])
-  for (const point of section.points.slice(1)) pen = pen.lineTo(point)
+  let pen = draw(outlinePoints(section?.outline)[0] as [number, number])
+  for (const point of outlinePoints(section?.outline).slice(1)) pen = pen.lineTo(point)
   type Rotatable = {
     rotate: (a: number, p: number[], d: number[]) => Rotatable
     blobSTEP: () => Blob
@@ -92,7 +93,7 @@ function seatedFit(vertices: number[], profile: [number, number][]): { fit: numb
 describe('seatedPair', () => {
   it('aligns the ghost for a short part whose member axis is not the longest extent', async () => {
     await ensureOc()
-    const profile = partSectionForCode('EA50*50*3', [])?.points
+    const profile = outlinePoints(partSectionForCode('EA50*50*3', [])?.outline)
     expect(profile).toBeDefined()
     if (!profile) return
     for (const length of [2000, 60, 20]) {
@@ -109,7 +110,7 @@ describe('seatedPair', () => {
    */
   it('aligns the ghost for a part rotated off the world axes', async () => {
     await ensureOc()
-    const profile = partSectionForCode('EA200*200*20', [])?.points
+    const profile = outlinePoints(partSectionForCode('EA200*200*20', [])?.outline)
     expect(profile).toBeDefined()
     if (!profile) return
     const bytes = await extrudeSection('EA200*200*20', 2000, [30, 20, 45])

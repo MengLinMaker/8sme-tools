@@ -4,6 +4,7 @@ import { nw30Bottom, nw31Top } from '@test/fixtures'
 import { Matrix4 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { type DiffSoup, probeDiffPresence } from './booleanDiff'
 import { type MeasurableShape, measureShape } from './measure'
@@ -122,7 +123,7 @@ describe.runIf(RUN)('OCC hot-path benchmark', () => {
       const ncText = readFileSync(part.nc, 'utf8')
       const stepBytes = new Uint8Array(readFileSync(part.stp))
       const header = parseDstv(ncText).header
-      const profile = partSectionForCode(header.profile, header.dimensions)?.points
+      const profile = outlinePoints(partSectionForCode(header.profile, header.dimensions)?.outline)
 
       let start = performance.now()
       const stepShape = (await importSTEP(

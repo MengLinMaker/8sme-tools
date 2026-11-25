@@ -6,6 +6,7 @@ import { Matrix4, Quaternion, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { detectOrientation } from '@/lib/sections/orient'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import {
   booleanDiff,
@@ -202,9 +203,9 @@ describe('diff skin diagnostics', () => {
 
         // The app seats each model on its own bbox. Replicate that and see if it shifts them apart.
         const header = parseDstv(nc).header
-        const profile = partSectionForCode(header.profile, header.dimensions)?.points as
-          | [number, number][]
-          | undefined
+        const profile = outlinePoints(
+          partSectionForCode(header.profile, header.dimensions)?.outline,
+        ) as [number, number][] | undefined
         const mfgW = toWorldSoup(primaryParts, seatMatrix(made.vertices, profile))
         const stpW = toWorldSoup(compareParts, seatMatrix(step.vertices, profile))
         const { aDiff: aSeat, bDiff: bSeat } = computeDiffMasks(

@@ -6,6 +6,7 @@ import { Matrix4, Quaternion, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
 import { parseDstv } from '@/lib/parsers/dstv'
 import { detectOrientation } from '@/lib/sections/orient'
+import { outlinePoints } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import type { DiffSoup } from './booleanDiff'
 import { manifoldBooleanDiff } from './manifoldDiff'
@@ -102,9 +103,9 @@ describe('manifold diff', () => {
 
         // The app seats each model into the profile frame on its own bbox.
         const header = parseDstv(nc).header
-        const profile = partSectionForCode(header.profile, header.dimensions)?.points as
-          | [number, number][]
-          | undefined
+        const profile = outlinePoints(
+          partSectionForCode(header.profile, header.dimensions)?.outline,
+        ) as [number, number][] | undefined
         const seated = manifoldBooleanDiff(
           top,
           soups(made),
