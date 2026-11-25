@@ -232,13 +232,13 @@ describe('auditEntries', () => {
       { path: 'IFC shafts PDF/TR9-1  Shaft - UC (0).pdf', bytes: PDF_BYTES },
       { path: 'IFC shafts PDF/TR9-2  Shaft - UC (0).pdf', bytes: PDF_BYTES },
     ])
-    expect(result.parts.map((part) => part.mark)).toEqual(['tr9-1', 'tr9-2'])
+    // The part is named by its NC's internal mark (the file name is only a container).
+    expect(result.parts.map((part) => part.mark)).toEqual(['TR9-1', 'TR9-2'])
     expect(result.parts.map((part) => part.nc?.length)).toEqual([100, 200])
     expect(result.parts.map((part) => part.pdf?.path)).toEqual([
       'IFC shafts PDF/TR9-1  Shaft - UC (0).pdf',
       'IFC shafts PDF/TR9-2  Shaft - UC (0).pdf',
     ])
-    expect(result.findings.some((finding) => finding.code === 'NC_MARK_MISMATCH')).toBe(false)
   })
 
   it('still folds duplicate copies of the same mark together', () => {
@@ -247,8 +247,8 @@ describe('auditEntries', () => {
       { path: 'IFC-shaft-NC-selected/TR9-1.nc1', bytes: strToU8(makeNc('TR9-1', 1, 100)) },
       { path: 'IFC shaft NC/TR9-2.nc1', bytes: strToU8(makeNc('TR9-2', 1, 200)) },
     ])
-    expect(result.parts.map((part) => part.mark)).toEqual(['tr9-1', 'tr9-2'])
-    expect(result.parts.find((part) => part.mark === 'tr9-1')?.nc?.path).toBe(
+    expect(result.parts.map((part) => part.mark)).toEqual(['TR9-1', 'TR9-2'])
+    expect(result.parts.find((part) => part.mark === 'TR9-1')?.nc?.path).toBe(
       'IFC shaft NC/TR9-1.nc1',
     )
   })
@@ -355,11 +355,26 @@ describe('auditEntries', () => {
     expect(result.findings.find((finding) => finding.code === 'QTY_MISMATCH')?.mark).toBe('a3')
   })
 
-  it('ignores slash/underscore differences in the NC internal mark', () => {
+  it('names the part by its NC internal mark and keeps the file-named STEP with it', () => {
+    // A real mark can carry `/`, which no file name can: `a_1.nc1` holds `A/1`.
     const result = auditEntries('job.zip', [
       { path: 'a_1.nc1', bytes: strToU8(makeNc('A/1', 1, 100)) },
+      { path: 'a_1.stp', bytes: strToU8(VALID_STEP) },
     ])
-    expect(result.findings.some((f) => f.code === 'NC_MARK_MISMATCH')).toBe(false)
+    expect(result.parts).toHaveLength(1)
+    expect(result.parts[0]?.mark).toBe('A/1')
+    expect(result.parts[0]?.nc?.path).toBe('a_1.nc1')
+    expect(result.parts[0]?.step?.path).toBe('a_1.stp')
+  })
+
+  it('adopts an internal mark that differs from the file name outright', () => {
+    const result = auditEntries('job.zip', [
+      { path: 'm117.nc1', bytes: strToU8(makeNc('X9', 1, 100)) },
+      { path: 'm117.stp', bytes: strToU8(VALID_STEP) },
+    ])
+    expect(result.parts).toHaveLength(1)
+    expect(result.parts[0]?.mark).toBe('X9')
+    expect(result.parts[0]?.step?.path).toBe('m117.stp')
   })
 
   it('skips marks with neither an NC nor a STEP as non-parts', () => {

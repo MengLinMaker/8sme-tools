@@ -30,7 +30,6 @@ describe('fixTierForCode', () => {
       'GRADE_MISMATCH',
       'LENGTH_DIFFERENCE',
       'GEOMETRY_WEIGHT_MISMATCH',
-      'NC_MARK_MISMATCH',
       'CUT_DEPTH',
       'CUT_CORNER',
       'CUT_STEP',

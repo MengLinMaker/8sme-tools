@@ -71,15 +71,55 @@ export function auditEntries(
   const assemblyPartList: PartListRow[] = []
   const seenPartLists = new Set<string>()
 
+  /**
+   * File-name key → the key a part now lives under, after its NC renamed it. A STEP arriving later
+   * still finds its part through the name on the file.
+   */
+  const aliases = new Map<string, string>()
+  const resolveKey = (key: string): string => {
+    let current = key
+    for (let hop = 0; hop < 8; hop++) {
+      const next = aliases.get(current)
+      if (!next || next === current) break
+      current = next
+    }
+    return current
+  }
+
   const getPart = (mark: string): PartRecord => {
     // Group by comparison key, not the literal spelling: `ITEM 35` and `item35` are one part.
-    const key = markKey(mark)
+    const key = resolveKey(markKey(mark))
     let part = parts.get(key)
     if (!part) {
       part = { mark }
       parts.set(key, part)
     }
     return part
+  }
+
+  /**
+   * Renames a part to the mark its NC carries, merging into an existing record when the file name
+   * had already created one under that mark. Findings raised before this point only carry the mark
+   * string, so renaming first keeps every message consistent.
+   */
+  const adoptMark = (part: PartRecord, internal: string): void => {
+    const fromKey = markKey(part.mark)
+    const toKey = markKey(internal)
+    part.mark = internal
+    if (toKey === fromKey) return
+    // Files that keep the old name (a STEP named after the file, not the mark) still resolve here.
+    aliases.set(fromKey, toKey)
+    parts.delete(fromKey)
+    const existing = parts.get(toKey)
+    if (!existing) {
+      parts.set(toKey, part)
+      return
+    }
+    // Two records for one part (e.g. `M_12.stp` + `M/12.nc1`): keep the files, prefer the one named
+    // by the internal mark.
+    existing.nc ??= part.nc
+    existing.step ??= part.step
+    existing.pdf ??= part.pdf
   }
 
   for (const entry of entries) {
@@ -120,7 +160,13 @@ export function auditEntries(
     if (kind === 'nc') {
       counts.nc++
       // Duplicate copies of a part's files are harmless: keep the first and ignore the rest.
-      part.nc ??= parseNcFile(entry.path, decodeText(entry.bytes))
+      const nc = part.nc ?? parseNcFile(entry.path, decodeText(entry.bytes))
+      part.nc ??= nc
+      // The NC's own mark is the part's real name: the file name is only a container (a real mark
+      // can contain `/`, which no file name can — `M_12.nc1` carries `M/12`), and WiseCAM nests on
+      // the internal name too. Adopt it, folding whatever the file name created into that record so
+      // the part's STEP/PDF stay with it.
+      if (nc.mark.trim()) adoptMark(part, nc.mark.trim())
     } else if (kind === 'step') {
       counts.step++
       const step = parseStepFile(entry.path, decodeText(entry.bytes))
@@ -165,15 +211,6 @@ export function auditEntries(
           mark: part.mark,
           message: `${baseName(part.nc.path)} may not open: ${part.nc.problems.join('; ')}`,
           params: { file: baseName(part.nc.path), problems: part.nc.problems.join('; ') },
-        })
-      }
-      if (part.nc.mark && markKey(part.nc.mark) !== markKey(part.mark)) {
-        findings.push({
-          severity: 'warning',
-          code: 'NC_MARK_MISMATCH',
-          mark: part.mark,
-          message: `NC internal mark "${part.nc.mark}" does not match filename mark "${part.mark}"`,
-          params: { internal: part.nc.mark, mark: part.mark },
         })
       }
     }

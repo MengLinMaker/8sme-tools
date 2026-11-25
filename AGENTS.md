@@ -21,6 +21,10 @@ the hard way — do not re-litigate them.
   The `ST` header is `{order, drawing, phase, mark, grade, quantity, profileTypeCode,
   profile, length, dims…}`. The cross-section dims for a **T** (`T` profile type) are
   `[flange width b, half depth d/2, tf, tw, root r]` of the parent UB.
+- **The part's name is its NC internal mark** (the `ST` header field), not the file name: a file
+  name is only a container, and a real mark can carry `/` which no file name can (`M_12.nc1` holds
+  `M/12`). WiseCAM nests on the internal name too. The audit adopts it (`auditJob`), so findings,
+  part-list matching and the UI all speak the internal mark.
 - **STEP** parts are OpenCASCADE **AP214**. They contain the real part geometry (holes,
   curves, mitres). They carry **no quantity** (that's why WiseCAM drops quantity on import), but
   the Tekla filename does: `<n> OFF` (`12095, ITEM 35, SHS 75x75x6, 24 OFF[C].STEP`). The audit
