@@ -58,7 +58,10 @@ No provenance, confidence, source blobs or duplicate interpretations. Importers 
   `projectCutEdgesToFaces` projection as the 3-D viewer, then develop onto the unrolled chart and
   dedupe overlapping corner segments. Through holes/slots keep only the **nearest outer-face rim**
   (the side the cut cylinder sits on), so STEP matches the single machined line the NC authors
-  without depending on the NC. Closed rims are classified as holes/slots. Bevels are carried per
+  without depending on the NC. Closed rims are classified as holes/slots. A hole is assigned to a
+  face by its **cylinder axis** (a drill is normal to its face), then the side nearest the cylinder
+  centre — scoring the centre's direction from the section centroid mislabelled an I-section web
+  hole as a flange hole and added a phantom flange-centre column (M/12). Bevels are carried per
   vertex; NC tube and angle root-line bevels are shifted to the outer skin for display/diff only
   (round-trip data stays authored). An angle is one-sided, so a full-wall prep sets the outer skin
   back at both ends whatever its signed side; the drawn line shifts into the material at each end.

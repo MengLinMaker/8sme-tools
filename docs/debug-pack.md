@@ -82,6 +82,11 @@ ideal — red = overcut (scrap), blue = undercut.
 
 - **No etch/marking data**: no paired fixture carries `SI` text or `KO`/`PU` scribe marks. The
   only NC files with `KO`/`PU` are `test/fixtures/ncep/`, which has no STEP — so mark
-  production cannot be diffed from this pack.
+  production cannot be diffed from this pack. **NC-only bottom-marking examples**:
+  `test/fixtures/ncep/M-9.nc1` (UB310*32, three `KO`/`PU` pairs on `h` at along 26.1, 228.1,
+  1860.5) and `M-39.nc1` (UB410*60, one pair at 6233.45). They exercise the IR's separate
+  `rear` chart; locked by `src/lib/part/ub-bottom-marks.test.ts`. WiseCAM's NCEP export does
+  not machine the `h` copy (see `docs/ncep-format.md`), so this is the faithful pre-export
+  record.
 - **One size per family** except the hollows: a single UB (250UB31) and a single PFC section, so
   taper/mass-variant differences are not covered here.

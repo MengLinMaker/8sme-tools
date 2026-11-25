@@ -140,19 +140,6 @@ function cylinderFeatures(
     )
   if (cylinders.length === 0) return []
 
-  let cx = 0
-  let cy = 0
-  for (const point of section) {
-    cx += point[0]
-    cy += point[1]
-  }
-  cx /= section.length || 1
-  cy /= section.length || 1
-  const centroid: Vec3 = [
-    cx * seated.xAxis[0] + cy * seated.yAxis[0],
-    cx * seated.xAxis[1] + cy * seated.yAxis[1],
-    cx * seated.xAxis[2] + cy * seated.yAxis[2],
-  ]
   const planes = (['v', 'o', 'u', 'h'] as NcFace[])
     .filter((face) => layout.faces[face])
     .map((face) => {
@@ -163,6 +150,7 @@ function cylinderFeatures(
       const spanVec = spanAxis === 0 ? seated.xAxis : seated.yAxis
       return {
         face,
+        axis,
         normal: [base[0] * sign, base[1] * sign, base[2] * sign] as Vec3,
         spanVec: spanVec as Vec3,
         q: faceHalf(frame, axis),
@@ -170,15 +158,24 @@ function cylinderFeatures(
         acrossSign: ncAuthoredAcrossSign(frame, face),
       }
     })
-  const planeFor = (center: Vec3): (typeof planes)[number] | null => {
+  /**
+   * The face a hole is drilled through. A hole's **axis is normal to its face**, so pick the face
+   * pair whose plane normal is parallel to the cylinder axis first — the old code scored the
+   * centre's direction from the section centroid, which labelled a web hole (axis normal to v/h)
+   * as a flange hole and added a phantom hole at the flange centre (M/12). The side is then the
+   * face on the same side as the cylinder centre: a flange hole sits inside its flange, and a
+   * web hole's centre lands on the entry web face.
+   */
+  const planeFor = (center: Vec3, cylinderAxis: Vec3): (typeof planes)[number] | null => {
+    const normalAxis: 0 | 1 =
+      Math.abs(dot3(cylinderAxis, seated.xAxis)) >= Math.abs(dot3(cylinderAxis, seated.yAxis))
+        ? 0
+        : 1
     let best: (typeof planes)[number] | null = null
     let bestScore = Number.NEGATIVE_INFINITY
     for (const plane of planes) {
-      const score = dot3(plane.normal, [
-        center[0] - centroid[0],
-        center[1] - centroid[1],
-        center[2] - centroid[2],
-      ])
+      if (plane.axis !== normalAxis) continue
+      const score = dot3(plane.normal, center)
       if (score > bestScore) {
         bestScore = score
         best = plane
@@ -236,7 +233,7 @@ function cylinderFeatures(
         (a.center[1] + b.center[1]) / 2,
         (a.center[2] + b.center[2]) / 2,
       ]
-      const plane = planeFor(midpoint)
+      const plane = planeFor(midpoint, a.axis)
       if (!plane) continue
       const pa = uvOnPlane(a.center, a.axis, plane)
       const pb = uvOnPlane(b.center, b.axis, plane)
@@ -254,7 +251,7 @@ function cylinderFeatures(
     }
     // A closed cylinder rim is a hole. Unpaired open cylinders are rounded cuts, not holes.
     if (!a.closed) continue
-    const plane = planeFor(a.center)
+    const plane = planeFor(a.center, a.axis)
     if (!plane) continue
     const center = uvOnPlane(a.center, a.axis, plane)
     if (!center) continue
@@ -681,8 +678,8 @@ export function partIrFromStepGeometry(
       if (points.every((point) => features.some((feature) => insideFeature(point, feature))))
         continue
       const loop = classifiedLoop(points, options.length)
-      if (loop) features.push(loop)
-      else cutRuns.push(points)
+      if (loop && !sameRim(loop)) features.push(loop)
+      else if (!loop) cutRuns.push(points)
     }
     for (const points of mergeRuns(cutRuns)) {
       if (points.every((point) => features.some((feature) => insideFeature(point, feature))))
