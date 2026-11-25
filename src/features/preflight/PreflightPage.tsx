@@ -1242,6 +1242,14 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     () => (stepIrGuess ? partSectionForCode(stepIrGuess.code, stepIrGuess.dims ?? []) : null),
     [stepIrGuess],
   )
+  // Stable identity: `PartViewer` rebuilds its whole three.js scene (and a WebGL context) when one
+  // of its section props changes identity, so the tessellation must be memoised, not called inline
+  // in JSX. Inline calls leak a context on every render (zoom re-renders → "Too many active WebGL
+  // contexts").
+  const stepIrSectionPoints = useMemo(
+    () => (stepIrSection ? outlinePoints(stepIrSection.outline) : null),
+    [stepIrSection],
+  )
   const stepIrProfile = stepIrGuess?.code ?? viewing?.expected?.profile ?? null
   const stepIrDims = useMemo(
     () =>
@@ -5714,16 +5722,14 @@ export function PreflightPage({ projectId }: { projectId: string }) {
                             highlightStray
                             smoothLines
                             alignReference={manufactured}
-                            seatProfile={
-                              stepIrSection ? outlinePoints(stepIrSection.outline) : null
-                            }
+                            seatProfile={stepIrSectionPoints}
                             stepSeat={stepSeatForViewing}
                             focus={findingFocus}
                             // The STEP pane is STEP-only: no NC marks, section, frame or alignment
                             // reference. Its cut lines come from the STEP-derived IR options.
                             sabreFailures={viewerMarkers.failures}
                             ncMarks={null}
-                            ncSection={stepIrSection ? outlinePoints(stepIrSection.outline) : null}
+                            ncSection={stepIrSectionPoints}
                             faceFrame={stepFaceFrame}
                             cutEdges={stepCutEdgeOptions}
                             visibleSpans={visibleSpans}

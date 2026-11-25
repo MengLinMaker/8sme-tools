@@ -1354,17 +1354,22 @@ function mountScene(
       }
     }
 
-    const overlay = extrudeOverlay(
-      ghostOutline ?? outlineFromPoints(profile ?? []),
-      ghostVoids,
-      length,
-      xAxis,
-      yAxis,
-      isOverlay,
-      STOCK_COLOR,
-    )
-    scene.add(overlay)
-    overlays.push(overlay)
+    // A part with neither an NC section nor a stock outline has no ghost to draw — extruding an
+    // empty path makes three.js throw, so skip it rather than kill the pane.
+    const envelope = ghostOutline ?? (profile ? outlineFromPoints(profile) : null)
+    if (envelope && envelope.edges.length > 0) {
+      const overlay = extrudeOverlay(
+        envelope,
+        ghostVoids,
+        length,
+        xAxis,
+        yAxis,
+        isOverlay,
+        STOCK_COLOR,
+      )
+      scene.add(overlay)
+      overlays.push(overlay)
+    }
 
     // Cut-reach markers project onto the section frame; the NC toolpath is separate (only when
     // `nc` is present, so the STEP/overlay panes show markers without the toolpath).
@@ -2466,6 +2471,10 @@ function mountScene(
           }
         })
       }
+      // `dispose()` frees three.js resources but keeps the WebGL context alive until the canvas is
+      // garbage-collected; a remount then adds another context and the browser drops the oldest
+      // ("Too many active WebGL contexts"). Release it explicitly.
+      renderer.forceContextLoss()
       renderer.dispose()
       renderer.domElement.remove()
     },
