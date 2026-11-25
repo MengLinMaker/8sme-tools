@@ -4769,7 +4769,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
 
       {result && (
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <Stat label={t('preflight.stats.parts')} value={result.summary.parts} />
+          <Stat label={t('preflight.stats.parts')} value={activeParts.length} />
           <Stat label={t('preflight.stats.totalQty')} value={totalQty} />
           <Stat
             label={t('preflight.stats.totalLength')}
