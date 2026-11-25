@@ -8,6 +8,12 @@ The files are the repo fixtures (`test/fixtures/…`) — paths below — so the
 separate checkout. A ready-to-share copy was exported to
 `~/Downloads/debug-pack-sections-<date>/` with `NC/`, `STEP/` and `manifest.csv`.
 
+**Identity is the NC's internal mark** — the `ST` header field. That is what the machine, the part
+list and WiseCAM see; the filename is only a container (a real mark can contain `/`, which a
+filename cannot — `M_12.nc1` carries the internal mark `M/12`). All other parts here agree with
+their filename, and the exported `manifest.csv` records both columns plus a `marks_consistent`
+flag, so the pack is consistent with that rule.
+
 `dVol`/`dSize` are our NC→STEP rebuild measured against the reference STEP, so the largest
 deltas are the most informative parts to diff.
 
@@ -29,7 +35,7 @@ deltas are the most informative parts to diff.
 | `m118` | T | BT100*15 | 2921 | 1 | 16 | 45.4 | 0 | 8 | 0 | 0 | 19.2 mm | 0.06% | T: 16×45.4° welds, 8 holes; member end differs 19 mm (known T end treatment) |
 | `m135` | T | BT100*15 | 2971 | 1 | 9 | 45.3 | 1 | 8 | 0 | 0 | 19.2 mm | 0.06% | T: curved cut (arc) + 9×45.3° welds; member end differs 19 mm |
 | `m200` | T | BT100*15 | 2744 | 1 | 10 | 45.3 | 1 | 8 | 0 | 1 | 4.6 mm | 0.07% | T: notch + 10 welds |
-| `M_12` | UB/UC | UB250*31 | 5309 | 1 | 0 | 0 | 0 | 62 | 0 | 0 | 0.0 mm | 0.07% | UB250*31; 62 holes incl. overlapping pair |
+| `M/12` (file `M_12`) | UB/UC | UB250*31 | 5309 | 1 | 0 | 0 | 0 | 62 | 0 | 0 | 0.0 mm | 0.07% | UB250*31; 62 holes incl. overlapping pair |
 
 ## Where the pair lives
 
@@ -59,6 +65,13 @@ pnpm nc-to-step -i "test/fixtures/nw31-top/NC files/m124.nc1" -o /tmp/m124-built
 ```
 In the app, open the job and use the **Overlay** pane: manufactured (NC rebuild) vs the STEP
 ideal — red = overcut (scrap), blue = undercut.
+
+## Mark naming
+
+The part is named by its NC internal mark. `M_12.nc1` is the only fixture in the pack whose
+filename differs from the internal mark (`M/12`), because a slash cannot appear in a filename; the
+audit's `markKey` already treats `/`, `_`, `-` and whitespace as the same separator, so the two are
+the same part.
 
 ## Gaps in the paired data
 
