@@ -28,6 +28,23 @@ export function setOcWasmProvider(provider: () => Promise<ArrayBuffer | Uint8Arr
   wasmBinaryProvider = provider
 }
 
+/**
+ * The OCCT kernel reports STEP transfer progress on **stdout** ("Statistics on Transfer (Write)",
+ * "Transferring Shape", "WorkSession : Sending all data", the asterisk banners). Emscripten forwards
+ * stdout to `console.log`, so every export floods the browser console with the writer's internal
+ * statistics — noise, not diagnostics (real failures arrive as thrown exceptions / `printErr`).
+ *
+ * Filtered at the module's own `print` hook, so it is silenced at the source rather than by
+ * patching `console` for the whole app.
+ */
+const OC_CHATTER =
+  /Statistics on Transfer|Transfer Mode = |Transferring Shape|WorkSession\s*:|Step File Name|^\s*\*+\s*$/
+
+function ocPrint(line: string): void {
+  if (OC_CHATTER.test(line)) return
+  console.log(line)
+}
+
 export async function ensureOc(): Promise<void> {
   if (!ocReady) {
     ocReady = (async () => {
@@ -39,11 +56,13 @@ export async function ensureOc(): Promise<void> {
         import('replicad'),
         binary ? Promise.resolve(null) : import('replicad-opencascadejs/wasm?url'),
       ])
-      const oc = await initOpenCascade(
-        binary
+      const oc = await initOpenCascade({
+        ...(binary
           ? { wasmBinary: binary }
-          : { locateFile: () => wasmUrlOverride ?? (wasm as { default: string }).default },
-      )
+          : { locateFile: () => wasmUrlOverride ?? (wasm as { default: string }).default }),
+        // Emscripten reads `print` from the module options (`g.print && (ma = g.print)`).
+        print: ocPrint,
+      } as Parameters<typeof initOpenCascade>[0])
       replicad.setOC(oc)
     })()
   }
