@@ -2,6 +2,14 @@ import type { PartRecord } from '@/lib/audit/types'
 import { extractDrawingText, findSectionCode } from '@/lib/parsers/pdfText'
 import { getAngle } from './angle'
 import { inferTee } from './infer'
+import {
+  type Outline,
+  outline,
+  outlinePoints,
+  reverseOutline,
+  rotateOutline,
+  translateOutline,
+} from './outline'
 import { getPfcByDepth } from './pfc'
 import { getTfbByDepth } from './tfb'
 import type { RolledAngle, RolledSection } from './types'
@@ -33,10 +41,15 @@ import { getUc, getUcByDepth } from './uc'
  */
 
 export interface StockOutline {
-  /** closed cross-section outline in mm, centred on its bounding box */
+  /** the stock section as real primitives (lines and arcs), in mm (absent for a caller-supplied
+   * display-only outline) */
+  outline?: Outline
+  /** closed cross-section outline in mm, centred on its bounding box (polyline form of `outline`) */
   points: [number, number][]
   /** inner voids for hollow sections (RHS/SHS/CHS), in mm */
   holes?: [number, number][][]
+  /** the voids as real primitives, wound opposite to `outline` */
+  voidOutlines?: Outline[]
   /** human label, e.g. "PFC100*50 stock" */
   label: string
   /** nominal mass per metre (kg/m), where known */
@@ -76,23 +89,6 @@ function numbers(code: string): number[] {
   return (code.match(/\d+(?:\.\d+)?/g) ?? []).map(Number)
 }
 
-function centre(points: [number, number][]): [number, number][] {
-  let minX = Number.POSITIVE_INFINITY
-  let minY = Number.POSITIVE_INFINITY
-  let maxX = Number.NEGATIVE_INFINITY
-  let maxY = Number.NEGATIVE_INFINITY
-  for (const [x, y] of points) {
-    minX = Math.min(minX, x)
-    maxX = Math.max(maxX, x)
-    minY = Math.min(minY, y)
-    maxY = Math.max(maxY, y)
-  }
-  const cx = (minX + maxX) / 2
-  const cy = (minY + maxY) / 2
-  return points.map(([x, y]) => [x - cx, y - cy] as [number, number])
-}
-
-/** Signed area of a closed polygon (positive = counter-clockwise). */
 function signedArea(points: [number, number][]): number {
   let twice = 0
   for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
@@ -155,26 +151,27 @@ function inflate(points: [number, number][], distance: number): [number, number]
   return out
 }
 
-function rectangle(width: number, height: number): [number, number][] {
-  const hw = width / 2
-  const hh = height / 2
-  return [
-    [-hw, -hh],
-    [hw, -hh],
-    [hw, hh],
-    [-hw, hh],
-  ]
+/** Moves a generated outline to sit centred on its bounding box. */
+function centreOutline(contour: Outline): Outline {
+  const points = outlinePoints(contour)
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const [x, y] of points) {
+    minX = Math.min(minX, x)
+    maxX = Math.max(maxX, x)
+    minY = Math.min(minY, y)
+    maxY = Math.max(maxY, y)
+  }
+  return translateOutline(contour, -(minX + maxX) / 2, -(minY + maxY) / 2)
 }
 
-/** Drops consecutive duplicate vertices (within `eps`) — a zero-length edge makes replicad throw. */
-function dedupe(points: [number, number][], eps = 1e-6): [number, number][] {
-  const out: [number, number][] = []
-  for (const point of points) {
-    const last = out[out.length - 1]
-    if (last && Math.abs(last[0] - point[0]) < eps && Math.abs(last[1] - point[1]) < eps) continue
-    out.push(point)
-  }
-  return out
+/** Rectangle outline as primitives (no arcs). */
+function rectangleOutline(width: number, height: number): Outline {
+  const hw = width / 2
+  const hh = height / 2
+  return outline([-hw, -hh]).lineTo([hw, -hh]).lineTo([hw, hh]).lineTo([-hw, hh]).done()
 }
 
 /**
@@ -184,8 +181,7 @@ function dedupe(points: [number, number][], eps = 1e-6): [number, number][] {
  * corner `(t, t)`, and the convex **toe radius** `toeRadius` on the free end of each leg. The
  * toe radius rounds the **inner** corner of the toe — the corner on the same side as the root
  * (the OneSteel 7th Ed figure points R2 there) — while the two **outer** toe corners stay
- * sharp. Either radius may be 0 to keep that corner sharp. The toe arcs' own first points must
- * not be repeated as explicit vertices, so the list is de-duplicated.
+ * sharp. Either radius may be 0 to keep that corner sharp.
  */
 function angleL(
   legA: number,
@@ -193,25 +189,22 @@ function angleL(
   thickness: number,
   rootRadius = 0,
   toeRadius = 0,
-): [number, number][] {
+): Outline {
   const t = thickness
   const r = Math.max(0, Math.min(rootRadius, legA - t, legB - t))
   const rt = Math.max(0, Math.min(toeRadius, t, legA - t, legB - t))
-  const points: [number, number][] = [
-    [0, 0],
-    [legA, 0], // outer corner of the horizontal toe stays sharp
-  ]
+  const builder = outline([0, 0]).lineTo([legA, 0]) // outer corner of the horizontal toe stays sharp
   // Horizontal leg: round the inner corner of the toe (end face → inner face y = t).
-  if (rt > 0) points.push(...arcPoints(legA - rt, t - rt, rt, 0, Math.PI / 2))
-  else points.push([legA, t])
+  if (rt > 0) builder.arcTo([legA - rt, t - rt], rt, 0, Math.PI / 2)
+  else builder.lineTo([legA, t])
   // Inner corner (t, t): root fillet, or a sharp corner.
-  if (r > 0) points.push(...arcPoints(t + r, t + r, r, -Math.PI / 2, -Math.PI))
-  else points.push([t, t])
+  if (r > 0) builder.arcTo([t + r, t + r], r, -Math.PI / 2, -Math.PI)
+  else builder.lineTo([t, t])
   // Vertical leg: round the inner corner of the toe (inner face x = t → end face).
-  if (rt > 0) points.push(...arcPoints(t - rt, legB - rt, rt, 0, Math.PI / 2))
-  else points.push([t, legB])
-  points.push([0, legB]) // outer corner of the vertical toe stays sharp
-  return centre(dedupe(points))
+  if (rt > 0) builder.arcTo([t - rt, legB - rt], rt, 0, Math.PI / 2)
+  else builder.lineTo([t, legB])
+  builder.lineTo([0, legB]) // outer corner of the vertical toe stays sharp
+  return centreOutline(builder.done())
 }
 
 /**
@@ -223,42 +216,27 @@ function angleL(
  * `radius` is the root fillet where the flanges meet the inner web face; 0 keeps those two corners
  * sharp.
  */
-function channel(
-  depth: number,
-  flange: number,
-  web: number,
-  tf: number,
-  radius = 0,
-): [number, number][] {
+function channel(depth: number, flange: number, web: number, tf: number, radius = 0): Outline {
   const hb = flange / 2
   const hd = depth / 2
   const xWeb = -hb + web
   const r = Math.max(0, Math.min(radius, flange - web, hd - tf))
-  const webVertical: [number, number][] =
-    r <= 0
-      ? [
-          [-hb, -hd],
-          [hb, -hd],
-          [hb, -hd + tf],
-          [xWeb, -hd + tf],
-          [xWeb, hd - tf],
-          [hb, hd - tf],
-          [hb, hd],
-          [-hb, hd],
-        ]
-      : [
-          // Two concave root fillets on the inner web face (arc centres sit in the channel cavity).
-          [-hb, -hd],
-          [hb, -hd],
-          [hb, -hd + tf],
-          ...arcPoints(xWeb + r, -hd + tf + r, r, -Math.PI / 2, -Math.PI),
-          ...arcPoints(xWeb + r, hd - tf - r, r, Math.PI, Math.PI / 2),
-          [hb, hd - tf],
-          [hb, hd],
-          [-hb, hd],
-        ]
+  const builder = outline([-hb, -hd])
+    .lineTo([hb, -hd])
+    .lineTo([hb, -hd + tf])
+  if (r > 0) {
+    // Two concave root fillets on the inner web face (arc centres sit in the channel cavity).
+    builder.arcTo([xWeb + r, -hd + tf + r], r, -Math.PI / 2, -Math.PI)
+    builder.arcTo([xWeb + r, hd - tf - r], r, Math.PI, Math.PI / 2)
+  } else {
+    builder.lineTo([xWeb, -hd + tf]).lineTo([xWeb, hd - tf])
+  }
+  builder
+    .lineTo([hb, hd - tf])
+    .lineTo([hb, hd])
+    .lineTo([-hb, hd])
   // Rotate 90° CW into the canonical stance (web up, flanges down, C opening downward).
-  return centre(webVertical).map(([x, y]) => [y, -x] as [number, number])
+  return rotateOutline(centreOutline(builder.done()), -Math.PI / 2)
 }
 
 /**
@@ -273,59 +251,32 @@ function channelInner(
   web: number,
   tf: number,
   radius = 0,
-): [number, number][] {
+): Outline | null {
   const hb = flange / 2
   const hd = depth / 2
   const xInner = hd - tf
   const yWeb = hb - web
   const r = Math.max(0, Math.min(radius, flange - web, hd - tf))
-  if (!(xInner > 0) || !(yWeb > 0)) return []
+  if (!(xInner > 0) || !(yWeb > 0)) return null
   if (r <= 0) {
-    return [
-      [-xInner, -hb],
-      [-xInner, yWeb],
-      [xInner, yWeb],
-      [xInner, -hb],
-    ]
+    return outline([-xInner, -hb])
+      .lineTo([-xInner, yWeb])
+      .lineTo([xInner, yWeb])
+      .lineTo([xInner, -hb])
+      .done()
   }
-  return dedupe([
-    [-xInner, -hb],
-    ...arcPoints(-xInner + r, yWeb - r, r, Math.PI, Math.PI / 2),
-    [xInner - r, yWeb],
-    ...arcPoints(xInner - r, yWeb - r, r, Math.PI / 2, 0).slice(1),
-    [xInner, -hb],
-  ])
+  return outline([-xInner, -hb])
+    .arcTo([-xInner + r, yWeb - r], r, Math.PI, Math.PI / 2)
+    .lineTo([xInner - r, yWeb])
+    .arcTo([xInner - r, yWeb - r], r, Math.PI / 2, 0)
+    .lineTo([xInner, -hb])
+    .done()
 }
 
-function circle(od: number): [number, number][] {
-  const r = od / 2
-  const points: [number, number][] = []
-  for (let i = 0; i < 48; i++) {
-    const angle = (i / 48) * Math.PI * 2
-    points.push([Math.cos(angle) * r, Math.sin(angle) * r])
-  }
-  return points
-}
-
-function reverse(points: [number, number][]): [number, number][] {
-  return [...points].reverse()
-}
-
-/** Polyline approximation of a circular arc (radians), inclusive of both endpoints. */
-function arcPoints(
-  cx: number,
-  cy: number,
-  radius: number,
-  start: number,
-  end: number,
-  steps = 6,
-): [number, number][] {
-  const points: [number, number][] = []
-  for (let i = 0; i <= steps; i++) {
-    const angle = start + ((end - start) * i) / steps
-    points.push([cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius])
-  }
-  return points
+/** A round contour: the outer wall of a CHS or a round void. */
+function circle(od: number): Outline {
+  const radius = od / 2
+  return outline([radius, 0]).circle([0, 0], radius).done()
 }
 
 /**
@@ -341,33 +292,20 @@ function hollowCanonicalSize(n: number[]): { width: number; height: number } {
 }
 
 /** Rounded rectangle outline (counter-clockwise), radius clamped to the half-size. */
-function roundedRect(width: number, height: number, radius: number): [number, number][] {
+function roundedRect(width: number, height: number, radius: number): Outline {
   const hw = width / 2
   const hh = height / 2
   const r = Math.max(0, Math.min(radius, hw, hh))
-  if (r <= 0) {
-    return [
-      [-hw, -hh],
-      [hw, -hh],
-      [hw, hh],
-      [-hw, hh],
-    ]
-  }
-  const points: [number, number][] = []
-  const steps = 6
+  if (r <= 0) return rectangleOutline(width, height)
+  const builder = outline([hw - r, -hh])
   const corners: [number, number, number][] = [
     [hw - r, -hh + r, -Math.PI / 2],
     [hw - r, hh - r, 0],
     [-hw + r, hh - r, Math.PI / 2],
     [-hw + r, -hh + r, Math.PI],
   ]
-  for (const [cx, cy, start] of corners) {
-    for (let i = 0; i <= steps; i++) {
-      const angle = start + (i / steps) * (Math.PI / 2)
-      points.push([cx + Math.cos(angle) * r, cy + Math.sin(angle) * r])
-    }
-  }
-  return points
+  for (const [cx, cy, start] of corners) builder.arcTo([cx, cy], r, start, start + Math.PI / 2)
+  return builder.done()
 }
 
 /** Hollow rectangle: outer grown and void shrunk by `gap` so the part fits inside. */
@@ -377,50 +315,42 @@ function hollowRect(
   wall: number,
   radius: number,
   gap: number,
-): { points: [number, number][]; holes?: [number, number][][] } {
+): { outline: Outline; voidOutline?: Outline } {
   const outer = roundedRect(width + 2 * gap, height + 2 * gap, radius + gap)
   const iw = width - 2 * wall - 2 * gap
   const ih = height - 2 * wall - 2 * gap
-  if (iw <= 0 || ih <= 0) return { points: outer }
-  const hole = reverse(roundedRect(iw, ih, Math.max(0, radius - wall - gap)))
-  return { points: outer, holes: [hole] }
+  if (iw <= 0 || ih <= 0) return { outline: outer }
+  const hole = reverseOutline(roundedRect(iw, ih, Math.max(0, radius - wall - gap)))
+  return { outline: outer, voidOutline: hole }
 }
 
 /**
  * T-section (a UB split lengthwise), flange down, web up. `radius` is the root fillet
  * where the web meets the flange (from the parent UB); 0 keeps the junction sharp.
  */
-function teeOutline(
-  b: number,
-  depth: number,
-  tf: number,
-  tw: number,
-  radius = 0,
-): [number, number][] {
+function teeOutline(b: number, depth: number, tf: number, tw: number, radius = 0): Outline {
   const hb = b / 2
   const hd = depth / 2
   const hw = tw / 2
   const r = Math.max(0, Math.min(radius, hb - hw, hd - tf))
-  const points: [number, number][] = [
-    [-hb, -hd],
-    [hb, -hd],
-    [hb, -hd + tf],
-  ]
+  const builder = outline([-hb, -hd])
+    .lineTo([hb, -hd])
+    .lineTo([hb, -hd + tf])
   if (r > 0) {
     // Right root fillet: flange top → web side, concave (centre in the void).
-    points.push(...arcPoints(hw + r, -hd + tf + r, r, -Math.PI / 2, -Math.PI))
+    builder.arcTo([hw + r, -hd + tf + r], r, -Math.PI / 2, -Math.PI)
   } else {
-    points.push([hw, -hd + tf])
+    builder.lineTo([hw, -hd + tf])
   }
-  points.push([hw, hd], [-hw, hd])
+  builder.lineTo([hw, hd]).lineTo([-hw, hd])
   if (r > 0) {
     // Left root fillet: web side → flange top.
-    points.push(...arcPoints(-hw - r, -hd + tf + r, r, 0, -Math.PI / 2))
+    builder.arcTo([-hw - r, -hd + tf + r], r, 0, -Math.PI / 2)
   } else {
-    points.push([-hw, -hd + tf])
+    builder.lineTo([-hw, -hd + tf])
   }
-  points.push([-hb, -hd + tf])
-  return centre(points)
+  builder.lineTo([-hb, -hd + tf])
+  return centreOutline(builder.done())
 }
 
 /**
@@ -435,23 +365,11 @@ function hollowCornerRadius(wall: number): number {
   return (wall > 3 ? 2.5 : 2) * wall
 }
 
-/**
- * Canonical **H** stance for an I-section: rotate the DSTV/Tekla reference pose (web vertical,
- * flanges horizontal; x = flange width, y = depth) 90° CCW, so the **depth runs horizontal and the
- * flange width vertical** — the flanges become the two vertical strokes (the letter "H") and the
- * web lies horizontal with its `v` face up. This puts the member's longer cross-section side
- * horizontal (same principle as RHS/angles) and the web/cut face on top. See
- * `docs/canonical-orientation.md` §2.
- */
-function iSectionCanonical(points: [number, number][]): [number, number][] {
-  return points.map(([x, y]): [number, number] => [-y, x])
-}
-
 /** Canonical H-stance I-section outline for UB / UC / TFB, with the root fillets. */
-function iSectionOutline(section: RolledSection): [number, number][] {
-  return iSectionCanonical(
-    ubOutlineFromDims(section.b, section.d, section.tf, section.tw, section.r ?? 0),
-  )
+function iSectionOutline(section: RolledSection): Outline {
+  const h = ubOutlineFromDims(section.b, section.d, section.tf, section.tw, section.r ?? 0)
+  // Rotate the DSTV/Tekla reference pose (web vertical) 90° CCW into the canonical H stance.
+  return rotateOutline(h, Math.PI / 2)
 }
 
 /**
@@ -459,48 +377,36 @@ function iSectionOutline(section: RolledSection): [number, number][] {
  * flange junctions carry the concave root fillet `radius`; `radius <= 0` keeps them sharp (as
  * for a TFB, which has no tabulated root radius).
  */
-function ubOutlineFromDims(
-  b: number,
-  d: number,
-  tf: number,
-  tw: number,
-  radius = 0,
-): [number, number][] {
+function ubOutlineFromDims(b: number, d: number, tf: number, tw: number, radius = 0): Outline {
   const hb = b / 2
   const hd = d / 2
   const hw = tw / 2
   const r = Math.max(0, Math.min(radius, hb - hw, hd - tf))
-  if (r <= 0) {
-    return centre([
-      [-hb, -hd],
-      [hb, -hd],
-      [hb, -hd + tf],
-      [hw, -hd + tf],
-      [hw, hd - tf],
-      [hb, hd - tf],
-      [hb, hd],
-      [-hb, hd],
-      [-hb, hd - tf],
-      [-hw, hd - tf],
-      [-hw, -hd + tf],
-      [-hb, -hd + tf],
-    ])
+  const builder = outline([-hb, -hd])
+    .lineTo([hb, -hd])
+    .lineTo([hb, -hd + tf])
+  if (r > 0) {
+    // Root fillets are concave: each arc's centre sits in the void beside/between the flanges.
+    builder
+      .arcTo([hw + r, -hd + tf + r], r, -Math.PI / 2, -Math.PI)
+      .arcTo([hw + r, hd - tf - r], r, Math.PI, Math.PI / 2)
+  } else {
+    builder.lineTo([hw, -hd + tf]).lineTo([hw, hd - tf])
   }
-  // Root fillets are concave: each arc's centre sits in the void beside/between the flanges.
-  return centre([
-    [-hb, -hd],
-    [hb, -hd],
-    [hb, -hd + tf],
-    ...arcPoints(hw + r, -hd + tf + r, r, -Math.PI / 2, -Math.PI),
-    ...arcPoints(hw + r, hd - tf - r, r, Math.PI, Math.PI / 2),
-    [hb, hd - tf],
-    [hb, hd],
-    [-hb, hd],
-    [-hb, hd - tf],
-    ...arcPoints(-hw - r, hd - tf - r, r, Math.PI / 2, 0),
-    ...arcPoints(-hw - r, -hd + tf + r, r, 0, -Math.PI / 2),
-    [-hb, -hd + tf],
-  ])
+  builder
+    .lineTo([hb, hd - tf])
+    .lineTo([hb, hd])
+    .lineTo([-hb, hd])
+    .lineTo([-hb, hd - tf])
+  if (r > 0) {
+    builder
+      .arcTo([-hw - r, hd - tf - r], r, Math.PI / 2, 0)
+      .arcTo([-hw - r, -hd + tf + r], r, 0, -Math.PI / 2)
+  } else {
+    builder.lineTo([-hw, hd - tf]).lineTo([-hw, -hd + tf])
+  }
+  builder.lineTo([-hb, -hd + tf])
+  return centreOutline(builder.done())
 }
 
 /**
@@ -512,9 +418,10 @@ function ubOutlineFromDims(
  * gave the section its depth and flange width swapped (a `360UB` built as a 172 mm-deep, 359 mm
  * wide beam); read them correctly, then rotate into the canonical H stance.
  */
-function iSectionFromHeaderDims(dims: number[]): [number, number][] {
-  return iSectionCanonical(
+function iSectionFromHeaderDims(dims: number[]): Outline {
+  return rotateOutline(
     ubOutlineFromDims(dims[1] ?? 0, dims[0] ?? 0, dims[2] ?? 0, dims[3] ?? 0, dims[4] ?? 0),
+    Math.PI / 2,
   )
 }
 
@@ -563,19 +470,19 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
   if (!family) return null
 
   const n = numbers(clean)
-  let points: [number, number][] | null = null
-  let holes: [number, number][][] = []
+  let contour: Outline | null = null
+  let voidOutlines: Outline[] = []
   let hollow = false
   let label = `${clean} stock`
 
   switch (family) {
     case 'tee': {
       if (dims.length >= 4) {
-        points = teeOutline(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0)
+        contour = teeOutline(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0)
       } else {
         const match = inferTee(clean, dims)
         if (match)
-          points = teeOutline(
+          contour = teeOutline(
             match.section.b,
             match.section.d / 2,
             match.section.tf,
@@ -591,7 +498,7 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
     case 'angle-unequal': {
       const angle = catalogueAngle(clean, dims)
       if (angle) {
-        points = angleL(angle.a, angle.b, angle.t, angle.r1, angle.r2)
+        contour = angleL(angle.a, angle.b, angle.t, angle.r1, angle.r2)
         break
       }
       // Not in the catalogue: fall back to the callout / NC dims, root radius only.
@@ -599,7 +506,7 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
       const legB = family === 'angle-equal' ? legA : (n[1] ?? dims[1] ?? legA)
       const thickness = n[2] ?? dims[2]
       if (legA > 0 && legB > 0 && thickness > 0)
-        points = angleL(legA, legB, thickness, dims[4] ?? 0)
+        contour = angleL(legA, legB, thickness, dims[4] ?? 0)
       break
     }
     case 'rhs':
@@ -614,11 +521,11 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
       const radius = dims[4] ?? hollowCornerRadius(wall)
       if (height > 0 && width > 0 && wall > 0 && wall < Math.min(height, width) / 2) {
         const rect = hollowRect(width, height, wall, radius, INFLATE)
-        points = rect.points
-        holes = rect.holes ?? []
+        contour = rect.outline
+        voidOutlines = rect.voidOutline ? [rect.voidOutline] : []
         hollow = true
       } else if (height > 0 && width > 0) {
-        points = rectangle(width, height)
+        contour = rectangleOutline(width, height)
       }
       break
     }
@@ -626,9 +533,9 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
       const od = n[0]
       const wall = n[1] ?? dims[2] ?? 0
       if (od > 0) {
-        points = circle(od + 2 * INFLATE)
+        contour = circle(od + 2 * INFLATE)
         const id = od - 2 * wall - 2 * INFLATE
-        if (wall > 0 && id > 0) holes = [reverse(circle(id))]
+        if (wall > 0 && id > 0) voidOutlines = [reverseOutline(circle(id))]
         hollow = true
       }
       break
@@ -639,55 +546,62 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
       // PFCs are fully tabulated (tf, tw, r) — the short callout only carries depth+flange.
       const pfc = /PFC/i.test(clean) ? getPfcByDepth(depth) : undefined
       if (pfc) {
-        points = channel(pfc.d, pfc.b, pfc.tw, pfc.tf, pfc.r ?? 0)
+        contour = channel(pfc.d, pfc.b, pfc.tw, pfc.tf, pfc.r ?? 0)
         label = `${pfc.designation} stock`
       } else if (depth > 0 && flange > 0) {
         // TFC / unknown channel: thicknesses aren't in the short code, so take the larger of
         // the two NC thicknesses for both so the ghost can't be thinner than the part.
         const thickness = Math.max(dims[2] ?? depth * 0.05, dims[3] ?? depth * 0.08)
-        points = channel(depth, flange, thickness, thickness, dims[4] ?? 0)
+        contour = channel(depth, flange, thickness, thickness, dims[4] ?? 0)
       }
       break
     }
     case 'ub': {
       const section = getUb(clean)
       if (section) {
-        points = iSectionOutline(section)
+        contour = iSectionOutline(section)
         label = `${section.designation} stock`
       } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
         // Full UB from an NC header (dims = depth, b, tf, tw).
-        points = iSectionFromHeaderDims(dims)
+        contour = iSectionFromHeaderDims(dims)
       }
       break
     }
     case 'uc': {
       const section = getUc(clean) ?? getUcByDepth(dims[0] ?? n[0] ?? 0)
       if (section) {
-        points = iSectionOutline(section)
+        contour = iSectionOutline(section)
         label = `${section.designation} stock`
       } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
         // Full UC from an NC header (dims = depth, b, tf, tw).
-        points = iSectionFromHeaderDims(dims)
+        contour = iSectionFromHeaderDims(dims)
       }
       break
     }
     case 'tfb': {
       const section = getTfbByDepth(n[0] || dims[0] || dims[1] || 0)
       if (section) {
-        points = iSectionOutline(section)
+        contour = iSectionOutline(section)
         label = `${section.designation} stock`
       } else if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0) {
-        points = iSectionFromHeaderDims(dims)
+        contour = iSectionFromHeaderDims(dims)
       }
       break
     }
   }
 
-  if (!points || points.length < 3) return null
+  if (!contour) return null
+  const points = outlinePoints(contour)
+  if (points.length < 3) return null
   // The stock ghost is drawn at the section's exact size (INFLATE = 0) so it reads to scale.
   return {
+    outline: contour,
     points: hollow ? points : inflate(points, INFLATE),
-    holes: holes.length > 0 ? holes : undefined,
+    holes:
+      voidOutlines.length > 0
+        ? voidOutlines.map((voidOutline) => outlinePoints(voidOutline))
+        : undefined,
+    voidOutlines: voidOutlines.length > 0 ? voidOutlines : undefined,
     label,
     mass: sectionMassPerMetre(clean, dims) ?? undefined,
   }
@@ -697,15 +611,36 @@ export function stockOutlineForCode(code: string, dims: number[]): StockOutline 
  * The exact (un-inflated) cross-section for a profile code, for rebuilding a part's solid
  * from its NC. Uses the same builders as the stock ghost, but with no clearance allowance.
  */
-export function partSectionForCode(
-  code: string,
-  dims: number[],
-): {
+export interface PartSection {
+  /** the section as real primitives — the source of truth for the STEP rebuild */
+  outline: Outline
+  /** the section as a polyline (derived from `outline`) */
   points: [number, number][]
+  /** hollow voids as real primitives, wound opposite to `outline` */
+  voidOutlines?: Outline[]
+  /** hollow voids as polylines (derived) */
   holes?: [number, number][][]
-  /** Inner/back contour for open sections (currently PFC); hollow voids use `holes`. */
+  /** Inner/back contour for open sections (currently PFC), as primitives. */
+  innerOutline?: Outline
+  /** Inner/back contour as a polyline (derived); hollow voids use `holes`. */
   innerSection?: [number, number][]
-} | null {
+}
+
+export function partSectionForCode(code: string, dims: number[]): PartSection | null {
+  const built = partOutlineForCode(code, dims)
+  if (!built) return null
+  return {
+    ...built,
+    points: outlinePoints(built.outline),
+    holes: built.voidOutlines?.map((voidOutline) => outlinePoints(voidOutline)),
+    innerSection: built.innerOutline ? outlinePoints(built.innerOutline) : undefined,
+  }
+}
+
+type PartOutline = Pick<PartSection, 'outline' | 'voidOutlines' | 'innerOutline'>
+
+/** The generated primitives for a part's stock section (no polyline sampling). */
+function partOutlineForCode(code: string, dims: number[]): PartOutline | null {
   const clean = code.trim().replace(/\s+/g, '').toUpperCase()
   const family = detectFamily(clean)
   if (!family) return null
@@ -714,11 +649,11 @@ export function partSectionForCode(
   switch (family) {
     case 'tee': {
       if (dims.length >= 4)
-        return { points: teeOutline(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0) }
+        return { outline: teeOutline(dims[0], dims[1], dims[2], dims[3], dims[4] ?? 0) }
       const match = inferTee(clean, dims)
       if (match)
         return {
-          points: teeOutline(
+          outline: teeOutline(
             match.section.b,
             match.section.d / 2,
             match.section.tf,
@@ -738,7 +673,7 @@ export function partSectionForCode(
       const thickness = n[2] ?? dims[2] ?? angle?.t
       if (!(legA > 0 && legB > 0 && thickness > 0)) return null
       return {
-        points: angleL(legA, legB, thickness, dims[4] ?? angle?.r1 ?? 0, angle?.r2 ?? 0),
+        outline: angleL(legA, legB, thickness, dims[4] ?? angle?.r1 ?? 0, angle?.r2 ?? 0),
       }
     }
     case 'rhs':
@@ -753,13 +688,13 @@ export function partSectionForCode(
       // which derives 2.5 × wall when no dim is supplied.
       const radius = dims[4] ?? hollowCornerRadius(wall)
       if (height > 0 && width > 0 && wall > 0 && wall < Math.min(height, width) / 2) {
-        const iw = width - 2 * wall
-        const ih = height - 2 * wall
-        const holes =
-          iw > 0 && ih > 0 ? [reverse(roundedRect(iw, ih, Math.max(0, radius - wall)))] : undefined
-        return { points: roundedRect(width, height, radius), holes }
+        const rect = hollowRect(width, height, wall, radius, 0)
+        return {
+          outline: rect.outline,
+          voidOutlines: rect.voidOutline ? [rect.voidOutline] : undefined,
+        }
       }
-      if (height > 0 && width > 0) return { points: rectangle(width, height) }
+      if (height > 0 && width > 0) return { outline: rectangleOutline(width, height) }
       return null
     }
     case 'chs': {
@@ -767,7 +702,10 @@ export function partSectionForCode(
       const wall = n[1] ?? dims[2] ?? 0
       if (!(od > 0)) return null
       const id = od - 2 * wall
-      return { points: circle(od), holes: wall > 0 && id > 0 ? [reverse(circle(id))] : undefined }
+      return {
+        outline: circle(od),
+        voidOutlines: wall > 0 && id > 0 ? [reverseOutline(circle(id))] : undefined,
+      }
     }
     case 'channel': {
       const depth = n[0] || dims[0]
@@ -775,37 +713,37 @@ export function partSectionForCode(
       const pfc = /PFC/i.test(clean) ? getPfcByDepth(depth) : undefined
       if (pfc) {
         return {
-          points: channel(pfc.d, pfc.b, pfc.tw, pfc.tf, pfc.r ?? 0),
-          innerSection: channelInner(pfc.d, pfc.b, pfc.tw, pfc.tf, pfc.r ?? 0),
+          outline: channel(pfc.d, pfc.b, pfc.tw, pfc.tf, pfc.r ?? 0),
+          innerOutline: channelInner(pfc.d, pfc.b, pfc.tw, pfc.tf, pfc.r ?? 0) ?? undefined,
         }
       }
       if (!(depth > 0 && flange > 0)) return null
       const tf = dims[2] ?? depth * 0.05
       const web = dims[3] ?? depth * 0.08
       return {
-        points: channel(depth, flange, web, tf, dims[4] ?? 0),
-        innerSection: channelInner(depth, flange, web, tf, dims[4] ?? 0),
+        outline: channel(depth, flange, web, tf, dims[4] ?? 0),
+        innerOutline: channelInner(depth, flange, web, tf, dims[4] ?? 0) ?? undefined,
       }
     }
     case 'ub': {
       const section = getUb(clean)
-      if (section) return { points: iSectionOutline(section) }
+      if (section) return { outline: iSectionOutline(section) }
       if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
-        return { points: iSectionFromHeaderDims(dims) }
+        return { outline: iSectionFromHeaderDims(dims) }
       return null
     }
     case 'uc': {
       const section = getUc(clean) ?? getUcByDepth(dims[0] ?? n[0] ?? 0)
-      if (section) return { points: iSectionOutline(section) }
+      if (section) return { outline: iSectionOutline(section) }
       if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
-        return { points: iSectionFromHeaderDims(dims) }
+        return { outline: iSectionFromHeaderDims(dims) }
       return null
     }
     case 'tfb': {
       const section = getTfbByDepth(n[0] || dims[0] || dims[1] || 0)
-      if (section) return { points: iSectionOutline(section) }
+      if (section) return { outline: iSectionOutline(section) }
       if (dims.length >= 4 && dims[0] > 0 && dims[1] > 0)
-        return { points: iSectionFromHeaderDims(dims) }
+        return { outline: iSectionFromHeaderDims(dims) }
       return null
     }
   }

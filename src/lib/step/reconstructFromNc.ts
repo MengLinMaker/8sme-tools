@@ -22,6 +22,7 @@ import {
   selectWeldingPrep,
 } from '@/lib/parsers/weldingPrep'
 import { profileFamily } from '@/lib/sections/canonical'
+import { type Outline, rotateOutline } from '@/lib/sections/outline'
 import { partSectionForCode } from '@/lib/sections/stock'
 import { stripStraySolids } from './clean'
 import type { MeasurableShape } from './measure'
@@ -377,6 +378,16 @@ export async function reconstructSolidFromNc(
   const authoredPoints = ncAuthoredStancePoints(header.profile, rawSection.points)
   const canonicalSectionFlip = authoredPoints !== rawSection.points
   const section = canonicalSectionFlip ? { ...rawSection, points: authoredPoints } : rawSection
+  // The generated outline is in the canonical stance, and this build runs in the authored one (the
+  // cuts' across signs are authored-relative), so rotate it the same way the sampled points are:
+  // `ncAuthoredStancePoints` is a +90° turn for a channel and a −90° turn for an I-section. The
+  // finished solid is rolled back to canonical at the end.
+  const authoredOutline =
+    canonicalSectionFlip && profileFamily(header.profile) === 'channel'
+      ? Math.PI / 2
+      : canonicalSectionFlip
+        ? -Math.PI / 2
+        : 0
 
   await ensureOc()
   const { draw, drawCircle, drawRoundedRectangle, Plane } = await import('replicad')
@@ -772,11 +783,13 @@ export async function reconstructSolidFromNc(
     }
     return cuts
   }
+  const authoredStance = (contour: Outline): Outline =>
+    authoredOutline === 0 ? contour : rotateOutline(contour, authoredOutline)
   // Pure stock: cross-section in the (width=Y, depth=Z) plane, extruded along the member (X).
-  // `sectionSketch` builds every stock contour from real primitives — outer outline and inner void
-  // both — so rounded corners are cylindrical faces, not chord chains, which is what WiseCAM's
+  // `sectionSketch` draws the stock's generated primitives — outer outline and inner void both —
+  // so rounded corners are real cylindrical faces, not chord chains, which is what WiseCAM's
   // standard-section matcher needs.
-  let solid = (await sectionSketch(section.points))
+  let solid = (await sectionSketch(authoredStance(section.outline)))
     ?.sketchOnPlane('YZ')
     .extrude(maxX + 20) as unknown as SolidOps
   if (!solid) return null
@@ -789,11 +802,11 @@ export async function reconstructSolidFromNc(
   }
   await emit('00-stock', solid)
 
-  // Holes in the section (hollow RHS/SHS/CHS) are through-cuts too. Their voids are built the same
-  // way, so a hollow's inner corners are arcs as well — a faceted void is what stopped WiseCAM
-  // recognising a rebuilt RHS/SHS as a standard section.
-  for (const hole of section.holes ?? []) {
-    const cut = (await sectionSketch(hole))
+  // Holes in the section (hollow RHS/SHS/CHS) are through-cuts too. Their voids come from the same
+  // generated primitives, so a hollow's inner corners are arcs as well — a faceted void is what
+  // stopped WiseCAM recognising a rebuilt RHS/SHS as a standard section.
+  for (const voidOutline of section.voidOutlines ?? []) {
+    const cut = (await sectionSketch(authoredStance(voidOutline)))
       ?.sketchOnPlane('YZ')
       .extrude(maxX + 20) as unknown as SolidOps
     if (!cut) continue

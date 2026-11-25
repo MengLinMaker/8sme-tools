@@ -1,34 +1,36 @@
 import type { Drawing } from 'replicad'
-import { type Pt, sectionPath } from '@/lib/sections/sectionPath'
+import type { Outline } from '@/lib/sections/outline'
 
 /**
- * A stock-section contour sketched with **real** primitives, for a brep that has rounded corners
- * rather than a faceted approximation of them.
+ * A stock contour sketched from its **generated primitives**, so the extruded stock has real
+ * rounded corners rather than a faceted approximation.
  *
- * The section builders in `sections/stock.ts` return a sampled polyline: every rounded corner is
- * ~6 chords. Drawing that polyline straight into an extrusion gives a section made of facets, and
- * WiseCAM then reads the part as a custom profile instead of the standard hollow/UB it is — the
- * same failure the UB root fillets had when they were chorded. `sectionPath` fits each run of
- * co-circular samples and returns one circular arc per corner, so the extrusion carries a single
- * cylindrical face per corner:
- *
- * - outer outline **and** inner void (an RHS/SHS has four rounded corners on each),
- * - a full round contour becomes one cylinder (`drawCircle`), so a CHS is truly round.
- *
- * Returns `null` for a degenerate contour (fewer than three distinct points).
+ * The section builders in `sections/stock.ts` know every corner's centre and radius, so
+ * `Outline` carries lines and true arcs (and whole circles) directly — nothing has to be sampled
+ * or re-fitted here. An extrusion of this sketch carries one cylindrical brep face per corner,
+ * outer outline and inner void alike, which is what WiseCAM's standard-section matcher needs; a
+ * chorded/faceted corner makes it read the part as a custom profile. A round contour becomes one
+ * cylinder (`drawCircle`), so a CHS is truly round.
  */
-export async function sectionSketch(points: Pt[]): Promise<Drawing | null> {
-  const path = sectionPath(points)
-  if (!path) return null
-  const { draw, drawCircle } = await import('replicad')
-  const only = path.segments.length === 1 ? path.segments[0] : undefined
-  if (only?.kind === 'circle') {
-    return drawCircle(only.radius).translate(only.center[0], only.center[1])
+export async function sectionSketch(contour: Outline): Promise<Drawing | null> {
+  const single = contour.edges.length === 1 ? contour.edges[0] : undefined
+  if (single?.kind === 'circle') {
+    const { drawCircle } = await import('replicad')
+    return drawCircle(single.radius).translate(single.center[0], single.center[1])
   }
-  let pen = draw(path.start)
-  for (const segment of path.segments) {
-    if (segment.kind === 'arc') pen = pen.sagittaArcTo(segment.to, segment.sagitta)
-    else if (segment.kind === 'line') pen = pen.lineTo(segment.to)
+  if (contour.edges.length === 0) return null
+  const { draw } = await import('replicad')
+  let pen = draw(contour.start)
+  for (const edge of contour.edges) {
+    if (edge.kind === 'line') {
+      pen = pen.lineTo(edge.to)
+    } else if (edge.kind === 'arc') {
+      // Sagitta straight from the swept angle: `r·(1 − cos(sweep/2))`, so no chord is measured.
+      // The sign follows replicad's convention — a counter-clockwise sweep bulges left, which is
+      // a negative sagitta; the same mapping the NC cut arcs use.
+      const sagitta = edge.radius * (1 - Math.cos(Math.abs(edge.sweep) / 2))
+      pen = pen.sagittaArcTo(edge.to, edge.sweep > 0 ? -sagitta : sagitta)
+    }
   }
   return pen.close()
 }

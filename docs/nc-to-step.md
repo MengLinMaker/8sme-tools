@@ -68,37 +68,32 @@ If `09` works and `10` does not, AP203 is required. If `12` works alone, WiseCAM
 If none work, the remaining difference is the Tekla/SolidWorks product/assembly structure, not the
 section designation string.
 
-## Stock section arcs (implemented)
+## Stock sections are generated as real arcs (implemented)
 
-The section builders (`src/lib/sections/stock.ts`) return a **sampled polyline**: every rounded
-corner is ~6 chords. Drawing that polyline into the extruded stock gives a faceted section, and
-WiseCAM reads it as a **custom** profile instead of the standard RHS/SHS/UB it is. An earlier fix
-fitted a radius per sampled vertex (`sectionArcRadii`), which helped UB root fillets but left two
-problems: a corner became a *chain* of small arcs, and the inner void of a hollow was still drawn
-as a chorded polygon (so a rebuilt RHS had 4 outer cylinders and a 28-sided hole).
+The section builders (`src/lib/sections/stock.ts`) generate every cross-section from known
+parameters — sides, thicknesses, root/corner/toe radii — so the corner geometry is known exactly at
+generation time. They return **primitives** (`src/lib/sections/outline.ts`): lines, true circular
+arcs and whole circles, not a sampled polyline.
 
-`sectionPath` (`src/lib/sections/sectionPath.ts`) now decomposes the contour into **real
-primitives**: each run of co-circular samples collapses into **one circular arc**, and a full round
-contour (CHS, a bored circle, a round void) into **one circle**. `sectionSketch`
-(`src/lib/step/sectionBrep.ts`) draws that path, so an extruded stock has a single cylindrical
-brep face per corner — **outer outline and inner void alike** — and a CHS is a true cylinder.
+`sectionSketch` (`src/lib/step/sectionBrep.ts`) extrudes those primitives directly, so every
+manufactured stock has one cylindrical brep face per corner — **outer outline and inner void
+alike** — and a CHS is one cylinder. A faceted corner is what made WiseCAM read the part as a
+custom section: drawing the sampled points straight gave chorded corners, and the later
+per-vertex radius fit (`sectionArcRadii`, now gone) still left a corner as a *chain* of small arcs
+and a hollow's void as a chorded 28-gon.
 
-The merge is exact, not a smoothing pass: builder samples are exactly on their circle (they come
-from `cos`/`sin`, and the stance rotations are exact), so the co-circularity tolerance is 1e-6 mm.
-A run must also be a genuine sampled arc — at least three steps, a plausible radius, a sub-180°
-sweep, tangent continuity with its own chords, and **evenly spaced samples** (the builders walk an
-arc in equal angular steps; a circle fitted across a straight edge and the start of a corner has
-one huge step beside one tiny one). Without those tests a long flat face merges into a near-tangent
-"arc" of absurd radius. Sharp corners stay sharp.
+A polyline is derived on demand (`outlinePoints`, 6 steps per arc / 48 for a circle) for the ghost,
+area, SVG and NCEP `cadgroup` consumers, so the primitives remain the single source of truth.
 
-Regression: `sectionBrep.test.ts` round-trips each built stock through STEP and asserts the RHS has
-4 + 4 cylindrical corners of 22.5 / 13.5 mm (no planar facets on the corners), the CHS is one
-cylinder of the OD, and a UB keeps 4 cylindrical root fillets; `sectionPath.test.ts` covers the
-contour decomposition itself.
+The build itself runs in the **authored** stance (the cuts' across signs are authored-relative), so
+`reconstructFromNc` rotates the outline by the same turn `ncAuthoredStancePoints` applies to the
+section points (channel +90°, I-section −90°) and rolls the finished solid back to canonical at the
+end.
 
-This is applied to every manufactured NC→STEP rebuild. The `NCEP` cadgroup writer still uses the
-sampled points.
-
+Regression: `stockArcs.test.ts` asserts the generated primitives — RHS 4+4 corner arcs at
+22.5/13.5 mm, UB root fillets, PFC cavity fillets, angle root + two toes, CHS one circle, and a
+zero radius staying sharp. `sectionBrep.test.ts` round-trips them through STEP and counts the
+cylindrical faces/radii (RHS 4 outer + 4 void, CHS one cylinder of the OD, UB 4 fillets).
 
 ## Cutting through the root fillet (implemented)
 
