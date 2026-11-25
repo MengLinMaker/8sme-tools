@@ -187,13 +187,18 @@ function chartLayer(
   const half = chart.layout.seam / 2
   const elements: string[] = []
   const reference: string[] = []
+  const faceAtPoint = (point: UvPoint): NcFace | null =>
+    faceAtCenteredStation(chart.layout, point[0])?.face ?? null
   const featureFace = (points: UvPoint[]): NcFace | null => {
-    for (const [station] of points) {
-      const hit = faceAtCenteredStation(chart.layout, station)
-      if (hit) return hit.face
+    for (const point of points) {
+      const face = faceAtPoint(point)
+      if (face) return face
     }
     return null
   }
+  /** Face a cut segment rides: its midpoint, so a vertex on a face boundary ties to one side only. */
+  const segmentFace = (a: UvPoint, b: UvPoint): NcFace | null =>
+    faceAtPoint([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2])
   const faceColor = (face: NcFace | null, fallback: string): string =>
     (face ? options.colorForFace?.(face) : undefined) ?? fallback
   const aligned = (feature: PartFeature, points: UvPoint[]): UvPoint[] => {
@@ -282,39 +287,41 @@ function chartLayer(
     }
     if (shape.form !== 'polyline') continue
     const alignedPoints = aligned(feature, shape.points)
-    const color = faceColor(featureFace(alignedPoints), STROKE)
-    if (feature.stock?.some(Boolean)) {
-      const source = alignedPoints
-      const segments: { a: UvPoint; b: UvPoint; stock: boolean }[] = []
-      const count = shape.closed ? source.length : source.length - 1
-      for (let index = 0; index < count; index++) {
-        const a = source[index] as UvPoint
-        const b = source[(index + 1) % source.length] as UvPoint
-        segments.push({ a, b, stock: Boolean(feature.stock[index]) })
-      }
-      let run: { a: UvPoint; b: UvPoint; stock: boolean }[] = []
-      const flush = (): void => {
-        if (run.length === 0) return
-        const points = [run[0]?.a as UvPoint, ...run.map((segment) => segment.b)]
-        if (points.length >= 2)
-          elements.push(
-            `<polyline points="${pointsAttr(points)}" fill="none" stroke="${run[0]?.stock ? STOCK_EDGE : color}" stroke-width="${fmt(run[0]?.stock ? stroke * 0.7 : stroke)}" stroke-linecap="round"/>`,
-          )
+    const stocked = feature.stock?.some(Boolean) ?? false
+    // Stock-tagged features index their own vertices, so arc radii must not expand them first.
+    const source = stocked ? alignedPoints : sampledPoints(alignedPoints, shape.radii, shape.closed)
+    if (source.length < 2) continue
+    // Colour each run by the face its segments ride — the same per-face key the 3D projector uses.
+    // A developed end cut spans u → v → o on a channel, and the web and flanges are different
+    // plates, so one colour for the whole polyline can never match the projection.
+    let run: UvPoint[] = []
+    let runKey: string | null = null
+    const flush = (): void => {
+      if (run.length < 2) {
         run = []
+        return
       }
-      for (const segment of segments) {
-        if (run.length > 0 && run[0]?.stock !== segment.stock) flush()
-        run.push(segment)
-      }
-      flush()
-      continue
+      const stock = runKey === 'stock'
+      elements.push(
+        `<polyline points="${pointsAttr(run)}" fill="none" stroke="${stock ? STOCK_EDGE : (runKey ?? STROKE)}" stroke-width="${fmt(stock ? stroke * 0.7 : stroke)}" stroke-linecap="round"/>`,
+      )
+      run = []
     }
-    const points = sampledPoints(alignedPoints, shape.radii, shape.closed)
-    if (points.length < 2) continue
-    const tag = shape.closed ? 'polygon' : 'polyline'
-    elements.push(
-      `<${tag} points="${pointsAttr(points)}" fill="none" stroke="${color}" stroke-width="${fmt(stroke)}"${shape.closed ? '' : ' stroke-linecap="round"'}/>`,
-    )
+    const count = shape.closed ? source.length : source.length - 1
+    for (let index = 0; index < count; index++) {
+      const a = source[index] as UvPoint
+      const b = source[(index + 1) % source.length] as UvPoint
+      const stock = stocked && Boolean(feature.stock?.[index])
+      const key = stock ? 'stock' : faceColor(segmentFace(a, b), STROKE)
+      if (run.length > 0 && key !== runKey) flush()
+      if (run.length === 0) {
+        runKey = key
+        run = [a, b]
+      } else {
+        run.push(b)
+      }
+    }
+    flush()
   }
   for (const mark of part.marks) {
     if (mark.chart !== chart.id) continue

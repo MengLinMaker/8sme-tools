@@ -153,21 +153,23 @@ function cylinderFeatures(
     cx * seated.xAxis[1] + cy * seated.yAxis[1],
     cx * seated.xAxis[2] + cy * seated.yAxis[2],
   ]
-  const planes = (['v', 'o', 'u', 'h'] as NcFace[]).map((face) => {
-    const spanAxis = faceSpanAxis(frame, face)
-    const axis = (1 - spanAxis) as 0 | 1
-    const sign = resolveFaceSign(frame, section, face)
-    const base = axis === 0 ? seated.xAxis : seated.yAxis
-    const spanVec = spanAxis === 0 ? seated.xAxis : seated.yAxis
-    return {
-      face,
-      normal: [base[0] * sign, base[1] * sign, base[2] * sign] as Vec3,
-      spanVec: spanVec as Vec3,
-      q: faceHalf(frame, axis),
-      halfSpan: faceHalf(frame, spanAxis),
-      acrossSign: ncAuthoredAcrossSign(frame, face),
-    }
-  })
+  const planes = (['v', 'o', 'u', 'h'] as NcFace[])
+    .filter((face) => layout.faces[face])
+    .map((face) => {
+      const spanAxis = faceSpanAxis(frame, face)
+      const axis = (1 - spanAxis) as 0 | 1
+      const sign = resolveFaceSign(frame, section, face)
+      const base = axis === 0 ? seated.xAxis : seated.yAxis
+      const spanVec = spanAxis === 0 ? seated.xAxis : seated.yAxis
+      return {
+        face,
+        normal: [base[0] * sign, base[1] * sign, base[2] * sign] as Vec3,
+        spanVec: spanVec as Vec3,
+        q: faceHalf(frame, axis),
+        halfSpan: faceHalf(frame, spanAxis),
+        acrossSign: ncAuthoredAcrossSign(frame, face),
+      }
+    })
   const planeFor = (center: Vec3): (typeof planes)[number] | null => {
     let best: (typeof planes)[number] | null = null
     let bestScore = Number.NEGATIVE_INFINITY
@@ -276,22 +278,28 @@ function brepProjectedRuns(
   wrapSeam: boolean,
   profile: string,
 ): UvPoint[][] {
-  const planes = (['v', 'o', 'u', 'h'] as NcFace[]).map((face) => {
-    const spanAxis = faceSpanAxis(frame, face)
-    const axis = (1 - spanAxis) as 0 | 1
-    const sign = resolveFaceSign(frame, section, face)
-    const base = axis === 0 ? seated.xAxis : seated.yAxis
-    const spanVec = spanAxis === 0 ? seated.xAxis : seated.yAxis
-    return {
-      face,
-      sign,
-      normal: [base[0] * sign, base[1] * sign, base[2] * sign] as Vec3,
-      spanVec: spanVec as Vec3,
-      q: faceHalf(frame, axis),
-      halfSpan: faceHalf(frame, spanAxis),
-      acrossSign: ncAuthoredAcrossSign(frame, face),
-    }
-  })
+  // Only the faces this chart develops can name a segment. On a one-sided section two letters can
+  // resolve onto the same material side (an angle's `o`/`u` both point at the bottom leg), and
+  // taking the first would label the cut `o` — a face with no layout region — dropping the whole
+  // bottom leg from the STEP IR while the 3-D pane still draws it.
+  const planes = (['v', 'o', 'u', 'h'] as NcFace[])
+    .filter((face) => layout.faces[face])
+    .map((face) => {
+      const spanAxis = faceSpanAxis(frame, face)
+      const axis = (1 - spanAxis) as 0 | 1
+      const sign = resolveFaceSign(frame, section, face)
+      const base = axis === 0 ? seated.xAxis : seated.yAxis
+      const spanVec = spanAxis === 0 ? seated.xAxis : seated.yAxis
+      return {
+        face,
+        sign,
+        normal: [base[0] * sign, base[1] * sign, base[2] * sign] as Vec3,
+        spanVec: spanVec as Vec3,
+        q: faceHalf(frame, axis),
+        halfSpan: faceHalf(frame, spanAxis),
+        acrossSign: ncAuthoredAcrossSign(frame, face),
+      }
+    })
   const ranges = new Map<NcFace, [number, number] | null>()
   for (const entry of planes) ranges.set(entry.face, centeredStationRange(layout, entry.face))
   const family = profileFamily(profile)
@@ -610,19 +618,20 @@ export function partIrFromStepGeometry(
           profileType === 'M',
           options.profile,
         )
-  const runs: UvPoint[][] =
-    openRuns.length > 0
-      ? openRuns
-      : developStepCutEdges(
-          { ...seated, section, frame, layout },
-          {
-            radius: options.radius,
-            alongOffset: seated.alongOffset,
-            includeInner: profileType === 'U',
-          },
-        ).map((cut) =>
-          cut.points.map(([station, along]) => [centredStation(layout, station), along] as UvPoint),
-        )
+  // The developed edges also carry the closed rims (holes/slots). The exact-projection
+  // (`openRuns`) path is cut lines only, so on an open section (the angle's two legs) a slot
+  // would otherwise vanish from the STEP IR while the NC IR still shows it.
+  const developedRuns: UvPoint[][] = developStepCutEdges(
+    { ...seated, section, frame, layout },
+    {
+      radius: options.radius,
+      alongOffset: seated.alongOffset,
+      includeInner: profileType === 'U',
+    },
+  ).map((cut) =>
+    cut.points.map(([station, along]) => [centredStation(layout, station), along] as UvPoint),
+  )
+  const runs: UvPoint[][] = openRuns.length > 0 ? openRuns : developedRuns
   const features: PartFeature[] = cylinderFeatures(
     seated,
     layout,
@@ -630,7 +639,30 @@ export function partIrFromStepGeometry(
     section,
     seated.alongOffset,
   )
+  const sameRim = (candidate: PartFeature): boolean => {
+    const centre = (feature: PartFeature): UvPoint | null =>
+      feature.shape.form === 'circle'
+        ? feature.shape.center
+        : feature.shape.form === 'slot'
+          ? feature.shape.center
+          : null
+    const a = centre(candidate)
+    if (!a) return false
+    return features.some((feature) => {
+      const b = centre(feature)
+      return (
+        feature.kind === candidate.kind && b != null && Math.hypot(a[0] - b[0], a[1] - b[1]) < 1
+      )
+    })
+  }
   if (openRuns.length > 0) {
+    // Harvest the closed rims first, so a rim segment can then be excluded from the cut lines.
+    for (const points of dedupeRuns(developedRuns)) {
+      if (points.every((point) => features.some((feature) => insideFeature(point, feature))))
+        continue
+      const loop = classifiedLoop(points, options.length)
+      if (loop && !sameRim(loop)) features.push(loop)
+    }
     // Exact projection fidelity for open sections: one IR segment per projected segment. Do not
     // merge/chain, which invented horizontal connectors that were absent from the 3-D cut lines.
     for (const points of mergeRuns(openRuns, 0.05)) {

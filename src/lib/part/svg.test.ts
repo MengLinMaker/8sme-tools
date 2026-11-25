@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { fixture } from '@test/fixtures'
+import { fixture, nw30Bottom } from '@test/fixtures'
 import { describe, expect, it } from 'vitest'
 import { partIrFromNc } from './fromNc'
 import { partIrSvg } from './svg'
@@ -67,6 +67,24 @@ describe('PartIR SVG view', () => {
     const ir = part('M-1')
     const svg = partIrSvg(ir, { colorForFace: () => '#123456' })
     expect(svg).toContain('stroke="#123456"')
+  })
+
+  it('colours a cut per face, not once by its first point (PFC web + flanges)', () => {
+    // A channel's end cut develops across u → v → o: the flanges and the web are different
+    // plates. Keying the whole polyline off the first vertex (a corner, which ties to `v`) made
+    // the flange cuts read as web-thickness in the IR while the 3D projection split them.
+    const ir = partIrFromNc(readFileSync(nw30Bottom('m71.nc1'), 'utf8'))
+    if (!ir) throw new Error('no m71 IR')
+    const palette: Record<string, string> = {
+      v: '#111111',
+      o: '#222222',
+      u: '#222222',
+      h: '#333333',
+    }
+    const svg = partIrSvg(ir, { colorForFace: (face) => palette[face] })
+    expect(svg).toContain('stroke="#111111"')
+    expect(svg).toContain('stroke="#222222"')
+    expect(ir.features.filter((feature) => feature.kind === 'cut')).toHaveLength(3)
   })
 
   it('draws rounded-corner strips between tube faces', () => {

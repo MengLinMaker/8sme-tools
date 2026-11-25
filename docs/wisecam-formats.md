@@ -267,9 +267,10 @@ imported you must change the format (STEP/NCEXA), not the NC bytes.
    - `PreflightPage` `exportFixed` / `exportSelected` now adds `<mark>.ncep` per part.
    - Tests against the real NCEP fixtures (`test/fixtures/ncep/`) reproduce the hole sets
      exactly (PFC M-1, UB M-3, SHS M-35, RHS M-42).
-   - **Still open:** `T`/angle/round layouts (no samples), bevelled/mitred end contours,
-     `o`/`u` handedness for mirrored parts (`flipFlanges` option exists), and a live
-     Add-from-File test on the licensed machine.
+   - **Still open:** `T`/round layouts (no samples) and angle NCEP output (the `L` layout now
+     exists for the viewer/diff, derived from the a1/a2 NC but with no NCEP sample to export
+     against), bevelled/mitred end contours, `o`/`u` handedness for mirrored parts
+     (`flipFlanges` option exists), and a live Add-from-File test on the licensed machine.
 4. **Bevels** survive in STEP as geometry, but only if **识别坡口** is enabled on import. In
    NC1 they are the explicit vertex bevel columns; in NCEXA they need the bevel machine mode /
    `machinetype=bevel` and `B`-axis toolpath.

@@ -31,4 +31,35 @@ describe('unrolledLayout', () => {
     expect(stationFor(layout, 'v', 0)).toBeCloseTo(v.start, 6)
     expect(stationFor(layout, 'v', 298)).toBeCloseTo(v.start + 298, 6)
   })
+
+  it('develops an angle as one continuous strip around the outer corner', () => {
+    // An angle is a section of a prism: the two outer leg faces develop as one strip, sharing the
+    // corner (station 0). The NC authors each face's across from the corner, so `u` is reversed
+    // onto the negative side and `v` runs forward — no separate charts, no gap.
+    const layout = unrolledLayout('L', [75, 75, 6, 6, 8])
+    if (!layout) throw new Error('no layout')
+    expect(layout.seam).toBeCloseTo(150, 6)
+    expect(layout.faces.o).toBeUndefined()
+    expect(layout.faces.h).toBeUndefined()
+    // Corner: both faces read y=0 at the shared station.
+    expect(stationFor(layout, 'u', 0)).toBeCloseTo(0, 6)
+    expect(stationFor(layout, 'v', 0)).toBeCloseTo(0, 6)
+    // Toes: the horizontal leg runs negative, the vertical leg positive.
+    expect(stationFor(layout, 'u', 75)).toBeCloseTo(-75, 6)
+    expect(stationFor(layout, 'v', 75)).toBeCloseTo(75, 6)
+  })
+
+  it('assigns an unequal angle’s legs to the authored faces', () => {
+    // a1/a2 confirm `v` spans the horizontal leg (dims[0]) and `u` the vertical one (dims[1]).
+    const layout = unrolledLayout('L', [150, 90, 10, 10, 12])
+    if (!layout) throw new Error('no layout')
+    expect(layout.seam).toBeCloseTo(240, 6)
+    expect(layout.faces.u?.length).toBeCloseTo(90, 6)
+    expect(layout.faces.v?.length).toBeCloseTo(150, 6)
+    // The corner is `u`'s y=0 end, shared with `v`'s y=0 start.
+    expect(stationFor(layout, 'u', 0)).toBeCloseTo(-30, 6)
+    expect(stationFor(layout, 'u', 90)).toBeCloseTo(-120, 6)
+    expect(stationFor(layout, 'v', 0)).toBeCloseTo(-30, 6)
+    expect(stationFor(layout, 'v', 150)).toBeCloseTo(120, 6)
+  })
 })

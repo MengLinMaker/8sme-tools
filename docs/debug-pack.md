@@ -56,6 +56,19 @@ deltas are the most informative parts to diff.
 - **Quantity**: m128 (24), m117 (6), a2 (378). **Short stub**: a2 (100 mm). **Mitre**: a1.
 - **Families**: RHS 150×100×9, SHS 100×100×6 and ×9, PFC100*50 (two lengths), EA75*75*6, UB250*31.
 
+## Locked results — PFC (Surface IR)
+
+The six PFC/TFC members above are pinned in `src/lib/part/pfc-debug-pack.test.ts`. For each
+part (m124, m116, m65, m128, m31, m222) it locks:
+
+- the two plates: flanges `o`/`u` are **6.7 mm**, web `v` (and hidden `h`) **4.2 mm**;
+- the NC cuts both plates and reaches faces `o`, `u` and `v`;
+- the rendered IR carries **both** palette colours — `#cb9cff` on the flanges and `#34d399` on
+  the web.
+
+A developed bound cut crosses `u → v → o`, so keying a polyline off its first vertex collapses
+the flanges onto the web colour. That is the PFC regression this locks out.
+
 ## Using it
 
 ```sh

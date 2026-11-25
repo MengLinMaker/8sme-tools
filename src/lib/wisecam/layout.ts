@@ -124,6 +124,28 @@ export function unrolledLayout(
     return { seam, origin: 'centered', faces }
   }
 
+  if (type === 'L') {
+    // An angle is a section of a prism, not a closed tube: the cuttable surface is the two outer
+    // leg faces, developed as one continuous strip around the sharp outer corner. The NC authors
+    // each face's across coordinate from that corner (`y = 0` at the corner, `y = leg` at the toe)
+    // — a1's mitre confirms it (the `u` and `v` start arcs meet at along 0 only when both read
+    // `y = 0` at the corner). Per the first real articles, `v` spans the **horizontal** leg
+    // (`dims[0]`) and `u` the **vertical** leg (`dims[1]`, the bottom view, so reversed). `u` sits
+    // on the negative side and `v` on the positive, sharing the corner station.
+    const horizontal = first
+    const vertical = second
+    const seam = horizontal + vertical
+    const half = seam / 2
+    return {
+      seam,
+      origin: 'centered',
+      faces: {
+        u: face(-half, vertical, vertical, 0, true),
+        v: face(-half + vertical, horizontal, horizontal),
+      },
+    }
+  }
+
   if (type === 'M') {
     const short = Math.min(first, second)
     const long = Math.max(first, second)

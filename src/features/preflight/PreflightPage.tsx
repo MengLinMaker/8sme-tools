@@ -82,7 +82,7 @@ import {
   setBevelInNc,
   setOutOfRangeBevelInNc,
 } from '@/lib/parsers/ncEdit'
-import { frameForProfile, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
+import { frameForProfile, type NcFaceFrame, resolveNcFaceFrame } from '@/lib/parsers/ncFaces'
 import { type NcFace, parseNcGeometry } from '@/lib/parsers/ncGeometry'
 import {
   channelVToHShift,
@@ -686,6 +686,27 @@ function stockThicknessesFor(
           [0, 1],
         ]
   return stockFaceThicknesses(section, holes ?? [], normals)
+}
+
+/**
+ * Maps a DSTV face to the palette colour of its wall thickness, indexed by that pane's own
+ * thickness scale. Each IR pane must use the scale of the 3D pane it mirrors — the STEP cuts are
+ * keyed to the STEP section's thicknesses and the NC cuts to the NC's — otherwise the same wall
+ * gets a different colour in the two views and the projection stops being a cross-check.
+ */
+function irFaceColour(
+  frame: NcFaceFrame | null,
+  section: [number, number][] | null,
+  thicknesses: number[],
+): ((face: NcFace) => string | undefined) | undefined {
+  if (!frame || !section || thicknesses.length === 0) return undefined
+  return (face: NcFace): string | undefined => {
+    const thickness = Math.round(faceThickness(frame, section, face) * 10) / 10
+    const index = thicknesses.indexOf(thickness)
+    if (index < 0) return undefined
+    const color = THICKNESS_COLORS[index % THICKNESS_COLORS.length] as number
+    return `#${color.toString(16).padStart(6, '0')}`
+  }
 }
 
 /** Columns of the profiles rollup that can carry the table's sort. */
@@ -1372,23 +1393,16 @@ export function PreflightPage({ projectId }: { projectId: string }) {
   )
   const viewingCutThicknesses =
     viewingNcProfiles.length > 0 ? viewingNcProfiles : viewingStockThicknesses
-  /** Face-thickness colours for the IR view, using the same palette as the 3D cut legend. */
+  /** Face-thickness colours for the NC IR pane, using the same palette as the 3D cut legend. */
   const viewingIrColorForFace = useMemo(() => {
     const section =
       viewingNcSection ??
       (viewingStepSection ? outlinePoints(viewingStepSection.outline) : null) ??
       (stock?.outline ? outlinePoints(stock.outline) : null)
-    if (!section || viewingCutThicknesses.length === 0) return undefined
     const frame =
-      viewingNcFrame ?? (viewingProfileCode ? frameForProfile(viewingProfileCode, section) : null)
-    if (!frame) return undefined
-    return (face: NcFace): string | undefined => {
-      const thickness = Math.round(faceThickness(frame, section, face) * 10) / 10
-      const index = viewingCutThicknesses.indexOf(thickness)
-      if (index < 0) return undefined
-      const color = THICKNESS_COLORS[index % THICKNESS_COLORS.length] as number
-      return `#${color.toString(16).padStart(6, '0')}`
-    }
+      viewingNcFrame ??
+      (viewingProfileCode && section ? frameForProfile(viewingProfileCode, section) : null)
+    return irFaceColour(frame ?? null, section, viewingCutThicknesses)
   }, [
     viewingNcSection,
     viewingStepSection,
@@ -1397,6 +1411,21 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     viewingProfileCode,
     viewingCutThicknesses,
   ])
+  /**
+   * The STEP IR pane's colours must come from the STEP 3D pane's own key — the detected STEP
+   * section's face frame and `stepCutThicknesses` — never the NC scale. The NC and STEP thickness
+   * sets differ (a wall may appear only in one), so sharing the NC map recoloured the STEP cuts
+   * relative to the projected model.
+   */
+  const stepIrColorForFace = useMemo(
+    () =>
+      irFaceColour(
+        stepFaceFrame,
+        stepIrSection ? outlinePoints(stepIrSection.outline) : null,
+        stepCutThicknesses,
+      ),
+    [stepFaceFrame, stepIrSection, stepCutThicknesses],
+  )
   /**
    * STEP → NCEP (surface scaffold). Develop the real part's cut edges onto the *same* unrolled net
    * the NC path uses, so the NCEP tab can show both conversions and their differences. Meshing is
@@ -1740,6 +1769,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         label: t('preflight.viewer.step'),
         nc: null,
         step: viewingStepIr,
+        colorForFace: stepIrColorForFace,
       })
     if (manufacturedShown)
       views.push({
@@ -1747,6 +1777,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         label: t('preflight.viewer.ncSurface'),
         nc: viewingNcIr,
         step: null,
+        colorForFace: viewingIrColorForFace,
       })
     if (overlayShown && viewingNcIr && viewingStepIr)
       views.push({
@@ -1755,6 +1786,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
         nc: viewingNcIr,
         step: viewingStepIr,
         diff: true,
+        colorForFace: viewingIrColorForFace,
       })
     if (views.length === 0) {
       if (viewingNcIr)
@@ -1763,6 +1795,7 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           label: t('preflight.viewer.ncSurface'),
           nc: viewingNcIr,
           step: null,
+          colorForFace: viewingIrColorForFace,
         })
       else if (viewingStepIr)
         views.push({
@@ -1770,10 +1803,20 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           label: t('preflight.viewer.step'),
           nc: null,
           step: viewingStepIr,
+          colorForFace: stepIrColorForFace,
         })
     }
     return views
-  }, [stepShown, manufacturedShown, overlayShown, viewingNcIr, viewingStepIr, t])
+  }, [
+    stepShown,
+    manufacturedShown,
+    overlayShown,
+    viewingNcIr,
+    viewingStepIr,
+    viewingIrColorForFace,
+    stepIrColorForFace,
+    t,
+  ])
 
   // One orbit bus per part, shared by the STEP and NC viewports so they rotate together.
   const [orbitBus, setOrbitBus] = useState(() => createOrbitBus())
@@ -6770,12 +6813,22 @@ function FaceMapSquare({ layout }: { layout: FaceMapEntry[] }) {
   )
 }
 
+/**
+ * IR strokes are deliberately a touch heavier than the 1:1 millimetre width: the unrolled net is
+ * usually viewed much smaller than the 3D model, and on a low-contrast screen a hairline cut
+ * disappears. Kept as a multiplier on the fit-scaled base stroke so the 1/zoom compensation still
+ * holds at any zoom.
+ */
+const IR_LINE_SCALE = 1.8
+
 export interface IrSurfaceView {
   id: string
   label: string
   nc: PartIr | null
   step: PartIr | null
   diff?: boolean
+  /** Face-thickness colours keyed to this pane's own 3D twin (defaults to the shared map). */
+  colorForFace?: (face: NcFace) => string | undefined
 }
 
 function IrSurfaceDrawing({
@@ -6803,8 +6856,9 @@ function IrSurfaceDrawing({
       parts: partIrSvgParts(base, {
         overlay: entry.nc && entry.step ? entry.step : undefined,
         diff: entry.diff,
-        stroke: 1 / zoom,
-        colorForFace,
+        stroke: IR_LINE_SCALE / zoom,
+        // Match the 3D pane this IR mirrors, so a wall reads the same colour in both.
+        colorForFace: entry.colorForFace ?? colorForFace,
         section: false,
         orientation,
       }),

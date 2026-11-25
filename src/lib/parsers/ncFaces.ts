@@ -99,7 +99,12 @@ export function resolveNcFaceFrame(
  */
 export function frameForProfile(profile: string, section: [number, number][]): NcFaceFrame {
   const family = profileFamily(profile)
-  const axisVH: Axis = family === 'angle' || family === 'tee' || family === 'round' ? 1 : 0
+  // An angle's DSTV letters follow the authored convention on the first real articles (a1/a2):
+  // `v` spans the **horizontal** leg (its cuts are the mitre/slots on the bottom face) and `u`
+  // spans the vertical leg. That is the same resolution `resolveNcFaceFrame` derives from the NC's
+  // across extents, so the STEP IR and the NC IR use one representation. (The old `v`=side,
+  // `u`=bottom reading flipped the STEP IR left/right against the NC.)
+  const axisVH: Axis = family === 'tee' || family === 'round' ? 1 : 0
   const frame: NcFaceFrame = {
     extent: [extentOf(section, 0), extentOf(section, 1)],
     axisVH,
