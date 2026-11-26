@@ -18,7 +18,14 @@ test/fixtures/
   hex-module-frames/           # J12095 HEX Module Frames (STEP-only, flat item<##>.stp)
   chs/                         # J7347 18 m Leg Nest (circular hollow, 508.0 OD × 9.5)
   ub/                          # rolled I-section seat reference — M_12 (UB250*31, 5.3 m)
+  assembly-demo/               # 6 nw31-top NCs + assembly part list + 2 assembly sheets (TR-1/TR-2)
+  assembly-demo.zip            # the same folder zipped for dropping on the Preflight tab
 ```
+
+`assembly-demo.zip` is not a test input: it is the hand-check job for the **Assemblies** card.
+Drop it on `/preflight` — two assemblies, one member each the part list names but no NC ships
+(`m999`, `m1000`) so the "no files" flag is visible, and one sheet is two pages so the drawing
+dialog's page handling is exercised.
 
 Marks included per job:
 

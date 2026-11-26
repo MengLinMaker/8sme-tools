@@ -77,4 +77,14 @@ export interface AuditResult {
   parts: PartRecord[]
   findings: Finding[]
   summary: AuditSummary
+  /**
+   * The part list the audit used: the assembly rows when the job ships one (so a mark with no
+   * files can still be reported against its assembly), else the plain list.
+   */
+  partList: PartListRow[]
+  /**
+   * Drawings whose mark has no NC/STEP, keyed the way marks are compared: assembly sheets and
+   * stray drawings. They are not parts, but an assembly drawing belongs to its assembly.
+   */
+  documents: Map<string, PdfFile>
 }

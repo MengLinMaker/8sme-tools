@@ -6,7 +6,15 @@ import { profileKey } from '@/lib/sections/fromFilename'
 import type { ZipEntry } from '@/lib/zip'
 import { aggregatePartList } from './partList'
 import { extractStepName, markKey, normalizeStepNameRules, type StepNameRules } from './stepNames'
-import type { AuditResult, AuditSummary, Finding, PartListRow, PartRecord, Severity } from './types'
+import type {
+  AuditResult,
+  AuditSummary,
+  Finding,
+  PartListRow,
+  PartRecord,
+  PdfFile,
+  Severity,
+} from './types'
 
 export { markFromFilename, quantityFromFilename } from './stepNames'
 
@@ -64,6 +72,7 @@ export function auditEntries(
 ): AuditResult {
   const findings: Finding[] = []
   const parts = new Map<string, PartRecord>()
+  const documents = new Map<string, PdfFile>()
   const counts = { nc: 0, step: 0, pdf: 0 }
   const rules = normalizeStepNameRules(options?.stepNames)
   /** Plain part lists (one row per mark) and assembly part lists are kept apart. */
@@ -191,8 +200,10 @@ export function auditEntries(
     if (usage) part.assemblies = usage
 
     // A mark with neither an NC nor a STEP is almost certainly not a laser part
-    // (e.g. a stray drawing or an assembly), so skip it rather than flag missing files.
+    // (e.g. a stray drawing or an assembly), so skip it rather than flag missing files. Its
+    // drawing is still kept: an assembly sheet is the document its assembly is welded from.
     if (!part.nc && !part.step) {
+      if (part.pdf) documents.set(markKey(part.mark), part.pdf)
       findings.push({
         severity: 'info',
         code: 'NOT_A_PART',
@@ -353,5 +364,7 @@ export function auditEntries(
     parts: partRecords,
     findings,
     summary,
+    partList,
+    documents,
   }
 }

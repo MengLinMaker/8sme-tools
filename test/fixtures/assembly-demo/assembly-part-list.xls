@@ -1,0 +1,21 @@
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<!-- Demo assembly part list for the Preflight "Assemblies" card. Tekla's report exporter writes
+     this HTML-table .xls shape; m999 and m1000 are deliberately absent from the NC folder so the
+     card shows a kit with "no files" members. -->
+<table border="1">
+<tr><td>Assembly</td><td>Part</td><td>Qty</td><td>Profile</td><td>Grade</td><td>Length</td></tr>
+<tr><td>TR-1</td><td>TR-1 Frame</td><td>1</td><td></td><td></td><td></td></tr>
+<tr><td></td><td>m119</td><td>1</td><td>RHS150*100*9.0</td><td>C300</td><td>3966</td></tr>
+<tr><td></td><td>m124</td><td>1</td><td>PFC100*50</td><td>C300</td><td>2056</td></tr>
+<tr><td></td><td>m130</td><td>1</td><td>PFC100*50</td><td>C300</td><td>3518</td></tr>
+<tr><td></td><td>m999</td><td>2</td><td>PFC100*50</td><td>C300</td><td>900</td></tr>
+<tr><td>TR-2</td><td>TR-2 Frame</td><td>2</td><td></td><td></td><td></td></tr>
+<tr><td></td><td>m117</td><td>3</td><td>RHS150*100*9.0</td><td>C300</td><td>4271</td></tr>
+<tr><td></td><td>m123</td><td>9</td><td>RHS150*100*9.0</td><td>C300</td><td>3990</td></tr>
+<tr><td></td><td>m24</td><td>3</td><td>RHS150*100*9.0</td><td>C300</td><td>4273</td></tr>
+<tr><td></td><td>m1000</td><td>1</td><td>RHS150*100*9.0</td><td>C300</td><td>1200</td></tr>
+</table>
+</body>
+</html>

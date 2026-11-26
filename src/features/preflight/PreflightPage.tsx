@@ -42,6 +42,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Toggle } from '@/components/ui/toggle'
+import { summarizeAssemblies } from '@/lib/audit/assemblySummary'
 import { auditEntries, markFromFilename } from '@/lib/audit/auditJob'
 import { assessBevelChangeGeometry, type BevelChangeIssue } from '@/lib/audit/bevelChange'
 import { assessCutReachGeometry, type CutMarker, type CutReachFailure } from '@/lib/audit/cutReach'
@@ -214,6 +215,8 @@ import { cn } from '@/lib/utils'
 import { buildNcepFromNc } from '@/lib/wisecam/fromNc'
 import { DEFAULT_NEST_NAME_RULE, type NestNameRule } from '@/lib/wisecam/nestNameRule'
 import { flattenZipEntries } from '@/lib/zip'
+import { AssembliesCard } from './AssembliesCard'
+import { type AssemblyDrawing, AssemblyDrawingDialog } from './AssemblyDrawingDialog'
 import { DrawingViewer } from './DrawingViewer'
 import { JobPanel } from './JobPanel'
 import { NameRulesDialog } from './NameRulesDialog'
@@ -3471,14 +3474,60 @@ export function PreflightPage({ projectId }: { projectId: string }) {
     }),
     [activeFindings, drawingMaterials, modelChecks, weldEtchings, sectionLabels, findingText, t],
   )
+  /**
+   * The assembly kit rollup: one row per assembly from the job's assembly part list, with the
+   * members it needs and whether every one arrived. It is built from the same records the parts
+   * table shows, so the card and the table cannot disagree about a kit.
+   */
+  const assemblyGroups = useMemo(
+    () =>
+      summarizeAssemblies(
+        sortedParts.map((part) => ({
+          mark: part.mark,
+          profile: sectionLabel(part),
+          lengthMm: partLength(part),
+          massKg: pieceMass(part),
+          status: statusForPart(part, partFilterContext),
+          assemblies: part.assemblies ?? [],
+        })),
+        result?.partList ?? [],
+        new Map([...(result?.documents ?? [])].map(([key, pdf]) => [key, pdf.path])),
+      ),
+    [sortedParts, sectionLabel, partLength, pieceMass, partFilterContext, result],
+  )
   /** Distinct assemblies in the job, for the filter and the assembly column. */
-  const assemblyOptions = useMemo(() => {
-    const names = new Set<string>()
-    for (const part of sortedParts) {
-      for (const usage of part.assemblies ?? []) names.add(usage.assembly)
+  const assemblyOptions = useMemo(
+    () => assemblyGroups.map((group) => group.assembly),
+    [assemblyGroups],
+  )
+  /** Open an assembly member in the viewer, from the mark the card shows. */
+  const openAssemblyPart = useCallback(
+    (mark: string) => {
+      const part = result?.parts.find((candidate) => candidate.mark === mark)
+      if (part) openPart(part)
+    },
+    [result, openPart],
+  )
+  /** The assembly sheets that have bytes in the job, in card order, for the drawing dialog. */
+  const assemblyDrawings = useMemo<AssemblyDrawing[]>(() => {
+    const drawings: AssemblyDrawing[] = []
+    for (const group of assemblyGroups) {
+      const path = group.drawingPath
+      if (!path) continue
+      const bytes = bytesByPath.get(path)
+      if (bytes) drawings.push({ assembly: group.assembly, path, bytes })
     }
-    return [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-  }, [sortedParts])
+    return drawings
+  }, [assemblyGroups, bytesByPath])
+  /** Index of the sheet shown in the drawing dialog; null keeps it closed. */
+  const [assemblyDrawingIndex, setAssemblyDrawingIndex] = useState<number | null>(null)
+  const openAssemblyDrawing = useCallback(
+    (assembly: string) => {
+      const index = assemblyDrawings.findIndex((drawing) => drawing.assembly === assembly)
+      if (index >= 0) setAssemblyDrawingIndex(index)
+    },
+    [assemblyDrawings],
+  )
   /** The parts-table columns, minus ASSY when the job carries no assembly at all. */
   const partColumns = useMemo(
     () =>
@@ -5506,6 +5555,25 @@ export function PreflightPage({ projectId }: { projectId: string }) {
           )}
         </Card>
       )}
+
+      {result && assemblyGroups.length > 0 && (
+        <AssembliesCard
+          groups={assemblyGroups}
+          filter={assemblyFilter}
+          onFilter={setAssemblyFilter}
+          onOpenPart={openAssemblyPart}
+          onOpenDrawing={openAssemblyDrawing}
+          open={!collapsedCards.assemblies}
+          onOpenChange={(open) => changeCardCollapsed('assemblies', !open)}
+        />
+      )}
+
+      <AssemblyDrawingDialog
+        drawings={assemblyDrawings}
+        index={assemblyDrawingIndex}
+        onIndex={setAssemblyDrawingIndex}
+        onClose={() => setAssemblyDrawingIndex(null)}
+      />
 
       {result && result.parts.length > 0 && (
         <NestingAnalysis

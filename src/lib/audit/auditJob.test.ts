@@ -388,4 +388,17 @@ describe('auditEntries', () => {
     expect(result.findings.some((f) => f.code === 'MISSING_NC' && f.mark === 'x9')).toBe(false)
     expect(result.findings.some((f) => f.code === 'MISSING_STEP' && f.mark === 'x9')).toBe(false)
   })
+
+  it('keeps an assembly sheet in the document index even though it is not a part', () => {
+    const result = auditEntries('job.zip', [
+      { path: 'a1.nc1', bytes: strToU8(makeNc('a1', 1, 100)) },
+      { path: 'a1.stp', bytes: strToU8(VALID_STEP) },
+      { path: 'x9 - ASSEMBLY.pdf', bytes: PDF_BYTES },
+      { path: 'a1  ANGLE.pdf', bytes: PDF_BYTES },
+    ])
+    // The assembly sheet is a document keyed by its mark; the part's own drawing is not.
+    expect([...result.documents.keys()]).toEqual(['x9'])
+    expect(result.documents.get('x9')?.path).toBe('x9 - ASSEMBLY.pdf')
+    expect(result.documents.has('a1')).toBe(false)
+  })
 })

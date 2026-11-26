@@ -46,7 +46,7 @@ export interface ProjectMeta {
   nestCuts?: Record<string, number>
   /** Show only problem marks in the nesting section dialog. */
   nestOnlyProblems?: boolean
-  /** Collapsed cards on preflight, by key (`job`, `parts`, `nesting`). */
+  /** Collapsed cards on preflight, by key (`job`, `parts`, `assemblies`, `nesting`). */
   collapsedCards?: Record<string, boolean>
 }
 
