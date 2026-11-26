@@ -20,6 +20,7 @@
     "nest-check": "node tools/nest-check.mjs",
     "ncep-svg": "node tools/ncep-svg.mjs",
     "sat-section": "node tools/sat-section.mjs",
+    "build-iges-kernel": "node tools/build-iges-kernel.mjs",
     "clean-step": "node tools/clean-step.mjs",
     "repair-step": "node tools/repair-step.mjs"
   },

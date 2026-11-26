@@ -17,6 +17,12 @@ const TOOLS: Tool[] = [
     descriptionKey: 'hub.tools.preflight.description',
     status: 'ready',
   },
+  {
+    to: '/convert',
+    titleKey: 'hub.tools.convert.title',
+    descriptionKey: 'hub.tools.convert.description',
+    status: 'ready',
+  },
 ]
 
 export function HubPage() {

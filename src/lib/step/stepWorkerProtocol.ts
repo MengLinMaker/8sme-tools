@@ -1,3 +1,5 @@
+import type { SatAnalysis } from '@/lib/convert/sat'
+import type { SatBuildFindings } from '@/lib/convert/satRebuild'
 import type { SectionGuess } from '@/lib/sections/detect'
 import type { CleanResult } from './clean'
 import type { StepMeasure } from './measure'
@@ -48,6 +50,25 @@ export interface TabResult {
   bytes: Uint8Array
   pieces: number
   tabs: number
+}
+
+/** An IGES file translated to STEP, or the reason the kernel cannot read it. */
+export interface IgesConvertResult {
+  step: string | null
+  /** Root entities the IGES reader found. */
+  roots: number
+  error: string | null
+}
+
+/** A SAT converted through the catalogue section, with the findings even when it cannot convert. */
+export interface SatConvertResult {
+  analysis: SatAnalysis
+  /** The rebuilt STEP text, or null when the section could not be planned/built. */
+  step: string | null
+  /** Verification of the exported STEP (measure + section read-back). */
+  build: SatBuildFindings | null
+  /** Why conversion stopped, if it did. `analysis.problems` carries the detailed reasons. */
+  error: string | null
 }
 
 /** First message a worker receives; carries embedded assets in the single-file build. */
@@ -119,6 +140,18 @@ export type StepRequest =
       kind: 'tab-defaults'
       step: Uint8Array
     }
+  | {
+      id: number
+      kind: 'sat'
+      /** The ACIS SAT text. */
+      text: string
+    }
+  | {
+      id: number
+      kind: 'iges'
+      iges: Uint8Array
+      name?: string
+    }
   | { id: number; kind: 'mesh'; step: Uint8Array; name: string }
   | {
       id: number
@@ -141,6 +174,8 @@ export type StepResponse =
   | { id: number; kind: 'clean'; ok: true; value: CleanResult | null }
   | { id: number; kind: 'tab'; ok: true; value: TabResult | null }
   | { id: number; kind: 'tab-defaults'; ok: true; value: TabDefaults }
+  | { id: number; kind: 'sat'; ok: true; value: SatConvertResult }
+  | { id: number; kind: 'iges'; ok: true; value: IgesConvertResult }
   | { id: number; kind: 'mesh'; ok: true; value: MeshedStep }
   | { id: number; kind: 'diff'; ok: true; value: DiffPayload | null }
   | { id: number; kind: 'warm'; ok: true; value: null }

@@ -4,9 +4,11 @@ import type { CleanResult } from './clean'
 import type { MeshedStep } from './mesh'
 import type { DiffPayload } from './occDiff'
 import type {
+  IgesConvertResult,
   InspectResult,
   ReconstructResult,
   RepairResult,
+  SatConvertResult,
   SeatResult,
   StepRequest,
   StepResponse,
@@ -184,6 +186,31 @@ class StepWorkerPool {
       },
       [copy.buffer],
       options.priority ?? PRIORITY_BACKGROUND,
+    )
+  }
+
+  /**
+   * Convert a SAT section prism to a true-arc STEP in the OCC worker. The pure analysis runs in the
+   * worker too, so a failed conversion still returns its findings (section, length, end cuts).
+   */
+  sat(text: string, options: { priority?: number } = {}): Promise<SatConvertResult> {
+    return this.run<SatConvertResult>(
+      { id: this.nextId++, kind: 'sat', text },
+      [],
+      options.priority ?? PRIORITY_FOREGROUND,
+    )
+  }
+
+  /** Translate an IGES file to STEP in the OCC worker. */
+  iges(
+    bytes: Uint8Array,
+    options: { name?: string; priority?: number } = {},
+  ): Promise<IgesConvertResult> {
+    const copy = new Uint8Array(bytes)
+    return this.run<IgesConvertResult>(
+      { id: this.nextId++, kind: 'iges', iges: copy, name: options.name },
+      [copy.buffer],
+      options.priority ?? PRIORITY_FOREGROUND,
     )
   }
 

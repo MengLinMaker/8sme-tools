@@ -1,5 +1,8 @@
 import type { AnyShape } from 'replicad'
 import { Matrix4 } from 'three'
+import { igesToStep } from '@/lib/convert/iges'
+import { analyzeSat } from '@/lib/convert/sat'
+import { rebuildSatPrism } from '@/lib/convert/satRebuild'
 import { gunzipBase64 } from '@/lib/gzip'
 import { cleanStep } from './clean'
 import { type MeasurableShape, measureShape, type StepMeasure } from './measure'
@@ -12,8 +15,10 @@ import { reconstructSolidFromNc } from './reconstructFromNc'
 import { baseMatchesFeatures, buildFaceFilledBase, repairStep } from './repair'
 import { rigidFromMatrix, seatedStepProfile } from './seat'
 import type {
+  IgesConvertResult,
   InspectResult,
   ReconstructResult,
+  SatConvertResult,
   SeatResult,
   StepRequest,
   StepResponse,
@@ -138,6 +143,12 @@ async function handle(request: StepRequest): Promise<void> {
     } else if (request.kind === 'tab-defaults') {
       const value = await detectTabDefaults(request.step)
       scope.postMessage({ id: request.id, kind: 'tab-defaults', ok: true, value })
+    } else if (request.kind === 'sat') {
+      const value = await convertSat(request.text)
+      scope.postMessage({ id: request.id, kind: 'sat', ok: true, value })
+    } else if (request.kind === 'iges') {
+      const value = await convertIges(request.iges, request.name)
+      scope.postMessage({ id: request.id, kind: 'iges', ok: true, value })
     } else if (request.kind === 'warm') {
       await ensureOc()
       scope.postMessage({ id: request.id, kind: 'warm', ok: true, value: null })
@@ -196,6 +207,48 @@ async function inspect(bytes: Uint8Array, detectSection: boolean): Promise<Inspe
     return { measure, section }
   } finally {
     shape.delete()
+  }
+}
+
+/**
+ * Read a SAT section, match it to the catalogue and rebuild it as a true-arc STEP. A failure is
+ * returned as findings (`analysis`) plus an error, not thrown: the converter tab is a diagnosis
+ * tool, so "why this file cannot be rebuilt" is the useful output.
+ */
+async function convertSat(text: string): Promise<SatConvertResult> {
+  const analysis = analyzeSat(text)
+  if (!analysis.plan) {
+    return {
+      analysis,
+      step: null,
+      build: null,
+      error: analysis.problems[0] ?? 'could not plan a section rebuild',
+    }
+  }
+  try {
+    const built = await rebuildSatPrism(analysis.plan)
+    return { analysis, step: built.step, build: built.findings, error: null }
+  } catch (error) {
+    return {
+      analysis,
+      step: null,
+      build: null,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+/** Translate an IGES file to STEP; the missing-kernel case is returned as a readable error. */
+async function convertIges(iges: Uint8Array, name: string | undefined): Promise<IgesConvertResult> {
+  try {
+    const result = await igesToStep(iges, { name })
+    return { step: result.step, roots: result.roots, error: null }
+  } catch (error) {
+    return {
+      step: null,
+      roots: 0,
+      error: error instanceof Error ? error.message : String(error),
+    }
   }
 }
 
