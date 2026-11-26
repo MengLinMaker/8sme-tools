@@ -3,6 +3,7 @@ export const en = {
     appName: '8SME Tools',
     nav: {
       preflight: 'Preflight',
+      convert: 'Convert',
     },
     language: {
       label: 'Language',
@@ -847,6 +848,7 @@ export const zh = {
     appName: '8SME 工具',
     nav: {
       preflight: '预检',
+      convert: '转换',
     },
     language: {
       label: '语言',
