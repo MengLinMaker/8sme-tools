@@ -19,6 +19,7 @@
     "nc-to-step": "node tools/nc-to-step.mjs",
     "nest-check": "node tools/nest-check.mjs",
     "ncep-svg": "node tools/ncep-svg.mjs",
+    "sat-section": "node tools/sat-section.mjs",
     "clean-step": "node tools/clean-step.mjs",
     "repair-step": "node tools/repair-step.mjs"
   },

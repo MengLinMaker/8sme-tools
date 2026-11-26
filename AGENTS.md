@@ -123,6 +123,8 @@ maps DSTV faces to machine roles + enforces the cut-side rules.
 ## Toolchain
 
 - `pnpm nc-to-step -i <nc1>` rebuilds STEP from NC (`tools/nc-to-step.mjs`; see `docs/nc-to-step.md`).
+- `pnpm sat-section -i <sat> [-o <step>]` rebuilds a section prism from an ACIS `.sat` as a
+  standard-section STEP with one true arc per corner; see `docs/sat-section.md`.
 - `pnpm nest-check -i <ncexa|dir> [--job <job.ncexa>]` verifies a WiseCAM nesting's
   quantities (nested vs `TotalCount`, results vs results SVG, duplicates); see
   `docs/ncexa-nest-check.md`. In the app, the **Nesting counts** tab counts the pieces under

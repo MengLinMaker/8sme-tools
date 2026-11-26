@@ -241,7 +241,8 @@ interface OccStep {
     SetIVal: (key: string, value: number) => void
   }
   STEPControl_Writer: new () => {
-    Transfer: (shape: unknown, mode: unknown) => void
+    /** `name` (OCC's optional third argument) becomes the STEP product name. */
+    Transfer: (shape: unknown, mode: unknown, name?: string) => void
     Write: (path: string) => void
   }
   STEPControl_AsIs: unknown
@@ -351,16 +352,29 @@ export async function placeRealPart(
 }
 
 /**
- * Writes a shape to STEP (AP214, no assembly) and returns the file text. The writer constructor
- * (re)initialises the STEP interface, so its options are set after it exists.
+ * Writes a shape to STEP and returns the file text. The writer constructor (re)initialises the
+ * STEP interface, so its options are set after it exists.
+ *
+ * Defaults are unchanged (AP214, no assembly, unnamed). `schema` exists because WiseCAM's
+ * standard-section matcher has only ever registered the **AP203** Tekla exports
+ * (`docs/nc-to-step.md`), and `name` sets the product name — the working files carry the section
+ * designation in `FILE_NAME` and `PRODUCT`, which `writeStep`'s caller patches into the header.
  */
-export async function writeStep(shape: AnyShape, path: string): Promise<string> {
+export async function writeStep(
+  shape: AnyShape,
+  path: string,
+  options: { schema?: 'AP214IS' | 'AP203' | 'AP242DIS'; name?: string } = {},
+): Promise<string> {
   const { getOC } = await import('replicad')
   const occ = getOC() as unknown as OccStep
   const writer = new occ.STEPControl_Writer()
-  occ.Interface_Static.SetCVal('write.step.schema', 'AP214IS')
+  occ.Interface_Static.SetCVal('write.step.schema', options.schema ?? 'AP214IS')
   occ.Interface_Static.SetIVal('write.step.assembly', 0)
-  writer.Transfer((shape as unknown as { wrapped: unknown }).wrapped, occ.STEPControl_AsIs)
+  const wrapped = (shape as unknown as { wrapped: unknown }).wrapped
+  // Only pass a name when there is one: the binding's two-argument form is what every existing
+  // caller uses, and an explicit empty name is not equivalent.
+  if (options.name) writer.Transfer(wrapped, occ.STEPControl_AsIs, options.name)
+  else writer.Transfer(wrapped, occ.STEPControl_AsIs)
   writer.Write(path)
   const content = occ.FS.readFile(path, { encoding: 'utf8' })
   return typeof content === 'string' ? content : new TextDecoder().decode(content)
