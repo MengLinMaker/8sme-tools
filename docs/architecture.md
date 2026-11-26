@@ -788,3 +788,7 @@ expansion. Inside: statistics on the Nestings side, stock bars per adobe length,
 boosted to the top and always sorted first, green mark↔file hover linking, unmatched names in their
 own table, and `±` piece differences against required (amber short, red over). Issues =
 `Σ|cut − required|` plus unmatched nested pieces. The divider runs the full dialog height.
+
+**Visibility.** The card only renders when at least one machine nesting (one `<Result>`) is present.
+A job with none — e.g. it carries only the multi-result project snapshot `.ncexa` — shows no card
+at all, rather than an empty-state placeholder.

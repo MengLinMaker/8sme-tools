@@ -939,6 +939,10 @@ export function NestingAnalysis({
     onCutsChange({ ...cuts, [file]: value })
   }
 
+  // Only per-beam nestings (one Result) are coverage. With none — e.g. a job that carries just the
+  // multi-result project snapshot `.ncexa` — there is nothing to analyse, so hide the whole card.
+  if (packages.length === 0) return null
+
   return (
     <section>
       <Card>
@@ -959,14 +963,12 @@ export function NestingAnalysis({
               <span className="text-base font-semibold">
                 {t('preflight.nestingCoverage.title')}
               </span>
-              {packages.length > 0 && (
-                <span className="text-sm font-normal text-muted-foreground">
-                  {t('preflight.nestingCoverage.selected', {
-                    selected: allSelectedPackages.length,
-                    total: packages.length,
-                  })}
-                </span>
-              )}
+              <span className="text-sm font-normal text-muted-foreground">
+                {t('preflight.nestingCoverage.selected', {
+                  selected: allSelectedPackages.length,
+                  total: packages.length,
+                })}
+              </span>
             </CardTitle>
           </button>
           <Button variant="outline" size="sm" onClick={() => setRuleOpen(true)}>
@@ -976,23 +978,15 @@ export function NestingAnalysis({
         </CardHeader>
         {cardOpen && (
           <CardContent className="flex flex-col gap-3">
-            {packages.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {t('preflight.nestingCoverage.empty')}
-              </p>
-            ) : (
-              <>
-                <p className="text-xs text-muted-foreground">
-                  {t('preflight.nestingCoverage.sectionsHint')}
-                </p>
-                <SectionOverview
-                  sections={sections}
-                  onToggle={(profile) =>
-                    setOpenProfile((current) => (current === profile ? null : profile))
-                  }
-                />
-              </>
-            )}
+            <p className="text-xs text-muted-foreground">
+              {t('preflight.nestingCoverage.sectionsHint')}
+            </p>
+            <SectionOverview
+              sections={sections}
+              onToggle={(profile) =>
+                setOpenProfile((current) => (current === profile ? null : profile))
+              }
+            />
           </CardContent>
         )}
       </Card>
