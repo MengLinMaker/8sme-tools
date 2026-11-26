@@ -156,7 +156,7 @@ export function DrawingViewer({ bytes }: { bytes: Uint8Array }) {
   }, [sizes])
 
   // Ctrl/⌘ + wheel zooms toward the pointer; plain wheel is left alone so it
-  // scrolls the page instead of the drawing. Drag to pan.
+  // scrolls the page instead of the drawing. Drag to pan; double-click resets to fit.
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -176,9 +176,14 @@ export function DrawingViewer({ bytes }: { bytes: Uint8Array }) {
         el.scrollTop = pointerY * ratio - (event.clientY - rect.top)
       })
     }
+    const onDoubleClick = () => fitWidth()
     el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
-  }, [])
+    el.addEventListener('dblclick', onDoubleClick)
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('dblclick', onDoubleClick)
+    }
+  }, [fitWidth])
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return

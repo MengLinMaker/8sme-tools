@@ -56,7 +56,7 @@ export function AssemblyDrawingDialog({
     <Dialog
       open={index != null}
       onClose={onClose}
-      className="max-w-[96vw]"
+      fullscreen
       title={
         current ? (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -98,7 +98,7 @@ export function AssemblyDrawingDialog({
       }
     >
       {current && (
-        <div className="h-[78vh]">
+        <div className="h-full">
           {/* The bytes are copied by the viewer, so stepping back to a sheet re-renders it. */}
           <DrawingViewer bytes={current.bytes} />
         </div>

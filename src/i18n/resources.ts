@@ -556,7 +556,7 @@ export const en = {
       noDrawing: 'No drawing.',
       zoomIn: 'Zoom in',
       zoomOut: 'Zoom out',
-      fitWidth: 'Fit width',
+      fitWidth: 'Fit width — double-click the drawing to reset',
       focusIssue: 'Focus in 3D',
       location: 'Location',
       locationHint:
@@ -1276,7 +1276,7 @@ export const zh = {
       noDrawing: '无图纸。',
       zoomIn: '放大',
       zoomOut: '缩小',
-      fitWidth: '适应宽度',
+      fitWidth: '适应宽度——双击图纸复位',
       focusIssue: '在 3D 中定位',
       location: '位置',
       locationHint:
